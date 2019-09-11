@@ -1,0 +1,1178 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Apollo]NPC Updating[Apollo]</title>
+    <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319</link>
+    <description>This is NPC Updating. This does not include parsing values for spawning npcs into your server or making them walk or anything. :P Just updating them is all. Follow the packaging in the top of the class to figure out where to place them if you must.
+
+[B][SIZE=18pt]Credits: Graham, Zuppers, Me[/SIZE][/B]
+
+First thing you will be updating are the Client Synchronizers. ParallelClientSynchronizer works well with computers that have multiple cores/processors. SequentialClientSynchronizer works well with computers that have a single core/processor. You can change which one your server uses in data/synchronizer.
+
+[B][SIZE=14pt]ParallelClientSynchronizer:[/SIZE][/B]
+[code]http://pastebin.com/7pFftvjb[/code]
+
+[B][SIZE=14pt]SequentialClientSynchronizer:[/SIZE][/B]
+[CODE=Java]package org.apollo.game.sync;
+
+import org.apollo.game.GameService;
+import org.apollo.game.model.Player;
+import org.apollo.game.model.World;
+import org.apollo.game.sync.task.NPCSynchronizationTask;
+import org.apollo.game.sync.task.PlayerSynchronizationTask;
+import org.apollo.game.sync.task.PostPlayerSynchronizationTask;
+import org.apollo.game.sync.task.PrePlayerSynchronizationTask;
+import org.apollo.game.sync.task.SynchronizationTask;
+import org.apollo.util.CharacterRepository;
+
+/**
+ * An implementation of {@link ClientSynchronizer} which runs in a single
+ * thread (the {@link GameService} thread from which this is called). Each
+ * client is processed sequentially. Therefore this class will work well on
+ * machines with a single core/processor. The {@link ParallelClientSynchronizer}
+ * will work better on machines with multiple cores/processors, however, both
+ * classes will work.
+ * @author Graham
+ */
+public final class SequentialClientSynchronizer extends ClientSynchronizer {
+
+    @Override
+    public void synchronize() {
+        CharacterRepository&lt;Player&gt; players = World.getWorld().getPlayerRepository();
+
+        for (Player player : players) {
+            SynchronizationTask task = new PrePlayerSynchronizationTask(player);
+            task.run();
+        }
+
+        for (Player player : players) {
+            SynchronizationTask task = new PlayerSynchronizationTask(player);
+            task.run();
+        }
+
+        for (Player player : players) {
+            SynchronizationTask task = new PostPlayerSynchronizationTask(player);
+            task.run();
+        }
+        for (Player player : players) {
+                SynchronizationTask task = new NPCSynchronizationTask(player);
+                task.run();
+        }
+    }
+}[/CODE]
+
+Now with apollo&#39;s packet system you have to have an event for every single packet that you read/write. It is very nice, just takes a little while to handle a packet. Here&#39;s the packet and event.
+
+[B][SIZE=14pt]NPCSynchronizationEventEncoder:[/SIZE][/B]
+[CODE=Java]package org.apollo.net.release.r317;
+
+import org.apollo.game.event.impl.NPCSynchronizationEvent;
+import org.apollo.game.model.Animation;
+import org.apollo.game.model.Direction;
+import org.apollo.game.model.Graphic;
+import org.apollo.game.model.Position;
+import org.apollo.game.sync.block.AnimationBlock;
+import org.apollo.game.sync.block.GraphicBlock;
+import org.apollo.game.sync.block.SynchronizationBlockSet;
+import org.apollo.game.sync.block.TurnToPositionBlock;
+import org.apollo.game.sync.seg.AddNpcSegment;
+import org.apollo.game.sync.seg.MovementSegment;
+import org.apollo.game.sync.seg.SegmentType;
+import org.apollo.game.sync.seg.SynchronizationSegment;
+import org.apollo.net.codec.game.DataOrder;
+import org.apollo.net.codec.game.DataType;
+import org.apollo.net.codec.game.GamePacket;
+import org.apollo.net.codec.game.GamePacketBuilder;
+import org.apollo.net.meta.PacketType;
+import org.apollo.net.release.EventEncoder;
+/**
+ * NPCSynchronizationEventEncoder.java
+ * @author The Wanderer &amp; Zuppers
+ */
+public class NPCSynchronizationEventEncoder extends EventEncoder&lt;NPCSynchronizationEvent&gt; {
+
+        @Override
+        public GamePacket encode(NPCSynchronizationEvent event) {
+                GamePacketBuilder builder = new GamePacketBuilder(65, PacketType.VARIABLE_SHORT);
+                builder.switchToBitAccess();
+               
+                GamePacketBuilder blockBuilder = new GamePacketBuilder();
+
+                /*
+                 * Write the current size of the npc list.
+                 */
+                builder.putBits(8, event.getLocalNPCs());
+               
+                for (SynchronizationSegment segment : event.getSegments()) {
+                        SegmentType type = segment.getType();
+                        if(type == SegmentType.REMOVE_CHARACTER){
+                            putRemoveCharacterUpdate(builder);
+                        }
+                        else if (type == SegmentType.ADD_CHARACTER) {
+                                putAddCharacterUpdate((AddNpcSegment) segment, event, builder);
+                                putBlocks(segment, blockBuilder);
+                        } else {
+                                putMovementUpdate(segment, event, builder);
+                                putBlocks(segment, blockBuilder);
+                        }
+                }
+               
+                /*
+                 * Check if the update block isn&#39;t empty.
+                 */
+                if(blockBuilder.getLength() &gt; 0) {
+                        /*
+                         * If so, put a flag indicating that an update block follows.
+                         */
+                        builder.putBits(14, 16383);
+                        builder.switchToByteAccess();
+                       
+                        /*
+                         * And append the update block.
+                         */
+                        builder.putRawBuilder(blockBuilder);
+                } else {
+                        /*
+                         * Terminate the packet normally.
+                         */
+                        builder.switchToByteAccess();
+                }
+               
+                /*
+                 * Write the packet.
+                 */
+                return builder.toGamePacket();
+        }
+
+        /**
+         * Adds a new NPC.
+         * @param packet The main packet.
+         * @param npc The npc to add.
+         */
+        private void putAddCharacterUpdate(AddNpcSegment seg, NPCSynchronizationEvent event, GamePacketBuilder builder) {
+                boolean updateRequired = seg.getBlockSet().size() &gt; 0;
+                Position npc = seg.getPosition();
+                Position other = event.getPosition();
+                builder.putBits(14, seg.getIndex());
+                builder.putBits(5, npc.getY() - other.getY());
+                builder.putBits(5, npc.getX() - other.getX());
+                builder.putBits(1, 0);
+                builder.putBits(12, seg.getNpcid());
+                builder.putBits(1, updateRequired ? 1 : 0);
+        }
+
+                /**
+         * Puts a remove character update.
+         * @param builder The builder.
+         */
+        private void putRemoveCharacterUpdate(GamePacketBuilder builder) {
+                builder.putBits(1, 1);
+                builder.putBits(2, 3);
+        }
+       
+        /**
+         * Update an NPC&#39;s movement.
+         * @param packet The main packet.
+         * @param npc The npc.
+         */
+        private void putMovementUpdate(SynchronizationSegment seg, NPCSynchronizationEvent event, GamePacketBuilder builder) {
+                boolean updateRequired = seg.getBlockSet().size() &gt; 0;
+                if (seg.getType() == SegmentType.RUN) {
+                        Direction[] directions = ((MovementSegment) seg).getDirections();
+                        builder.putBits(1, 1);
+                        builder.putBits(2, 2);
+                        builder.putBits(3, directions[0].toInteger());
+                        builder.putBits(3, directions[1].toInteger());
+                        builder.putBits(1, updateRequired ? 1 : 0);
+                } else if (seg.getType() == SegmentType.WALK) {
+                        Direction[] directions = ((MovementSegment) seg).getDirections();
+                        builder.putBits(1, 1);
+                        builder.putBits(2, 1);
+                        builder.putBits(3, directions[0].toInteger());
+                        builder.putBits(1, updateRequired ? 1 : 0);
+                } else {
+                        if (updateRequired) {
+                                builder.putBits(1, 1);
+                                builder.putBits(2, 0);
+                        } else {
+                                builder.putBits(1, 0);
+                        }
+                }
+        }
+       
+        /**
+         * Update an NPC.
+         * @param packet The update block.
+         * @param npc The npc.
+         */
+        private void putBlocks(SynchronizationSegment segment, GamePacketBuilder blockBuilder) {
+                SynchronizationBlockSet blockSet = segment.getBlockSet();
+                if (blockSet.size() &gt; 0) {
+                        int mask = 0;
+                        //TODO: masks Hit, Hit_2, Transform, Face Entity, and Forced Chat
+                        if (blockSet.contains(GraphicBlock.class)) {
+                                mask |= 0x80;
+                        }
+
+                        if (blockSet.contains(AnimationBlock.class)){
+                                mask |= 0x10;
+                        }
+
+                        if (blockSet.contains(TurnToPositionBlock.class)) {
+                                mask |= 0x4;
+                        }
+                       
+                        blockBuilder.put(DataType.BYTE, mask);
+
+                        if (blockSet.contains(GraphicBlock.class)) {
+                                putGraphicBlock(blockSet.get(GraphicBlock.class), blockBuilder);
+                        }
+
+                        if (blockSet.contains(AnimationBlock.class)) {
+                                putAnimationBlock(blockSet.get(AnimationBlock.class), blockBuilder);
+                        }
+
+                        if (blockSet.contains(TurnToPositionBlock.class)) {
+                                putTurnToPositionBlock(blockSet.get(TurnToPositionBlock.class), blockBuilder);
+                        }
+                }
+        }
+       
+        /**
+         * Puts a turn to position block into the specified builder.
+         * @param block The block.
+         * @param blockBuilder The builder.
+         */
+        private void putTurnToPositionBlock(TurnToPositionBlock block, GamePacketBuilder blockBuilder) {
+                Position pos = block.getPosition();
+                blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, pos.getX() * 2 + 1);
+                blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, pos.getY() * 2 + 1);
+        }
+
+        /**
+         * Puts a graphic block into the specified builder.
+         * @param block The block.
+         * @param blockBuilder The builder.
+         */
+        private void putGraphicBlock(GraphicBlock block, GamePacketBuilder blockBuilder) {
+                Graphic graphic = block.getGraphic();
+                blockBuilder.put(DataType.SHORT, graphic.getId());
+                blockBuilder.put(DataType.INT, graphic.getDelay());
+        }
+
+        /**
+         * Puts an animation block into the specified builder.
+         * @param block The block.
+         * @param blockBuilder The builder.
+         */
+        private void putAnimationBlock(AnimationBlock block, GamePacketBuilder blockBuilder) {
+                Animation animation = block.getAnimation();
+                blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, animation.getId());
+                blockBuilder.put(DataType.BYTE, animation.getDelay());
+        }
+       
+}[/CODE]
+
+[B][SIZE=14pt]NPCSynchronizationEvent:[/SIZE][/B]
+[CODE=Java]package org.apollo.game.event.impl;
+
+import java.util.List;
+import org.apollo.game.event.Event;
+import org.apollo.game.model.Position;
+import org.apollo.game.sync.seg.SynchronizationSegment;
+
+/**
+ * NPCSynchronizationEvent.java
+ * @author The Wanderer &amp; Zuppers
+ */
+public class NPCSynchronizationEvent extends Event {
+
+    /**
+     * The npc&#39;s position.
+     */
+    private final Position position;
+
+    /**
+     * The number of local players.
+     */
+    private final int localNPCs;
+
+    /**
+     * A list of segments.
+     */
+    private final List&lt;SynchronizationSegment&gt; segments;
+
+    /**
+     * Creates the player synchronization event.
+     * @param position The player&#39;s current position.
+     * @param localPlayers The number of local players.
+     * @param segments A list of segments.
+     */
+    public NPCSynchronizationEvent(Position position, int localNPCs, List&lt;SynchronizationSegment&gt; segments) {
+        this.position = position;
+        this.localNPCs = localNPCs;
+        this.segments = segments;
+    }
+
+    /**
+     * Gets the player&#39;s position.
+     * @return The player&#39;s position.
+     */
+    public Position getPosition() {
+        return position;
+    }
+
+
+    /**
+     * Gets the number of local players.
+     * @return The number of local players.
+     */
+    public int getLocalNPCs() {
+        return localNPCs;
+    }
+
+    /**
+     * Gets the synchronization segments.
+     * @return The segments.
+     */
+    public List&lt;SynchronizationSegment&gt; getSegments() {
+        return segments;
+    }
+}[/CODE]
+
+Now for the task. First thing we need is to add a class for adding npc segments.
+
+[B][SIZE=14pt]AddNpcSegment:[/SIZE][/B]
+[CODE=Java]package org.apollo.game.sync.seg;
+
+import org.apollo.game.model.Position;
+import org.apollo.game.sync.block.SynchronizationBlockSet;
+
+/**
+ *
+ * @author Zuppers
+ */
+public final class AddNpcSegment extends SynchronizationSegment {
+
+    /**
+     * The index.
+     */
+    private final int index;
+    /**
+     * The position.
+     */
+    private final Position position;
+    /**
+     * The npc id.
+     */
+    private final int npcid;
+
+    /**
+     * Creates the add character segment.
+     * @param blockSet The block set.
+     * @param index The characters&#39;s index.
+     * @param position The position.
+     */
+    public AddNpcSegment(SynchronizationBlockSet blockSet, int index, Position position, int npcid) {
+        super(blockSet);
+        this.index = index;
+        this.position = position;
+        this.npcid = npcid;
+    }
+
+    /**
+     * Gets the character&#39;s index.
+     * @return The index.
+     */
+    public int getIndex() {
+        return index;
+    }
+
+    /**
+     * Gets the position.
+     * @return The position.
+     */
+    public Position getPosition() {
+        return position;
+    }
+
+    @Override
+    public SegmentType getType() {
+        return SegmentType.ADD_CHARACTER;
+    }
+
+    /**
+     * @return the npcid
+     */
+    public int getNpcid() {
+        return npcid;
+    }
+}[/CODE]
+
+Aaaand now the task.
+
+[B][SIZE=14pt]NPCSynchronizationTask:[/SIZE][/B]
+[CODE=Java]package org.apollo.game.sync.task;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import org.apollo.game.event.impl.NPCSynchronizationEvent;
+import org.apollo.game.model.NPC;
+import org.apollo.game.model.Player;
+import org.apollo.game.model.World;
+import org.apollo.game.sync.block.SynchronizationBlockSet;
+import org.apollo.game.sync.seg.AddNpcSegment;
+import org.apollo.game.sync.seg.MovementSegment;
+import org.apollo.game.sync.seg.RemoveCharacterSegment;
+import org.apollo.game.sync.seg.SynchronizationSegment;
+import org.apollo.util.CharacterRepository;
+
+/**
+ * NPCSynchronizzationTask.java
+ * @author The Wanderer &amp; Zuppers
+ */
+public class NPCSynchronizationTask extends SynchronizationTask {
+
+
+    private static final int NEW_NPCS_PER_CYCLE = 20;
+
+    /**
+     * The player.
+     */
+   private final Player player;
+
+    /**
+     * Creates the {@link NPCSynchronizationTask} for the specified player.
+     * @param player The player.
+     */
+    public NPCSynchronizationTask(Player player) {
+      this.player = player;
+    }
+
+    @Override
+    public void run() {
+        SynchronizationBlockSet blockSet = player.getBlockSet();
+        List&lt;NPC&gt; localNPCs = player.getLocalNPCList();
+        int oldLocalPlayers = localNPCs.size();
+        List&lt;SynchronizationSegment&gt; segments = new ArrayList&lt;SynchronizationSegment&gt;();
+
+        for (Iterator&lt;NPC&gt; it = localNPCs.iterator(); it.hasNext();) {
+            NPC n = it.next();
+            if (!n.isActive() || n.isTeleporting() || n.getPosition().getLongestDelta(player.getPosition()) &gt; player.getViewingDistance()) {
+                it.remove();
+                segments.add(new RemoveCharacterSegment());
+            } else {
+                segments.add(new MovementSegment(n.getBlockSet(), n.getDirections()));
+            }
+        }
+
+        int added = 0;
+
+        CharacterRepository&lt;NPC&gt; repository = World.getWorld().getNPCRepository();
+        for (Iterator&lt;NPC&gt; it = repository.iterator(); it.hasNext();) {
+            NPC n = it.next();
+            if (localNPCs.size() &gt;= 255) {//this should never happen? who would put 255+ npcs in the same spot?
+
+                break;
+            } else if (added &gt;= NEW_NPCS_PER_CYCLE) {
+                break;
+            }
+            if (n.getPosition().isWithinDistance(player.getPosition(), player.getViewingDistance()) &amp;&amp; !localNPCs.contains(n)) {
+                localNPCs.add(n);
+                added++;
+                blockSet = n.getBlockSet();
+                segments.add(new AddNpcSegment(blockSet, n.getIndex(), n.getPosition(),n.getDefinition().getId()));
+            }
+
+        }
+        NPCSynchronizationEvent event = new NPCSynchronizationEvent(player.getPosition(), oldLocalPlayers, segments);
+        player.send(event);
+    }
+}[/CODE]
+
+Also, don&#39;t forgot to register the packet in Release317!
+[code=Java]register(NPCSynchronizationEvent.class, new NPCSynchronizationEventEncoder());[/code]
+
+Hope this will help anyone trying to add npc support to Apollo and help further the usage of Apollo! :) Some of my methods may be a little bit different than yours in say the World class. If you have any issues ask away.</description>
+    
+    <lastBuildDate>Thu, 15 Dec 2011 01:14:31 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“The Wanderer, post:7, topic:425319”][quote author=zuppers link=topic=527980.msg3849534#msg3849534 date=1323906603]<br>
+It’s still missing some update blocks but hopefully this will be enough to get people started. For anyone attempting this remember you need to create your own npc class and add a new character repository for npcs in org.apollo.game.model.World.<br>
+[/quote]<br>
+Yeah, I think I added a todo comment with some update blocks that were left out.[/quote]</p>
+<p>I can grab the other ones for you and message you them and the blocks that you have to send. Just remind me later.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/9</link>
+        <pubDate>Thu, 15 Dec 2011 01:14:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-9</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>Great job on this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/8</link>
+        <pubDate>Thu, 15 Dec 2011 00:08:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-8</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@the_wanderer The Wanderer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_wanderer">@the_wanderer</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="6" data-topic="425319">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/zuppers/40/10929_1.png" class="avatar"> zuppers:</div>
+<blockquote>
+<p>It’s still missing some update blocks but hopefully this will be enough to get people started. For anyone attempting this remember you need to create your own npc class and add a new character repository for npcs in org.apollo.game.model.World.</p>
+</blockquote>
+</aside>
+<p>Yeah, I think I added a todo comment with some update blocks that were left out.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/7</link>
+        <pubDate>Thu, 15 Dec 2011 00:05:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-7</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@zuppers zuppers]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zuppers">@zuppers</a> wrote:</p>
+          <blockquote>
+              <p>It’s still missing some update blocks but hopefully this will be enough to get people started. For anyone attempting this remember you need to create your own npc class and add a new character repository for npcs in org.apollo.game.model.World.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/6</link>
+        <pubDate>Wed, 14 Dec 2011 23:50:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-6</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@m1lkman m1lkman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m1lkman">@m1lkman</a> wrote:</p>
+          <blockquote>
+              <p>Who zuppers is?</p>
+<p>Also, this is a snippet. Brilliant job AJ</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/5</link>
+        <pubDate>Wed, 14 Dec 2011 23:48:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-5</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@the_wanderer The Wanderer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_wanderer">@the_wanderer</a> wrote:</p>
+          <blockquote>
+              <p>Thank zuppers. Probably would of taken me another 2 days to fix it. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/4</link>
+        <pubDate>Wed, 14 Dec 2011 23:41:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-4</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Awesome, glad that you managed to fix it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/3</link>
+        <pubDate>Wed, 14 Dec 2011 23:39:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-3</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>Great tutorial, I like.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/2</link>
+        <pubDate>Wed, 14 Dec 2011 23:37:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-2</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+      <item>
+        <title>[Apollo]NPC Updating[Apollo]</title>
+        <dc:creator><![CDATA[@the_wanderer The Wanderer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_wanderer">@the_wanderer</a> wrote:</p>
+          <blockquote>
+              <p>This is NPC Updating. This does not include parsing values for spawning npcs into your server or making them walk or anything. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> Just updating them is all. Follow the packaging in the top of the class to figure out where to place them if you must.</p>
+<p><span class="bbcode-b">[SIZE=18pt]Credits: Graham, Zuppers, Me[/SIZE]</span></p>
+<p>First thing you will be updating are the Client Synchronizers. ParallelClientSynchronizer works well with computers that have multiple cores/processors. SequentialClientSynchronizer works well with computers that have a single core/processor. You can change which one your server uses in data/synchronizer.</p>
+<p><span class="bbcode-b">[SIZE=14pt]ParallelClientSynchronizer:[/SIZE]</span></p>
+<pre><code class="lang-auto"></code></pre>
+<p><span class="bbcode-b">[SIZE=14pt]SequentialClientSynchronizer:[/SIZE]</span></p>
+<p>[CODE=Java]package org.apollo.game.sync;</p>
+<p>import org.apollo.game.GameService;<br>
+import org.apollo.game.model.Player;<br>
+import org.apollo.game.model.World;<br>
+import org.apollo.game.sync.task.NPCSynchronizationTask;<br>
+import org.apollo.game.sync.task.PlayerSynchronizationTask;<br>
+import org.apollo.game.sync.task.PostPlayerSynchronizationTask;<br>
+import org.apollo.game.sync.task.PrePlayerSynchronizationTask;<br>
+import org.apollo.game.sync.task.SynchronizationTask;<br>
+import org.apollo.util.CharacterRepository;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>An implementation of {<a class="mention" href="/u/link">@link</a> ClientSynchronizer} which runs in a single</p>
+</li>
+<li>
+<p>thread (the {<a class="mention" href="/u/link">@link</a> GameService} thread from which this is called). Each</p>
+</li>
+<li>
+<p>client is processed sequentially. Therefore this class will work well on</p>
+</li>
+<li>
+<p>machines with a single core/processor. The {<a class="mention" href="/u/link">@link</a> ParallelClientSynchronizer}</p>
+</li>
+<li>
+<p>will work better on machines with multiple cores/processors, however, both</p>
+</li>
+<li>
+<p>classes will work.</p>
+</li>
+<li>
+<p><span class="mention">@author</span> Graham<br>
+*/<br>
+public final class SequentialClientSynchronizer extends ClientSynchronizer {</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void synchronize() {<br>
+CharacterRepository players = World.getWorld().getPlayerRepository();</p>
+<pre><code> for (Player player : players) {
+     SynchronizationTask task = new PrePlayerSynchronizationTask(player);
+     task.run();
+ }
+
+ for (Player player : players) {
+     SynchronizationTask task = new PlayerSynchronizationTask(player);
+     task.run();
+ }
+
+ for (Player player : players) {
+     SynchronizationTask task = new PostPlayerSynchronizationTask(player);
+     task.run();
+ }
+ for (Player player : players) {
+         SynchronizationTask task = new NPCSynchronizationTask(player);
+         task.run();
+ }
+</code></pre>
+<p>}<br>
+}[/CODE]</p>
+</li>
+</ul>
+<p>Now with apollo’s packet system you have to have an event for every single packet that you read/write. It is very nice, just takes a little while to handle a packet. Here’s the packet and event.</p>
+<p><span class="bbcode-b">[SIZE=14pt]NPCSynchronizationEventEncoder:[/SIZE]</span></p>
+<p>[CODE=Java]package org.apollo.net.release.r317;</p>
+<p>import org.apollo.game.event.impl.NPCSynchronizationEvent;<br>
+import org.apollo.game.model.Animation;<br>
+import org.apollo.game.model.Direction;<br>
+import org.apollo.game.model.Graphic;<br>
+import org.apollo.game.model.Position;<br>
+import org.apollo.game.sync.block.AnimationBlock;<br>
+import org.apollo.game.sync.block.GraphicBlock;<br>
+import org.apollo.game.sync.block.SynchronizationBlockSet;<br>
+import org.apollo.game.sync.block.TurnToPositionBlock;<br>
+import org.apollo.game.sync.seg.AddNpcSegment;<br>
+import org.apollo.game.sync.seg.MovementSegment;<br>
+import org.apollo.game.sync.seg.SegmentType;<br>
+import org.apollo.game.sync.seg.SynchronizationSegment;<br>
+import org.apollo.net.codec.game.DataOrder;<br>
+import org.apollo.net.codec.game.DataType;<br>
+import org.apollo.net.codec.game.GamePacket;<br>
+import org.apollo.net.codec.game.GamePacketBuilder;<br>
+import org.apollo.net.meta.PacketType;<br>
+import org.apollo.net.release.EventEncoder;<br>
+/**</p>
+<ul>
+<li>
+<p>NPCSynchronizationEventEncoder.java</p>
+</li>
+<li>
+<p><span class="mention">@author</span> The Wanderer &amp; Zuppers<br>
+*/<br>
+public class NPCSynchronizationEventEncoder extends EventEncoder {</p>
+<pre><code> @Override
+ public GamePacket encode(NPCSynchronizationEvent event) {
+         GamePacketBuilder builder = new GamePacketBuilder(65, PacketType.VARIABLE_SHORT);
+         builder.switchToBitAccess();
+        
+         GamePacketBuilder blockBuilder = new GamePacketBuilder();
+
+         /*
+          * Write the current size of the npc list.
+          */
+         builder.putBits(8, event.getLocalNPCs());
+        
+         for (SynchronizationSegment segment : event.getSegments()) {
+                 SegmentType type = segment.getType();
+                 if(type == SegmentType.REMOVE_CHARACTER){
+                     putRemoveCharacterUpdate(builder);
+                 }
+                 else if (type == SegmentType.ADD_CHARACTER) {
+                         putAddCharacterUpdate((AddNpcSegment) segment, event, builder);
+                         putBlocks(segment, blockBuilder);
+                 } else {
+                         putMovementUpdate(segment, event, builder);
+                         putBlocks(segment, blockBuilder);
+                 }
+         }
+        
+         /*
+          * Check if the update block isn't empty.
+          */
+         if(blockBuilder.getLength() &gt; 0) {
+                 /*
+                  * If so, put a flag indicating that an update block follows.
+                  */
+                 builder.putBits(14, 16383);
+                 builder.switchToByteAccess();
+                
+                 /*
+                  * And append the update block.
+                  */
+                 builder.putRawBuilder(blockBuilder);
+         } else {
+                 /*
+                  * Terminate the packet normally.
+                  */
+                 builder.switchToByteAccess();
+         }
+        
+         /*
+          * Write the packet.
+          */
+         return builder.toGamePacket();
+ }
+
+ /**
+  * Adds a new NPC.
+  * @param packet The main packet.
+  * @param npc The npc to add.
+  */
+ private void putAddCharacterUpdate(AddNpcSegment seg, NPCSynchronizationEvent event, GamePacketBuilder builder) {
+         boolean updateRequired = seg.getBlockSet().size() &gt; 0;
+         Position npc = seg.getPosition();
+         Position other = event.getPosition();
+         builder.putBits(14, seg.getIndex());
+         builder.putBits(5, npc.getY() - other.getY());
+         builder.putBits(5, npc.getX() - other.getX());
+         builder.putBits(1, 0);
+         builder.putBits(12, seg.getNpcid());
+         builder.putBits(1, updateRequired ? 1 : 0);
+ }
+
+         /**
+  * Puts a remove character update.
+  * @param builder The builder.
+  */
+ private void putRemoveCharacterUpdate(GamePacketBuilder builder) {
+         builder.putBits(1, 1);
+         builder.putBits(2, 3);
+ }
+
+ /**
+  * Update an NPC's movement.
+  * @param packet The main packet.
+  * @param npc The npc.
+  */
+ private void putMovementUpdate(SynchronizationSegment seg, NPCSynchronizationEvent event, GamePacketBuilder builder) {
+         boolean updateRequired = seg.getBlockSet().size() &gt; 0;
+         if (seg.getType() == SegmentType.RUN) {
+                 Direction[] directions = ((MovementSegment) seg).getDirections();
+                 builder.putBits(1, 1);
+                 builder.putBits(2, 2);
+                 builder.putBits(3, directions[0].toInteger());
+                 builder.putBits(3, directions[1].toInteger());
+                 builder.putBits(1, updateRequired ? 1 : 0);
+         } else if (seg.getType() == SegmentType.WALK) {
+                 Direction[] directions = ((MovementSegment) seg).getDirections();
+                 builder.putBits(1, 1);
+                 builder.putBits(2, 1);
+                 builder.putBits(3, directions[0].toInteger());
+                 builder.putBits(1, updateRequired ? 1 : 0);
+         } else {
+                 if (updateRequired) {
+                         builder.putBits(1, 1);
+                         builder.putBits(2, 0);
+                 } else {
+                         builder.putBits(1, 0);
+                 }
+         }
+ }
+
+ /**
+  * Update an NPC.
+  * @param packet The update block.
+  * @param npc The npc.
+  */
+ private void putBlocks(SynchronizationSegment segment, GamePacketBuilder blockBuilder) {
+         SynchronizationBlockSet blockSet = segment.getBlockSet();
+         if (blockSet.size() &gt; 0) {
+                 int mask = 0;
+                 //TODO: masks Hit, Hit_2, Transform, Face Entity, and Forced Chat
+                 if (blockSet.contains(GraphicBlock.class)) {
+                         mask |= 0x80;
+                 }
+
+                 if (blockSet.contains(AnimationBlock.class)){
+                         mask |= 0x10;
+                 }
+
+                 if (blockSet.contains(TurnToPositionBlock.class)) {
+                         mask |= 0x4;
+                 }
+                
+                 blockBuilder.put(DataType.BYTE, mask);
+
+                 if (blockSet.contains(GraphicBlock.class)) {
+                         putGraphicBlock(blockSet.get(GraphicBlock.class), blockBuilder);
+                 }
+
+                 if (blockSet.contains(AnimationBlock.class)) {
+                         putAnimationBlock(blockSet.get(AnimationBlock.class), blockBuilder);
+                 }
+
+                 if (blockSet.contains(TurnToPositionBlock.class)) {
+                         putTurnToPositionBlock(blockSet.get(TurnToPositionBlock.class), blockBuilder);
+                 }
+         }
+ }
+
+ /**
+  * Puts a turn to position block into the specified builder.
+  * @param block The block.
+  * @param blockBuilder The builder.
+  */
+ private void putTurnToPositionBlock(TurnToPositionBlock block, GamePacketBuilder blockBuilder) {
+         Position pos = block.getPosition();
+         blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, pos.getX() * 2 + 1);
+         blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, pos.getY() * 2 + 1);
+ }
+
+ /**
+  * Puts a graphic block into the specified builder.
+  * @param block The block.
+  * @param blockBuilder The builder.
+  */
+ private void putGraphicBlock(GraphicBlock block, GamePacketBuilder blockBuilder) {
+         Graphic graphic = block.getGraphic();
+         blockBuilder.put(DataType.SHORT, graphic.getId());
+         blockBuilder.put(DataType.INT, graphic.getDelay());
+ }
+
+ /**
+  * Puts an animation block into the specified builder.
+  * @param block The block.
+  * @param blockBuilder The builder.
+  */
+ private void putAnimationBlock(AnimationBlock block, GamePacketBuilder blockBuilder) {
+         Animation animation = block.getAnimation();
+         blockBuilder.put(DataType.SHORT, DataOrder.LITTLE, animation.getId());
+         blockBuilder.put(DataType.BYTE, animation.getDelay());
+ }
+</code></pre>
+</li>
+</ul>
+<p>}[/CODE]</p>
+<p><span class="bbcode-b">[SIZE=14pt]NPCSynchronizationEvent:[/SIZE]</span></p>
+<p>[CODE=Java]package org.apollo.game.event.impl;</p>
+<p>import java.util.List;<br>
+import org.apollo.game.event.Event;<br>
+import org.apollo.game.model.Position;<br>
+import org.apollo.game.sync.seg.SynchronizationSegment;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>NPCSynchronizationEvent.java</p>
+</li>
+<li>
+<p><span class="mention">@author</span> The Wanderer &amp; Zuppers<br>
+*/<br>
+public class NPCSynchronizationEvent extends Event {</p>
+<p>/**</p>
+<ul>
+<li>The npc’s position.<br>
+*/<br>
+private final Position position;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The number of local players.<br>
+*/<br>
+private final int localNPCs;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>A list of segments.<br>
+*/<br>
+private final List segments;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Creates the player synchronization event.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> position The player’s current position.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> localPlayers The number of local players.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> segments A list of segments.<br>
+*/<br>
+public NPCSynchronizationEvent(Position position, int localNPCs, List segments) {<br>
+this.position = position;<br>
+this.localNPCs = localNPCs;<br>
+this.segments = segments;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the player’s position.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The player’s position.<br>
+*/<br>
+public Position getPosition() {<br>
+return position;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the number of local players.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The number of local players.<br>
+*/<br>
+public int getLocalNPCs() {<br>
+return localNPCs;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the synchronization segments.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The segments.<br>
+*/<br>
+public List getSegments() {<br>
+return segments;<br>
+}<br>
+}[/CODE]</li>
+</ul>
+</li>
+</ul>
+<p>Now for the task. First thing we need is to add a class for adding npc segments.</p>
+<p><span class="bbcode-b">[SIZE=14pt]AddNpcSegment:[/SIZE]</span></p>
+<p>[CODE=Java]package org.apollo.game.sync.seg;</p>
+<p>import org.apollo.game.model.Position;<br>
+import org.apollo.game.sync.block.SynchronizationBlockSet;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Zuppers<br>
+*/<br>
+public final class AddNpcSegment extends SynchronizationSegment {</p>
+<p>/**</p>
+<ul>
+<li>The index.<br>
+<em>/<br>
+private final int index;<br>
+/</em>*</li>
+<li>The position.<br>
+<em>/<br>
+private final Position position;<br>
+/</em>*</li>
+<li>The npc id.<br>
+*/<br>
+private final int npcid;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Creates the add character segment.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> blockSet The block set.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> index The characters’s index.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> position The position.<br>
+*/<br>
+public AddNpcSegment(SynchronizationBlockSet blockSet, int index, Position position, int npcid) {<br>
+super(blockSet);<br>
+this.index = index;<br>
+this.position = position;<br>
+this.npcid = npcid;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the character’s index.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The index.<br>
+*/<br>
+public int getIndex() {<br>
+return index;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the position.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The position.<br>
+*/<br>
+public Position getPosition() {<br>
+return position;<br>
+}</li>
+</ul>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public SegmentType getType() {<br>
+return SegmentType.ADD_CHARACTER;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the npcid<br>
+*/<br>
+public int getNpcid() {<br>
+return npcid;<br>
+}<br>
+}[/CODE]</li>
+</ul>
+</li>
+</ul>
+<p>Aaaand now the task.</p>
+<p><span class="bbcode-b">[SIZE=14pt]NPCSynchronizationTask:[/SIZE]</span></p>
+<p>[CODE=Java]package org.apollo.game.sync.task;</p>
+<p>import java.util.ArrayList;<br>
+import java.util.Iterator;<br>
+import java.util.List;<br>
+import org.apollo.game.event.impl.NPCSynchronizationEvent;<br>
+import org.apollo.game.model.NPC;<br>
+import org.apollo.game.model.Player;<br>
+import org.apollo.game.model.World;<br>
+import org.apollo.game.sync.block.SynchronizationBlockSet;<br>
+import org.apollo.game.sync.seg.AddNpcSegment;<br>
+import org.apollo.game.sync.seg.MovementSegment;<br>
+import org.apollo.game.sync.seg.RemoveCharacterSegment;<br>
+import org.apollo.game.sync.seg.SynchronizationSegment;<br>
+import org.apollo.util.CharacterRepository;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>NPCSynchronizzationTask.java</p>
+</li>
+<li>
+<p><span class="mention">@author</span> The Wanderer &amp; Zuppers<br>
+*/<br>
+public class NPCSynchronizationTask extends SynchronizationTask {</p>
+<p>private static final int NEW_NPCS_PER_CYCLE = 20;</p>
+<p>/**</p>
+<ul>
+<li>The player.<br>
+*/<br>
+private final Player player;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Creates the {<a class="mention" href="/u/link">@link</a> NPCSynchronizationTask} for the specified player.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> player The player.<br>
+*/<br>
+public NPCSynchronizationTask(Player player) {<br>
+this.player = player;<br>
+}</li>
+</ul>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void run() {<br>
+SynchronizationBlockSet blockSet = player.getBlockSet();<br>
+List localNPCs = player.getLocalNPCList();<br>
+int oldLocalPlayers = localNPCs.size();<br>
+List segments = new ArrayList();</p>
+<pre><code> for (Iterator&lt;NPC&gt; it = localNPCs.iterator(); it.hasNext();) {
+     NPC n = it.next();
+     if (!n.isActive() || n.isTeleporting() || n.getPosition().getLongestDelta(player.getPosition()) &gt; player.getViewingDistance()) {
+         it.remove();
+         segments.add(new RemoveCharacterSegment());
+     } else {
+         segments.add(new MovementSegment(n.getBlockSet(), n.getDirections()));
+     }
+ }
+
+ int added = 0;
+
+ CharacterRepository&lt;NPC&gt; repository = World.getWorld().getNPCRepository();
+ for (Iterator&lt;NPC&gt; it = repository.iterator(); it.hasNext();) {
+     NPC n = it.next();
+     if (localNPCs.size() &gt;= 255) {//this should never happen? who would put 255+ npcs in the same spot?
+
+         break;
+     } else if (added &gt;= NEW_NPCS_PER_CYCLE) {
+         break;
+     }
+     if (n.getPosition().isWithinDistance(player.getPosition(), player.getViewingDistance()) &amp;&amp; !localNPCs.contains(n)) {
+         localNPCs.add(n);
+         added++;
+         blockSet = n.getBlockSet();
+         segments.add(new AddNpcSegment(blockSet, n.getIndex(), n.getPosition(),n.getDefinition().getId()));
+     }
+
+ }
+ NPCSynchronizationEvent event = new NPCSynchronizationEvent(player.getPosition(), oldLocalPlayers, segments);
+ player.send(event);
+</code></pre>
+<p>}<br>
+}[/CODE]</p>
+</li>
+</ul>
+<p>Also, don’t forgot to register the packet in Release317!</p>
+<pre><code class="lang-auto"></code></pre>
+<p>Hope this will help anyone trying to add npc support to Apollo and help further the usage of Apollo! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Some of my methods may be a little bit different than yours in say the World class. If you have any issues ask away.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319/1</link>
+        <pubDate>Wed, 14 Dec 2011 23:33:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-425319-1</guid>
+        <source url="https://forum.moparisthebest.com/t/apollo-npc-updating-apollo/425319.rss">[Apollo]NPC Updating[Apollo]</source>
+      </item>
+  </channel>
+</rss>

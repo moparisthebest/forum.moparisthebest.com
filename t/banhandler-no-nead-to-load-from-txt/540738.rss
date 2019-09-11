@@ -1,0 +1,1053 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BanHandler (no nead to load from txt)</title>
+    <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738</link>
+    <description>[b]Class[/b]: SerialHandler
+[b]Purpose[/b]: This will handle all File read&#39;s and writes with Serializable objects.
+[code=java5]
+public class SerialHandler {
+
+    public static Object fetch(String file) {
+        Object o = null;
+        java.io.FileInputStream fis = null;
+        ObjectInputStream dis = null;
+        try {
+
+            fis = new java.io.FileInputStream(file);
+            dis = new ObjectInputStream(fis);
+
+            o = dis.readObject();
+        } catch (FileNotFoundException ex) {
+        } catch (IOException ex) {
+            System.err.println(&quot;IO exception fetching file:&quot; + file);
+        } catch (ClassNotFoundException ex) {
+            System.err.println(&quot;Cant fix class not found?&quot;);
+        } finally {
+            try {
+                if (fis != null) {
+                    fis.close();
+                }
+                if (dis != null) {
+                    dis.close();
+                }
+            } catch (IOException ex) {
+                Logger.getLogger(Handler.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        }
+        return o;
+    }
+
+    public static void put(String file, Object obj) {
+        if (obj instanceof Serializable == false) {
+            return;
+        }
+        java.io.FileOutputStream fos = null;
+        java.io.ObjectOutputStream oos = null;
+        try {
+            try {
+                fos = new FileOutputStream(file, false);
+                oos = new ObjectOutputStream(fos);
+                oos.writeObject(obj);
+            } catch (FileNotFoundException fnfe) {
+            } catch (IOException ex) {
+            } finally {
+                if (fos != null) {
+                    fos.close();
+                }
+                if (oos != null) {
+                    oos.close();
+                }
+            }
+        } catch (IOException ioe) {
+        }
+    }
+}[/code]
+
+[b]Class[/b]: Saveable
+[b]Purpose[/b]: This is an interface that extends Serializable. it also contains a method that will return the filepath this object saves to and reads from.
+[code=java5]public interface Saveable extends Serializable {
+    public String getFilePath();
+}[/code]
+
+[b]Class[/b]: Security
+[b]Purpose[/b]: Kind of a baseline example of how this would work. Yours will probably not run off of a securitymanager like mine, but i did document this to explain how it works. 
+[code=java5]public class Security extends SecurityManager implements Saveable {
+    /*Keep these when saving*/
+
+    /**
+     * bannedIP - holds the list of IP&#39;s in numeric.
+     */
+    private final List&lt;Integer&gt; bannedIP;
+    /**
+     * bannedPlayer - holds the list of Players who are permanently banned from
+     * this server.
+     */
+    private final List&lt;String&gt; bannedPlayer;
+    /**
+     * bannedMAC - holds the list of all banned NIC cards.
+     */
+    private final List&lt;Long&gt; bannedMAC;
+    /**
+     * connected - the list of users who are current connected to the server.
+     * transient means it will not be included in the Serialized object.
+     */
+    final transient LinkedList&lt;String&gt; connected;
+    /**
+     * creates a new Copy of Security
+     */
+    public Security() {
+        connected = new LinkedList();
+        bannedIP = new ArrayList();
+        bannedPlayer = new ArrayList();
+        bannedMAC = new ArrayList();
+    }
+    /**
+     * Private method
+     * @param numericIP - integer to format as an IP address using 
+     * Dotted-decimal notation
+     * @return Formatted view of the numericIP in &quot;0.0.0.0&quot; notation
+     */
+    private String formatIP(int numericIP) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 3; i &gt;= 0; i--) {
+            b.append((numericIP &lt;&lt; i * 8) &amp; 0xff);
+            if (i != 0) {
+                b.append(&#39;.&#39;);
+            }
+        }
+        return b.toString();
+    }
+    /**
+     * Private method
+     * @param macAdd - macAddress to format
+     * @return formatted Mac with standard &quot;00:00:00:00:00:00&quot; notation
+     */
+    private String formatMAC(long macAdd) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 5; i &gt;= 0; i--) {
+            b.append(Long.toHexString((macAdd &lt;&lt; i * 8) &amp; 0xff));
+            if (i != 0) {
+                b.append(&#39;:&#39;);
+            }
+        }
+        return b.toString().toUpperCase();
+    }
+    /**
+     * 
+     * @param numericIP - numeric form of IP address to check against the 
+     * bannedIP table.
+     * @param port - port the client is attempting to connect too.
+     * @throws SecurityException - if the port is not accepted or if numericIP 
+     * is found in the banned IP table.
+     */
+    public void checkIPAndPort(int numericIP, int port) {
+        if (port != 43594) {
+            throw new SecurityException(formatIP(numericIP) + &quot; tried connecting on an invalid port:&quot; + port);
+        }
+        if (bannedIP.contains(numericIP)) {
+            throw new SecurityException(formatIP(numericIP) + &quot; attempted to connect but is IP banned&quot;);
+        }
+    }
+
+    /**
+     *
+     * @param MAC - MAC address to check against the banned MAC table
+     * @throws SecurityException - if the address is found in the table.
+     */
+    public void checkMAC(long MAC) {
+        synchronized (bannedMAC) {
+            if (bannedMAC.contains(MAC)) {
+                throw new SecurityException(formatMAC(MAC) + &quot; attemted to connect but is a banned Computer&quot;);
+            }
+        }
+    }
+
+    /**
+     *
+     * @param numericIP the IP address (IPv4) of the host to ban in numeric
+     * form.
+     */
+    public void banIP(int numericIP) {
+        synchronized (bannedIP) {
+            if (!bannedIP.contains(numericIP)) {
+                bannedIP.add(numericIP);
+            }
+        }
+    }
+
+    /**
+     * @param playerName - player to append to the banned Players table. Name is
+     * only added if it does not already exist
+     */
+    public void banPlayer(String playerName) {
+        synchronized (bannedPlayer) {
+            if (!bannedPlayer.contains(playerName)) {
+                bannedPlayer.add(playerName);
+            }
+        }
+    }
+
+    /**
+     * @param name Name to check against the list of banned Players
+     * @throws SecurityException - if the name is found in the list
+     */
+    public void checkPlayer(String name) {
+        synchronized (bannedPlayer) {
+            if (bannedPlayer.contains(name)) {
+                throw new SecurityException(name + &quot; is banned!&quot;);
+            }
+        }
+    }
+
+    /**
+     * Synchronized removal of all the MAC address from the table of banned MACs
+     * that match MAC.
+     *
+     * @param ip - the ip address in numeric form to remove from banned list.
+     * @return If the ip address was removed from the list.
+     */
+    public boolean removeMAC(long MAC) {
+        synchronized (bannedMAC) {
+            boolean ret = bannedMAC.remove(MAC);
+            while (bannedMAC.remove(MAC));
+            return ret;
+        }
+    }
+
+    /**
+     * Synchronized removal of all the IP address from the table of banned IPs
+     * that match ip.
+     *
+     * @param ip - the ip address in numeric form to remove from banned list.
+     * @return If the ip address was removed from the list.
+     */
+    public boolean removeIP(int ip) {
+        synchronized (bannedIP) {
+            boolean ret = bannedIP.remove((Integer) ip);
+            while (bannedIP.remove((Integer) ip));
+            return ret;
+        }
+    }
+
+    /**
+     * Synchronized removal of all the occurrences from the table of banned
+     * Players that match playerName.
+     *
+     * @param playerName - the Player&#39;s name to remove from the banned list.
+     * @return If the name was removed from the list.
+     */
+    public boolean removePlayer(String playerName) {
+        synchronized (bannedPlayer) {
+            boolean ret = bannedPlayer.remove(playerName);
+            while (bannedPlayer.remove(playerName));
+            return ret;
+        }
+    }
+
+    @Override
+    public String getFilePath() {
+        return &quot;./SERIAL/Security.ser&quot;;
+    }
+}[/code]
+EDIT:
+
+I forgot.
+[b]Class[/b]: Server
+[b]Purpose[/b]: To show how to load this during boot.
+
+[code]
+static Security security;
+public static void main(String[] args) {
+        //boot logic here..
+
+       security = new Security();//have to do this redudancy to get the filepath. or can just type in the string.
+       Security securitytmp = (Security)SerialHandler.fetch(security.getFilePath());
+if (securitytmp != null) //loaded the file correctly
+security = securitytmp; //assigns the file.
+    }[/code]
+Upon the execution of this code:
+Loads file devoted to Security.
+If it loads, all of the Serializable data values will be restored to their previous state. If a value is not serializable, or should be excluded - mark it transient.</description>
+    
+    <lastBuildDate>Sun, 16 Mar 2014 06:58:11 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="20" data-topic="540738">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>your jokes <span class="bbcode-s">suck</span> are great</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/21</link>
+        <pubDate>Sun, 16 Mar 2014 06:58:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-21</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>your jokes suck</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/20</link>
+        <pubDate>Sat, 15 Mar 2014 22:02:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-20</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>well since it’s a pun i thought it’d be better to merge the spelling of the two words. any other critiques towards my delivery of jokes?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/19</link>
+        <pubDate>Sat, 15 Mar 2014 21:58:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-19</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>pretty sure thats knead</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/18</link>
+        <pubDate>Sat, 15 Mar 2014 21:51:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-18</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="16" data-topic="540738">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/strucker/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Strucker:</div>
+<blockquote>
+<p>i just noticed that the title says nead lol</p>
+</blockquote>
+</aside>
+<p>why did the baker rob the bank? coz he neaded the dough…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/17</link>
+        <pubDate>Sat, 15 Mar 2014 21:40:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-17</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>i just noticed that the title says nead lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/16</link>
+        <pubDate>Sat, 15 Mar 2014 16:05:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-16</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“zuppers, post:14, topic:540738”][quote author=Pure_ link=topic=659603.msg4411598#msg4411598 date=1393949748]</p>
+<p>[quote author=matzie link=topic=659603.msg4411574#msg4411574 date=1393940374]</p>
+<aside class="quote">
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.<br>
+[/quote]Decompile client<br>
+Send dummy MAC address<br>
+???<br>
+Profit<br>
+[/quote]Not even lol,<br>
+<img src="http://puu.sh/7kx6E.png" alt width="" height="">[/quote]</p>
+<p>haha thanks for that <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue_winking_eye.png?v=5" title=":stuck_out_tongue_winking_eye:" class="emoji" alt=":stuck_out_tongue_winking_eye:"> now i know i might as well not use it (: looks like im back to David lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/15</link>
+        <pubDate>Fri, 07 Mar 2014 22:38:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-15</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@zuppers zuppers]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zuppers">@zuppers</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Pure_, post:10, topic:540738”][quote author=matzie link=topic=659603.msg4411574#msg4411574 date=1393940374]</p>
+<aside class="quote">
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.<br>
+[/quote]Decompile client<br>
+Send dummy MAC address<br>
+???<br>
+Profit[/quote]Not even lol,<br>
+<img src="http://puu.sh/7kx6E.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/14</link>
+        <pubDate>Thu, 06 Mar 2014 02:00:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-14</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Pure_, post:10, topic:540738”][quote author=matzie link=topic=659603.msg4411574#msg4411574 date=1393940374]</p>
+<aside class="quote">
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.<br>
+[/quote]Decompile client<br>
+Send dummy MAC address<br>
+???<br>
+Profit[/quote]<br>
+I will have security measures in place to insure this does not happen. Am not going to say what they are though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/13</link>
+        <pubDate>Thu, 06 Mar 2014 01:52:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-13</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>Nice but i think its a bit too hard…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/12</link>
+        <pubDate>Tue, 04 Mar 2014 20:25:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-12</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Pure_, post:10, topic:540738”][quote author=matzie link=topic=659603.msg4411574#msg4411574 date=1393940374]</p>
+<aside class="quote">
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.<br>
+[/quote]Decompile client<br>
+Send dummy MAC address<br>
+???<br>
+Profit[/quote]</p>
+<blockquote>
+<p>implying average rsps user could do that</p>
+</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/11</link>
+        <pubDate>Tue, 04 Mar 2014 19:52:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-11</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:8, topic:540738”][quote author=xx matty xx link=topic=659603.msg4411164#msg4411164 date=1393768173]<br>
+lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server<br>
+[/quote]<br>
+It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.[/quote]Decompile client<br>
+Send dummy MAC address<br>
+???<br>
+Profit</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/10</link>
+        <pubDate>Tue, 04 Mar 2014 16:15:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-10</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>Fair enough</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/9</link>
+        <pubDate>Tue, 04 Mar 2014 13:58:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-9</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="540738">
+<div class="title">
+<div class="quote-controls"></div>
+ xx matty xx:</div>
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>It is not breaking and U.S. laws having the client send their MAC address to my server. and requiring they use my client, i would be able to ban MAC addresses as well. Most clients already have this implemented anyways, so i added it to my ban handler. You probably say that is easy to counter, but we will see. (:</p>
+<p>and The SerialHandler, fetches files. and puts files. That is all it does.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/8</link>
+        <pubDate>Tue, 04 Mar 2014 13:39:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-8</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>[code=java]<br>
+public class SerialHandler {</p>
+<pre><code>public static Object fetch(String file) {
+    Object o = null;
+    java.io.FileInputStream fis = null;
+    ObjectInputStream dis = null;
+    try {
+
+        fis = new java.io.FileInputStream(file);
+        dis = new ObjectInputStream(fis);
+
+        o = dis.readObject();
+    } catch (FileNotFoundException ex) {
+    } catch (IOException ex) {
+        System.err.println("IO exception fetching file:" + file);
+    } catch (ClassNotFoundException ex) {
+        System.err.println("Cant fix class not found?");
+    } finally {
+        try {
+            if (fis != null) {
+                fis.close();
+            }
+            if (dis != null) {
+                dis.close();
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(Handler.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    return o;
+}
+
+public static void put(String file, Object obj) {
+    if (obj instanceof Serializable == false) {
+        return;
+    }
+    java.io.FileOutputStream fos = null;
+    java.io.ObjectOutputStream oos = null;
+    try {
+        try {
+            fos = new FileOutputStream(file, false);
+            oos = new ObjectOutputStream(fos);
+            oos.writeObject(obj);
+        } catch (FileNotFoundException fnfe) {
+        } catch (IOException ex) {
+        } finally {
+            if (fos != null) {
+                fos.close();
+            }
+            if (oos != null) {
+                oos.close();
+            }
+        }
+    } catch (IOException ioe) {
+    }
+}
+</code></pre>
+<p>}[/code]</p>
+<p>wtf is this? I can barely read it</p>
+<pre><code class="lang-auto">import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.logging.Logger;
+
+public final class SerialHandler
+{
+
+	private static final Logger logger = Logger.getLogger( SerialHandler.class.getName() );
+
+
+	public static Object fetch( String file ) throws ClassNotFoundException, IOException
+	{
+		try( ObjectInputStream inputStream = new ObjectInputStream( new FileInputStream( file ) ) ) {
+			return inputStream.readObject();
+		}
+	}
+
+
+	public static void put( String file, Object obj ) throws IOException
+	{
+		if( obj.getClass().getSuperclass() != Serializable.class ) {
+			logger.severe( obj + " is not an instance of serializable." );
+			return;
+		}
+
+		try( ObjectOutputStream outputStream = new ObjectOutputStream( new FileOutputStream( file, false ) ) ) {
+			outputStream.writeObject( obj );
+		}
+	}
+
+	private SerialHandler() { }
+
+}</code></pre>
+<p>Why not something more… elegant and simple… remember to <a href="http://en.wikipedia.org/wiki/KISS_principle" data-bbcode="true" rel="nofollow noopener">KISS</a>.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/7</link>
+        <pubDate>Sun, 02 Mar 2014 19:33:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-7</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ambokile, post:5, topic:540738”][quote author=xx matty xx link=topic=659603.msg4411164#msg4411164 date=1393768173]<br>
+lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server<br>
+[/quote]</p>
+<p>What do you mean?[/quote]MAC addresses are link layer so the source address is of the local switch not the remote client.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/6</link>
+        <pubDate>Sun, 02 Mar 2014 19:21:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-6</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@Ambokile Ambokile]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ambokile">@Ambokile</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="540738">
+<div class="title">
+<div class="quote-controls"></div>
+ xx matty xx:</div>
+<blockquote>
+<p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+</blockquote>
+</aside>
+<p>What do you mean?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/5</link>
+        <pubDate>Sun, 02 Mar 2014 19:17:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-5</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>lol it’d be funny if someone actually used this since banning the MAC of your router will ban everyone on the server</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/4</link>
+        <pubDate>Sun, 02 Mar 2014 13:49:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-4</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>Wow instead of saving to a text file you saved a byte stream!!!</p>
+<p>Jagex doesn’t do this, so why should you???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/3</link>
+        <pubDate>Sun, 02 Mar 2014 08:52:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-3</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>this looks 10000000x more complicated than it has to be</p>
+<p>loading from .txt with a <span class="bbcode-i">Scanner</span> would be so much faster and less redundant</p>
+<p>[code]<span class="hashtag">#ban_player</span> <br>
+<span class="hashtag">#ban_player</span> <br>
+<span class="hashtag">#ban_ip</span> <br>
+<span class="hashtag">#ban_ip</span> <br>
+<span class="hashtag">#ban_mac</span> <br>
+<span class="hashtag">#ban_mac</span> </p>
+<p>…[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/2</link>
+        <pubDate>Sun, 02 Mar 2014 07:25:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-2</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+      <item>
+        <title>BanHandler (no nead to load from txt)</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">Class</span>: SerialHandler<br>
+<span class="bbcode-b">Purpose</span>: This will handle all File read’s and writes with Serializable objects.</p>
+<p>[code=java5]<br>
+public class SerialHandler {</p>
+<pre><code>public static Object fetch(String file) {
+    Object o = null;
+    java.io.FileInputStream fis = null;
+    ObjectInputStream dis = null;
+    try {
+
+        fis = new java.io.FileInputStream(file);
+        dis = new ObjectInputStream(fis);
+
+        o = dis.readObject();
+    } catch (FileNotFoundException ex) {
+    } catch (IOException ex) {
+        System.err.println("IO exception fetching file:" + file);
+    } catch (ClassNotFoundException ex) {
+        System.err.println("Cant fix class not found?");
+    } finally {
+        try {
+            if (fis != null) {
+                fis.close();
+            }
+            if (dis != null) {
+                dis.close();
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(Handler.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    return o;
+}
+
+public static void put(String file, Object obj) {
+    if (obj instanceof Serializable == false) {
+        return;
+    }
+    java.io.FileOutputStream fos = null;
+    java.io.ObjectOutputStream oos = null;
+    try {
+        try {
+            fos = new FileOutputStream(file, false);
+            oos = new ObjectOutputStream(fos);
+            oos.writeObject(obj);
+        } catch (FileNotFoundException fnfe) {
+        } catch (IOException ex) {
+        } finally {
+            if (fos != null) {
+                fos.close();
+            }
+            if (oos != null) {
+                oos.close();
+            }
+        }
+    } catch (IOException ioe) {
+    }
+}
+</code></pre>
+<p>}[/code]</p>
+<p><span class="bbcode-b">Class</span>: Saveable<br>
+<span class="bbcode-b">Purpose</span>: This is an interface that extends Serializable. it also contains a method that will return the filepath this object saves to and reads from.</p>
+<p><code>public interface Saveable extends Serializable {
+    public String getFilePath();
+}</code></p>
+<p><span class="bbcode-b">Class</span>: Security<br>
+<span class="bbcode-b">Purpose</span>: Kind of a baseline example of how this would work. Yours will probably not run off of a securitymanager like mine, but i did document this to explain how it works.</p>
+<p>[code=java5]public class Security extends SecurityManager implements Saveable {<br>
+/<em>Keep these when saving</em>/</p>
+<pre><code>/**
+ * bannedIP - holds the list of IP's in numeric.
+ */
+private final List&lt;Integer&gt; bannedIP;
+/**
+ * bannedPlayer - holds the list of Players who are permanently banned from
+ * this server.
+ */
+private final List&lt;String&gt; bannedPlayer;
+/**
+ * bannedMAC - holds the list of all banned NIC cards.
+ */
+private final List&lt;Long&gt; bannedMAC;
+/**
+ * connected - the list of users who are current connected to the server.
+ * transient means it will not be included in the Serialized object.
+ */
+final transient LinkedList&lt;String&gt; connected;
+/**
+ * creates a new Copy of Security
+ */
+public Security() {
+    connected = new LinkedList();
+    bannedIP = new ArrayList();
+    bannedPlayer = new ArrayList();
+    bannedMAC = new ArrayList();
+}
+/**
+ * Private method
+ * @param numericIP - integer to format as an IP address using 
+ * Dotted-decimal notation
+ * @return Formatted view of the numericIP in "0.0.0.0" notation
+ */
+private String formatIP(int numericIP) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 3; i &gt;= 0; i--) {
+        b.append((numericIP &lt;&lt; i * 8) &amp; 0xff);
+        if (i != 0) {
+            b.append('.');
+        }
+    }
+    return b.toString();
+}
+/**
+ * Private method
+ * @param macAdd - macAddress to format
+ * @return formatted Mac with standard "00:00:00:00:00:00" notation
+ */
+private String formatMAC(long macAdd) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 5; i &gt;= 0; i--) {
+        b.append(Long.toHexString((macAdd &lt;&lt; i * 8) &amp; 0xff));
+        if (i != 0) {
+            b.append(':');
+        }
+    }
+    return b.toString().toUpperCase();
+}
+/**
+ * 
+ * @param numericIP - numeric form of IP address to check against the 
+ * bannedIP table.
+ * @param port - port the client is attempting to connect too.
+ * @throws SecurityException - if the port is not accepted or if numericIP 
+ * is found in the banned IP table.
+ */
+public void checkIPAndPort(int numericIP, int port) {
+    if (port != 43594) {
+        throw new SecurityException(formatIP(numericIP) + " tried connecting on an invalid port:" + port);
+    }
+    if (bannedIP.contains(numericIP)) {
+        throw new SecurityException(formatIP(numericIP) + " attempted to connect but is IP banned");
+    }
+}
+
+/**
+ *
+ * @param MAC - MAC address to check against the banned MAC table
+ * @throws SecurityException - if the address is found in the table.
+ */
+public void checkMAC(long MAC) {
+    synchronized (bannedMAC) {
+        if (bannedMAC.contains(MAC)) {
+            throw new SecurityException(formatMAC(MAC) + " attemted to connect but is a banned Computer");
+        }
+    }
+}
+
+/**
+ *
+ * @param numericIP the IP address (IPv4) of the host to ban in numeric
+ * form.
+ */
+public void banIP(int numericIP) {
+    synchronized (bannedIP) {
+        if (!bannedIP.contains(numericIP)) {
+            bannedIP.add(numericIP);
+        }
+    }
+}
+
+/**
+ * @param playerName - player to append to the banned Players table. Name is
+ * only added if it does not already exist
+ */
+public void banPlayer(String playerName) {
+    synchronized (bannedPlayer) {
+        if (!bannedPlayer.contains(playerName)) {
+            bannedPlayer.add(playerName);
+        }
+    }
+}
+
+/**
+ * @param name Name to check against the list of banned Players
+ * @throws SecurityException - if the name is found in the list
+ */
+public void checkPlayer(String name) {
+    synchronized (bannedPlayer) {
+        if (bannedPlayer.contains(name)) {
+            throw new SecurityException(name + " is banned!");
+        }
+    }
+}
+
+/**
+ * Synchronized removal of all the MAC address from the table of banned MACs
+ * that match MAC.
+ *
+ * @param ip - the ip address in numeric form to remove from banned list.
+ * @return If the ip address was removed from the list.
+ */
+public boolean removeMAC(long MAC) {
+    synchronized (bannedMAC) {
+        boolean ret = bannedMAC.remove(MAC);
+        while (bannedMAC.remove(MAC));
+        return ret;
+    }
+}
+
+/**
+ * Synchronized removal of all the IP address from the table of banned IPs
+ * that match ip.
+ *
+ * @param ip - the ip address in numeric form to remove from banned list.
+ * @return If the ip address was removed from the list.
+ */
+public boolean removeIP(int ip) {
+    synchronized (bannedIP) {
+        boolean ret = bannedIP.remove((Integer) ip);
+        while (bannedIP.remove((Integer) ip));
+        return ret;
+    }
+}
+
+/**
+ * Synchronized removal of all the occurrences from the table of banned
+ * Players that match playerName.
+ *
+ * @param playerName - the Player's name to remove from the banned list.
+ * @return If the name was removed from the list.
+ */
+public boolean removePlayer(String playerName) {
+    synchronized (bannedPlayer) {
+        boolean ret = bannedPlayer.remove(playerName);
+        while (bannedPlayer.remove(playerName));
+        return ret;
+    }
+}
+
+@Override
+public String getFilePath() {
+    return "./SERIAL/Security.ser";
+}
+</code></pre>
+<p>}[/code]<br>
+EDIT:</p>
+<p>I forgot.<br>
+<span class="bbcode-b">Class</span>: Server<br>
+<span class="bbcode-b">Purpose</span>: To show how to load this during boot.</p>
+<p>[code]<br>
+static Security security;<br>
+public static void main(String[] args) {<br>
+//boot logic here…</p>
+<pre><code>   security = new Security();//have to do this redudancy to get the filepath. or can just type in the string.
+   Security securitytmp = (Security)SerialHandler.fetch(security.getFilePath());
+</code></pre>
+<p>if (securitytmp != null) //loaded the file correctly<br>
+security = securitytmp; //assigns the file.<br>
+}[/code]<br>
+Upon the execution of this code:<br>
+Loads file devoted to Security.<br>
+If it loads, all of the Serializable data values will be restored to their previous state. If a value is not serializable, or should be excluded - mark it transient.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738/1</link>
+        <pubDate>Sat, 01 Mar 2014 06:54:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540738-1</guid>
+        <source url="https://forum.moparisthebest.com/t/banhandler-no-nead-to-load-from-txt/540738.rss">BanHandler (no nead to load from txt)</source>
+      </item>
+  </channel>
+</rss>

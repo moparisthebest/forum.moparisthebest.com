@@ -1,0 +1,1222 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Netty latency problem</title>
+    <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769</link>
+    <description>I thought that there&#39;s some Java experts around that don&#39;t check RSC boards so, I would appreciate if someone helped me out on this problem, as I&#39;ve tried many different things and nothing seems to help.
+
+For example, when you walk first time, it&#39;s instant, but when you walk right after that it has about 300ms delay, it&#39;s same with all the actions, it&#39;s like the pipeline was busy and waits for the old packet to get executed, but it doesn&#39;t make any sense to me since I&#39;m using [i]cachedThreadPool[/i] as boss and workers, and using [i]NioServerSocketChannelFactory[/i], it shouldn&#39;t be blocking it.
+
+My configuration:
+[code]
+		bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()));
+		
+		bootstrap.setOption(&quot;child.tcpNoDelay&quot;, true);
+		bootstrap.setOption(&quot;child.keepAlive&quot;, true);
+		bootstrap.setOption(&quot;child.reuseAddress&quot;, true);
+		
+		bootstrap.setPipelineFactory(new StaminaPipelineFactory());
+[/code]
+
+My pipeline:
+[code]public class ServerPipelineFactory implements ChannelPipelineFactory {
+	
+	public ChannelPipeline getPipeline() throws Exception {
+		ChannelPipeline pipeline = Channels.pipeline();
+		pipeline.addLast(&quot;decoder&quot;, new RSCProtocolDecoder());
+		pipeline.addLast(&quot;encoder&quot;, new RSCProtocolEncoder());
+		pipeline.addLast(&quot;handler&quot;, new ConnectionHandler());
+		return pipeline;
+	}
+}
+[/code]
+
+Encoder:
+[code]	protected Object encode(ChannelHandlerContext ctx, Channel channel, Object object) throws Exception {
+		Packet p = (Packet) object;
+		int packetLength = p.getLength();
+		if (!p.isRaw()) {
+			ChannelBuffer buffer = ChannelBuffers.buffer(packetLength + 3);
+			byte[] outlen = {(byte)(packetLength &gt;&gt; 8), (byte)(packetLength)};
+			buffer.writeBytes(outlen);
+			buffer.writeByte((byte) p.getID());
+			buffer.writeBytes(p.getBuffer());
+			return buffer;
+		}
+		return p.getBuffer();
+	}
+[/code]
+Decoder:
+[code]
+	protected Object decode(ChannelHandlerContext ctx, Channel channel,
+			ChannelBuffer buffer) {
+		buffer.markReaderIndex();
+		if (buffer.readableBytes() &lt; 2) {
+			return null;
+		}
+		Logger.log(&quot;Received at: &quot; + System.currentTimeMillis());
+		byte[] buf = { buffer.readByte(), buffer.readByte() };
+		int length = (short) ((buf[0] &amp; 0xff) &lt;&lt; 8) | (short) (buf[1] &amp; 0xff);
+		if (length &gt; buffer.readableBytes()) {
+			buffer.resetReaderIndex();
+			return null;
+		}
+		if (length - 1 &lt; 0) {
+			Logger.err(&quot;Negative array length!&quot;);
+			channel.close();
+			return null;
+		}
+		ChannelBuffer payloadBuffer;
+		byte[] data = new byte[length - 1];
+		int id = buffer.readByte() &amp; 0xff;
+		buffer.readBytes(data);
+		payloadBuffer = ChannelBuffers.wrappedBuffer(data);
+
+		return new Packet(id, payloadBuffer);
+	}
+[/code]
+ConnectionHandler:
+[code]
+package org.stamina.net;
+
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.ExceptionEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.channel.SimpleChannelUpstreamHandler;
+import org.stamina.Server;
+import org.stamina.model.Player;
+import org.stamina.net.packet.Packet;
+
+public final class ConnectionHandler extends SimpleChannelUpstreamHandler  {
+
+	@Override
+	public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) {
+		final Session session = (Session) ctx.getAttachment();
+		final Player player = session.getPlayer();
+		if (player != null &amp;&amp; !player.destroyed() &amp;&amp; player.initialized()) {
+			player.destroy(false);
+		}
+	}
+
+	@Override
+	public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
+		final Channel chan = e.getChannel();
+		final Session session = new Session(chan);
+		session.setPlayer(new Player(session));
+		ctx.setAttachment(session);
+		Server.getServer().registerSession(session);
+	}
+
+	@Override
+	public void channelDisconnected(ChannelHandlerContext ctx,
+			ChannelStateEvent e) {
+	}
+
+	@Override
+	public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
+
+	}
+
+	@Override
+	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+		if(ctx.getAttachment() instanceof Session) {
+			final Session session = (Session) ctx.getAttachment();
+			final Channel channel = e.getChannel();
+			if (!channel.isConnected()) {
+				return;
+			}
+			session.handlePacket((Packet) e.getMessage());
+		}
+	}
+}
+[/code]
+
+
+while spam clicking wield item.
+[code]     [java] [2012-07-21 18:39:28] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 99ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 317ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 119ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 18ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 331ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 247ms
+     [java] [2012-07-21 18:39:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 146ms
+     [java] [2012-07-21 18:39:30] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 368ms
+     [java] [2012-07-21 18:39:30] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 269ms
+     [java] [2012-07-21 18:39:30] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 188ms
+     [java] [2012-07-21 18:39:30] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 17ms
+[/code]
+Idle, my ping pong packet only being sent:
+[code]
+     [java] [2012-07-21 18:40:58] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:00] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:03] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+     [java] [2012-07-21 18:41:05] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:08] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:10] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 22ms
+     [java] [2012-07-21 18:41:12] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+     [java] [2012-07-21 18:41:15] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:17] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:20] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:22] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+     [java] [2012-07-21 18:41:24] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 21ms
+     [java] [2012-07-21 18:41:27] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+     [java] [2012-07-21 18:41:29] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 19ms
+     [java] [2012-07-21 18:41:32] [New I/O  worker #1] [Decoder]Packet client-&gt;server delay: 20ms
+[/code]
+Both, server and client were ran on same machine.
+I can see that there&#39;s definetly something blocking the pipeline from receiving new packets while old is still being handled. I&#39;ve tried almost everything and the delay is still the same.
+
+
+Any hints towards fixing it is appreciated. If you want more information feel free to ask, or even see the source of the server via TeamView.</description>
+    
+    <lastBuildDate>Fri, 27 Jul 2012 09:57:58 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, that’s what I’m talking about. Consistency would have been a better choice of word.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/30</link>
+        <pubDate>Fri, 27 Jul 2012 09:57:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-30</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:28, topic:450769”]Well, as long as the ordering of your updates is done correctly (updates to world state, and sending of packet updates) you should be fine. It’s very important that you update ALL of the game state before then building and sending ALL of the update packets.<br>
+And if you’ve modelled your updating off mine, which was written with reference to RSCD, you then clear each player’s collections.[/quote]<br>
+I’m not using your client updating system, I’m still using RSCDs, I was talking about the session pulsing synchronization issues you were talking about earlier:</p>
+<aside class="quote" data-post="26" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/lothy/40/51_1.png" class="avatar"> Lothy:</div>
+<blockquote>
+<p>Just a heads up: If you have deviated from this approach and are handling packets immediately upon arrival (or at least trying to) then you have almost certainly introduced synchronisation issues.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/29</link>
+        <pubDate>Thu, 26 Jul 2012 22:45:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-29</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>Well, as long as the ordering of your updates is done correctly (updates to world state, and sending of packet updates) you should be fine. It’s very important that you update ALL of the game state before then building and sending ALL of the update packets.<br>
+And if you’ve modelled your updating off mine, which was written with reference to RSCD, you then clear each player’s collections.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/28</link>
+        <pubDate>Thu, 26 Jul 2012 22:21:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-28</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:26, topic:450769”]If you are in fact queueing the inbound packets as I do then you will find that each session is only pulsed once each game tick. This means that netty’s worker threads will decode packets and queue them inside the session.<br>
+Each tick, the main game loop (the game pulse) will pulse each session, which causes execution of the queued inbound packets.<br>
+After that game state is updated and update packets are issued (which would result in some form of delay, but I’ve never quantified it).</p>
+<p>Just a heads up: If you have deviated from this approach and are handling packets immediately upon arrival (or at least trying to) then you have almost certainly introduced synchronisation issues. There’s a reason that my code makes rather heavy use of the CountdownLatch class.[/quote]<br>
+I have a different thread running to pulse all the sessions on the server every 10 milliseconds, can you tell me more about these synchronization issues and possibly how to fix them?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/27</link>
+        <pubDate>Thu, 26 Jul 2012 13:13:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-27</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>You guys realise that both Graham and myself have released our code under extremely liberal, non-copy-left, licences right?<br>
+There is no ‘ripping’, there is no ‘stealing’. The code is completely and unequivocally free to use as you see fit. The only difference AFAIK is that Graham’s is under the MIT licence and mine is under the BSD licence. Their names notwithstanding, both of these licences are the same for all intents and purposes.</p>
+<p>If you are in fact queueing the inbound packets as I do then you will find that each session is only pulsed once each game tick. This means that netty’s worker threads will decode packets and queue them inside the session.<br>
+Each tick, the main game loop (the game pulse) will pulse each session, which causes execution of the queued inbound packets.<br>
+After that game state is updated and update packets are issued (which would result in some form of delay, but I’ve never quantified it).</p>
+<p>Just a heads up: If you have deviated from this approach and are handling packets immediately upon arrival (or at least trying to) then you have almost certainly introduced synchronisation issues. There’s a reason that my code makes rather heavy use of the CountdownLatch class.</p>
+<p>Anyway, it’s nice to know that some of my code has seen some use. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> I didn’t know that. I’m actually in the process of overhauling, but I’m not going to get the new project code up on github for another couple of weeks – full time work is rough on personal time.</p>
+<p>EDIT: So I’m pretty slack and haven’t stated it in the README on github, but it was (and still is) my intent that Elysium be licenced under the BSD licence.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/26</link>
+        <pubDate>Thu, 26 Jul 2012 12:15:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-26</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>I did use the idea from Elysium, using the ‘Session’, I just recently found it out and thought that it would be good thing to have each session have their own packetqueue. That’s pretty much only thing I used from Elysium.</p>
+<p>Imthenull, I wouldn’t talk as you ripped almost the entire core from Apollo for ProjectRSC.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/25</link>
+        <pubDate>Thu, 26 Jul 2012 11:57:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-25</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:23, topic:450769”]just for reference…</p>
+<aside class="quote">
+<blockquote>
+<p>[code=java]package <a href="http://org.stamina.net" rel="nofollow noopener">org.stamina.net</a>;</p>
+<p>import org.jboss.netty.channel.Channel;<br>
+import org.jboss.netty.channel.ChannelHandlerContext;<br>
+import org.jboss.netty.channel.ChannelStateEvent;<br>
+import org.jboss.netty.channel.ExceptionEvent;<br>
+import org.jboss.netty.channel.MessageEvent;<br>
+import org.jboss.netty.channel.SimpleChannelUpstreamHandler;<br>
+import org.stamina.Server;<br>
+import org.stamina.model.Player;<br>
+import org.stamina.net.packet.Packet;</p>
+<p>public final class ConnectionHandler extends SimpleChannelUpstreamHandler  {</p>
+<pre><code>    @Override
+    public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) {
+            final Session session = (Session) ctx.getAttachment();
+            final Player player = session.getPlayer();
+            if (player != null &amp;&amp; !player.destroyed() &amp;&amp; player.initialized()) {
+                    player.destroy(false);
+            }
+    }
+
+    @Override
+    public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
+            final Channel chan = e.getChannel();
+            final Session session = new Session(chan);
+            session.setPlayer(new Player(session));
+            ctx.setAttachment(session);
+            Server.getServer().registerSession(session);
+    }
+
+    @Override
+    public void channelDisconnected(ChannelHandlerContext ctx,
+                    ChannelStateEvent e) {
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
+
+    }
+
+    @Override
+    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+            if(ctx.getAttachment() instanceof Session) {
+                    final Session session = (Session) ctx.getAttachment();
+                    final Channel channel = e.getChannel();
+                    if (!channel.isConnected()) {
+                            return;
+                    }
+                    session.handlePacket((Packet) e.getMessage());
+            }
+    }
+</code></pre>
+<p>}<br>
+[/code]</p>
+</blockquote>
+</aside>
+<aside class="quote">
+<blockquote>
+<p>[code=java]package org.moparscape.elysium.net.codec;</p>
+<p>import org.jboss.netty.channel.*;<br>
+import org.moparscape.elysium.Server;<br>
+import org.moparscape.elysium.net.Session;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Created by IntelliJ IDEA.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lothy<br>
+*/<br>
+public final class ElysiumConnectionHandler extends SimpleChannelUpstreamHandler {</p>
+<p>private static final Server server = Server.getInstance();</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {<br>
+Channel chan = e.getChannel();<br>
+Session session = new Session(chan);<br>
+ctx.setAttachment(session);<br>
+server.registerSession(session);<br>
+System.out.println(“Channel connected”);<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void channelDisconnected(ChannelHandlerContext ctx, ChannelStateEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+System.out.println(“Channel disconnected”);<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+session.messageReceived((Message) e.getMessage());<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+</blockquote>
+</aside>
+<aside class="quote">
+<blockquote>
+<p>There’s a limit of 60 packets that can be received per pulse though and the pulse is every 10ms so I doubt it’s that.</p>
+</blockquote>
+</aside>
+<aside class="quote">
+<blockquote>
+<pre><code class="lang-auto">
+    @SuppressWarnings("unchecked")
+    public boolean pulse() {
+        if (isRemoving()) {
+            return false;
+        }
+
+        Message message;
+        int processed = 0;
+
+        // Process all of the messages that have been received from this player.
+        // Process the entire queue up to a maximum of 60 messages.
+        while ((message = messageQueue.poll()) != null &amp;&amp; processed++ &lt; 60) {
+            MessageHandler&lt;Message&gt; handler = (MessageHandler&lt;Message&gt;) HandlerLookupService.getHandler(message.getClass());
+            if (handler != null) {
+                try {
+                    handler.handle(this, getPlayer(), message);
+                } catch (Exception e) {
+                    System.out.printf("Player Index: %d - Failure during handling of %s\n",
+                            getPlayer() == null ? -1 : getPlayer().getIndex(),
+                            message.getClass().toString());
+                    e.printStackTrace();
+                }
+            }
+        }
+        return true;
+    }</code></pre>
+</blockquote>
+</aside>
+<p>The github project can be found <a href="https://github.com/Lothy/Elysium" data-bbcode="true" rel="nofollow noopener">here</a>[/quote]Ya, and that code was ‘borrowed’ from here:<br>
+<aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://assets-cdn.github.com/favicon.ico" class="site-icon" width="32" height="32">
+      <a href="https://github.com/grahamedgecombe/lightstone" target="_blank" rel="nofollow noopener">GitHub</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://avatars1.githubusercontent.com/u/231932?s=400&amp;v=4" class="thumbnail onebox-avatar" width="230" height="230">
+
+<h3><a href="https://github.com/grahamedgecombe/lightstone" target="_blank" rel="nofollow noopener">grahamedgecombe/lightstone</a></h3>
+
+<p>lightstone - An open-source implementation of the Minecraft server software.</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+</p>
+<p>Either way, what difference does it make?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/24</link>
+        <pubDate>Thu, 26 Jul 2012 00:49:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-24</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>just for reference…</p>
+<p>[quote="-Nothing, post:1, topic:450769"][code=java]package <a href="http://org.stamina.net" rel="nofollow noopener">org.stamina.net</a>;</p>
+<p>import org.jboss.netty.channel.Channel;<br>
+import org.jboss.netty.channel.ChannelHandlerContext;<br>
+import org.jboss.netty.channel.ChannelStateEvent;<br>
+import org.jboss.netty.channel.ExceptionEvent;<br>
+import org.jboss.netty.channel.MessageEvent;<br>
+import org.jboss.netty.channel.SimpleChannelUpstreamHandler;<br>
+import org.stamina.Server;<br>
+import org.stamina.model.Player;<br>
+import org.stamina.net.packet.Packet;</p>
+<p>public final class ConnectionHandler extends SimpleChannelUpstreamHandler  {</p>
+<pre><code>    @Override
+    public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) {
+            final Session session = (Session) ctx.getAttachment();
+            final Player player = session.getPlayer();
+            if (player != null &amp;&amp; !player.destroyed() &amp;&amp; player.initialized()) {
+                    player.destroy(false);
+            }
+    }
+
+    @Override
+    public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
+            final Channel chan = e.getChannel();
+            final Session session = new Session(chan);
+            session.setPlayer(new Player(session));
+            ctx.setAttachment(session);
+            Server.getServer().registerSession(session);
+    }
+
+    @Override
+    public void channelDisconnected(ChannelHandlerContext ctx,
+                    ChannelStateEvent e) {
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
+
+    }
+
+    @Override
+    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+            if(ctx.getAttachment() instanceof Session) {
+                    final Session session = (Session) ctx.getAttachment();
+                    final Channel channel = e.getChannel();
+                    if (!channel.isConnected()) {
+                            return;
+                    }
+                    session.handlePacket((Packet) e.getMessage());
+            }
+    }
+</code></pre>
+<p>}<br>
+[/code][/quote]</p>
+<p>[quote=“Github”][code=java]package org.moparscape.elysium.net.codec;</p>
+<p>import org.jboss.netty.channel.*;<br>
+import org.moparscape.elysium.Server;<br>
+import org.moparscape.elysium.net.Session;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Created by IntelliJ IDEA.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lothy<br>
+*/<br>
+public final class ElysiumConnectionHandler extends SimpleChannelUpstreamHandler {</p>
+<p>private static final Server server = Server.getInstance();</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {<br>
+Channel chan = e.getChannel();<br>
+Session session = new Session(chan);<br>
+ctx.setAttachment(session);<br>
+server.registerSession(session);<br>
+System.out.println(“Channel connected”);<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void channelDisconnected(ChannelHandlerContext ctx, ChannelStateEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+System.out.println(“Channel disconnected”);<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+session.messageReceived((Message) e.getMessage());<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {<br>
+Session session = (Session) ctx.getAttachment();<br>
+}<br>
+}<br>
+[/code][/quote]</p>
+</li>
+</ul>
+<aside class="quote quote-modified" data-post="18" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+ -Nothing:</div>
+<blockquote>
+<p>There’s a limit of 60 packets that can be received per pulse though and the pulse is every 10ms so I doubt it’s that.</p>
+</blockquote>
+</aside>
+<p>[quote=“Github”][code=java]</p>
+<pre><code>@SuppressWarnings("unchecked")
+public boolean pulse() {
+    if (isRemoving()) {
+        return false;
+    }
+
+    Message message;
+    int processed = 0;
+
+    // Process all of the messages that have been received from this player.
+    // Process the entire queue up to a maximum of 60 messages.
+    while ((message = messageQueue.poll()) != null &amp;&amp; processed++ &lt; 60) {
+        MessageHandler&lt;Message&gt; handler = (MessageHandler&lt;Message&gt;) HandlerLookupService.getHandler(message.getClass());
+        if (handler != null) {
+            try {
+                handler.handle(this, getPlayer(), message);
+            } catch (Exception e) {
+                System.out.printf("Player Index: %d - Failure during handling of %s\n",
+                        getPlayer() == null ? -1 : getPlayer().getIndex(),
+                        message.getClass().toString());
+                e.printStackTrace();
+            }
+        }
+    }
+    return true;
+}
+</code></pre>
+<p>[/code][/quote]</p>
+<p>The github project can be found <a href="https://github.com/Lothy/Elysium" data-bbcode="true" rel="nofollow noopener">here</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/23</link>
+        <pubDate>Wed, 25 Jul 2012 22:38:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-23</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:20, topic:450769”][quote author=imthenull link=topic=553649.msg4058900#msg4058900 date=1343254743]<br>
+sounds (and looks) like you ripped Elysium’s source. lol<br>
+[/quote]</p>
+<p>you’re retarded. no.[/quote]</p>
+<p>gtfo you pos. imthenull knows more than you. Nothing, provide your event handling when you find me on msn.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/22</link>
+        <pubDate>Wed, 25 Jul 2012 22:33:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-22</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:20, topic:450769”][quote author=imthenull link=topic=553649.msg4058900#msg4058900 date=1343254743]<br>
+sounds (and looks) like you ripped Elysium’s source. lol<br>
+[/quote]</p>
+<p>you’re retarded. no.[/quote]<br>
+How am i retarded, would you like me to supply evidence towards my theory?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/21</link>
+        <pubDate>Wed, 25 Jul 2012 22:25:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-21</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="19" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/imthenull/40/1273_1.png" class="avatar"> imthenull:</div>
+<blockquote>
+<p>sounds (and looks) like you ripped Elysium’s source. lol</p>
+</blockquote>
+</aside>
+<p>you’re retarded. no.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/20</link>
+        <pubDate>Wed, 25 Jul 2012 22:21:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-20</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>sounds (and looks) like you ripped Elysium’s source. lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/19</link>
+        <pubDate>Wed, 25 Jul 2012 22:19:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-19</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Not_a_bot, post:17, topic:450769”]The topic is misleading, you don’t know the actual problem and assume it’s a latency problem caused by Netty.</p>
+<p>After quickly skimming your VisualVM logs (if it’s not obvious), it’s mainly showing the status of the threads that are currently allocated and their states (some from Netty’s internal threadpool, another from Snaq (which is used for pooling SQL connections AFAIK)). It again seems too vague to gather much information from, you would need to post up your transport layer (packet handling), if I went on assumptions I personally think you’ve intentionally queued or delayed processing for some sort of defense mechanism to handle flooding (like old RSCD did).[/quote]<br>
+There’s nothing intentionally added in which slows down the execution of packets. There’s a limit of 60 packets that can be received per pulse though and the pulse is every 10ms so I doubt it’s that.</p>
+<p>There’s a reason why I think it’s netty, I’ve tried to fix it several times, I’ve rewritten networking and the way packets get handled entirely about 3 times now, each attempt has been totally different.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/18</link>
+        <pubDate>Wed, 25 Jul 2012 22:11:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-18</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Not_a_bot Not_a_bot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/not_a_bot">@Not_a_bot</a> wrote:</p>
+          <blockquote>
+              <p>The topic is misleading, you don’t know the actual problem and assume it’s a latency problem caused by Netty.</p>
+<p>After quickly skimming your VisualVM logs (if it’s not obvious), it’s mainly showing the status of the threads that are currently allocated and their states (some from Netty’s internal threadpool, another from Snaq (which is used for pooling SQL connections AFAIK)). It again seems too vague to gather much information from, you would need to post up your transport layer (packet handling), if I went on assumptions I personally think you’ve intentionally queued or delayed processing for some sort of defense mechanism to handle flooding (like old RSCD did).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/17</link>
+        <pubDate>Wed, 25 Jul 2012 19:54:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-17</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@The_Enforcer The Enforcer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_enforcer">@The_Enforcer</a> wrote:</p>
+          <blockquote>
+              <p>PM me, I’ll help.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/16</link>
+        <pubDate>Wed, 25 Jul 2012 14:46:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-16</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="12" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>Are you using the latest version of Netty?</p>
+</blockquote>
+</aside>
+<p>Yes, I’ve tried multiple versions, including the latest version.</p>
+<p>So I guess it could be the packethandling blocking the thread… I have no idea what to look for though.<br>
+I took a thread dump with VisualVM while walking around, I’m not so good at analyzing it though.</p>
+<pre><code class="lang-auto">2012-07-25 16:24:20
+Full thread dump Java HotSpot(TM) Client VM (20.7-b02 mixed mode, sharing):
+
+"RMI TCP Connection(idle)" daemon prio=6 tid=0x04d3b400 nid=0x96c waiting on condition [0x081ff000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+	at sun.misc.Unsafe.park(Native Method)
+	- parking to wait for  &lt;0x243d3578&gt; (a java.util.concurrent.SynchronousQueue$TransferStack)
+	at java.util.concurrent.locks.LockSupport.parkNanos(Unknown Source)
+	at java.util.concurrent.SynchronousQueue$TransferStack.awaitFulfill(Unknown Source)
+	at java.util.concurrent.SynchronousQueue$TransferStack.transfer(Unknown Source)
+	at java.util.concurrent.SynchronousQueue.poll(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"RMI TCP Connection(19)-91.157.199.113" daemon prio=6 tid=0x04d39000 nid=0x1270 runnable [0x081af000]
+   java.lang.Thread.State: RUNNABLE
+	at java.net.SocketInputStream.socketRead0(Native Method)
+	at java.net.SocketInputStream.read(Unknown Source)
+	at java.io.BufferedInputStream.fill(Unknown Source)
+	at java.io.BufferedInputStream.read(Unknown Source)
+	- locked &lt;0x1a3e2038&gt; (a java.io.BufferedInputStream)
+	at java.io.FilterInputStream.read(Unknown Source)
+	at sun.rmi.transport.tcp.TCPTransport.handleMessages(Unknown Source)
+	at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run0(Unknown Source)
+	at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.runTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- &lt;0x249469e0&gt; (a java.util.concurrent.locks.ReentrantLock$NonfairSync)
+
+"*** Profiler Agent Special Execution Thread 6" daemon prio=6 tid=0x04d3a800 nid=0x1260 in Object.wait() [0x083df000]
+   java.lang.Thread.State: WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x247fae28&gt; (a java.lang.Object)
+	at java.lang.Object.wait(Object.java:485)
+	at org.netbeans.lib.profiler.server.ProfilerServer$SeparateCmdExecutionThread.run(ProfilerServer.java:289)
+	- locked &lt;0x247fae28&gt; (a java.lang.Object)
+
+   Locked ownable synchronizers:
+	- None
+
+"*** JFluid Monitor thread ***" daemon prio=10 tid=0x04d39400 nid=0x1474 waiting on condition [0x0838f000]
+   java.lang.Thread.State: TIMED_WAITING (sleeping)
+	at java.lang.Thread.sleep(Native Method)
+	at org.netbeans.lib.profiler.server.Monitors$SurvGenAndThreadsMonitor.run(Monitors.java:186)
+
+   Locked ownable synchronizers:
+	- None
+
+"*** Profiler Agent Communication Thread" daemon prio=10 tid=0x04d3bc00 nid=0x13c4 runnable [0x0833f000]
+   java.lang.Thread.State: RUNNABLE
+	at java.net.SocketInputStream.socketRead0(Native Method)
+	at java.net.SocketInputStream.read(Unknown Source)
+	at java.net.SocketInputStream.read(Unknown Source)
+	at java.io.ObjectInputStream$PeekInputStream.peek(Unknown Source)
+	at java.io.ObjectInputStream$BlockDataInputStream.readBlockHeader(Unknown Source)
+	at java.io.ObjectInputStream$BlockDataInputStream.refill(Unknown Source)
+	at java.io.ObjectInputStream$BlockDataInputStream.read(Unknown Source)
+	at java.io.ObjectInputStream.read(Unknown Source)
+	at org.netbeans.lib.profiler.wireprotocol.WireIO.receiveCommandOrResponse(WireIO.java:88)
+	at org.netbeans.lib.profiler.server.ProfilerServer.listenToClient(ProfilerServer.java:1704)
+	at org.netbeans.lib.profiler.server.ProfilerServer.run(ProfilerServer.java:685)
+
+   Locked ownable synchronizers:
+	- None
+
+"New I/O  worker #1" prio=6 tid=0x04d38400 nid=0x140c runnable [0x0829f000]
+   java.lang.Thread.State: RUNNABLE
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.poll0(Native Method)
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.poll(Unknown Source)
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.access$400(Unknown Source)
+	at sun.nio.ch.WindowsSelectorImpl.doSelect(Unknown Source)
+	at sun.nio.ch.SelectorImpl.lockAndDoSelect(Unknown Source)
+	- locked &lt;0x24728e00&gt; (a sun.nio.ch.Util$2)
+	- locked &lt;0x24728e10&gt; (a java.util.Collections$UnmodifiableSet)
+	- locked &lt;0x24728d88&gt; (a sun.nio.ch.WindowsSelectorImpl)
+	at sun.nio.ch.SelectorImpl.select(Unknown Source)
+	at org.jboss.netty.channel.socket.nio.SelectorUtil.select(SelectorUtil.java:52)
+	at org.jboss.netty.channel.socket.nio.AbstractNioWorker.run(AbstractNioWorker.java:209)
+	at org.jboss.netty.channel.socket.nio.NioWorker.run(NioWorker.java:35)
+	at org.jboss.netty.util.ThreadRenamingRunnable.run(ThreadRenamingRunnable.java:102)
+	at org.jboss.netty.util.internal.DeadLockProofWorker$1.run(DeadLockProofWorker.java:42)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.runTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- &lt;0x24746d08&gt; (a java.util.concurrent.locks.ReentrantLock$NonfairSync)
+
+"DestroyJavaVM" prio=6 tid=0x04d39c00 nid=0x728 waiting on condition [0x00000000]
+   java.lang.Thread.State: RUNNABLE
+
+   Locked ownable synchronizers:
+	- None
+
+"New I/O server boss #1 ([id: 0x00baa466, /0.0.0.0:42227])" prio=6 tid=0x03f4e400 nid=0x1230 runnable [0x0815f000]
+   java.lang.Thread.State: RUNNABLE
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.poll0(Native Method)
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.poll(Unknown Source)
+	at sun.nio.ch.WindowsSelectorImpl$SubSelector.access$400(Unknown Source)
+	at sun.nio.ch.WindowsSelectorImpl.doSelect(Unknown Source)
+	at sun.nio.ch.SelectorImpl.lockAndDoSelect(Unknown Source)
+	- locked &lt;0x2472c088&gt; (a sun.nio.ch.Util$2)
+	- locked &lt;0x2472c098&gt; (a java.util.Collections$UnmodifiableSet)
+	- locked &lt;0x2472c010&gt; (a sun.nio.ch.WindowsSelectorImpl)
+	at sun.nio.ch.SelectorImpl.select(Unknown Source)
+	at org.jboss.netty.channel.socket.nio.NioServerSocketPipelineSink$Boss.run(NioServerSocketPipelineSink.java:227)
+	at org.jboss.netty.util.ThreadRenamingRunnable.run(ThreadRenamingRunnable.java:102)
+	at org.jboss.netty.util.internal.DeadLockProofWorker$1.run(DeadLockProofWorker.java:42)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.runTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- &lt;0x24746fe8&gt; (a java.util.concurrent.locks.ReentrantLock$NonfairSync)
+	- &lt;0x24762620&gt; (a java.util.concurrent.locks.ReentrantLock$NonfairSync)
+
+"SessionProcessor-0" prio=6 tid=0x05d05400 nid=0xfec runnable [0x0810f000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+	at sun.misc.Unsafe.park(Native Method)
+	- parking to wait for  &lt;0x2472c1b0&gt; (a java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject)
+	at java.util.concurrent.locks.LockSupport.parkNanos(Unknown Source)
+	at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(Unknown Source)
+	at java.util.concurrent.DelayQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"LoginProcessor-0" prio=6 tid=0x04e62400 nid=0x1318 runnable [0x080bf000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+	at sun.misc.Unsafe.park(Native Method)
+	- parking to wait for  &lt;0x2472c2d0&gt; (a java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject)
+	at java.util.concurrent.locks.LockSupport.parkNanos(Unknown Source)
+	at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(Unknown Source)
+	at java.util.concurrent.DelayQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"GameProcessor-0" prio=6 tid=0x05d06400 nid=0xeec runnable [0x0806f000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+	at sun.misc.Unsafe.park(Native Method)
+	- parking to wait for  &lt;0x2472c3f0&gt; (a java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject)
+	at java.util.concurrent.locks.LockSupport.parkNanos(Unknown Source)
+	at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(Unknown Source)
+	at java.util.concurrent.DelayQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"JMX server connection timeout 14" daemon prio=6 tid=0x03b3ac00 nid=0x420 in Object.wait() [0x0801f000]
+   java.lang.Thread.State: TIMED_WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x24429370&gt; (a [I)
+	at com.sun.jmx.remote.internal.ServerCommunicatorAdmin$Timeout.run(Unknown Source)
+	- locked &lt;0x24429370&gt; (a [I)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"RMI Scheduler(0)" daemon prio=6 tid=0x03b3a400 nid=0x1048 waiting on condition [0x07fcf000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+	at sun.misc.Unsafe.park(Native Method)
+	- parking to wait for  &lt;0x243d59e0&gt; (a java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject)
+	at java.util.concurrent.locks.LockSupport.parkNanos(Unknown Source)
+	at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(Unknown Source)
+	at java.util.concurrent.DelayQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue.take(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(Unknown Source)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"RMI TCP Accept-0" daemon prio=6 tid=0x069d9800 nid=0x330 runnable [0x07f2f000]
+   java.lang.Thread.State: RUNNABLE
+	at java.net.PlainSocketImpl.socketAccept(Native Method)
+	at java.net.PlainSocketImpl.accept(Unknown Source)
+	- locked &lt;0x23fe4758&gt; (a java.net.SocksSocketImpl)
+	at java.net.ServerSocket.implAccept(Unknown Source)
+	at java.net.ServerSocket.accept(Unknown Source)
+	at sun.management.jmxremote.LocalRMIServerSocketFactory$1.accept(Unknown Source)
+	at sun.rmi.transport.tcp.TCPTransport$AcceptLoop.executeAcceptLoop(Unknown Source)
+	at sun.rmi.transport.tcp.TCPTransport$AcceptLoop.run(Unknown Source)
+	at java.lang.Thread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"Thread-2" prio=6 tid=0x03f25400 nid=0x928 in Object.wait() [0x0413f000]
+   java.lang.Thread.State: WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x1ed99038&gt; (a snaq.util.EventDispatcher)
+	at java.lang.Object.wait(Object.java:485)
+	at snaq.util.EventDispatcher.run(EventDispatcher.java:82)
+	- locked &lt;0x1ed99038&gt; (a snaq.util.EventDispatcher)
+
+   Locked ownable synchronizers:
+	- None
+
+"Thread-1" prio=6 tid=0x03f2dc00 nid=0x139c in Object.wait() [0x040ef000]
+   java.lang.Thread.State: WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x1ed990b8&gt; (a snaq.util.EventDispatcher)
+	at java.lang.Object.wait(Object.java:485)
+	at snaq.util.EventDispatcher.run(EventDispatcher.java:82)
+	- locked &lt;0x1ed990b8&gt; (a snaq.util.EventDispatcher)
+
+   Locked ownable synchronizers:
+	- None
+
+"Low Memory Detector" daemon prio=6 tid=0x03adb800 nid=0xaa8 runnable [0x00000000]
+   java.lang.Thread.State: RUNNABLE
+
+   Locked ownable synchronizers:
+	- None
+
+"C1 CompilerThread0" daemon prio=10 tid=0x03ad7800 nid=0x368 waiting on condition [0x00000000]
+   java.lang.Thread.State: RUNNABLE
+
+   Locked ownable synchronizers:
+	- None
+
+"Attach Listener" daemon prio=10 tid=0x03ad6400 nid=0x67c waiting on condition [0x00000000]
+   java.lang.Thread.State: RUNNABLE
+
+   Locked ownable synchronizers:
+	- None
+
+"Signal Dispatcher" daemon prio=10 tid=0x03ad5400 nid=0x1614 runnable [0x00000000]
+   java.lang.Thread.State: RUNNABLE
+
+   Locked ownable synchronizers:
+	- None
+
+"Finalizer" daemon prio=8 tid=0x03acc000 nid=0x1434 in Object.wait() [0x03d0f000]
+   java.lang.Thread.State: WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x1ed99368&gt; (a java.lang.ref.ReferenceQueue$Lock)
+	at java.lang.ref.ReferenceQueue.remove(Unknown Source)
+	- locked &lt;0x1ed99368&gt; (a java.lang.ref.ReferenceQueue$Lock)
+	at java.lang.ref.ReferenceQueue.remove(Unknown Source)
+	at java.lang.ref.Finalizer$FinalizerThread.run(Unknown Source)
+
+   Locked ownable synchronizers:
+	- None
+
+"Reference Handler" daemon prio=10 tid=0x03aca800 nid=0xa7c in Object.wait() [0x03cbf000]
+   java.lang.Thread.State: WAITING (on object monitor)
+	at java.lang.Object.wait(Native Method)
+	- waiting on &lt;0x1ed993f8&gt; (a java.lang.ref.Reference$Lock)
+	at java.lang.Object.wait(Object.java:485)
+	at java.lang.ref.Reference$ReferenceHandler.run(Unknown Source)
+	- locked &lt;0x1ed993f8&gt; (a java.lang.ref.Reference$Lock)
+
+   Locked ownable synchronizers:
+	- None
+
+"VM Thread" prio=10 tid=0x03a8e400 nid=0x978 runnable 
+
+"VM Periodic Task Thread" prio=10 tid=0x03afc800 nid=0x890 waiting on condition 
+
+JNI global references: 12844
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/15</link>
+        <pubDate>Wed, 25 Jul 2012 11:26:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-15</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>i don’t see anything obvious…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/14</link>
+        <pubDate>Wed, 25 Jul 2012 03:23:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-14</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>I don’t see this being a netty problem. Broaden you’re idea of what could be wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/13</link>
+        <pubDate>Tue, 24 Jul 2012 21:19:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-13</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>Are you using the latest version of Netty?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/12</link>
+        <pubDate>Tue, 24 Jul 2012 19:39:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-12</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“veer, post:10, topic:450769”][quote author=-Nothing link=topic=553649.msg4057545#msg4057545 date=1343115863]</p>
+<aside class="quote">
+<blockquote>
+<p>This is the only thing you changed in your server? Lets look at how events are handled?</p>
+</blockquote>
+</aside>
+<p>No, it’s not the only thing I’ve changed. The server is multithreaded, you can check it out via teamviewer, I talked to super_ already and he saw nothing what could be wrong with the server. As the packets get seem to get stuck in the pipeline and not in packethandling.<br>
+[/quote]<br>
+Don’t put words in my mouth <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"><br>
+I said there is nothing immediately obvious I could tell was wrong, but that’s vastly different from nothing possibly being wrong.[/quote]<br>
+Maybe I worded it bit wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/11</link>
+        <pubDate>Tue, 24 Jul 2012 13:46:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-11</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@slavemaster veer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/slavemaster">@slavemaster</a> wrote:</p>
+          <blockquote>
+              <p>[quote="-Nothing, post:9, topic:450769"][quote author=Rodgerwilco link=topic=553649.msg4057238#msg4057238 date=1343087414]<br>
+This is the only thing you changed in your server? Lets look at how events are handled?<br>
+[/quote]<br>
+No, it’s not the only thing I’ve changed. The server is multithreaded, you can check it out via teamviewer, I talked to super_ already and he saw nothing what could be wrong with the server. As the packets get seem to get stuck in the pipeline and not in packethandling.[/quote]<br>
+Don’t put words in my mouth <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"><br>
+I said there is nothing immediately obvious I could tell was wrong, but that’s vastly different from nothing possibly being wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/10</link>
+        <pubDate>Tue, 24 Jul 2012 13:05:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-10</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="8" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/rodgerwilco/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Rodgerwilco:</div>
+<blockquote>
+<p>This is the only thing you changed in your server? Lets look at how events are handled?</p>
+</blockquote>
+</aside>
+<p>No, it’s not the only thing I’ve changed. The server is multithreaded, you can check it out via teamviewer, I talked to super_ already and he saw nothing what could be wrong with the server. As the packets get seem to get stuck in the pipeline and not in packethandling.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/9</link>
+        <pubDate>Tue, 24 Jul 2012 07:44:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-9</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>This is the only thing you changed in your server? Lets look at how events are handled?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/8</link>
+        <pubDate>Mon, 23 Jul 2012 23:50:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-8</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="6" data-topic="450769">
+<div class="title">
+<div class="quote-controls"></div>
+ t4:</div>
+<blockquote>
+<p>uh, keepalive tells how long the thread should remain marked as active after finishing…</p>
+</blockquote>
+</aside>
+<p>Ah, thanks for clarification.</p>
+<p>This problem still occurs, any help is appreciated.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/7</link>
+        <pubDate>Mon, 23 Jul 2012 12:30:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-7</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+      <item>
+        <title>Netty latency problem</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>uh, keepalive tells how long the thread should remain marked as active after finishing…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/netty-latency-problem/450769/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/netty-latency-problem/450769/6</link>
+        <pubDate>Mon, 23 Jul 2012 12:25:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450769-6</guid>
+        <source url="https://forum.moparisthebest.com/t/netty-latency-problem/450769.rss">Netty latency problem</source>
+      </item>
+  </channel>
+</rss>

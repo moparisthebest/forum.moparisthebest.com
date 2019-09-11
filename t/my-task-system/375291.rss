@@ -1,0 +1,803 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>My Task System</title>
+    <link>https://forum.moparisthebest.com/t/my-task-system/375291</link>
+    <description>[code]package org.xera.me;
+
+import java.util.LinkedList;
+import java.util.Queue;
+
+import org.xera.me.event.Event;
+import org.xera.me.event.EventManager;
+import org.xera.me.task.Task;
+
+/**
+ * Constantly processes tasks of our environment.
+ * @author Thomas Nappo
+ */
+public class Engine implements Runnable {
+	
+	/**
+	 * Starts a new engine.
+	 * @return the engine we created, for chaining
+	 */
+	public Engine start() {
+		return this;
+	}
+	
+	/**
+	 * The scheduled event manager of the engine.
+	 */
+	private EventManager eventManager = new EventManager();
+	
+	/**
+	 * @return The scheduled event manager of this engine.
+	 */
+	public EventManager getEventManager() {
+		return eventManager;
+	}
+	
+	/**
+	 * A queue of pending tasks.
+	 */
+	private Queue&lt;Task&gt; tasks = new LinkedList&lt;Task&gt;();
+	
+	/**
+	 * Submits a new task to be processed.
+	 * @param task The task itself.
+	 */
+	public void submit(Task task) {
+		if(task instanceof Event) {
+			eventManager.submit((Event) task);
+			return;
+		}
+		tasks.add(task);
+	}
+	
+	/**
+	 * Completes all of the tasks in the task queue.
+	 */
+	public void taskCompletion() {
+		while(!tasks.isEmpty()) {
+			Task t = tasks.poll();
+			if(t instanceof Event) {
+				continue;
+			}
+			t.handle();
+		}
+	}
+
+	@Override
+	public void run() {
+		while(true) {
+			taskCompletion();
+			eventManager.complete();
+			try {
+				Thread.sleep(1);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+}[/code]
+
+This is our task engine, it&#39;s the core worker of our system. You could also call this &quot;TaskManager&quot; or &quot;TaskEngine&quot;, but I&#39;ve called in Engine for general purposes. It is a runnable thread, and every set amount of time it completes all the tasks in the queue, and calls the event manager (which is like an extension of a task manager, or this class, for the most part) to research all events in it&#39;s separate event queue.
+
+[code]package org.xera.me.task;
+
+/**
+ * A core task that must be processed.
+ * @author Thomas Nappo
+ */
+public interface Task {
+
+	/**
+	 * Executes the task.
+	 */
+	public void handle();
+	
+}[/code]
+
+This is just an interface of a task. Tasks require the handle method, which any logic entered in handle shall be executed.
+
+[code]engine.submit(new Task() {
+	@Override
+	public void handle() {
+		System.out.println(&quot;Hello, this is an example task.&quot;);
+	}
+});[/code]
+
+This is an example submission of a task. When executed, it prints out to the console, &quot;Hello, this is an example task.&quot;.
+
+[code]package org.xera.me.event;
+
+import java.util.Queue;
+import java.util.LinkedList;
+
+/**
+ * Manages events.
+ * @author Thomas Nappo
+ */
+public class EventManager {
+	
+	/**
+	 * All the scheduled events.
+	 */
+	private Queue&lt;Event&gt; events = new LinkedList&lt;Event&gt;();
+	
+	/**
+	 * Marks all scheduled events (this should rarely be used!)
+	 */
+	public void markEvents() {
+		for(Event e : events) {
+			if(!e.running)
+				continue;
+			e.mark();
+		}
+	}
+	
+	/**
+	 * Attempts to dispose a certain event.
+	 * @param e The event to garbage.
+	 * @return &lt;code&gt;true&lt;/code&gt; if we disposed the event, &lt;code&gt;false&lt;/code&gt; meaning the event was running and we did not dispose of it.
+	 */
+	public boolean disposeEvent(Event e) {
+		if(e.running) {
+			return false;
+		}
+		e = null;
+		return true;
+	}
+	
+	/**
+	 * Executes all events of the queue that were found to be ready and running.
+	 */
+	public void complete() {
+		int s = events.size();
+		while(s &gt; 0) {
+			Event e = events.poll();
+			if(!e.ready()) {
+				events.add(e);
+				continue;
+			}
+			s--;
+			if(!e.running) {
+				continue;
+			}
+			e.mark();
+			e.handle();
+			if(e.running) {
+				events.add(e);
+				s++;
+			}
+		}
+	}
+	
+	/**
+	 * Schedules an event.
+	 * @param e The event to be scheduled.
+	 */
+	public void submit(Event e) {
+		events.add(e);
+	}
+
+}
+[/code]
+
+This is our event manager. Similar to the task manager, it has a queue of events (scheduled tasks). When it researches through the tasks of the queue, if a task iterated isn&#39;t running, it adds it to a &quot;remove&quot; arraylist, which later removes it from the queue. We cannot directly remove it in the same loop because it&#39;s concurrent modification, just imagine having a few apples, while you&#39;re sorting through all of them you find one that you don&#39;t like, well if you remove it right then and there, that slot, or iteration, becomes null, therefore we just tried to check conditions of a null (or nothing). This solution is like having a few apples, while you&#39;re sorting through all of them you find one that you don&#39;t like, keep it in your head, continue to sort through the rest of the apples, and after you&#39;re done sorting, the apples in your head you then remove. After we check if a task isn&#39;t running, we then check if it&#39;s ready to be executed, this is dependent on whether the current machine time subtracted by the marked machine time of the task is greater than the delay of the event. If so, we continue on iterating through the events. If we passed both conditions, we then mark the event first (because what if the execution time of the event is slow?), then execute the event.
+
+[code]package org.xera.me.event;
+
+import org.xera.me.task.Task;
+
+/**
+ * A time-schedueled task.
+ * @author Thomas Nappo
+ */
+public abstract class Event implements Task {
+	
+	/**
+	 * Constructs a new event.
+	 * @param delay The amount of delay in execution of the event.
+	 */
+	public Event(int delay) {
+		mark(); // Mark the current time of creation.
+		this.delay = delay; // Set the delay.
+		start(); // Finally allow the event to run.
+	}
+	
+	/**
+	 * Marked machine time.
+	 */
+	protected long current;
+	
+	/**
+	 * The amount of delay in execution of this event.
+	 */
+	protected int delay;
+	
+	/**
+	 * Flag in which states whether or not this event is running.
+	 */
+	protected boolean running;
+	
+	/**
+	 * If this event is ready for execution.
+	 * @return &lt;code&gt;true&lt;/code&gt; if ready, &lt;code&gt;false&lt;/code&gt; if not.
+	 */
+	public boolean ready() {
+		return (System.currentTimeMillis() - current) &gt; delay;
+	}
+	
+	/**
+	 * Starts this event.
+	 */
+	public void start() {
+		this.running = true;
+	}
+	
+	/**
+	 * Stops this event.
+	 */
+	public void stop() {
+		this.running = false;
+		try {
+			this.wait();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	/**
+	 * Marks the event with the current machine time.
+	 */
+	public void mark() {
+		this.current = System.currentTimeMillis();
+	}
+
+}[/code]
+
+Event means scheduled task in this circumstance, so therefore an event implements a task. The difference between interfaces and abstract classes, are that classes that extend abstract classes can superconstruct it&#39;s parent, or &quot;super&quot;, so it can use all the methods inside the super class without having the rewrite the methods/variables, where interfaces require you to rewrite all methods placed inside.
+
+[code]engine.submit(new Event(2000) {
+	@Override
+	public void handle() {
+		System.out.println(&quot;Hello, we were delayed by 2 seconds.&quot;);
+		this.stop();
+	}
+});[/code]
+
+This is an example submission of an event. It&#39;s delay is 2 seconds, so after two seconds it prints to the console &quot;Hello, we were delayed by 2 seconds.&quot;, after, it stops the event so it will only run once.
+
+[code]engine.submit(new Event(2000) {
+	@Override
+	public void handle() {
+		System.out.println(&quot;Hello, we were delayed by 2 seconds, and are going to repeat 2 seconds later.&quot;);
+	}
+});[/code]
+
+Like the previous example submission of an event, this events delay is two, but it does not stop. It will print out &quot;Hello, we were delayed by 2 seconds, and are going to repeat 2 seconds later.&quot; every 2 seconds until the event is stopped.
+
+[code]package org.xera.me.tickable;
+
+import org.xera.me.event.Event;
+
+/**
+ * Simple special event that can execute at 600ms intervals.
+ * @author Thomas Nappo
+ */
+public abstract class Tickable extends Event {
+
+	/**
+	 * Constructs a new tickable.
+	 * @param amount The amount of cycles it takes up.
+	 */
+	public Tickable(int amount) {
+		super(600 * amount); // Superconstructs an event with 600 milliseconds multiplied by the amount of ticks specified.
+	}
+
+}[/code]
+
+This is a tickable event. Tickables (also known as RuneScape cycle) are cycles of 600 milliseconds. They are multiples of 600ms events. They are useful directly for RuneScape, as near all actions in RuneScape are done in tickables.</description>
+    
+    <lastBuildDate>Sat, 08 Jan 2011 15:38:05 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/my-task-system/375291.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“meiscooldude, post:26, topic:375291”]Hey,</p>
+<p>Looked over it again, still a few issues I see. Don’t have time to go through and show you, BUT I do have time to tell you about Unit Testing!</p>
+<p><a href="http://www.vogella.de/articles/JUnit/article.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.vogella.de/articles/JUnit/article.html</a></p>
+<p>Unit Testing basically uses code to test code. You write a ‘test’ in code that executes the code you want to actually test. The test will (usually) check the program state (if you changed a variable in your test, was it what you think it would be at the end of your test, did any exceptions throw you were not expecting, etc) to see if the test pasted.</p>
+<p>Try and get 100% code coverage (every line in your Task System code is executed by a test). Some of the issues should arise if you do this [usually those edge cases].</p>
+<p>Anywho, have fun! (The internet is a wonderful resource!)[/quote]Thank you!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/27</link>
+        <pubDate>Sat, 08 Jan 2011 15:38:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-27</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@meiscooldude meiscooldude]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/meiscooldude">@meiscooldude</a> wrote:</p>
+          <blockquote>
+              <p>Hey,</p>
+<p>Looked over it again, still a few issues I see. Don’t have time to go through and show you, BUT I do have time to tell you about Unit Testing!</p>
+<p><a href="http://www.vogella.de/articles/JUnit/article.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.vogella.de/articles/JUnit/article.html</a></p>
+<p>Unit Testing basically uses code to test code. You write a ‘test’ in code that executes the code you want to actually test. The test will (usually) check the program state (if you changed a variable in your test, was it what you think it would be at the end of your test, did any exceptions throw you were not expecting, etc) to see if the test pasted.</p>
+<p>Try and get 100% code coverage (every line in your Task System code is executed by a test). Some of the issues should arise if you do this [usually those edge cases].</p>
+<p>Anywho, have fun! (The internet is a wonderful resource!)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/26</link>
+        <pubDate>Wed, 29 Dec 2010 23:26:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-26</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>Updated thread. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/25</link>
+        <pubDate>Wed, 29 Dec 2010 16:28:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-25</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@boxhad boxhad]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/boxhad">@boxhad</a> wrote:</p>
+          <blockquote>
+              <p>Nice tutorial</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/24</link>
+        <pubDate>Wed, 29 Dec 2010 15:05:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-24</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>Extremely well thought out criticism! If only other people would be like you. I’ll review it some more</p>
+<p>Okay well I wanted the mark method to be public because what if somebody wants to run the event faster? I mean yeah this is a really unlikely case, but the whole reason for doing these “reinvent the wheel” experiments is to add more features for ease to the user.</p>
+<p>It’s very true that there is somewhat no reason to check system clock in Engine, however, what if somebody wants to slow down the rate at which it processes tasks? Very stupid call of me here though, because why on Earth would anybody want to do that? Plus you’re right about it even more, because 100ms would force the event to call at least 100ms, while the user wants it to be delayed at 50ms. So there is no reason not to process tasks as fast as possible (using while(true)) because it won’t truly <span class="bbcode-b">IDLE</span> the engine if we set a “delay”, as it’ll still be checking if we were delayed enough.</p>
+<p>EDIT: I’ll submit some more later, need to go somewhere</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/23</link>
+        <pubDate>Wed, 29 Dec 2010 13:59:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-23</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@meiscooldude meiscooldude]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/meiscooldude">@meiscooldude</a> wrote:</p>
+          <blockquote>
+              <p>Cool! Interesting little experiment. A few code smells though…</p>
+<ol>
+<li>
+<p>Why does the Engine class use the ‘start’ method instead of a constructor?</p>
+</li>
+<li>
+<p>Engine is meant for handling simple tasks and delegating complex tasks (ie. Events) to an EventManager. Wouldn’t it be cool if the same Engine could delegate tasks to multiple types of TaskManagers instead of just an EventManager?</p>
+</li>
+<li>
+<p>I also feel like Engine is doing too much. Handling simple tasks and delegating tasks is a lot for it to manage. Why not make it just delegate and create a concrete ‘SimpleTaskManager’ for handling simple tasks? That way when Engine has a task submitted it simply delegates it to the appropriate Manager.</p>
+</li>
+<li>
+<p>Engine shouldn’t check for a specific type of a Task upon submission. Try using a Map of sorts to tie Type(s) to Manager(s). Or perhaps even a cleaver use of Generics?</p>
+</li>
+<li>
+<p>I don’t see why the mark(), taskCompletion(), and getEventManager() methods should be public. If Engine is mean to be extensible then make the protected, if they are just helper methods, private.</p>
+</li>
+<li>
+<p>Engine is not very Thread friendly. By means of both efficiency and safety.</p>
+</li>
+</ol>
+<p>6(a). There is no need to check the system clock in Engine. Inside the run method there is an if statement providing execution delay. While this works it waists valuable processor time that could be given to other threads. Java’s Thread.sleep method causes threads to pause execution and give other threads it’s valueable processor time.</p>
+<p><code>
+while(running) {
+	taskCompletion();
+	eventManager.research();
+	Thread.sleep(delay);
+}</code></p>
+<p>6(b). There is no sure fire way to stop Engine from execution (aside from Thread interupts) with the given method ‘setRunning’. Idealy it seems you want a developer to call ‘e.setRunning(false)’ to stop execution of tasks. If code on (a) separate Thread(s) call the ‘setRunning’ method with ‘false’ then ‘true’ before Engine has a chance to check its loop condition ‘while(running)’ it will continue to run. Try implementing a few thread safe methods like start(), pause(), and stop().</p>
+<p>6©. Threading in Java is simple. Threading well in Java is a whole other issue. But there are resources! Here’s a freebee: <a href="http://download.oracle.com/javase/tutorial/essential/concurrency/index.html" rel="nofollow noopener">http://download.oracle.com/javase/tutorial/essential/concurrency/index.html</a></p>
+<ol start="7">
+<li>Your code could use a little better documentation. A method name should give you a pretty good description of what that method does. ‘garbageEvent’ could be better substitued with ‘disposeEvent’. Try and use verbs in method names, because a method does something. Properties are a great place for nouns.</li>
+</ol>
+<p>Also, ‘Researches all events to check if they should be executed.’, the documentation for the ‘research()’ method on EventManager doesn’t state that it performs any actions. A developer who may be too busy to look at the underlying code will only see the method heading and the documentation. Noting that it returns a boolean (which isn’t used anywhere btw) would imply it only checks to see if there are any Events in the queue that need to be executed not actually execute the Events, and remove those which had expired. That could really irritate a developer who just wants to check something with timing (for instance) and suddenly all this random code is executing for no reason.</p>
+<ol start="8">
+<li>
+<p>When I first saw you using a Queue I was all gitty inside. But apparently your just itterating over it inside the EventManager instead of actually using the Queue interface. Try looking into PriorityQueues. They are quite nice when dealing with scheduling.</p>
+</li>
+<li>
+<p>What happens if Engine’s delay is set to 100ms and an event’s delay is set to 50ms? Is this behavior desireable?</p>
+</li>
+<li>
+<p>Instead of having stop() method on Event, try implementing a ‘RepeatingEvent’ that repeates execution a given number of times with 0 being infinity. That would stop forcing people to remember to have to stop() and remove the possibility of having something you only want ran once (ie. Add something to Database) run as many times as it can before you realize and close that application as fast as you can.</p>
+</li>
+</ol>
+<p>-EOF-ish</p>
+<p>See where those get you. I’d be happy to look over it again from there. Remember, Code reviews are AWESOME! =]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/22</link>
+        <pubDate>Wed, 29 Dec 2010 09:02:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-22</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Aeronity, post:20, topic:375291”][quote author=Phaze One link=topic=471247.msg3448001#msg3448001 date=1293558014]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>Why would he want your respect in the first place<br>
+[/quote]<br>
+Because hes a rep whore.[/quote]Yeah I kinda am lol, I’ll admit</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/21</link>
+        <pubDate>Wed, 29 Dec 2010 01:03:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-21</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Aeronity Aeronity]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/aeronity">@Aeronity</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Phaze One, post:18, topic:375291”][quote author=I Vain I link=topic=471247.msg3446652#msg3446652 date=1293486126]<br>
+I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+[/quote]</p>
+<p>Why would he want your respect in the first place[/quote]<br>
+Because hes a rep whore.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/20</link>
+        <pubDate>Tue, 28 Dec 2010 17:45:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-20</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@justinxg27 justinxg27]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justinxg27">@justinxg27</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:4, topic:375291”][quote author=Canownueazy link=topic=471247.msg3446557#msg3446557 date=1293481129]</p>
+<p>[quote author=Davidi2 link=topic=471247.msg3446556#msg3446556 date=1293481091]<br>
+Whose task system is this? How much did it cost?<br>
+[/quote]It’s mine.<br>
+[/quote]Well yea, but how much did the rights cost?[/quote]Lol’d</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/19</link>
+        <pubDate>Tue, 28 Dec 2010 17:44:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-19</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Phaze_One Fuscate]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/phaze_one">@Phaze_One</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“I Vain I”]I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. :)[/quote]</p>
+<p>Why would he want your respect in the first place</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/18</link>
+        <pubDate>Tue, 28 Dec 2010 17:40:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-18</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Aeronity, post:16, topic:375291”][quote author=Canownueazy link=topic=471247.msg3446683#msg3446683 date=1293487047]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+[/quote]Like?</p>
+</blockquote>
+</aside>
+<p>you bz getn flam3d[/quote]Fail troll is fail.</p>
+<p>Anyway I’ve revised it because I did something wrong specifically garbaging all events that are not running.</p>
+<p><span class="mention">@I</span> vain I<br>
+Who the hell is Steven? TheNewCoder or Mystic fat?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/17</link>
+        <pubDate>Tue, 28 Dec 2010 15:41:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-17</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Aeronity Aeronity]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/aeronity">@Aeronity</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Canownueazy, post:13, topic:375291”][quote author=I Vain I link=topic=471247.msg3446652#msg3446652 date=1293486126]<br>
+I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+[/quote]Like?[/quote]<br>
+you bz getn flam3d</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/16</link>
+        <pubDate>Tue, 28 Dec 2010 01:58:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-16</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@LilXCj LilXCj]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lilxcj">@LilXCj</a> wrote:</p>
+          <blockquote>
+              <p>Saw name.</p>
+<p>Put on trollface.</p>
+<p>awaited umad</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/15</link>
+        <pubDate>Mon, 27 Dec 2010 23:19:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-15</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Ddragonimp Ddragonimp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ddragonimp">@Ddragonimp</a> wrote:</p>
+          <blockquote>
+              <p>wow took me a while to read but that is amazing coding.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/14</link>
+        <pubDate>Mon, 27 Dec 2010 22:11:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-14</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“I Vain I”]I only have slight respect for you since we have the same name. Other than that, I will always see you as a failure, as you have bought servers in the past, and released botnets.</p>
+<p>Oh by the way, I’m friends with multiple people you make servers/clients with, so I know what goes on. :)[/quote]Like?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/13</link>
+        <pubDate>Mon, 27 Dec 2010 21:57:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-13</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@abatssk8ter abatssk8ter]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abatssk8ter">@abatssk8ter</a> wrote:</p>
+          <blockquote>
+              <p>Wher’d you rip this one canu?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/12</link>
+        <pubDate>Mon, 27 Dec 2010 21:57:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-12</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“krackkid, post:9, topic:375291”]You are thomas nappo o.o?[/quote]Yeah</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/11</link>
+        <pubDate>Mon, 27 Dec 2010 21:28:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-11</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:8, topic:375291”]Wow, nice <span class="bbcode-s">task system</span> purchase Canownueasy, your <span class="bbcode-s">work</span> selection never fails to please me.</p>
+<p>I WANT TO BE UB3R <span class="bbcode-s">COD3R</span> BAY3R LIK U!!  :([/quote]fix’t</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/10</link>
+        <pubDate>Mon, 27 Dec 2010 21:15:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-10</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <p>You are thomas nappo o.o?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/9</link>
+        <pubDate>Mon, 27 Dec 2010 21:13:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-9</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Wow, nice task system Canownueasy, your work never fails to please me.</p>
+<p>I WANT TO BE UB3R COD3R LIK U!!  <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/8</link>
+        <pubDate>Mon, 27 Dec 2010 21:12:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-8</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:6, topic:375291”][quote author=Phaze One link=topic=471247.msg3446589#msg3446589 date=1293483736]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Whose task system is this? How much did it cost?</p>
+</blockquote>
+</aside>
+<p>Not funny.<br>
+[/quote]Learn the history; this guy has bad ju-ju[/quote]It cost $200 right?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/7</link>
+        <pubDate>Mon, 27 Dec 2010 21:11:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-7</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Phaze One, post:5, topic:375291”][quote author=Davidi2 link=topic=471247.msg3446556#msg3446556 date=1293481091]<br>
+Whose task system is this? How much did it cost?<br>
+[/quote]</p>
+<p>Not funny.[/quote]Learn the history; this guy has bad ju-ju</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/6</link>
+        <pubDate>Mon, 27 Dec 2010 21:07:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-6</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Phaze_One Fuscate]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/phaze_one">@Phaze_One</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="375291">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>Whose task system is this? How much did it cost?</p>
+</blockquote>
+</aside>
+<p>Not funny.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/5</link>
+        <pubDate>Mon, 27 Dec 2010 21:02:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-5</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Canownueazy, post:3, topic:375291”][quote author=Davidi2 link=topic=471247.msg3446556#msg3446556 date=1293481091]<br>
+Whose task system is this? How much did it cost?<br>
+[/quote]It’s mine.[/quote]Well yea, but how much did the rights cost?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/4</link>
+        <pubDate>Mon, 27 Dec 2010 20:19:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-4</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+      <item>
+        <title>My Task System</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:2, topic:375291”]Whose task system is this? How much did it cost?[/quote]It’s mine.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-task-system/375291/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-task-system/375291/3</link>
+        <pubDate>Mon, 27 Dec 2010 20:18:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-375291-3</guid>
+        <source url="https://forum.moparisthebest.com/t/my-task-system/375291.rss">My Task System</source>
+      </item>
+  </channel>
+</rss>

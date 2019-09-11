@@ -1,0 +1,496 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>JSON Parser - Generate Java Objects into JSON strings</title>
+    <link>https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318</link>
+    <description>with influence from Rick_ and his JDBC wrapper, I needed to write a JSON parser for my application so decided to use annotations.
+
+So far I have tested it and come across no errors, let me know what you think, or if there are any areas in which I could improve on.
+
+This is still a WIP, I think i need to add in a check to ensure that multiple key names are not used within the same braces as i believe that is not valid JSON? although it does pass validation if i use two of the same key names.
+
+edit: One issue I have just come across is inheritance, how I will go about handling sub-classes such as Phone could have two children classes MobilePhone and HomePhone.
+
+[code]package com.wibble.json;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface JSONKey {
+    
+    public String key();
+}[/code]
+
+[code]package com.wibble.json;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface Parsable {
+    boolean value() default false;
+}[/code]
+
+[code]public static String parse(Object entity, Class clazz) {
+        if (!clazz.isAnnotationPresent(Parsable.class))
+            return &quot;&quot;;
+        StringBuilder json_builder = new StringBuilder();
+        json_builder.append(&quot;{\n&quot;);
+        try {
+            for (Field field : clazz.getDeclaredFields()) {
+                if (field.isAnnotationPresent(JSONKey.class)) {
+                    JSONKey key = field.getAnnotation(JSONKey.class);
+                    field.setAccessible(true);
+                    Object field_value = field.get(entity);
+                    /* grab the field information according to json standards */
+                    if (field_value == null) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + &quot;null&quot; + &quot;,\n&quot;);
+                    } else if (field.getType().isAssignableFrom(String.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + &quot;\&quot;&quot; + field_value + &quot;\&quot;&quot; + &quot;,\n&quot;);
+                    } else if (field.getType().isAssignableFrom(int.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + String.valueOf(field_value) + &quot;,\n&quot;);
+                    } else if (field.getType().isAssignableFrom(boolean.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + String.valueOf(field_value) + &quot;,\n&quot;);
+                    } else if (field_value.getClass().isArray()) {
+                        int array_dimensions = field.getType().toString().replaceAll(&quot;[^\\[]&quot;, &quot;&quot;).length();
+                        int array_length = Array.getLength(field_value);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException(&quot;Multidimensional arrays not supported yet&quot;);
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: \n[&quot;);
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(field_value, i);
+                            json_builder.append(parse(o, o.getClass()));
+                            if (i != array_length - 1)
+                                json_builder.append(&quot;,&quot;);
+                        }
+                        json_builder.append(&quot;\n],&quot;);
+                    } else {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: \n&quot;);
+                        json_builder.append(parse(field_value, field_value.getClass())).append(&quot;,\n&quot;);
+                    }
+                }
+            }
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(JSONKey.class)) {
+                    if (method.getParameterTypes().length != 0)
+                        throw new RuntimeException(&quot;Methods with parameters not supported&quot;);
+                    JSONKey key = method.getAnnotation(JSONKey.class);
+                    method.setAccessible(true);
+                    Object method_return = method.invoke(entity);
+                    if (method_return == null) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + &quot;null&quot; + &quot;,\n&quot;);
+                    } else if (method.getReturnType().isAssignableFrom(String.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + &quot;\&quot;&quot; + method_return + &quot;\&quot;&quot; + &quot;,\n&quot;);
+                    } else if (method.getReturnType().isAssignableFrom(int.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + String.valueOf(method_return) + &quot;,\n&quot;);
+                    } else if (method.getReturnType().isAssignableFrom(boolean.class)) {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: &quot; + String.valueOf(method_return) + &quot;,\n&quot;);
+                    } else if (method_return.getClass().isArray()) {
+                        int array_dimensions = method.getReturnType().toString().replaceAll(&quot;[^\\[]&quot;, &quot;&quot;).length();
+                        int array_length = Array.getLength(method_return);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException(&quot;Multidimensional arrays not supported yet&quot;);
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: \n[&quot;);
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(method_return, i);
+                            if(o.getClass().isAssignableFrom(String.class) ||
+                                    o.getClass().isAssignableFrom(Integer.class) ||
+                                    o.getClass().isAssignableFrom(Boolean.class)) {
+                                json_builder.append(o);
+                            } else {
+                                json_builder.append(parse(o, o.getClass()));
+                            }
+                            if (i != array_length - 1)
+                                json_builder.append(&quot;,&quot;);
+                        }
+                        json_builder.append(&quot;\n],&quot;);
+                    } else {
+                        json_builder.append(&quot;\&quot;&quot; + key.key() + &quot;\&quot;: \n&quot;);
+                        json_builder.append(parse(method_return, method_return.getClass())).append(&quot;,\n&quot;);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        int last_comma = json_builder.lastIndexOf(&quot;,&quot;);
+        json_builder.replace(last_comma, last_comma + 1, &quot;&quot;);
+        return json_builder.append(&quot;}&quot;).toString();
+    }[/code]
+
+Here is some example classes you can use to test:
+
+[code]package com.wibble.json;
+
+import java.security.PublicKey;
+
+@Parsable
+public class Person {
+
+    public Person(String name, int age) {
+        this.name = name;
+        this.age = age;
+        //this.address = new Address(&quot;Amherst Road&quot;);
+    }
+    
+    public int age = 21;
+
+    @JSONKey(key = &quot;name&quot;)
+    public String name;
+
+    @JSONKey(key = &quot;address&quot;)
+    Address[] address = new Address[] { new Address(&quot;one&quot;), new Address(&quot;two&quot;) };
+
+    @JSONKey(key = &quot;age&quot;)
+    public int getValue() {
+        return age;
+    }
+}[/code]
+
+[code]package com.wibble.json;
+
+@Parsable
+public class Address {
+    
+    public Address(String street) {
+        this.street = street;
+    }
+    
+    @JSONKey(key = &quot;streetAddress&quot;)
+    public String street;
+    @JSONKey(key = &quot;city&quot;)
+    public String city = &quot;Manchester&quot;;
+    @JSONKey(key = &quot;county&quot;)
+    public String county = &quot;Greater Manchester&quot;;
+    @JSONKey(key = &quot;postalCode&quot;)
+    public String post_code = &quot;M14 6FU&quot;;
+
+    @JSONKey(key = &quot;phoneDetails&quot;)
+    MobilePhone p = new MobilePhone(&quot;07965903203&quot;);
+
+}[/code]
+
+[code]package com.wibble.json;
+
+@Parsable
+public class MobilePhone {
+
+    @JSONKey(key = &quot;type&quot;)
+    String type = &quot;mobile&quot;;
+    
+    @JSONKey(key = &quot;phoneNumber&quot;)
+    String number;
+    
+    public MobilePhone(String i) {
+        this.number = i;
+    }
+}
+[/code]</description>
+    
+    <lastBuildDate>Tue, 31 Jan 2012 17:06:46 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>JSON Parser - Generate Java Objects into JSON strings</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>I suppose I wanted a lightweight version, while gson is more than likely a better implementation is there anything (that you can see first hand) wrong with my implementation?</p>
+<p><code>public static String parse(Object entity, Class clazz) {
+        if (!clazz.isAnnotationPresent(Parsable.class))
+            return "";
+        StringBuilder json_builder = new StringBuilder();
+        json_builder.append("{\n");
+        try {
+            for (Field field : clazz.getDeclaredFields()) {
+                if (field.isAnnotationPresent(JSONKey.class)) {
+                    JSONKey key = field.getAnnotation(JSONKey.class);
+                    field.setAccessible(true);
+                    Object field_value = field.get(entity);
+                    /* grab the field information according to json standards */
+                    if (field_value == null) {
+                        json_builder.append("\"" + key.key() + "\": " + "null" + ",\n");
+                    } else if (field.getType().isAssignableFrom(String.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + "\"" + field_value + "\"" + ",\n");
+                    } else if (field.getType().isAssignableFrom(int.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(field_value) + ",\n");
+                    } else if (field.getType().isAssignableFrom(boolean.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(field_value) + ",\n");
+                    } else if (field_value.getClass().isArray()) {
+                        int array_dimensions = field.getType().toString().replaceAll("[^\\[]", "").length();
+                        int array_length = Array.getLength(field_value);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException("Multidimensional arrays not supported yet");
+                        json_builder.append("\"" + key.key() + "\": \n[");
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(field_value, i);
+                            json_builder.append(parse(o, o.getClass()));
+                            if (i != array_length - 1)
+                                json_builder.append(",");
+                        }
+                        json_builder.append("\n],");
+                    } else {
+                        json_builder.append("\"" + key.key() + "\": \n");
+                        json_builder.append(parse(field_value, field_value.getClass())).append(",\n");
+                    }
+                }
+            }
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(JSONKey.class)) {
+                    if (method.getParameterTypes().length != 0)
+                        throw new RuntimeException("Methods with parameters not supported");
+                    JSONKey key = method.getAnnotation(JSONKey.class);
+                    method.setAccessible(true);
+                    Object method_return = method.invoke(entity);
+                    if (method_return == null) {
+                        json_builder.append("\"" + key.key() + "\": " + "null" + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(String.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + "\"" + method_return + "\"" + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(int.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(method_return) + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(boolean.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(method_return) + ",\n");
+                    } else if (method_return.getClass().isArray()) {
+                        int array_dimensions = method.getReturnType().toString().replaceAll("[^\\[]", "").length();
+                        int array_length = Array.getLength(method_return);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException("Multidimensional arrays not supported yet");
+                        json_builder.append("\"" + key.key() + "\": \n[");
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(method_return, i);
+                            if(o.getClass().isAssignableFrom(String.class) ||
+                                    o.getClass().isAssignableFrom(Integer.class) ||
+                                    o.getClass().isAssignableFrom(Boolean.class)) {
+                                json_builder.append(o);
+                            } else {
+                                json_builder.append(parse(o, o.getClass()));
+                            }
+                            if (i != array_length - 1)
+                                json_builder.append(",");
+                        }
+                        json_builder.append("\n],");
+                    } else {
+                        json_builder.append("\"" + key.key() + "\": \n");
+                        json_builder.append(parse(method_return, method_return.getClass())).append(",\n");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        int last_comma = json_builder.lastIndexOf(",");
+        json_builder.replace(last_comma, last_comma + 1, "");
+        return json_builder.append("}").toString();
+    }</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/3</link>
+        <pubDate>Tue, 31 Jan 2012 17:06:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431318-3</guid>
+        <source url="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318.rss">JSON Parser - Generate Java Objects into JSON strings</source>
+      </item>
+      <item>
+        <title>JSON Parser - Generate Java Objects into JSON strings</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>gson</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/2</link>
+        <pubDate>Tue, 31 Jan 2012 16:58:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431318-2</guid>
+        <source url="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318.rss">JSON Parser - Generate Java Objects into JSON strings</source>
+      </item>
+      <item>
+        <title>JSON Parser - Generate Java Objects into JSON strings</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>with influence from Rick_ and his JDBC wrapper, I needed to write a JSON parser for my application so decided to use annotations.</p>
+<p>So far I have tested it and come across no errors, let me know what you think, or if there are any areas in which I could improve on.</p>
+<p>This is still a WIP, I think i need to add in a check to ensure that multiple key names are not used within the same braces as i believe that is not valid JSON? although it does pass validation if i use two of the same key names.</p>
+<p>edit: One issue I have just come across is inheritance, how I will go about handling sub-classes such as Phone could have two children classes MobilePhone and HomePhone.</p>
+<p>[code]package com.wibble.json;</p>
+<p>import java.lang.annotation.Retention;<br>
+import java.lang.annotation.RetentionPolicy;</p>
+<p><span class="mention">@Retention</span>(RetentionPolicy.RUNTIME)<br>
+public <span class="mention">@interface</span> JSONKey {</p>
+<pre><code>public String key();
+</code></pre>
+<p>}[/code]</p>
+<p>[code]package com.wibble.json;</p>
+<p>import java.lang.annotation.ElementType;<br>
+import java.lang.annotation.Retention;<br>
+import java.lang.annotation.RetentionPolicy;<br>
+import java.lang.annotation.Target;</p>
+<p><span class="mention">@Retention</span>(RetentionPolicy.RUNTIME)<br>
+<a class="mention" href="/u/target">@Target</a>(ElementType.TYPE)<br>
+public <span class="mention">@interface</span> Parsable {<br>
+boolean value() default false;<br>
+}[/code]</p>
+<p><code>public static String parse(Object entity, Class clazz) {
+        if (!clazz.isAnnotationPresent(Parsable.class))
+            return "";
+        StringBuilder json_builder = new StringBuilder();
+        json_builder.append("{\n");
+        try {
+            for (Field field : clazz.getDeclaredFields()) {
+                if (field.isAnnotationPresent(JSONKey.class)) {
+                    JSONKey key = field.getAnnotation(JSONKey.class);
+                    field.setAccessible(true);
+                    Object field_value = field.get(entity);
+                    /* grab the field information according to json standards */
+                    if (field_value == null) {
+                        json_builder.append("\"" + key.key() + "\": " + "null" + ",\n");
+                    } else if (field.getType().isAssignableFrom(String.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + "\"" + field_value + "\"" + ",\n");
+                    } else if (field.getType().isAssignableFrom(int.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(field_value) + ",\n");
+                    } else if (field.getType().isAssignableFrom(boolean.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(field_value) + ",\n");
+                    } else if (field_value.getClass().isArray()) {
+                        int array_dimensions = field.getType().toString().replaceAll("[^\\[]", "").length();
+                        int array_length = Array.getLength(field_value);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException("Multidimensional arrays not supported yet");
+                        json_builder.append("\"" + key.key() + "\": \n[");
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(field_value, i);
+                            json_builder.append(parse(o, o.getClass()));
+                            if (i != array_length - 1)
+                                json_builder.append(",");
+                        }
+                        json_builder.append("\n],");
+                    } else {
+                        json_builder.append("\"" + key.key() + "\": \n");
+                        json_builder.append(parse(field_value, field_value.getClass())).append(",\n");
+                    }
+                }
+            }
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(JSONKey.class)) {
+                    if (method.getParameterTypes().length != 0)
+                        throw new RuntimeException("Methods with parameters not supported");
+                    JSONKey key = method.getAnnotation(JSONKey.class);
+                    method.setAccessible(true);
+                    Object method_return = method.invoke(entity);
+                    if (method_return == null) {
+                        json_builder.append("\"" + key.key() + "\": " + "null" + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(String.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + "\"" + method_return + "\"" + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(int.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(method_return) + ",\n");
+                    } else if (method.getReturnType().isAssignableFrom(boolean.class)) {
+                        json_builder.append("\"" + key.key() + "\": " + String.valueOf(method_return) + ",\n");
+                    } else if (method_return.getClass().isArray()) {
+                        int array_dimensions = method.getReturnType().toString().replaceAll("[^\\[]", "").length();
+                        int array_length = Array.getLength(method_return);
+                        if (array_dimensions != 1)
+                            throw new RuntimeException("Multidimensional arrays not supported yet");
+                        json_builder.append("\"" + key.key() + "\": \n[");
+                        for (int i = 0; i &lt; array_length; i++) {
+                            Object o = Array.get(method_return, i);
+                            if(o.getClass().isAssignableFrom(String.class) ||
+                                    o.getClass().isAssignableFrom(Integer.class) ||
+                                    o.getClass().isAssignableFrom(Boolean.class)) {
+                                json_builder.append(o);
+                            } else {
+                                json_builder.append(parse(o, o.getClass()));
+                            }
+                            if (i != array_length - 1)
+                                json_builder.append(",");
+                        }
+                        json_builder.append("\n],");
+                    } else {
+                        json_builder.append("\"" + key.key() + "\": \n");
+                        json_builder.append(parse(method_return, method_return.getClass())).append(",\n");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        int last_comma = json_builder.lastIndexOf(",");
+        json_builder.replace(last_comma, last_comma + 1, "");
+        return json_builder.append("}").toString();
+    }</code></p>
+<p>Here is some example classes you can use to test:</p>
+<p>[code]package com.wibble.json;</p>
+<p>import java.security.PublicKey;</p>
+<p><span class="mention">@Parsable</span><br>
+public class Person {</p>
+<pre><code>public Person(String name, int age) {
+    this.name = name;
+    this.age = age;
+    //this.address = new Address("Amherst Road");
+}
+
+public int age = 21;
+
+@JSONKey(key = "name")
+public String name;
+
+@JSONKey(key = "address")
+Address[] address = new Address[] { new Address("one"), new Address("two") };
+
+@JSONKey(key = "age")
+public int getValue() {
+    return age;
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[code]package com.wibble.json;</p>
+<p><span class="mention">@Parsable</span><br>
+public class Address {</p>
+<pre><code>public Address(String street) {
+    this.street = street;
+}
+
+@JSONKey(key = "streetAddress")
+public String street;
+@JSONKey(key = "city")
+public String city = "Manchester";
+@JSONKey(key = "county")
+public String county = "Greater Manchester";
+@JSONKey(key = "postalCode")
+public String post_code = "M14 6FU";
+
+@JSONKey(key = "phoneDetails")
+MobilePhone p = new MobilePhone("07965903203");
+</code></pre>
+<p>}[/code]</p>
+<p>[code]package com.wibble.json;</p>
+<p><span class="mention">@Parsable</span><br>
+public class MobilePhone {</p>
+<pre><code>@JSONKey(key = "type")
+String type = "mobile";
+
+@JSONKey(key = "phoneNumber")
+String number;
+
+public MobilePhone(String i) {
+    this.number = i;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318/1</link>
+        <pubDate>Tue, 31 Jan 2012 15:15:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431318-1</guid>
+        <source url="https://forum.moparisthebest.com/t/json-parser-generate-java-objects-into-json-strings/431318.rss">JSON Parser - Generate Java Objects into JSON strings</source>
+      </item>
+  </channel>
+</rss>

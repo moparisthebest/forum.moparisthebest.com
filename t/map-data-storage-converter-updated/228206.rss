@@ -1,0 +1,734 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Map Data Storage Converter [Updated]</title>
+    <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206</link>
+    <description>Don&#39;t feel like writing a new description:
+    /// &lt;summary&gt;
+    /// Able to convert between several storage methods of &quot;mapdata&quot; for the newer
+    /// revisions of the RS2 client.
+    /// 
+    /// These storage methods include:
+    ///     binary,
+    ///     xml,
+    ///     text files (in a directory)
+    ///     
+    /// Dumping to text files is not supported because it is a shitty way of storing
+    /// the data.  Seriously, get a clue.
+    /// &lt;/summary&gt;
+
+
+[code]using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Xml;
+using System.Text;
+
+namespace Samolyot.Utilities
+{
+    /// &lt;summary&gt;
+    /// Able to convert between several storage methods of &quot;mapdata&quot; for the newer
+    /// revisions of the RS2 client.
+    /// 
+    /// These storage methods include:
+    ///     binary,
+    ///     xml,
+    ///     text files (in a directory)
+    ///     
+    /// Dumping to text files is not supported because it is a shitty way of storing
+    /// the data.  Seriously, get a clue.
+    /// &lt;/summary&gt;
+    public class MapDataConverter
+    {
+        /// &lt;summary&gt;
+        /// Read mapdata from the specified file that was dumped via ToBin
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;file&quot;&gt;.bin file to read from&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        public static Dictionary&lt;int, int[]&gt; FromBin(string file)
+        {
+            if (!File.Exists(file))
+            {
+                throw new ArgumentException(String.Format(&quot;no mapdata because file {0} does not exist&quot;, file));
+            }
+
+            Dictionary&lt;int, int[]&gt; mapdata = null;
+            try
+            {
+                using (BinaryReader reader = new BinaryReader(File.OpenRead(file)))
+                {
+                    if (reader.ReadInt32() != 0x5441444d) // check magic number
+                    {
+                        throw new InvalidDataException(String.Format(&quot;file {0} is not a valid mapdata binary&quot;, file));
+                    }
+
+                    int count = reader.ReadInt32(); // number of maps in the file
+                    mapdata = new Dictionary&lt;int, int[]&gt;();
+                    Console.WriteLine(String.Format(&quot;{0} entries&quot;, count));
+                    for (int i = 0; i &lt; count; i++)
+                    {
+                        int area = reader.ReadInt32();
+                        int[] indices = new int[4];
+
+                        for (int j = 0; j &lt; 4; j++)
+                        {
+                            indices[j] = reader.ReadInt32();
+                        }
+
+                        mapdata.Add(area, indices);
+                    }
+
+                    reader.Close();
+                }
+            } catch (InvalidDataException x)
+            {
+                throw x; // rethrow
+            } catch (IOException)
+            {
+                mapdata = null;
+            }
+            return mapdata;
+        }
+
+        /// &lt;summary&gt;
+        /// Dumps map data to a simple binary format, can be read with FromBin
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;mapdata&quot;&gt;The mapdata to dump&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        public static bool ToBin(Dictionary&lt;int, int[]&gt; mapdata)
+        {
+            try
+            {
+                using (BinaryWriter writer = new BinaryWriter(File.Create(&quot;mapdata.bin&quot;)))
+                {
+                    writer.Write((int) 0x5441444d); // magic number
+                    writer.Write((int) mapdata.Count); // dictionary entries
+
+                    int ex = (20 * mapdata.Count);
+                    int wr = 0;
+                    foreach (int area in mapdata.Keys)
+                    {
+                        try
+                        {
+                            writer.Write((int) area);
+                            for (int i = 0; i &lt; 4; i++)
+                            {
+                                writer.Write((int) mapdata[area][i]);
+                            }
+                            wr += 20;
+                        } catch (Exception e)
+                        {
+                            Console.WriteLine(e.ToString());
+                            writer.Close();
+                            return false;
+                        }
+                    }
+
+                    writer.Flush();
+                    writer.Close();
+                }
+            } catch (Exception)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        /// &lt;summary&gt;
+        /// Reads mapdata from the specified directory.  This is best used to read mapdata from servers such
+        /// as RS2E into a suitable table, so it can then be dumped to a more appealing format such as XML or
+        /// to a simple binary format
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;directory&quot;&gt;The directory to search for files in.  Mapdata files should be named as number.txt,
+        /// where number is an integer, and have 4 lines each consisting of one 32-bit width integer&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        public static Dictionary&lt;int, int[]&gt; FromDirectory(string directory)
+        {
+            if (!Directory.Exists(directory))
+            {
+                throw new ArgumentException(String.Format(&quot;no mapdata because directory {0} does not exist&quot;, directory));
+            }
+
+            string[] files = Directory.GetFiles(directory, &quot;*.txt&quot;);
+            Dictionary&lt;int, int[]&gt; mapdata = new Dictionary&lt;int, int[]&gt;();
+
+            foreach (string s in files)
+            {
+                using (StreamReader file = File.OpenText(s))
+                {
+                    try
+                    {
+                        int[] indices = new int[4];
+                        bool present = false;
+                        for (int i = 0; i &lt; 4; i++)
+                        {
+                            indices[i] = Int32.Parse(file.ReadLine());
+                            if (indices[i] != 0)
+                                present = true;
+                        }
+                        if (!present)
+                            continue;
+                        int area = Int32.Parse(s.Substring(directory.Length + 1, s.Length - (5 + directory.Length)));
+                        mapdata.Add(area, indices);
+                    } catch (Exception)
+                    {
+                    }
+                }
+            }
+            return mapdata;
+        }
+
+        /// &lt;summary&gt;
+        /// Dumps mapdata into an XML document
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;mapdata&quot;&gt;The mapdata to dump&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        public static bool ToXml(Dictionary&lt;int, int[]&gt; mapdata)
+        {
+            try
+            {
+                using (XmlTextWriter file = new XmlTextWriter(&quot;mapdata.xml&quot;, Encoding.UTF8))
+                {
+                    file.Formatting = Formatting.Indented;
+                    file.WriteStartDocument();
+                    file.WriteStartElement(&quot;mapdata&quot;);
+
+                    foreach (int id in mapdata.Keys)
+                    {
+                        file.WriteStartElement(&quot;map&quot;);
+                        file.WriteAttributeString(&quot;area&quot;, id.ToString());
+
+                        int[] data = mapdata[id];
+                        for (int i = 0; i &lt; 4; i++)
+                        {
+                            file.WriteStartElement(&quot;data&quot;);
+                            file.WriteAttributeString(&quot;index&quot;, i.ToString());
+                            file.WriteAttributeString(&quot;value&quot;, data[i].ToString());
+                            file.WriteEndElement();
+                        }
+
+                        file.WriteEndElement();
+                    }
+
+                    file.WriteEndElement();
+                    file.Flush();
+                    file.Close();
+                }
+            } catch (Exception)
+            {
+                return false;
+            }
+            return true;
+        }
+
+        /// &lt;summary&gt;
+        /// Loads mapdata from the specified XML document.  For each map described in the document,
+        /// an element under the name &quot;map&quot; needs to exist with an &quot;area&quot; attribute.  These elements 
+        /// must have 4 child elements named &quot;data&quot;.  The &quot;data&quot; elements need the following attributes:
+        ///     index,
+        ///     value,
+        /// where index is the value&#39;s turn to be sent, and value is the offset/index of the mapdata for
+        /// the client to interpret
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;file&quot;&gt;The XML file to read from&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        public static Dictionary&lt;int, int[]&gt; FromXml(string file)
+        {
+            if (!File.Exists(file))
+            {
+                throw new ArgumentException(String.Format(&quot;no mapdata because file {0} does not exist&quot;, file));
+            }
+
+            Dictionary&lt;int, int[]&gt; mapdata = new Dictionary&lt;int, int[]&gt;();
+
+            try
+            {
+                XmlDocument doc = new XmlDocument();
+                doc.Load(File.OpenRead(file));
+
+                XmlNodeList maps = doc.GetElementsByTagName(&quot;map&quot;);
+
+                foreach (XmlNode element in maps)
+                {
+                    if (element.HasChildNodes)
+                    {
+                        int area = -1;
+                        foreach (XmlAttribute attribute in element.Attributes)
+                        {
+                            if (attribute.Name.Equals(&quot;area&quot;))
+                            {
+                                if (!Int32.TryParse(attribute.Value, out area))
+                                {
+                                    break; // it&#39;s not valid, skip this element
+                                }
+                                break;
+                            }
+                        }
+                        if (area == -1)
+                            continue;
+
+                        int[] indices = new int[4];
+                        int vc = 0;
+                        foreach (XmlNode child in element.ChildNodes)
+                        {
+                            if (child.Name.Equals(&quot;data&quot;))
+                            {
+                                int idx = -1;
+                                int value = -1;
+
+                                foreach (XmlAttribute attribute in child.Attributes)
+                                {
+                                    if (attribute.Name.Equals(&quot;index&quot;))
+                                    {
+                                        if (!Int32.TryParse(attribute.Value, out idx))
+                                            break; // it&#39;s not valid, skip this element
+                                    } else if (attribute.Name.Equals(&quot;value&quot;))
+                                    {
+                                        if (!Int32.TryParse(attribute.Value, out value))
+                                            break; // it&#39;s not valid, skip this element
+                                    }
+                                }
+
+                                if (idx == -1 || value == -1)
+                                    break;
+
+
+                                indices[idx] = value;
+                                ++vc;
+                            }
+                        }
+
+                        if (vc != 4)
+                            continue;
+
+                        mapdata.Add(area, indices);
+                    }
+                }
+            } catch (Exception)
+            {
+                return null;
+            }
+
+            return mapdata;
+        }
+    }
+}
+[/code]
+
+
+Obviously, this is written in C#.  Porting it to Java is not too difficult of a task if you aren&#39;t inbred.
+
+Note: If you choose to download the source file, rename it to MapDataConverter.cs, I cannot attach .cs files, so I had to give it a .txt extension.
+
+[Update]
+Binary attached, open up a console and run it by doing mdataconv directory, for example mdataconv ./mapdata.</description>
+    
+    <lastBuildDate>Thu, 28 Aug 2008 20:53:10 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>Bumped again since people requested a binary, and the thread was buried.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/6</link>
+        <pubDate>Thu, 28 Aug 2008 20:53:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-6</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>Obvious bump is obvious.</p>
+<p><img src="http://blog.theavclub.tv/wp-content/uploads/2007/01/borat-high-five.jpg" alt width="450" height="318"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/5</link>
+        <pubDate>Thu, 28 Aug 2008 00:05:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-5</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>Sure, I’ll whip something up after I eat dinner[br][br][size=1]Posted on: August 27, 2008, 05:48:53 pm[/size][hr]Added to the first post</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/4</link>
+        <pubDate>Wed, 27 Aug 2008 22:54:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-4</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@Mod_Adam Adam]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_adam">@Mod_Adam</a> wrote:</p>
+          <blockquote>
+              <p>Oh my, I love it, thank you Cheese_Police.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/3</link>
+        <pubDate>Wed, 27 Aug 2008 20:34:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-3</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@cocoa cocoa]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cocoa">@cocoa</a> wrote:</p>
+          <blockquote>
+              <p>=[] you is back</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/2</link>
+        <pubDate>Wed, 27 Aug 2008 07:37:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-2</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+      <item>
+        <title>Map Data Storage Converter [Updated]</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>Don’t feel like writing a new description:<br>
+/// <summary><br>
+/// Able to convert between several storage methods of “mapdata” for the newer<br>
+/// revisions of the RS2 client.<br>
+///<br>
+/// These storage methods include:<br>
+///     binary,<br>
+///     xml,<br>
+///     text files (in a directory)<br>
+///<br>
+/// Dumping to text files is not supported because it is a shitty way of storing<br>
+/// the data.  Seriously, get a clue.<br>
+/// </summary></p>
+<p>[code]using System;<br>
+using System.Collections.Generic;<br>
+using <a href="http://System.IO" rel="nofollow noopener">System.IO</a>;<br>
+using System.Xml;<br>
+using System.Text;</p>
+<p>namespace Samolyot.Utilities<br>
+{<br>
+/// <summary><br>
+/// Able to convert between several storage methods of “mapdata” for the newer<br>
+/// revisions of the RS2 client.<br>
+///<br>
+/// These storage methods include:<br>
+///     binary,<br>
+///     xml,<br>
+///     text files (in a directory)<br>
+///<br>
+/// Dumping to text files is not supported because it is a shitty way of storing<br>
+/// the data.  Seriously, get a clue.<br>
+/// </summary><br>
+public class MapDataConverter<br>
+{<br>
+/// <summary><br>
+/// Read mapdata from the specified file that was dumped via ToBin<br>
+/// </summary><br>
+/// .bin file to read from<br>
+/// <br>
+public static Dictionary&lt;int, int[]&gt; FromBin(string file)<br>
+{<br>
+if (!File.Exists(file))<br>
+{<br>
+throw new ArgumentException(String.Format(“no mapdata because file {0} does not exist”, file));<br>
+}</p>
+<pre><code>        Dictionary&lt;int, int[]&gt; mapdata = null;
+        try
+        {
+            using (BinaryReader reader = new BinaryReader(File.OpenRead(file)))
+            {
+                if (reader.ReadInt32() != 0x5441444d) // check magic number
+                {
+                    throw new InvalidDataException(String.Format("file {0} is not a valid mapdata binary", file));
+                }
+
+                int count = reader.ReadInt32(); // number of maps in the file
+                mapdata = new Dictionary&lt;int, int[]&gt;();
+                Console.WriteLine(String.Format("{0} entries", count));
+                for (int i = 0; i &lt; count; i++)
+                {
+                    int area = reader.ReadInt32();
+                    int[] indices = new int[4];
+
+                    for (int j = 0; j &lt; 4; j++)
+                    {
+                        indices[j] = reader.ReadInt32();
+                    }
+
+                    mapdata.Add(area, indices);
+                }
+
+                reader.Close();
+            }
+        } catch (InvalidDataException x)
+        {
+            throw x; // rethrow
+        } catch (IOException)
+        {
+            mapdata = null;
+        }
+        return mapdata;
+    }
+
+    /// &lt;summary&gt;
+    /// Dumps map data to a simple binary format, can be read with FromBin
+    /// &lt;/summary&gt;
+    /// &lt;param name="mapdata"&gt;The mapdata to dump&lt;/param&gt;
+    /// &lt;returns&gt;&lt;/returns&gt;
+    public static bool ToBin(Dictionary&lt;int, int[]&gt; mapdata)
+    {
+        try
+        {
+            using (BinaryWriter writer = new BinaryWriter(File.Create("mapdata.bin")))
+            {
+                writer.Write((int) 0x5441444d); // magic number
+                writer.Write((int) mapdata.Count); // dictionary entries
+
+                int ex = (20 * mapdata.Count);
+                int wr = 0;
+                foreach (int area in mapdata.Keys)
+                {
+                    try
+                    {
+                        writer.Write((int) area);
+                        for (int i = 0; i &lt; 4; i++)
+                        {
+                            writer.Write((int) mapdata[area][i]);
+                        }
+                        wr += 20;
+                    } catch (Exception e)
+                    {
+                        Console.WriteLine(e.ToString());
+                        writer.Close();
+                        return false;
+                    }
+                }
+
+                writer.Flush();
+                writer.Close();
+            }
+        } catch (Exception)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// &lt;summary&gt;
+    /// Reads mapdata from the specified directory.  This is best used to read mapdata from servers such
+    /// as RS2E into a suitable table, so it can then be dumped to a more appealing format such as XML or
+    /// to a simple binary format
+    /// &lt;/summary&gt;
+    /// &lt;param name="directory"&gt;The directory to search for files in.  Mapdata files should be named as number.txt,
+    /// where number is an integer, and have 4 lines each consisting of one 32-bit width integer&lt;/param&gt;
+    /// &lt;returns&gt;&lt;/returns&gt;
+    public static Dictionary&lt;int, int[]&gt; FromDirectory(string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            throw new ArgumentException(String.Format("no mapdata because directory {0} does not exist", directory));
+        }
+
+        string[] files = Directory.GetFiles(directory, "*.txt");
+        Dictionary&lt;int, int[]&gt; mapdata = new Dictionary&lt;int, int[]&gt;();
+
+        foreach (string s in files)
+        {
+            using (StreamReader file = File.OpenText(s))
+            {
+                try
+                {
+                    int[] indices = new int[4];
+                    bool present = false;
+                    for (int i = 0; i &lt; 4; i++)
+                    {
+                        indices[i] = Int32.Parse(file.ReadLine());
+                        if (indices[i] != 0)
+                            present = true;
+                    }
+                    if (!present)
+                        continue;
+                    int area = Int32.Parse(s.Substring(directory.Length + 1, s.Length - (5 + directory.Length)));
+                    mapdata.Add(area, indices);
+                } catch (Exception)
+                {
+                }
+            }
+        }
+        return mapdata;
+    }
+
+    /// &lt;summary&gt;
+    /// Dumps mapdata into an XML document
+    /// &lt;/summary&gt;
+    /// &lt;param name="mapdata"&gt;The mapdata to dump&lt;/param&gt;
+    /// &lt;returns&gt;&lt;/returns&gt;
+    public static bool ToXml(Dictionary&lt;int, int[]&gt; mapdata)
+    {
+        try
+        {
+            using (XmlTextWriter file = new XmlTextWriter("mapdata.xml", Encoding.UTF8))
+            {
+                file.Formatting = Formatting.Indented;
+                file.WriteStartDocument();
+                file.WriteStartElement("mapdata");
+
+                foreach (int id in mapdata.Keys)
+                {
+                    file.WriteStartElement("map");
+                    file.WriteAttributeString("area", id.ToString());
+
+                    int[] data = mapdata[id];
+                    for (int i = 0; i &lt; 4; i++)
+                    {
+                        file.WriteStartElement("data");
+                        file.WriteAttributeString("index", i.ToString());
+                        file.WriteAttributeString("value", data[i].ToString());
+                        file.WriteEndElement();
+                    }
+
+                    file.WriteEndElement();
+                }
+
+                file.WriteEndElement();
+                file.Flush();
+                file.Close();
+            }
+        } catch (Exception)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    /// &lt;summary&gt;
+    /// Loads mapdata from the specified XML document.  For each map described in the document,
+    /// an element under the name "map" needs to exist with an "area" attribute.  These elements 
+    /// must have 4 child elements named "data".  The "data" elements need the following attributes:
+    ///     index,
+    ///     value,
+    /// where index is the value's turn to be sent, and value is the offset/index of the mapdata for
+    /// the client to interpret
+    /// &lt;/summary&gt;
+    /// &lt;param name="file"&gt;The XML file to read from&lt;/param&gt;
+    /// &lt;returns&gt;&lt;/returns&gt;
+    public static Dictionary&lt;int, int[]&gt; FromXml(string file)
+    {
+        if (!File.Exists(file))
+        {
+            throw new ArgumentException(String.Format("no mapdata because file {0} does not exist", file));
+        }
+
+        Dictionary&lt;int, int[]&gt; mapdata = new Dictionary&lt;int, int[]&gt;();
+
+        try
+        {
+            XmlDocument doc = new XmlDocument();
+            doc.Load(File.OpenRead(file));
+
+            XmlNodeList maps = doc.GetElementsByTagName("map");
+
+            foreach (XmlNode element in maps)
+            {
+                if (element.HasChildNodes)
+                {
+                    int area = -1;
+                    foreach (XmlAttribute attribute in element.Attributes)
+                    {
+                        if (attribute.Name.Equals("area"))
+                        {
+                            if (!Int32.TryParse(attribute.Value, out area))
+                            {
+                                break; // it's not valid, skip this element
+                            }
+                            break;
+                        }
+                    }
+                    if (area == -1)
+                        continue;
+
+                    int[] indices = new int[4];
+                    int vc = 0;
+                    foreach (XmlNode child in element.ChildNodes)
+                    {
+                        if (child.Name.Equals("data"))
+                        {
+                            int idx = -1;
+                            int value = -1;
+
+                            foreach (XmlAttribute attribute in child.Attributes)
+                            {
+                                if (attribute.Name.Equals("index"))
+                                {
+                                    if (!Int32.TryParse(attribute.Value, out idx))
+                                        break; // it's not valid, skip this element
+                                } else if (attribute.Name.Equals("value"))
+                                {
+                                    if (!Int32.TryParse(attribute.Value, out value))
+                                        break; // it's not valid, skip this element
+                                }
+                            }
+
+                            if (idx == -1 || value == -1)
+                                break;
+
+
+                            indices[idx] = value;
+                            ++vc;
+                        }
+                    }
+
+                    if (vc != 4)
+                        continue;
+
+                    mapdata.Add(area, indices);
+                }
+            }
+        } catch (Exception)
+        {
+            return null;
+        }
+
+        return mapdata;
+    }
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Obviously, this is written in C#.  Porting it to Java is not too difficult of a task if you aren’t inbred.</p>
+<p>Note: If you choose to download the source file, rename it to MapDataConverter.cs, I cannot attach .cs files, so I had to give it a .txt extension.</p>
+<p>[Update]<br>
+Binary attached, open up a console and run it by doing mdataconv directory, for example mdataconv ./mapdata.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206/1</link>
+        <pubDate>Wed, 27 Aug 2008 01:44:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-228206-1</guid>
+        <source url="https://forum.moparisthebest.com/t/map-data-storage-converter-updated/228206.rss">Map Data Storage Converter [Updated]</source>
+      </item>
+  </channel>
+</rss>

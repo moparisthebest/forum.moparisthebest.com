@@ -1,0 +1,1165 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+    <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334</link>
+    <description>Remove anything related to Prayer from your server ([b]Only for bone burying and using bones on altars. This Snippet has nothing to do with using prayers whatsoever.[/b])
+
+Prayer class:
+[code=java]package server.model.players.skills;
+
+import server.Config;
+import server.Constants;
+import server.event.CycleEvent;
+import server.event.CycleEventContainer;
+import server.event.CycleEventHandler;
+import server.model.players.Client;
+import server.util.Misc;
+
+/**
+ * 
+ * @author sk8rdude461
+ * 
+ */
+
+public final class Prayer {
+
+	private static final int PLR_BURY_ANIM = 827;// Bury anim id
+	private static final int PLR_ALTAR_ANIM = 713; // Altar anim id
+	private static final int ALTAR_GFX = 624;// GFX id that happens on the altar
+	private static final int BTIME = 3;// Cycles before next bury
+	private static final int STIME = 6;// Cycles before next sacrifice
+	private static final int BCID = 18337;// Bonecrusher ID
+
+	public enum BoneData {
+		BONES(5),
+		BIG(15),
+		BABYDRAGON(30),
+		WYVERN(50),
+		DRAGON(72),
+		DAGGANOTH(125),
+		OURG(140);
+		int xpGain;
+
+		BoneData(int xpGain) {
+			this.xpGain = xpGain;
+		}
+
+		public String getBone(BoneData bone) {
+			return bone.toString().toLowerCase().contains(&quot;bones&quot;) ?
+					Misc.capitalize(bone.toString().trim()) : Misc.capitalize(bone.toString().concat(&quot; bones&quot;).trim());
+		}
+
+		public int getXpGain() {
+			return xpGain;
+		}
+
+		/**
+		 * Checks if iName is in the enum or not
+		 * @param iName
+		 *            the Full name of the item
+		 * @return whether it&#39;s an valid bone or not.
+		 */
+		public static boolean validBone(String iName) {
+			for (final BoneData b : BoneData.values()) {
+				if (iName.equalsIgnoreCase(b.getBone(b)))
+					return true;
+			}
+			return false;
+		}
+	}
+
+	private enum AltarData {
+
+		CHAOS(409, 1.2);
+
+		int altarId;
+		double xpMod;
+
+		AltarData(int altarId, double xpMod) {
+			this.altarId = altarId;
+			this.xpMod = xpMod;
+		}
+
+		public int getAltarId() {
+			return altarId;
+		}
+
+		public double getXpMod() {
+			return xpMod;
+		}
+
+		public static boolean validAltarId(int altarId) {
+			for (final AltarData a : AltarData.values()) {
+				if (a.getAltarId() == altarId)
+					return true;
+			}
+			return false;
+		}
+	}
+
+	/**
+	 * Called when the player clicks on an item, will only work if the item is a
+	 * valid bone and is unnoted.
+	 * 
+	 * @param c
+	 *            Client object buying the bones
+	 * @param bone
+	 *            name of the item
+	 */
+	public static void bury(final Client c, final String bone) {
+		c.prayerXP = 0;
+		
+		if (!BoneData.validBone(bone) || !c.getItems().hasUnnotedItem(bone) ||
+				c.playerIsPraying)
+			return;
+
+		for (BoneData b : BoneData.values()) {
+			if(b.getBone(b).equalsIgnoreCase(bone))
+				c.prayerXP = b.getXpGain();
+		}
+
+		c.prayerXP = (c.prayerXP * Config.PRAYER_EXPERIENCE);
+		c.playerIsPraying = true;
+		c.sendMessage(&quot;You bury the &quot; + bone + &quot;...&quot;);
+		c.startAnimation(PLR_BURY_ANIM);
+		c.getItems().deleteItem(
+				c.getItems().getUnnotedItem(c.getItems().getItemId(bone)), 1);
+
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+
+			@Override
+			public void execute(CycleEventContainer evt) {
+				evt.stop();
+				// The only reason this cycle event is here is to reset the
+				// variable and give xp.
+			}
+
+			@Override
+			public void stop() {
+				c.getPA().addSkillXP(c.prayerXP, Constants.PLAYER_PRAYER);
+				c.getPA().resetVariables();
+				c.sendMessage(&quot;And receive &quot; + c.prayerXP + &quot; Prayer exp as a reward.&quot;);
+			}
+		}, BTIME);
+	}
+	
+	/**
+	 * Called when player uses an item on an object, it will only work if they use a valid
+	 * bone on a valid altar. Uses CycleEvents to go through the players entire inventory instead
+	 * of them doing it manually.
+	 * @param c			Client object using the objectId
+	 * @param objectId	the object id.
+	 * @param objectX	the x coordinate of the object
+	 * @param objectY	the y coordinate of the object
+	 * @param bone		name of item.
+	 */
+	public static void sacrifice(final Client c, final int objectId, final int objectX,
+			final int objectY, final String bone) {
+		c.prayerXP = 0;
+
+		if (!BoneData.validBone(bone) || !c.getItems().hasUnnotedItem(bone) &amp;&amp;
+				!AltarData.validAltarId(objectId))
+			return;
+		
+		if (c.playerIsPraying)
+			return;
+
+		for (BoneData b : BoneData.values()) {
+			
+			if (b.getBone(b).equalsIgnoreCase(bone))
+				c.prayerXP = b.getXpGain();
+		}
+		
+		for(AltarData a : AltarData.values()) {
+			if(a.getAltarId() == objectId)
+				c.prayerXP = (int) (a.getXpMod() * c.prayerXP);
+		}
+		
+		c.playerIsPraying = true;
+		c.boneAmt = c.getItems().getItemAmount(c.getItems().getItemId(bone));
+		c.prayerXP = (c.prayerXP * Config.PRAYER_EXPERIENCE);
+		animate(c, objectX, objectY);
+		c.getItems().deleteItem(
+				c.getItems().getUnnotedItem(c.getItems().getItemId(bone)), 1);
+		c.getPA().addSkillXP(c.prayerXP, Constants.PLAYER_PRAYER);
+		c.boneAmt--;
+
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+
+			@Override
+			public void execute(CycleEventContainer evt) {
+				if(!c.playerIsPraying)
+					evt.stop();
+				if(c.boneAmt &gt; 0) {
+					animate(c, objectX, objectY);
+					c.getItems().deleteItem(
+							c.getItems().getUnnotedItem(c.getItems().getItemId(bone)), 1);
+					c.getPA().addSkillXP(c.prayerXP, Constants.PLAYER_PRAYER);
+					c.boneAmt--;
+				} else 
+					evt.stop();
+			}
+
+			@Override
+			public void stop() {
+				c.getPA().resetVariables();
+			}
+		}, STIME);
+	}
+	/**
+	 * Forces player to do animation, and puts gfx over the altar
+	 * Also makes player turn to the altar&#39;s X and Y.
+	 * It should be noted that altars are 2 squares long and this
+	 * should be handled differently than it is currently.
+	 * @param c			The player
+	 * @param objectX	The objet X coords
+	 * @param objectY	The object Y coords
+	 */
+	public static void animate(Client c, int objectX, int objectY) {
+		// TODO: player turning and altar gfx properly.
+		c.turnPlayerTo(objectX, objectY);
+		c.startAnimation(PLR_ALTAR_ANIM);
+		c.getPA().stillGfx(ALTAR_GFX, objectX, objectY, c.heightLevel, 0);
+		c.sendMessage(&quot;The gods are pleased with your offering.&quot;);
+	}
+	
+	/**
+	 * &quot;Converts&quot; the bones to c.prayerXP if the player has a bonecrusher
+	 * in their inventory.
+	 * @param c		The player we&#39;re checking/giving c.prayerXP
+	 * @param bone	Name of the item dropped
+	 */
+	public static void boneCrusher(Client c, String bone) {
+		c.prayerXP = 0;
+		
+		if(!c.getItems().playerHasUnnotedItem(BCID) || !BoneData.validBone(bone))
+			return;
+		
+		for (BoneData b : BoneData.values()) {
+			
+			if (b.getBone(b).equalsIgnoreCase(bone))
+				c.prayerXP = b.getXpGain();
+		}
+		c.prayerXP = (c.prayerXP * Config.PRAYER_EXPERIENCE);
+		c.getPA().addSkillXP(c.prayerXP, Constants.PLAYER_PRAYER);
+	}
+}[/code]
+
+Warning: I have a class called Constants.java that holds a lot of my static data, things like: Skill ids, skill names, etc. Most PI&#39;s will have the int declared in Player.java as: c.player&lt;SKILLNAMEHERE&gt; so remember to replace that
+
+ClickItem.java above the switch block (provided you have one) add:
+[code=java]
+		Prayer.bury(c, c.getItems().getItemName(itemId));[/code]
+
+Missing shit:
+ItemAssistant.java add:
+[code=java]
+	/**
+	 * Returns the itemId of the item the player has in inventory based off name.
+	 * This is good in case one item has more than one id with the same name.
+	 * I specified &quot;Unnoted&quot; because items can have the same name noted/unnoted
+	 * and usually you need the unnoted version to do whatever you&#39;re doing.
+	 * This searches both the inventory and equipment slots.
+	 * @param	itemName the name to look for in the players inventory.
+	 * @return 	whether they have the item or not
+	 */
+	public boolean hasUnnotedItem(String itemName) {
+		
+		String item = &quot;&quot;;
+		
+		for(int i = 0; i &lt; c.playerItems.length; i++) {
+			item = getItemName(c.playerItems[i]-1).replace(&quot;_&quot;, &quot; &quot;);
+			if( item.equalsIgnoreCase(itemName.replace(&quot;_&quot;, &quot; &quot;)) 
+					&amp;&amp; !Item.itemIsNote[c.playerItems[i]-1]) {
+				return true;
+			}
+		}
+		
+		item = getItemName(c.playerEquipment[c.playerWeapon]).toLowerCase().replace(&quot;_&quot;, &quot; &quot;);
+		
+		if( item.equalsIgnoreCase(itemName.toLowerCase().replace(&quot;_&quot;, &quot; &quot;).trim()) 
+				&amp;&amp; !Item.itemIsNote[c.playerEquipment[c.playerWeapon]] ) {
+			return true;
+		}
+		
+		return false;
+	}
+	
+	public boolean playerHasUnnotedItem(int itemId) {
+		
+		for(int i = 0; i &lt; c.playerItems.length; i++) {
+			if(itemId == c.playerItems[i]-1
+					&amp;&amp; !Item.itemIsNote[c.playerItems[i]-1]) {
+				return true;
+			}
+		}
+		
+		if( itemId == c.playerEquipment[c.playerWeapon]
+				&amp;&amp; !Item.itemIsNote[c.playerEquipment[c.playerWeapon]] ) {
+			return true;
+		}
+		
+		return false;
+	}
+[/code]
+
+Player.java add:
+[code]	public boolean playerIsPraying = false;
+	public int prayerXP = 0;
+	public int boneAmt = 0;[/code]
+
+PlayerAssistant.java add:
+[code=java]// only giving you the variables from above
+	public void resetVariables() {
+		c.prayerXP = 0;
+		c.boneAmt = 0;
+		c.playerIsPraying = false;
+	}[/code]
+
+
+[b]Making the bone crusher work[/b]
+In my server, all bones are dropped as a constant, therefore I edited the following in NPCHandler.java:
+Search for:
+[code=java]dropItems(int i)[/code]
+
+Find:
+[code=java]NPCDrops.constantDrops.get(npcs[i].npcType)[/code]
+
+Replace:
+[code=java]			if (NPCDrops.constantDrops.get(npcs[i].npcType) != null) {
+				for (int item : NPCDrops.constantDrops.get(npcs[i].npcType)) {
+					if(!BoneData.validBone(c.getItems().getItemName(item)))
+						Server.itemHandler.createGroundItem(c, item, npcs[i].absX,
+							npcs[i].absY, 1, c.playerId);
+					else
+						Prayer.boneCrusher(c, c.getItems().getItemName(item));
+				}
+			}[/code]
+
+That should be all. If I forgot something please let me know. [b]Do not forget imports[/b]
+I plan on adding more features and support to this later, so be sure to come back.
+If you want support for something specific please let me know and maybe I&#39;ll get around to adding it. I&#39;ve added a base to for altars, go ahead and do what you will with that.
+
+[b]Adding new bones[/b]
+It&#39;s now even easier to add new bones! Now all you must do is add a new enum and name it the name of the bones (with/without the word bones). Then add the xp it gives (the bury method multiplies the xp by Config.PRAYER_EXPERIENCE). And you&#39;re done.
+
+
+[b]What it does:[/b]
+Altar support
+Bury bones
+Prayer bonuses (wearing items and such)
+Ashes(My server doesn&#39;t have ashes to scatter, and if it does I haven&#39;t seen them)
+Bonecrusher (Does not work with [url=http://runescape.wikia.com/wiki/Bonecrusher]ashes as said in the wiki[/url])
+
+[b]I will not do anything related to summoning, my server doesn&#39;t have support for it.[/b]
+
+I would like some feedback on how my enums are done, as I&#39;m trying to get better at them.</description>
+    
+    <lastBuildDate>Mon, 24 Mar 2014 03:36:13 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Okay, I removed the bone variables from the Prayer class and moved them into the Player class (now you all can stop bitching about that right?)</p>
+<p>I also updated the thread title to the features of the class (as if anyone cares lol)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/44</link>
+        <pubDate>Mon, 24 Mar 2014 03:36:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-44</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:42, topic:541334”][quote author=arham 4 link=topic=660206.msg4415026#msg4415026 date=1395491604]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Is there any other way that you don’t have to loop through all of the data?</p>
+</blockquote>
+</aside>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference</p>
+</blockquote>
+</aside>
+<p>Then why’d you call me out when I did???<br>
+[/quote]<br>
+because you weren’t looping through 7 constants you were looping through all of the objects in the region like 3 times[/quote]<br>
+I am talking about RIGHT NOW…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/43</link>
+        <pubDate>Mon, 24 Mar 2014 01:22:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-43</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:39, topic:541334”][quote author=lare69 link=topic=660206.msg4415001#msg4415001 date=1395481789]</p>
+<aside class="quote">
+<blockquote>
+<p>Is there any other way that you don’t have to loop through all of the data?</p>
+</blockquote>
+</aside>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference<br>
+[/quote]<br>
+Then why’d you call me out when I did???[/quote]<br>
+because you weren’t looping through 7 constants you were looping through all of the objects in the region like 3 times</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/42</link>
+        <pubDate>Mon, 24 Mar 2014 00:56:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-42</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“DAn0194, post:40, topic:541334”][quote author=DAn0194 link=topic=660206.msg4414909#msg4414909 date=1395434136]<br>
+Is there any other way that you don’t have to loop through all of the data?<br>
+[/quote]</p>
+<aside class="quote">
+<blockquote>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference</p>
+</blockquote>
+</aside>
+<p>I was talking if you had a enum with like over 100 constants(even then I guess it’s not that big of a deal just to use a hashmap or a loop).[/quote]<br>
+Quoted the wrong person mang. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/41</link>
+        <pubDate>Sun, 23 Mar 2014 13:56:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-41</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="29" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/dan0194/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> DAn0194:</div>
+<blockquote>
+<p>Is there any other way that you don’t have to loop through all of the data?</p>
+</blockquote>
+</aside>
+<aside class="quote" data-post="39" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference</p>
+</blockquote>
+</aside>
+<p>I was talking if you had a enum with like over 100 constants(even then I guess it’s not that big of a deal just to use a hashmap or a loop).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/40</link>
+        <pubDate>Sat, 22 Mar 2014 15:05:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-40</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Pure_, post:30, topic:541334”][quote author=DAn0194 link=topic=660206.msg4414909#msg4414909 date=1395434136]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p><span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array<br>
+[/quote]You would be wasting memory if you wanted to fetch them from the array via their ids, you could write your own hash function I guess, or just use constants (eww) to access their relative indexes.</p>
+</blockquote>
+</aside>
+<p>Is there any other way that you don’t have to loop through all of the data?<br>
+[/quote]Just use a hashmap.[/quote]<br>
+Isn’t that what I did lol?</p>
+<p>[quote=“lare69, post:38, topic:541334”][quote author=DAn0194 link=topic=660206.msg4414909#msg4414909 date=1395434136]<br>
+Is there any other way that you don’t have to loop through all of the data?</p>
+</blockquote>
+</aside>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference[/quote]<br>
+Then why’d you call me out when I did???</p>
+<p>[quote=“AtomicInt_, post:31, topic:541334”]Yes.</p>
+<p>[code=java]<br>
+enum Bone {<br>
+NORMAL(…)<br>
+}</p>
+<p>boolean bury(Item item) {<br>
+Bone bone = Bone.valueOf(item.getName().toUpperCase());<br>
+if (bone == null) return;</p>
+<pre><code>...
+</code></pre>
+<p>}[/code]</p>
+<p>Also what’s up with the Map usage, enum collections were written for a reason!</p>
+<p>[code=java]<br>
+private static Map&lt;Integer, BoneData&gt; bones = new HashMap&lt;Integer, BoneData&gt;();</p>
+<pre><code>    static {
+        for (BoneData bone : BoneData.values()) {
+            bones.put(bone.getId(), bone);
+        }
+    }
+
+    public static BoneData forId(int id) {
+        return bones.get(id);
+    }[/code]
+</code></pre>
+<p>There is no need for all of that unnecessary code</p>
+<p><code>
+Set&lt;Bone&gt; ALL_BONES = EnumSet.allOf(Bone.class);
+</code>[/quote]<br>
+We learn something new everyday. Thanks for that advice.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/39</link>
+        <pubDate>Sat, 22 Mar 2014 12:33:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-39</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="34" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+ Pure_:</div>
+<blockquote>
+<p>You seem to not understand how HashMap#get functions, go read about it.</p>
+</blockquote>
+</aside>
+<p>yeah pure was right, my mistake <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>[quote=“wildskiller, post:33, topic:541334”][quote author=lare69 link=topic=660206.msg4414921#msg4414921 date=1395438133]<br>
+It would <span class="bbcode-b">barely</span> be wasting any memory[/quote]<br>
+Just because it “barely” wastes memory, it is still wasting memory. Any amount of memory that you find isn’t necessary, you should find less a less memory usage way. You don’t want people with 512MB ram computers to be raging on your game because it overloads their CPU with USELESS processed code.[/quote]<br>
+this didn’t make much sense</p>
+<ol>
+<li>cpu != ram</li>
+<li>memory should not be prioritized over performance</li>
+<li>“because it overloads their CPU with USELESS processed code” did not make sense at all</li>
+<li>“512MB ram” lol pointers are 4 bytes, if you made an array size 10000 (4*10000 = 40000), it would be using around 38kb of memory… and like I said before: memory shouldn’t ever be a concern unless you have a memory leak</li>
+<li>looping through 7 constants is fine, no optimizations need to be done</li>
+</ol>
+<aside class="quote" data-post="35" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sk8rdude461/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sk8rdude461:</div>
+<blockquote>
+<p>CPU and RAM are totally different… I mean, you’re right with what you’re saying, it just seems misinformed. Also “you should find a less memory usage way” you mean, “you should find a more efficient way”.</p>
+</blockquote>
+</aside>
+<p>nah he was right to say it like that, grabbing it from the array is the fastest and most efficient way at the cost of an almost irrelevant amount of memory usage</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/38</link>
+        <pubDate>Sat, 22 Mar 2014 09:49:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-38</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>No?</p>
+<p><code>
+Bone forId(int id) {
+    for (Bone bone : ALL_BONES) {
+        if (bone.id == id) return bone;
+    }
+    throw new EnumConstantNotPresentException(...);
+}</code></p>
+<p>edit: I see what you mean by completely different things (set != map) but they can be utilized in the same manor without the boilerplate.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/37</link>
+        <pubDate>Sat, 22 Mar 2014 03:37:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-37</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:31, topic:541334”][quote author=DAn0194 link=topic=660206.msg4414909#msg4414909 date=1395434136]<br>
+Is there any other way that you don’t have to loop through all of the data?<br>
+[/quote]</p>
+<p>[code=java]<br>
+enum Bone {<br>
+NORMAL(…)<br>
+}</p>
+<p>boolean bury(Item item) {<br>
+Bone bone = Bone.valueOf(item.getName().toUpperCase());<br>
+if (bone == null) return;</p>
+<pre><code>...
+</code></pre>
+<p>}[/code][/quote]Yes. This would be better.</p>
+<p>[quote=“AtomicInt_, post:31, topic:541334”]Also what’s up with the Map usage, enum collections were written for a reason!</p>
+<p>[code=java]<br>
+private static Map&lt;Integer, BoneData&gt; bones = new HashMap&lt;Integer, BoneData&gt;();</p>
+<pre><code>    static {
+        for (BoneData bone : BoneData.values()) {
+            bones.put(bone.getId(), bone);
+        }
+    }
+
+    public static BoneData forId(int id) {
+        return bones.get(id);
+    }[/code]
+</code></pre>
+<p>There is no need for all of that unnecessary code</p>
+<p><code>
+Set&lt;Bone&gt; ALL_BONES = EnumSet.allOf(Bone.class);
+</code>[/quote]Completely different things?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/36</link>
+        <pubDate>Sat, 22 Mar 2014 02:40:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-36</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wildskiller, post:33, topic:541334”][quote author=lare69 link=topic=660206.msg4414921#msg4414921 date=1395438133]<br>
+It would <span class="bbcode-b">barely</span> be wasting any memory[/quote]<br>
+Just because it “barely” wastes memory, it is still wasting memory. Any amount of memory that you find isn’t necessary, you should find less a less memory usage way. You don’t want people with 512MB ram computers to be raging on your game because it overloads their CPU with USELESS processed code.[/quote]<br>
+CPU and RAM are totally different… I mean, you’re right with what you’re saying, it just seems misinformed. Also “you should find a less memory usage way” you mean, “you should find a more efficient way”.</p>
+<p>Lastly, most standard 317 clients set the -Xmx to 1024m (1 GB) or even higher. (-Xmx is the max ram usage)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/35</link>
+        <pubDate>Fri, 21 Mar 2014 22:33:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-35</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>You seem to not understand how HashMap#get functions, go read about it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/34</link>
+        <pubDate>Fri, 21 Mar 2014 22:21:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-34</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="32" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+ lare69:</div>
+<blockquote>
+<p>It would <span class="bbcode-b">barely</span> be wasting any memory</p>
+</blockquote>
+</aside>
+<p>Just because it “barely” wastes memory, it is still wasting memory. Any amount of memory that you find isn’t necessary, you should find less a less memory usage way. You don’t want people with 512MB ram computers to be raging on your game because it overloads their CPU with USELESS processed code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/33</link>
+        <pubDate>Fri, 21 Mar 2014 21:55:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-33</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="28" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+ Pure_:</div>
+<blockquote>
+<p>You would be wasting memory</p>
+</blockquote>
+</aside>
+<p>It would barely be wasting any memory because the free slots in the array only hold pointers to the Object and not the actual Object itself (pointers are like 4 bytes iirc). Besides that memory shouldn’t even be a concern unless you have a memory leak.</p>
+<aside class="quote" data-post="29" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/dan0194/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> DAn0194:</div>
+<blockquote>
+<p>Is there any other way that you don’t have to loop through all of the data?</p>
+</blockquote>
+</aside>
+<p>Why do you say that like its a lot of data? Looping through 7 constants isn’t going to create any noticeable difference in overhead compared to whatever other alternative you can think of.</p>
+<aside class="quote" data-post="30" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+ Pure_:</div>
+<blockquote>
+<p>Just use a hashmap.</p>
+</blockquote>
+</aside>
+<p>Did you read what I said before? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> There’s no point in using a HashMap! Go look at the “get(Object key)” method in the javadocs, you’re STILL looping to retrieve the data from the map!</p>
+<p>[quote=“AtomicInt_, post:31, topic:541334”][code=java]<br>
+enum Bone {<br>
+NORMAL(…)<br>
+}</p>
+<p>boolean bury(Item item) {<br>
+Bone bone = Bone.valueOf(item.getName().toUpperCase());<br>
+if (bone == null) return;</p>
+<pre><code>...
+</code></pre>
+<p>}[/code][/quote]<br>
+Looks like it would work without looping.</p>
+<p>tl;dr there are only 7 constants lol the loop isn’t costly (at all) and doing unnecessary shit to avoid looping in this situation is dumb</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/32</link>
+        <pubDate>Fri, 21 Mar 2014 21:42:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-32</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“DAn0194, post:29, topic:541334”][quote author=Pure_ link=topic=660206.msg4414863#msg4414863 date=1395414070]</p>
+<aside class="quote">
+<blockquote>
+<p><span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array<br>
+[/quote]You would be wasting memory if you wanted to fetch them from the array via their ids, you could write your own hash function I guess, or just use constants (eww) to access their relative indexes.</p>
+</blockquote>
+</aside>
+<p>Is there any other way that you don’t have to loop through all of the data?[/quote]</p>
+<p>Yes.</p>
+<p>[code=java]<br>
+enum Bone {<br>
+NORMAL(…)<br>
+}</p>
+<p>boolean bury(Item item) {<br>
+Bone bone = Bone.valueOf(item.getName().toUpperCase());<br>
+if (bone == null) return;</p>
+<pre><code>...
+</code></pre>
+<p>}[/code]</p>
+<p>Also what’s up with the Map usage, enum collections were written for a reason!</p>
+<p>[code=java]<br>
+private static Map&lt;Integer, BoneData&gt; bones = new HashMap&lt;Integer, BoneData&gt;();</p>
+<pre><code>    static {
+        for (BoneData bone : BoneData.values()) {
+            bones.put(bone.getId(), bone);
+        }
+    }
+
+    public static BoneData forId(int id) {
+        return bones.get(id);
+    }[/code]
+</code></pre>
+<p>There is no need for all of that unnecessary code</p>
+<pre><code class="lang-auto">Set&lt;Bone&gt; ALL_BONES = EnumSet.allOf(Bone.class);</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/31</link>
+        <pubDate>Fri, 21 Mar 2014 21:21:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-31</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“DAn0194, post:29, topic:541334”][quote author=Pure_ link=topic=660206.msg4414863#msg4414863 date=1395414070]</p>
+<aside class="quote">
+<blockquote>
+<p><span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array<br>
+[/quote]You would be wasting memory if you wanted to fetch them from the array via their ids, you could write your own hash function I guess, or just use constants (eww) to access their relative indexes.</p>
+</blockquote>
+</aside>
+<p>Is there any other way that you don’t have to loop through all of the data?[/quote]Just use a hashmap.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/30</link>
+        <pubDate>Fri, 21 Mar 2014 21:11:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-30</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Pure_, post:28, topic:541334”][quote author=lare69 link=topic=660206.msg4414860#msg4414860 date=1395410001]<br>
+<span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array<br>
+[/quote]You would be wasting memory if you wanted to fetch them from the array via their ids, you could write your own hash function I guess, or just use constants (eww) to access their relative indexes.[/quote]<br>
+Is there any other way that you don’t have to loop through all of the data?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/29</link>
+        <pubDate>Fri, 21 Mar 2014 20:35:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-29</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:27, topic:541334”]<span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array[/quote]You would be wasting memory if you wanted to fetch them from the array via their ids, you could write your own hash function I guess, or just use constants (eww) to access their relative indexes.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/28</link>
+        <pubDate>Fri, 21 Mar 2014 15:01:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-28</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p><span class="mention">@arham</span>: there’s no point in using a map as it’s STILL looping to get the data from the map, if you wanted instant retrieval you would have to use a raw array</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/27</link>
+        <pubDate>Fri, 21 Mar 2014 13:53:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-27</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>here’s mine, it has alot of bones, i think i did it back in <a href="https://www.moparisthebest.com/smf/index.php/topic,646994.msg4350983.html#msg4350983" data-bbcode="true" rel="nofollow noopener">august</a>…</p>
+<p>[code=java]package server.model.players.skills;</p>
+<p>import server.Server;<br>
+import server.model.players.Client;<br>
+import server.task.Task;</p>
+<p>public class BoneBurying {</p>
+<pre><code>    /*
+     * The animation
+     */
+    private final static int ANIMATION = 827;
+    
+    /*
+     * Buries the item if the item clicked is in the values of the enum,
+     * if not it will return.
+     */
+    public static void buryBone(Client player, int itemId) {
+            for (bonesData e : bonesData.values()) {
+                    if (itemId == e.getId()) {
+                            player.getItems().deleteItem(e.getId(), 1);
+                            player.sendMessage("You bury a "+ player.getItems().getItemName(e.getId())        +" bone.");
+                            player.getPA().addSkillXP(e.getExperience(), 5);
+                            bury(player);
+                    }
+            }
+    }
+
+    /*
+     * Delay for the emote
+     */
+    private static void bury(final Client player) {
+            Server.getTaskScheduler().schedule(new Task(2, true) {
+                    private int count = 1;
+            
+                    protected void execute() {
+                            if (count &gt; 0) {                
+                                    count--;
+                            } else {
+                                    player.startAnimation(ANIMATION);
+                                    stop();
+                            }
+                    }
+            });
+    }
+    
+    private enum bonesData {
+
+            NORMAL(526, 2),
+            BURNT(528, 3),
+            BAT(530, 4),
+            BIG(532, 5),
+            BABY_DRAGON(534, 6),
+            DRAGON(536, 7),
+            WOLF(2859, 8),
+            SHAIKAHAN(3123, 9),
+            JOGRE(3125, 10),
+            MONKEY(3179, 11),
+            ZOGRE(4812, 12),
+            OURG(4834, 13),
+            DAGANNOTH(6729, 14);
+            
+            private int id, experience;
+
+            public int getId() {
+                    return id;
+            }
+
+            public int getExperience() {
+                    return experience;
+            }
+
+            private bonesData(int id, int experience) {
+                    this.id = id;
+                    this.experience = experience;
+            }
+    }
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/26</link>
+        <pubDate>Fri, 21 Mar 2014 02:20:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-26</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:16, topic:541334”][quote author=arham 4 link=topic=660206.msg4414621#msg4414621 date=1395266257]</p>
+<aside class="quote">
+<blockquote>
+<p>Few things maybe to touch up on is maybe don’t use strings in your enum and maybe put item ids and also static should come before final in constants but that is not that big of a deal. And you shouldn’t be putting the exp as a static variable because it is not instanced per class and you could get someone burying normal bones getting the exp for dragon bones. Other than that looks really good. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>This. Maybe an integer would suffice.<br>
+[/quote]<br>
+Read the new code :o[/quote]<br>
+You kinda complicated the getting. Instead of:</p>
+<pre><code class="lang-auto">                public String getBone(BoneData bone) {
+                        return bone.toString().toLowerCase().contains("bones") ?
+                                        Misc.capitalize(bone.toString().trim()) : Misc.capitalize(bone.toString().concat(" bones").trim());
+                }
+ 
+                /**
+                 * Checks if iName is in the enum or not
+                 * @param iName
+                 *            the Full name of the item
+                 * @return whether it's an valid bone or not.
+                 */
+                public static boolean validBone(String iName) {
+                        for (final BoneData b : BoneData.values()) {
+                                if (iName.equalsIgnoreCase(b.getBone(b)))
+                                        return true;
+                        }
+                        return false;
+                }</code></pre>
+<p>You could do:</p>
+<pre><code class="lang-auto">        public static Bone forId(int id) {
+            for (BoneData bone : BoneData.values()) {
+                if (id == bone.getId()) 
+                    return bone;
+            }
+        }</code></pre>
+<p>Or:</p>
+<pre><code class="lang-auto">        private static Map&lt;Integer, BoneData&gt; bones = new HashMap&lt;Integer, BoneData&gt;();
+
+        static {
+            for (BoneData bone : BoneData.values()) {
+                bones.put(bone.getId(), bone);
+            }
+        }
+
+        public static BoneData forId(int id) {
+            return bones.get(id);
+        }</code></pre>
+<p>And then add IDs to the bones. Here, I did them for you:</p>
+<pre><code class="lang-auto">        BONES(526, 5),,
+        BIG(528, 15),
+        BABYDRAGON(534, 30)
+        WYVERN(6812, 50),
+        DRAGON(536, 72),
+        DAGANNOTH(6729, 125),
+        OURG(4834, 140);</code></pre>
+<pre><code class="lang-auto">        private Bone(int id, int xpGain) {
+            this.id = id;
+            this.xpGain = xpGain;
+        }</code></pre>
+<pre><code class="lang-auto">        public int getId() {
+            return id;
+        }
+
+        public int getXpGain() {
+            return xpGain;
+        }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/25</link>
+        <pubDate>Thu, 20 Mar 2014 23:26:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-25</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:23, topic:541334”]sorry x) but yeah you should add them to their respective classes. anything you want to happen per player should be put in the player class</p>
+<p>it’s not bad to have a big player/client class, it’s just bad to have it filled with stuff that isn’t being used[/quote]<br>
+Yeah I’ll move it around, not a major edit.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/24</link>
+        <pubDate>Thu, 20 Mar 2014 06:28:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-24</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>sorry x) but yeah you should add them to their respective classes. anything you want to happen per player should be put in the player class</p>
+<p>it’s not bad to have a big player/client class, it’s just bad to have it filled with stuff that isn’t being used</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/23</link>
+        <pubDate>Thu, 20 Mar 2014 06:27:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-23</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:21, topic:541334”][quote author=sk8rdude461 link=topic=660206.msg4414631#msg4414631 date=1395267112]<br>
+B) add them to the Player/Client class.<br>
+[/quote]<br>
+why do you think that is?</p>
+<p>so the values are not global and are instead instanced per player!!! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> (instance means COPY, so every player will have their own COPY of that field!)</p>
+<aside class="quote">
+<blockquote>
+<p>You should use a proper design pattern because your code is bad enough.</p>
+</blockquote>
+</aside>
+<p>elaborate on what other design pattern he should use[/quote]<br>
+Dunt maek me feel dumb</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/22</link>
+        <pubDate>Thu, 20 Mar 2014 03:22:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-22</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="18" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sk8rdude461/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sk8rdude461:</div>
+<blockquote>
+<p>B) add them to the Player/Client class.</p>
+</blockquote>
+</aside>
+<p>why do you think that is?</p>
+<p>so the values are not global and are instead instanced per player!!! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> (instance means COPY, so every player will have their own COPY of that field!)</p>
+<aside class="quote" data-post="11" data-topic="541334">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ashi/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ashi:</div>
+<blockquote>
+<p>You should use a proper design pattern because your code is bad enough.</p>
+</blockquote>
+</aside>
+<p>elaborate on what other design pattern he should use</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/21</link>
+        <pubDate>Thu, 20 Mar 2014 02:44:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-21</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+      <item>
+        <title>[PI] Prayer (Bonecrusher support, altars, burying)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Strucker, post:19, topic:541334”]i see that you have the xp field declared static… that should be a problem with multiple players… because the xp value is global, it would affect all players… correct me if im wrong[/quote]I think you’re right. OPs code wasn’t well thought over.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334/20</link>
+        <pubDate>Wed, 19 Mar 2014 23:13:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541334-20</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-prayer-bonecrusher-support-altars-burying/541334.rss">[PI] Prayer (Bonecrusher support, altars, burying)</source>
+      </item>
+  </channel>
+</rss>

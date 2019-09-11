@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Virtual file cache indexing</title>
+    <link>https://forum.moparisthebest.com/t/virtual-file-cache-indexing/555289</link>
+    <description>It&#39;s known that the Runescape cache structure has a single data file and a bunch of files which are pointers to the first chunk of a file, and the length of the file. The purpose of these file indexes is so that the client has O(1) lookup on entries on the cache, although the fact may not be apparent. In the newer engines which has a compressed container format, you actually can remove the need for a file index (unless you want to save memory) and build a virtual file index by analyzing the data file. Here&#39;s an implementation of that, just for the sake of an example.
+
+I think for any cache library, this is much easier in terms of dependencies (you only need a single class to read files) and it makes the file structure easier to understand. The catch is that you MUST have a container like format which describes the packed length of the data, but all the files are already packed that way.
+
+It&#39;s also important to note that chunk 0 is denoted as the &#39;EOF&#39; chunk so you can estimate file sizes within a margin of 512 bytes. Depending on how large you cache archive is rebuilding the virtual index can take a longer amount of time to start up but you could precalculate the indexes (like the client already does) and load those files into memory. 
+
+This solution also works better for knowing which files are corrupted, and what files are actually included in the cache.
+
+You don&#39;t have to use morton codes for hashing, I just did out of preference. You can just encode the cache id (or type) and file id into a dword.
+
+[code=java]
+package com.evelus.jagexfs;
+
+import com.evelus.jagexfs.util.MortonCode;
+import com.google.common.base.Preconditions;
+
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * @author hadyn
+ */
+public class EntryCache {
+  private RandomAccessFile data;
+  private final byte[] CHUNK_BUFFER = new byte[EntryChunk.LENGTH];
+  private Map&lt;Integer, CachePointer&gt; pointers = new HashMap&lt;&gt;();
+
+  public static long compressedLength = 0L;
+  public static long uncompressedLength = 0L;
+
+  public EntryCache(RandomAccessFile data) throws IOException {
+    this.data = data;
+    rebuildIndex();
+  }
+
+  /**
+   * Reads an entry container from the cache and extracts the data.
+   *
+   * @param type    the type.
+   * @param entryId the entry id.
+   * @return the unpacked container bytes for the entry.
+   * @throws IOException if an I/O exception was encountered while reading the container.
+   */
+  public byte[] unpackContainer(int type, int entryId) throws IOException {
+    byte[] bytes = readContainer(type, entryId);
+    Container container = new Container();
+    container.read(ByteBuffer.wrap(bytes));
+    return container.getBytes();
+  }
+
+  /**
+   * Reads an entry container from the cache. To extract the bytes from the container it will
+   * have to be unpacked.
+   *
+   * @param type    the type.
+   * @param entryId the entry id.
+   * @return the container bytes.
+   * @throws IOException if an I/O exception was encountered while reading the container.
+   *
+   * @see Container
+   */
+  public byte[] readContainer(int type, int entryId) throws IOException {
+    if (!containsEntry(type, entryId)) {
+      return null;
+    }
+    CachePointer pointer = pointers.get(MortonCode.mortonCode2i(type, entryId));
+    int length = pointer.getLength();
+    byte[] bytes = new byte[length];
+    int chunkId = pointer.getFirstChunk();
+    EntryChunk chunk = new EntryChunk();
+    int destOff = 0;
+    int part = 0;
+    while (chunkId != EntryChunk.EOF_CHUNK) {
+      readChunk(chunk, chunkId);
+      if (chunk.getType() != type || chunk.getEntryId() != entryId || part != chunk.getPart()) {
+        throw new IOException(&quot;Corrupted file: &quot; + type + &quot;, &quot; + entryId + &quot;.&quot;);
+      }
+      int read = length - destOff;
+      if (read &gt; EntryChunk.DATA_LENGTH) {
+        read = EntryChunk.DATA_LENGTH;
+      }
+      if (chunk.getLength() &lt; read) {
+        throw new BufferUnderflowException();
+      }
+      System.arraycopy(chunk.getData(), 0, bytes, destOff, read);
+      chunkId = chunk.getNextChunk();
+      destOff += read;
+      part++;
+    }
+    return bytes;
+  }
+
+  private void readChunk(EntryChunk chunk, int chunkId) throws IOException {
+    Preconditions.checkArgument(chunkId &gt; EntryChunk.EOF_CHUNK, &quot;Invalid chunk id: %s.&quot;, chunkId);
+    Preconditions.checkState(chunkExists(chunkId), &quot;Chunk does not exist: %s.&quot;, chunkId);
+    long position = chunkId * (long) EntryChunk.LENGTH;
+    int len = (int) Math.min(data.length() - position, EntryChunk.LENGTH);
+    data.seek(position);
+    data.read(CHUNK_BUFFER, 0, len);
+    chunk.read(ByteBuffer.wrap(CHUNK_BUFFER));
+  }
+
+  private void writeChunk(EntryChunk chunk, int chunkId) throws IOException {
+    ByteBuffer bb = ByteBuffer.wrap(CHUNK_BUFFER);
+    chunk.write(bb);
+    bb.flip();
+    bb.get(CHUNK_BUFFER, 0, bb.limit());
+    data.seek(chunkId * (long) EntryChunk.LENGTH);
+    data.write(CHUNK_BUFFER, 0, bb.limit());
+  }
+
+  private int getFreeChunk() throws IOException {
+    return size() + 1;
+  }
+
+  private boolean chunkExists(int chunkId) throws IOException {
+    return size() &gt; chunkId;
+  }
+
+  public boolean containsEntry(int type, int entryId) {
+    return pointers.containsKey(MortonCode.mortonCode2i(type, entryId));
+  }
+
+  /**
+   * Rebuilds the index for the cache. This function will clear any other file pointers already
+   * associated with this cache.
+   *
+   * @throws IllegalArgumentException if there are multiple chunks which describe the start of a
+   *                                  file.
+   */
+  public void rebuildIndex() throws IOException {
+    pointers.clear();
+
+    Set&lt;Integer&gt; hashes = new HashSet&lt;&gt;();
+    EntryChunk chunk = new EntryChunk();
+    for (int chunkId = 1; chunkId &lt; size(); chunkId++) {
+      readChunk(chunk, chunkId);
+      if (chunk.getPart() != 0) {
+        continue;
+      }
+
+      // Check to make sure that the start of a file isn&#39;t mentioned twice in the cache. If it is
+      // then we can&#39;t be sure which chunk is the actual start to the file.
+      int hash = MortonCode.mortonCode2i(chunk.getType(), chunk.getEntryId());
+      if (hashes.contains(hash)) {
+        throw new IllegalStateException(
+          &quot;Found multiple chunks which describe the start of an entry; &quot; + chunk.getType() +
+            &quot;, &quot; + chunk.getEntryId() + &quot;.&quot;);
+      }
+      hashes.add(hash);
+
+      ByteBuffer bb = ByteBuffer.wrap(chunk.getData());
+      int compression = bb.get() &amp; 0xff;
+      int packedLength = bb.getInt();
+
+      compressedLength += (long) packedLength;
+      if(compression != Container.COMPRESSION_NONE) {
+        if(chunk.getType() != 5) {
+          uncompressedLength += (long) bb.getInt(bb.position());
+        }
+      } else {
+        uncompressedLength += (long) packedLength;
+      }
+
+      // Calculate the length of the file from the container header. Table files are not stored
+      // with their version because they are internally defined in the format, every other file
+      // however is. The last two bytes of the file are reserved for the version.
+      int length = packedLength + Container.getHeaderLength(compression);
+      if (chunk.getType() != EntryType.TYPE_TABLE) {
+        length += 2;
+      }
+
+      CachePointer pointer = new CachePointer(chunkId, length);
+      pointers.put(MortonCode.mortonCode2i(chunk.getType(), chunk.getEntryId()), pointer);
+    }
+  }
+
+  /**
+   * Gets the volumes that are mentioned in all of the chunks.
+   *
+   * @return the volume ids.
+   * @throws IOException an I/O exception was encountered.
+   */
+  public Set&lt;Integer&gt; getMentionedTypes() throws IOException {
+    Set&lt;Integer&gt; volumes = new HashSet&lt;&gt;();
+    EntryChunk chunk = new EntryChunk();
+    for (int chunkId = 1; chunkId &lt; size(); chunkId++) {
+      readChunk(chunk, chunkId);
+      volumes.add(chunk.getType());
+    }
+    return volumes;
+  }
+
+  /**
+   * Gets the size of the cache in chunks. The size takes into consideration the reserved EOF
+   * chunk so this function will always return a value equal to or greater than one.
+   *
+   * @return the size of the cache.
+   */
+  public int size() throws IOException {
+    return (int) (data.length() / EntryChunk.LENGTH);
+  }
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Thu, 28 Apr 2016 09:32:57 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/virtual-file-cache-indexing/555289.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Virtual file cache indexing</title>
+        <dc:creator><![CDATA[@_nova1 _nova]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_nova1">@_nova1</a> wrote:</p>
+          <blockquote>
+              <p>It’s known that the Runescape cache structure has a single data file and a bunch of files which are pointers to the first chunk of a file, and the length of the file. The purpose of these file indexes is so that the client has O(1) lookup on entries on the cache, although the fact may not be apparent. In the newer engines which has a compressed container format, you actually can remove the need for a file index (unless you want to save memory) and build a virtual file index by analyzing the data file. Here’s an implementation of that, just for the sake of an example.</p>
+<p>I think for any cache library, this is much easier in terms of dependencies (you only need a single class to read files) and it makes the file structure easier to understand. The catch is that you MUST have a container like format which describes the packed length of the data, but all the files are already packed that way.</p>
+<p>It’s also important to note that chunk 0 is denoted as the ‘EOF’ chunk so you can estimate file sizes within a margin of 512 bytes. Depending on how large you cache archive is rebuilding the virtual index can take a longer amount of time to start up but you could precalculate the indexes (like the client already does) and load those files into memory.</p>
+<p>This solution also works better for knowing which files are corrupted, and what files are actually included in the cache.</p>
+<p>You don’t have to use morton codes for hashing, I just did out of preference. You can just encode the cache id (or type) and file id into a dword.</p>
+<pre><code class="lang-auto">package com.evelus.jagexfs;
+
+import com.evelus.jagexfs.util.MortonCode;
+import com.google.common.base.Preconditions;
+
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * @author hadyn
+ */
+public class EntryCache {
+  private RandomAccessFile data;
+  private final byte[] CHUNK_BUFFER = new byte[EntryChunk.LENGTH];
+  private Map&lt;Integer, CachePointer&gt; pointers = new HashMap&lt;&gt;();
+
+  public static long compressedLength = 0L;
+  public static long uncompressedLength = 0L;
+
+  public EntryCache(RandomAccessFile data) throws IOException {
+    this.data = data;
+    rebuildIndex();
+  }
+
+  /**
+   * Reads an entry container from the cache and extracts the data.
+   *
+   * @param type    the type.
+   * @param entryId the entry id.
+   * @return the unpacked container bytes for the entry.
+   * @throws IOException if an I/O exception was encountered while reading the container.
+   */
+  public byte[] unpackContainer(int type, int entryId) throws IOException {
+    byte[] bytes = readContainer(type, entryId);
+    Container container = new Container();
+    container.read(ByteBuffer.wrap(bytes));
+    return container.getBytes();
+  }
+
+  /**
+   * Reads an entry container from the cache. To extract the bytes from the container it will
+   * have to be unpacked.
+   *
+   * @param type    the type.
+   * @param entryId the entry id.
+   * @return the container bytes.
+   * @throws IOException if an I/O exception was encountered while reading the container.
+   *
+   * @see Container
+   */
+  public byte[] readContainer(int type, int entryId) throws IOException {
+    if (!containsEntry(type, entryId)) {
+      return null;
+    }
+    CachePointer pointer = pointers.get(MortonCode.mortonCode2i(type, entryId));
+    int length = pointer.getLength();
+    byte[] bytes = new byte[length];
+    int chunkId = pointer.getFirstChunk();
+    EntryChunk chunk = new EntryChunk();
+    int destOff = 0;
+    int part = 0;
+    while (chunkId != EntryChunk.EOF_CHUNK) {
+      readChunk(chunk, chunkId);
+      if (chunk.getType() != type || chunk.getEntryId() != entryId || part != chunk.getPart()) {
+        throw new IOException("Corrupted file: " + type + ", " + entryId + ".");
+      }
+      int read = length - destOff;
+      if (read &gt; EntryChunk.DATA_LENGTH) {
+        read = EntryChunk.DATA_LENGTH;
+      }
+      if (chunk.getLength() &lt; read) {
+        throw new BufferUnderflowException();
+      }
+      System.arraycopy(chunk.getData(), 0, bytes, destOff, read);
+      chunkId = chunk.getNextChunk();
+      destOff += read;
+      part++;
+    }
+    return bytes;
+  }
+
+  private void readChunk(EntryChunk chunk, int chunkId) throws IOException {
+    Preconditions.checkArgument(chunkId &gt; EntryChunk.EOF_CHUNK, "Invalid chunk id: %s.", chunkId);
+    Preconditions.checkState(chunkExists(chunkId), "Chunk does not exist: %s.", chunkId);
+    long position = chunkId * (long) EntryChunk.LENGTH;
+    int len = (int) Math.min(data.length() - position, EntryChunk.LENGTH);
+    data.seek(position);
+    data.read(CHUNK_BUFFER, 0, len);
+    chunk.read(ByteBuffer.wrap(CHUNK_BUFFER));
+  }
+
+  private void writeChunk(EntryChunk chunk, int chunkId) throws IOException {
+    ByteBuffer bb = ByteBuffer.wrap(CHUNK_BUFFER);
+    chunk.write(bb);
+    bb.flip();
+    bb.get(CHUNK_BUFFER, 0, bb.limit());
+    data.seek(chunkId * (long) EntryChunk.LENGTH);
+    data.write(CHUNK_BUFFER, 0, bb.limit());
+  }
+
+  private int getFreeChunk() throws IOException {
+    return size() + 1;
+  }
+
+  private boolean chunkExists(int chunkId) throws IOException {
+    return size() &gt; chunkId;
+  }
+
+  public boolean containsEntry(int type, int entryId) {
+    return pointers.containsKey(MortonCode.mortonCode2i(type, entryId));
+  }
+
+  /**
+   * Rebuilds the index for the cache. This function will clear any other file pointers already
+   * associated with this cache.
+   *
+   * @throws IllegalArgumentException if there are multiple chunks which describe the start of a
+   *                                  file.
+   */
+  public void rebuildIndex() throws IOException {
+    pointers.clear();
+
+    Set&lt;Integer&gt; hashes = new HashSet&lt;&gt;();
+    EntryChunk chunk = new EntryChunk();
+    for (int chunkId = 1; chunkId &lt; size(); chunkId++) {
+      readChunk(chunk, chunkId);
+      if (chunk.getPart() != 0) {
+        continue;
+      }
+
+      // Check to make sure that the start of a file isn't mentioned twice in the cache. If it is
+      // then we can't be sure which chunk is the actual start to the file.
+      int hash = MortonCode.mortonCode2i(chunk.getType(), chunk.getEntryId());
+      if (hashes.contains(hash)) {
+        throw new IllegalStateException(
+          "Found multiple chunks which describe the start of an entry; " + chunk.getType() +
+            ", " + chunk.getEntryId() + ".");
+      }
+      hashes.add(hash);
+
+      ByteBuffer bb = ByteBuffer.wrap(chunk.getData());
+      int compression = bb.get() &amp; 0xff;
+      int packedLength = bb.getInt();
+
+      compressedLength += (long) packedLength;
+      if(compression != Container.COMPRESSION_NONE) {
+        if(chunk.getType() != 5) {
+          uncompressedLength += (long) bb.getInt(bb.position());
+        }
+      } else {
+        uncompressedLength += (long) packedLength;
+      }
+
+      // Calculate the length of the file from the container header. Table files are not stored
+      // with their version because they are internally defined in the format, every other file
+      // however is. The last two bytes of the file are reserved for the version.
+      int length = packedLength + Container.getHeaderLength(compression);
+      if (chunk.getType() != EntryType.TYPE_TABLE) {
+        length += 2;
+      }
+
+      CachePointer pointer = new CachePointer(chunkId, length);
+      pointers.put(MortonCode.mortonCode2i(chunk.getType(), chunk.getEntryId()), pointer);
+    }
+  }
+
+  /**
+   * Gets the volumes that are mentioned in all of the chunks.
+   *
+   * @return the volume ids.
+   * @throws IOException an I/O exception was encountered.
+   */
+  public Set&lt;Integer&gt; getMentionedTypes() throws IOException {
+    Set&lt;Integer&gt; volumes = new HashSet&lt;&gt;();
+    EntryChunk chunk = new EntryChunk();
+    for (int chunkId = 1; chunkId &lt; size(); chunkId++) {
+      readChunk(chunk, chunkId);
+      volumes.add(chunk.getType());
+    }
+    return volumes;
+  }
+
+  /**
+   * Gets the size of the cache in chunks. The size takes into consideration the reserved EOF
+   * chunk so this function will always return a value equal to or greater than one.
+   *
+   * @return the size of the cache.
+   */
+  public int size() throws IOException {
+    return (int) (data.length() / EntryChunk.LENGTH);
+  }
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/virtual-file-cache-indexing/555289/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/virtual-file-cache-indexing/555289/1</link>
+        <pubDate>Thu, 28 Apr 2016 09:32:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555289-1</guid>
+        <source url="https://forum.moparisthebest.com/t/virtual-file-cache-indexing/555289.rss">Virtual file cache indexing</source>
+      </item>
+  </channel>
+</rss>

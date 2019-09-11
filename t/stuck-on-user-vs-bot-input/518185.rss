@@ -1,0 +1,947 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Stuck on User vs. Bot input</title>
+    <link>https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185</link>
+    <description>I was trying to create something like Smart just to see how things work but I don&#39;t want to use the BlockingEventQueue that smart uses.. I want to block events like how RSBot does it..
+
+Anyway, I&#39;m stuck on determining the difference between user input and fake input.
+
+At first, I did the eventQueue like Smart did but it kept losing events sometimes. Sometimes it won&#39;t stop blocking so I erased all that code and started from scratch. I also tried creating a &quot;Glass-Pane&quot; over the applet but that failed miserably: http://stackoverflow.com/questions/16258575/glass-pane-over-an-applet
+
+I created a canvas just like the (somewhat out-dated) tutorials says to do but my own way -- a bit.
+
+How can I block user input and allow fake input? When I use my event handler (below the canvas class), it just doesn&#39;t let the &quot;Fake&quot; events go through unless I set the source to &quot;canvas&quot; and remove my if-statement. I&#39;m also using a JTabbedPane so when I send events, if the tab is not selected, it does not go through. But for now, I just want to get events working for one tab.
+
+My Canvas:
+[code=Java]
+package java.awt;
+
+import rs.BotManager;
+import rs.Bot;
+import java.awt.image.BufferStrategy;
+import java.awt.image.BufferedImage;
+import java.awt.peer.CanvasPeer;
+import javax.accessibility.*;
+
+public class Canvas extends Component implements Accessible {
+
+    private Bot bot = null;
+    private boolean Focused = false;
+    private static int nameCounter = 0;
+    private static final String base = &quot;canvas&quot;;
+    private static final long serialVersionUID = -2284879212465893870L;
+
+    public Canvas() {
+        super();
+    }
+
+    public Canvas(GraphicsConfiguration config) {
+        this();
+        setGraphicsConfiguration(config);
+    }
+    
+    private void setEventBlocking() { //Erased all the old code..
+        bot = BotManager.getBot(this.getClass().getClassLoader().hashCode());
+        if (bot != null) {
+            bot.botListener = new BotListener(bot, this); //Remove ALL listeners from the canvas and replace with our own..
+        }
+    }
+
+    @Override
+    public Graphics getGraphics() {
+        this.setEventBlocking();         //Replaces ALL listeners with our own.. Not sure if to delete the original listeners..
+
+        //Double buffering if done right.. Seems to work so far as I can get screenshots of the client working :)
+        if (super.getGraphics() != null &amp;&amp; bot != null &amp;&amp; bot.getBotBuffer() != null &amp;&amp; bot.getGameBuffer() != null) {
+            Graphics g = bot.getBotBuffer().getGraphics();
+            g.drawImage(bot.getGameBuffer(), 0, 0, null);
+            g.dispose();
+
+            Graphics2D G = (Graphics2D) super.getGraphics();
+            G.drawImage(bot.getBotBuffer(), 0, 0, null);
+            return bot.getGameBuffer().getGraphics();
+        }
+
+        return super.getGraphics();
+    }
+
+    @Override
+    public void paint(Graphics g) {
+        g.clearRect(0, 0, width, height);
+    }
+
+    @Override
+    public void update(Graphics g) {
+        g.clearRect(0, 0, width, height);
+        paint(g);
+    }
+
+    public BufferedImage getGameBuffer() {
+        return bot.getGameBuffer();
+    }
+
+    public BufferedImage getBotBuffer() {
+        return bot.getBotBuffer();
+    }
+
+    @Override
+    public final boolean hasFocus() {
+        return Focused;
+    }
+
+    @Override
+    public final boolean isValid() {
+        return visible;
+    }
+
+    @Override
+    public final boolean isVisible() {
+        return visible;
+    }
+
+    @Override
+    public final boolean isDisplayable() {
+        return true;
+    }
+
+    @Override
+    public final void setVisible(boolean visible) {
+        super.setVisible(visible);
+        this.visible = visible;
+    }
+
+    @Override
+    void setGraphicsConfiguration(GraphicsConfiguration gc) {
+        synchronized (getTreeLock()) {
+            CanvasPeer peer = (CanvasPeer) getPeer();
+            if (peer != null) {
+                gc = peer.getAppropriateGraphicsConfiguration(gc);
+            }
+            super.setGraphicsConfiguration(gc);
+        }
+    }
+
+    @Override
+    String constructComponentName() {
+        synchronized (Canvas.class) {
+            return base + nameCounter++;
+        }
+    }
+
+    @Override
+    public void addNotify() {
+        synchronized (getTreeLock()) {
+            if (peer == null) {
+                peer = getToolkit().createCanvas(this);
+            }
+            super.addNotify();
+        }
+    }
+
+    @Override
+    boolean postsOldMouseEvents() {
+        return true;
+    }
+
+    @Override
+    public void createBufferStrategy(int numBuffers) {
+        super.createBufferStrategy(numBuffers);
+    }
+
+    @Override
+    public void createBufferStrategy(int numBuffers,
+            BufferCapabilities caps) throws AWTException {
+        super.createBufferStrategy(numBuffers, caps);
+    }
+
+    @Override
+    public BufferStrategy getBufferStrategy() {
+        return super.getBufferStrategy();
+    }
+
+    @Override
+    public AccessibleContext getAccessibleContext() {
+        if (accessibleContext == null) {
+            accessibleContext = new AccessibleAWTCanvas();
+        }
+        return accessibleContext;
+    }
+
+    protected class AccessibleAWTCanvas extends AccessibleAWTComponent {
+
+        private static final long serialVersionUID = -6325592262103146699L;
+
+        @Override
+        public AccessibleRole getAccessibleRole() {
+            return AccessibleRole.CANVAS;
+        }
+    }
+}
+[/Code]
+
+
+And my EventHandler:
+
+
+[Code=java]
+import rs.BotManager;
+import rs.Bot;
+import rs.Utilities;
+import java.awt.Canvas;
+import java.awt.Point;
+import java.awt.event.*;
+
+public class BotListener implements KeyListener, FocusListener, MouseListener, MouseMotionListener, MouseWheelListener {
+
+    private Bot bot = null;
+    private Canvas canvas = null;
+    private boolean MouseEntered = false;
+    private boolean KeyInputEnabled = false;
+    private boolean MouseInputEnabled = false;
+    private Point Position = new Point(-1, -1);
+    private KeyListener[] KeyListeners = null;
+    private FocusListener[] FocusListeners = null;
+    private MouseListener[] MouseListeners = null;
+    private MouseMotionListener[] MouseMotionListeners = null;
+    private MouseWheelListener[] MouseWheelListeners = null;
+
+    public BotListener(Bot bot, Canvas canvas) {
+        this.bot = bot;
+        this.canvas = canvas;
+
+        saveListeners(canvas);
+        removeListeners(canvas);
+        addListeners(canvas);
+    }
+
+    private void saveListeners(Canvas canvas) {  //Save all the original listeners of the canvas
+        KeyListeners = canvas.getKeyListeners();
+        FocusListeners = canvas.getFocusListeners();
+        MouseListeners = canvas.getMouseListeners();
+        MouseMotionListeners = canvas.getMouseMotionListeners();
+        MouseWheelListeners = canvas.getMouseWheelListeners();
+    }
+
+    private void addListeners(Canvas canvas) {  //replace the listeners with our own after removing the originals..
+        canvas.addKeyListener(this);
+        canvas.addFocusListener(this);
+        canvas.addMouseListener(this);
+        canvas.addMouseMotionListener(this);
+        canvas.addMouseWheelListener(this);
+    }
+
+    private void removeListeners(Canvas canvas) {  //Remove all the original listeners after we have saved them..
+        for (KeyListener keyListener : canvas.getKeyListeners()) {
+            canvas.removeKeyListener(keyListener);
+        }
+
+        for (FocusListener focusListener : canvas.getFocusListeners()) {
+            canvas.removeFocusListener(focusListener);
+        }
+
+        for (MouseListener listener : canvas.getMouseListeners()) {
+            canvas.removeMouseListener(listener);
+        }
+
+        for (MouseMotionListener mouseMotionListener : canvas.getMouseMotionListeners()) {
+            canvas.removeMouseMotionListener(mouseMotionListener);
+        }
+
+        for (MouseWheelListener mouseWheelListener : canvas.getMouseWheelListeners()) {
+            canvas.removeMouseWheelListener(mouseWheelListener);
+        }
+    }
+
+    public boolean isListenersAttached(Bot bot) {  //Check if listeners are attached to the given bot&#39;s canvas..
+        return this.bot.getCanvas() == bot.getCanvas();
+    }
+
+    public boolean isListenersAttached(Canvas canvas) { //Check if the listeners are attached to the canvas..
+        return this.canvas == canvas;
+    }
+
+    public boolean isKeyInputEnabled() {
+        return KeyInputEnabled;
+    }
+
+    public void setKeyInput(boolean Enabled) {
+        this.KeyInputEnabled = Enabled;
+    }
+
+    public boolean isMouseInputEnabled() {
+        return MouseInputEnabled;
+    }
+
+    public void setMouseInput(boolean Enabled) {
+        this.MouseInputEnabled = Enabled;
+    }
+
+
+	public void sendKeys(String Text) {  //Source of all fake events are the &quot;Applet&quot;. The event handler will set the source to &quot;canvas&quot;.
+        char[] Data = Text.toCharArray();
+
+        for (char C : Data) {
+            long Time = System.currentTimeMillis();
+            this.keyPressed(new KeyEvent(bot.getApplet(), KeyEvent.KEY_PRESSED, Time, 0, (int) C, C, KeyEvent.KEY_LOCATION_STANDARD));
+            this.keyTyped(new KeyEvent(bot.getApplet(), KeyEvent.KEY_TYPED, Time, 0, 0, C, KeyEvent.KEY_LOCATION_UNKNOWN));
+            Utilities.sleep((int) ((Math.random() * 0.1 + 1) * 90));
+            this.keyReleased(new KeyEvent(bot.getApplet(), KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, (int) C, C, KeyEvent.KEY_LOCATION_STANDARD));
+        }
+    }
+    
+	
+	/** All Event Handling stuff **/
+
+	@Override
+    public void keyTyped(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {  //If the event is a &quot;Applet&quot; event, then it is a fake event..
+            e.setSource(this.canvas);            //Set the source to the canvas and dispatch it to the canvas..
+			
+			for (KeyListener listener : KeyListeners) { //Dispatches the event to all the &quot;Original listeners&quot;..
+				listener.keyTyped(e);
+			}
+        }
+		
+		if (this.KeyInputEnabled) {    //If user input is enabled, dispatch the event to the canvas..
+		    for (KeyListener listener : KeyListeners) {
+				listener.keyTyped(e);
+			}
+		}
+    }
+
+    @Override
+    public void keyPressed(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (KeyListener listener : KeyListeners) {
+            listener.keyPressed(e);
+        }
+    }
+
+    @Override
+    public void keyReleased(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (KeyListener listener : KeyListeners) {
+            listener.keyReleased(e);
+        }
+    }
+
+    @Override
+    public void focusGained(FocusEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (FocusListener listener : FocusListeners) {
+            listener.focusGained(e);
+        }
+    }
+
+    @Override
+    public void focusLost(FocusEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (FocusListener listener : FocusListeners) {
+            listener.focusLost(e);
+        }
+    }
+
+    @Override
+    public void mouseClicked(MouseEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseClicked(e);
+        }
+    }
+
+    @Override
+    public void mousePressed(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mousePressed(e);
+        }
+    }
+
+    @Override
+    public void mouseReleased(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseReleased(e);
+        }
+    }
+
+    @Override
+    public void mouseEntered(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseEntered(e);
+        }
+    }
+
+    @Override
+    public void mouseExited(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseExited(e);
+        }
+    }
+
+    @Override
+    public void mouseDragged(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseMotionListener listener : MouseMotionListeners) {
+            listener.mouseDragged(e);
+        }
+    }
+
+    @Override
+    public void mouseMoved(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseMotionListener listener : MouseMotionListeners) {
+            listener.mouseMoved(e);
+        }
+    }
+
+    @Override
+    public void mouseWheelMoved(MouseWheelEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseWheelListener listener : MouseWheelListeners) {
+            listener.mouseWheelMoved(e);
+        }
+    }
+}
+[/Code]</description>
+    
+    <lastBuildDate>Sat, 11 May 2013 22:48:29 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Stuck on User vs. Bot input</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>just send the event to the component, thats explicit enough. you might want to fake a focus event 'cause if they detect you moving your mouse and playing the game without focus its probably quite a big sign that you are cheating.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/4</link>
+        <pubDate>Sat, 11 May 2013 22:48:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-518185-4</guid>
+        <source url="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185.rss">Stuck on User vs. Bot input</source>
+      </item>
+      <item>
+        <title>Stuck on User vs. Bot input</title>
+        <dc:creator><![CDATA[@iphone-d iphone-d]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/iphone-d">@iphone-d</a> wrote:</p>
+          <blockquote>
+              <p>Ahh Thanx! I solved it by separating the different types of events into different classes. It seems to be an odd bug.</p>
+<p>I have a MouseListener class, keyboardlistener class, focuslistener class. If I combine them all, it does not work. However, if I separate them into the categories above, it works 100% even though its the exact same code &amp; logic. Odd bug indeed but I got it working.</p>
+<p>Now my new question: How can I send input to a specific Tab without having to go to that tab, getfocus, and then send?</p>
+<p>Is there a trick to guarantee that my input goes through or to keep focus?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/3</link>
+        <pubDate>Sat, 04 May 2013 02:43:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-518185-3</guid>
+        <source url="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185.rss">Stuck on User vs. Bot input</source>
+      </item>
+      <item>
+        <title>Stuck on User vs. Bot input</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>You can subclass AWTEvent to make your own custom events and check if the class is a member of your own on the client.</p>
+<p>That way you could do something quite simple,</p>
+<p>if (event.sender instanceof  BotEvent) {<br>
+//… send events<br>
+} else {<br>
+//… do what you want<br>
+}</p>
+<p>I can’t remember exactly how I did it but I remember BenLand100’s solution was good.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/2</link>
+        <pubDate>Fri, 03 May 2013 22:39:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-518185-2</guid>
+        <source url="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185.rss">Stuck on User vs. Bot input</source>
+      </item>
+      <item>
+        <title>Stuck on User vs. Bot input</title>
+        <dc:creator><![CDATA[@iphone-d iphone-d]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/iphone-d">@iphone-d</a> wrote:</p>
+          <blockquote>
+              <p>I was trying to create something like Smart just to see how things work but I don’t want to use the BlockingEventQueue that smart uses… I want to block events like how RSBot does it…</p>
+<p>Anyway, I’m stuck on determining the difference between user input and fake input.</p>
+<p>At first, I did the eventQueue like Smart did but it kept losing events sometimes. Sometimes it won’t stop blocking so I erased all that code and started from scratch. I also tried creating a “Glass-Pane” over the applet but that failed miserably: <a href="http://stackoverflow.com/questions/16258575/glass-pane-over-an-applet" rel="nofollow noopener">http://stackoverflow.com/questions/16258575/glass-pane-over-an-applet</a></p>
+<p>I created a canvas just like the (somewhat out-dated) tutorials says to do but my own way – a bit.</p>
+<p>How can I block user input and allow fake input? When I use my event handler (below the canvas class), it just doesn’t let the “Fake” events go through unless I set the source to “canvas” and remove my if-statement. I’m also using a JTabbedPane so when I send events, if the tab is not selected, it does not go through. But for now, I just want to get events working for one tab.</p>
+<p>My Canvas:</p>
+<pre><code class="lang-auto">package java.awt;
+
+import rs.BotManager;
+import rs.Bot;
+import java.awt.image.BufferStrategy;
+import java.awt.image.BufferedImage;
+import java.awt.peer.CanvasPeer;
+import javax.accessibility.*;
+
+public class Canvas extends Component implements Accessible {
+
+    private Bot bot = null;
+    private boolean Focused = false;
+    private static int nameCounter = 0;
+    private static final String base = "canvas";
+    private static final long serialVersionUID = -2284879212465893870L;
+
+    public Canvas() {
+        super();
+    }
+
+    public Canvas(GraphicsConfiguration config) {
+        this();
+        setGraphicsConfiguration(config);
+    }
+    
+    private void setEventBlocking() { //Erased all the old code..
+        bot = BotManager.getBot(this.getClass().getClassLoader().hashCode());
+        if (bot != null) {
+            bot.botListener = new BotListener(bot, this); //Remove ALL listeners from the canvas and replace with our own..
+        }
+    }
+
+    @Override
+    public Graphics getGraphics() {
+        this.setEventBlocking();         //Replaces ALL listeners with our own.. Not sure if to delete the original listeners..
+
+        //Double buffering if done right.. Seems to work so far as I can get screenshots of the client working :)
+        if (super.getGraphics() != null &amp;&amp; bot != null &amp;&amp; bot.getBotBuffer() != null &amp;&amp; bot.getGameBuffer() != null) {
+            Graphics g = bot.getBotBuffer().getGraphics();
+            g.drawImage(bot.getGameBuffer(), 0, 0, null);
+            g.dispose();
+
+            Graphics2D G = (Graphics2D) super.getGraphics();
+            G.drawImage(bot.getBotBuffer(), 0, 0, null);
+            return bot.getGameBuffer().getGraphics();
+        }
+
+        return super.getGraphics();
+    }
+
+    @Override
+    public void paint(Graphics g) {
+        g.clearRect(0, 0, width, height);
+    }
+
+    @Override
+    public void update(Graphics g) {
+        g.clearRect(0, 0, width, height);
+        paint(g);
+    }
+
+    public BufferedImage getGameBuffer() {
+        return bot.getGameBuffer();
+    }
+
+    public BufferedImage getBotBuffer() {
+        return bot.getBotBuffer();
+    }
+
+    @Override
+    public final boolean hasFocus() {
+        return Focused;
+    }
+
+    @Override
+    public final boolean isValid() {
+        return visible;
+    }
+
+    @Override
+    public final boolean isVisible() {
+        return visible;
+    }
+
+    @Override
+    public final boolean isDisplayable() {
+        return true;
+    }
+
+    @Override
+    public final void setVisible(boolean visible) {
+        super.setVisible(visible);
+        this.visible = visible;
+    }
+
+    @Override
+    void setGraphicsConfiguration(GraphicsConfiguration gc) {
+        synchronized (getTreeLock()) {
+            CanvasPeer peer = (CanvasPeer) getPeer();
+            if (peer != null) {
+                gc = peer.getAppropriateGraphicsConfiguration(gc);
+            }
+            super.setGraphicsConfiguration(gc);
+        }
+    }
+
+    @Override
+    String constructComponentName() {
+        synchronized (Canvas.class) {
+            return base + nameCounter++;
+        }
+    }
+
+    @Override
+    public void addNotify() {
+        synchronized (getTreeLock()) {
+            if (peer == null) {
+                peer = getToolkit().createCanvas(this);
+            }
+            super.addNotify();
+        }
+    }
+
+    @Override
+    boolean postsOldMouseEvents() {
+        return true;
+    }
+
+    @Override
+    public void createBufferStrategy(int numBuffers) {
+        super.createBufferStrategy(numBuffers);
+    }
+
+    @Override
+    public void createBufferStrategy(int numBuffers,
+            BufferCapabilities caps) throws AWTException {
+        super.createBufferStrategy(numBuffers, caps);
+    }
+
+    @Override
+    public BufferStrategy getBufferStrategy() {
+        return super.getBufferStrategy();
+    }
+
+    @Override
+    public AccessibleContext getAccessibleContext() {
+        if (accessibleContext == null) {
+            accessibleContext = new AccessibleAWTCanvas();
+        }
+        return accessibleContext;
+    }
+
+    protected class AccessibleAWTCanvas extends AccessibleAWTComponent {
+
+        private static final long serialVersionUID = -6325592262103146699L;
+
+        @Override
+        public AccessibleRole getAccessibleRole() {
+            return AccessibleRole.CANVAS;
+        }
+    }
+}</code></pre>
+<p>And my EventHandler:</p>
+<pre><code class="lang-auto">import rs.BotManager;
+import rs.Bot;
+import rs.Utilities;
+import java.awt.Canvas;
+import java.awt.Point;
+import java.awt.event.*;
+
+public class BotListener implements KeyListener, FocusListener, MouseListener, MouseMotionListener, MouseWheelListener {
+
+    private Bot bot = null;
+    private Canvas canvas = null;
+    private boolean MouseEntered = false;
+    private boolean KeyInputEnabled = false;
+    private boolean MouseInputEnabled = false;
+    private Point Position = new Point(-1, -1);
+    private KeyListener[] KeyListeners = null;
+    private FocusListener[] FocusListeners = null;
+    private MouseListener[] MouseListeners = null;
+    private MouseMotionListener[] MouseMotionListeners = null;
+    private MouseWheelListener[] MouseWheelListeners = null;
+
+    public BotListener(Bot bot, Canvas canvas) {
+        this.bot = bot;
+        this.canvas = canvas;
+
+        saveListeners(canvas);
+        removeListeners(canvas);
+        addListeners(canvas);
+    }
+
+    private void saveListeners(Canvas canvas) {  //Save all the original listeners of the canvas
+        KeyListeners = canvas.getKeyListeners();
+        FocusListeners = canvas.getFocusListeners();
+        MouseListeners = canvas.getMouseListeners();
+        MouseMotionListeners = canvas.getMouseMotionListeners();
+        MouseWheelListeners = canvas.getMouseWheelListeners();
+    }
+
+    private void addListeners(Canvas canvas) {  //replace the listeners with our own after removing the originals..
+        canvas.addKeyListener(this);
+        canvas.addFocusListener(this);
+        canvas.addMouseListener(this);
+        canvas.addMouseMotionListener(this);
+        canvas.addMouseWheelListener(this);
+    }
+
+    private void removeListeners(Canvas canvas) {  //Remove all the original listeners after we have saved them..
+        for (KeyListener keyListener : canvas.getKeyListeners()) {
+            canvas.removeKeyListener(keyListener);
+        }
+
+        for (FocusListener focusListener : canvas.getFocusListeners()) {
+            canvas.removeFocusListener(focusListener);
+        }
+
+        for (MouseListener listener : canvas.getMouseListeners()) {
+            canvas.removeMouseListener(listener);
+        }
+
+        for (MouseMotionListener mouseMotionListener : canvas.getMouseMotionListeners()) {
+            canvas.removeMouseMotionListener(mouseMotionListener);
+        }
+
+        for (MouseWheelListener mouseWheelListener : canvas.getMouseWheelListeners()) {
+            canvas.removeMouseWheelListener(mouseWheelListener);
+        }
+    }
+
+    public boolean isListenersAttached(Bot bot) {  //Check if listeners are attached to the given bot's canvas..
+        return this.bot.getCanvas() == bot.getCanvas();
+    }
+
+    public boolean isListenersAttached(Canvas canvas) { //Check if the listeners are attached to the canvas..
+        return this.canvas == canvas;
+    }
+
+    public boolean isKeyInputEnabled() {
+        return KeyInputEnabled;
+    }
+
+    public void setKeyInput(boolean Enabled) {
+        this.KeyInputEnabled = Enabled;
+    }
+
+    public boolean isMouseInputEnabled() {
+        return MouseInputEnabled;
+    }
+
+    public void setMouseInput(boolean Enabled) {
+        this.MouseInputEnabled = Enabled;
+    }
+
+
+	public void sendKeys(String Text) {  //Source of all fake events are the "Applet". The event handler will set the source to "canvas".
+        char[] Data = Text.toCharArray();
+
+        for (char C : Data) {
+            long Time = System.currentTimeMillis();
+            this.keyPressed(new KeyEvent(bot.getApplet(), KeyEvent.KEY_PRESSED, Time, 0, (int) C, C, KeyEvent.KEY_LOCATION_STANDARD));
+            this.keyTyped(new KeyEvent(bot.getApplet(), KeyEvent.KEY_TYPED, Time, 0, 0, C, KeyEvent.KEY_LOCATION_UNKNOWN));
+            Utilities.sleep((int) ((Math.random() * 0.1 + 1) * 90));
+            this.keyReleased(new KeyEvent(bot.getApplet(), KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, (int) C, C, KeyEvent.KEY_LOCATION_STANDARD));
+        }
+    }
+    
+	
+	/** All Event Handling stuff **/
+
+	@Override
+    public void keyTyped(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {  //If the event is a "Applet" event, then it is a fake event..
+            e.setSource(this.canvas);            //Set the source to the canvas and dispatch it to the canvas..
+			
+			for (KeyListener listener : KeyListeners) { //Dispatches the event to all the "Original listeners"..
+				listener.keyTyped(e);
+			}
+        }
+		
+		if (this.KeyInputEnabled) {    //If user input is enabled, dispatch the event to the canvas..
+		    for (KeyListener listener : KeyListeners) {
+				listener.keyTyped(e);
+			}
+		}
+    }
+
+    @Override
+    public void keyPressed(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (KeyListener listener : KeyListeners) {
+            listener.keyPressed(e);
+        }
+    }
+
+    @Override
+    public void keyReleased(KeyEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (KeyListener listener : KeyListeners) {
+            listener.keyReleased(e);
+        }
+    }
+
+    @Override
+    public void focusGained(FocusEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (FocusListener listener : FocusListeners) {
+            listener.focusGained(e);
+        }
+    }
+
+    @Override
+    public void focusLost(FocusEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (FocusListener listener : FocusListeners) {
+            listener.focusLost(e);
+        }
+    }
+
+    @Override
+    public void mouseClicked(MouseEvent e) {
+        if (e.getSource() == bot.getApplet()) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseClicked(e);
+        }
+    }
+
+    @Override
+    public void mousePressed(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mousePressed(e);
+        }
+    }
+
+    @Override
+    public void mouseReleased(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseReleased(e);
+        }
+    }
+
+    @Override
+    public void mouseEntered(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseEntered(e);
+        }
+    }
+
+    @Override
+    public void mouseExited(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseListener listener : MouseListeners) {
+            listener.mouseExited(e);
+        }
+    }
+
+    @Override
+    public void mouseDragged(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseMotionListener listener : MouseMotionListeners) {
+            listener.mouseDragged(e);
+        }
+    }
+
+    @Override
+    public void mouseMoved(MouseEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseMotionListener listener : MouseMotionListeners) {
+            listener.mouseMoved(e);
+        }
+    }
+
+    @Override
+    public void mouseWheelMoved(MouseWheelEvent e) {
+        if (e.getSource() == bot.getApplet() || MouseInputEnabled) {
+            e.setSource(this.canvas);
+        }
+
+        for (MouseWheelListener listener : MouseWheelListeners) {
+            listener.mouseWheelMoved(e);
+        }
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185/1</link>
+        <pubDate>Mon, 29 Apr 2013 04:41:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-518185-1</guid>
+        <source url="https://forum.moparisthebest.com/t/stuck-on-user-vs-bot-input/518185.rss">Stuck on User vs. Bot input</source>
+      </item>
+  </channel>
+</rss>

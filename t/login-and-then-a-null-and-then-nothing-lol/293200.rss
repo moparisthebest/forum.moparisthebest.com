@@ -1,0 +1,980 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Login and then a null and then nothing lol</title>
+    <link>https://forum.moparisthebest.com/t/login-and-then-a-null-and-then-nothing-lol/293200</link>
+    <description>ok well thanks to lester from rune-server he helpped me get saving and loading done on the WL base i had wheni was removing TPC and the update saving an loading well now theres a no problem =\ i am hoping some one who has done this before can help me. mabe even graham could help me :P since he made the tut well w/e on that so heres the IOClient.java and the Run.bat i hope some one will be able to help me  :o
+
+IOClien.java
+[code]
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+
+/**
+ * Represents a client that has connected but has not yet logged in.
+ * @author Graham
+ *
+ */
+public class IOClient {
+	
+	/**
+	 * When the client connected.
+	 */
+	private long connectedAt;
+	
+	/**
+	 * The timeout value in seconds.
+	 */
+	private static final int TIMEOUT = 1;
+	
+	/**
+	 * The client&#39;s current state.
+	 * @author Graham
+	 *
+	 */
+	private static enum State {
+		LOGIN_START,
+		LOGIN_READ1,
+		LOGIN_READ2,
+	}
+	
+	private State state = State.LOGIN_START;
+
+	private Socket socket;
+	private String connectedFrom;
+	
+	private stream outStream = new stream(new byte[client.bufferSize]);
+	private stream inStream = new stream(new byte[client.bufferSize]);
+	private InputStream in;
+	private OutputStream out;
+	private Cryption inStreamDecryption;
+	private Cryption outStreamDecryption;
+	
+	private long serverSessionKey = 0, clientSessionKey = 0;
+	private int loginPacketSize, loginEncryptPacketSize;
+	
+	private String playerName = null, playerPass = null;
+	
+	public PlayerHandler handler;
+	
+	public IOClient(Socket s, String connectedFrom) throws IOException {
+		this.socket = s;
+		this.connectedFrom = connectedFrom;
+		this.outStream.currentOffset = 0;
+		this.inStream.currentOffset = 0;
+		this.in = s.getInputStream();
+		this.out = s.getOutputStream();
+		this.serverSessionKey = ((long)(java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long)(java.lang.Math.random() * 99999999D);
+		this.connectedAt = System.currentTimeMillis();
+		IOHostList.add(connectedFrom);
+	}
+	
+	public void destruct(boolean close) {
+		if(close &amp;&amp; this.socket != null) {
+			IOHostList.remove(connectedFrom);
+			try {
+				this.socket.close();
+			} catch(Exception e) {}
+		}
+		this.socket = null;
+		this.outStream = null;
+		this.inStream = null;
+		this.in = null;
+		this.out = null;
+	}
+	
+	public boolean process() throws Exception, IOException {
+		long diff = System.currentTimeMillis() - connectedAt;
+		if(diff &gt; (TIMEOUT*1000)) {
+			throw new Exception(&quot;Timeout.&quot;);
+		}
+		if(state == State.LOGIN_START) {
+			if(fillinStream(2)) {
+				if(inStream.readUnsignedByte() != 14) {
+					throw new Exception(&quot;Expect login byte 14 from client.&quot;);
+				}
+				// this is part of the usename. Maybe it&#39;s used as a hash to select the appropriate
+				// login server
+				@SuppressWarnings(&quot;unused&quot;)
+				int namePart = inStream.readUnsignedByte();
+				for(int i = 0; i &lt; 8; i++) out.write(0);		// is being ignored by the client
+				// login response - 0 means exchange session key to establish encryption
+				// Note that we could use 2 right away to skip the cryption part, but i think this
+				// won&#39;t work in one case when the cryptor class is not set and will throw a NullPointerException
+				out.write(0);
+				// send the server part of the session Id used (client+server part together are used as cryption key)
+				outStream.writeQWord(serverSessionKey);
+				directFlushoutStream();
+				state = State.LOGIN_READ1;
+			}
+		} else if(state == State.LOGIN_READ1) {
+			if(fillinStream(2)) {
+				int loginType = inStream.readUnsignedByte();	// this is either 16 (new login) or 18 (reconnect after lost connection)
+				if(loginType != 16 &amp;&amp; loginType != 18) {
+					throw new Exception(&quot;Unexpected login type &quot;+loginType);
+				}
+				loginPacketSize = inStream.readUnsignedByte();
+				loginEncryptPacketSize = loginPacketSize-(36+1+1+2);	// the size of the RSA encrypted part (containing password)
+				misc.println_debug(&quot;LoginPacket size: &quot;+loginPacketSize+&quot;, RSA packet size: &quot;+loginEncryptPacketSize);
+				if(loginEncryptPacketSize &lt;= 0) {
+					throw new Exception(&quot;Zero RSA packet size&quot;);
+				}
+				state = State.LOGIN_READ2;
+			}
+		} else if(state == State.LOGIN_READ2) {
+			if(fillinStream(loginPacketSize)) {
+				if(inStream.readUnsignedByte() != 255 || inStream.readUnsignedWord() != 317) {
+					throw new Exception(&quot;Wrong login packet magic ID (expected 255, 317)&quot;);
+				}
+				int lowMemoryVersion = inStream.readUnsignedByte();
+				misc.println_debug(&quot;Client type: &quot;+((lowMemoryVersion==1) ? &quot;low&quot; : &quot;high&quot;)+&quot; memory version&quot;);
+				for(int i = 0; i &lt; 9; i++) {
+					misc.println_debug(&quot;dataFileVersion[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(inStream.readDWord()));
+				}
+				// don&#39;t bother reading the RSA encrypted block because we can&#39;t unless
+				// we brute force jagex&#39; private key pair or employ a hacked client the removes
+				// the RSA encryption part or just uses our own key pair.
+				// Our current approach is to deactivate the RSA encryption of this block
+				// clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod
+				// effectively rendering this tranformation inactive
+				loginEncryptPacketSize--;		// don&#39;t count length byte
+				int tmp = inStream.readUnsignedByte();
+				if(loginEncryptPacketSize != tmp) {
+					throw new Exception(&quot;Encrypted packet data length (&quot;+loginEncryptPacketSize+&quot;) different from length byte thereof (&quot;+tmp+&quot;)&quot;);
+				}
+				tmp = inStream.readUnsignedByte();
+				if(tmp != 10) {
+					throw new Exception(&quot;Encrypted packet Id was &quot;+tmp+&quot; but expected 10&quot;);
+				}
+				clientSessionKey = inStream.readQWord();
+				serverSessionKey = inStream.readQWord();
+				misc.println(&quot;UserId: &quot;+inStream.readDWord());
+				playerName = inStream.readString();
+				if(playerName == null || playerName.length() == 0) throw new Exception(&quot;Blank username.&quot;);
+				playerPass = inStream.readString();
+				misc.println(&quot;Ident: &quot;+playerName+&quot;:&quot;+playerPass);
+
+				int sessionKey[] = new int[4];
+				sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+				sessionKey[1] = (int)clientSessionKey;
+				sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+				sessionKey[3] = (int)serverSessionKey;
+
+				for(int i = 0; i &lt; 4; i++)
+					misc.println_debug(&quot;inStreamSessionKey[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(sessionKey[i]));
+
+				inStreamDecryption = new Cryption(sessionKey);
+				for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+
+				for(int i = 0; i &lt; 4; i++)
+					misc.println_debug(&quot;outStreamSessionKey[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(sessionKey[i]));
+
+				outStreamDecryption = new Cryption(sessionKey);
+				outStream.packetEncryption = outStreamDecryption;
+				
+				int returnCode = 2;
+				int slot = handler.getFreeSlot();
+				client c = null;
+				if(server.playerHandler.updateRunning) {
+					// updating
+					returnCode = 14;
+				} else if(slot == -1) {
+					// world full!
+					returnCode = 7;
+				} else if(handler.isPlayerOn(playerName)) {
+					returnCode = 5;
+				} else {
+					client loadgame = loadgame(socket, slot, playerName, playerPass);
+					if(loadgame != null) {
+						c.loadmoreinfo(); //whatever your loadmoreinfo is called
+					} else {
+						c = new client(socket, slot);
+					}				}
+				if(c != null) {
+					c.playerName = playerName;
+					c.playerPass = playerPass;
+					c.inStreamDecryption = inStreamDecryption;
+					c.outStreamDecryption = outStreamDecryption;
+					c.inStream = inStream;
+					c.outStream = outStream;
+					c.in = in;
+					c.out = out;
+					c.packetSize = 0;
+					c.packetType = -1;
+					c.readPtr = 0;
+					c.writePtr = 0;
+					c.handler = handler;
+					c.isActive = true;
+				}
+				
+				// CHANGE ADMINS HERE
+				if(playerName.equals(&quot;Graham&quot;) &amp;&amp; c != null) {
+					c.playerRights = 2;
+				}
+				
+				out.write(returnCode);
+				if(returnCode == 2) {
+					handler.addClient(slot, c);
+					out.write(c.playerRights);		// mod level
+					out.write(0);					// no log
+					this.socket = null;
+				} else {
+					out.write(0);
+					out.write(0);
+				}
+				directFlushoutStream();
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public client loadgame(Socket socket, int slot, String playerName, String playerPass) {
+		client c = null;
+		String line = &quot;&quot;;
+		String token = &quot;&quot;;
+		String token2 = &quot;&quot;;
+		String[] token3 = new String[3];
+		boolean EndOfFile = false;
+		int ReadMode = 0;
+		BufferedReader characterfile = null;
+		BufferedReader characterfile2 = null;
+		boolean File1 = false;
+		boolean File2 = false;
+		String FTPAdress = &quot;ftp://whitescape:password@81.165.211.142:2500&quot;;
+		int World = c.GetWorld(c.playerId);
+		if (World == 2) {
+		}
+		try {
+			characterfile = new BufferedReader(new FileReader(&quot;./characters/&quot;+playerName+&quot;.txt&quot;));
+			File1 = true;
+		} catch(FileNotFoundException fileex1) {
+		}
+		try {
+			characterfile2 = new BufferedReader(new FileReader(FTPAdress+&quot;/&quot;+playerName+&quot;.txt&quot;));
+			File2 = true;
+		} catch(FileNotFoundException fileex2) {
+		}
+		if (File1 == true &amp;&amp; File2 == true) {
+			File myfile1 = new File (&quot;./characters/&quot;+playerName+&quot;.txt&quot;);
+			File myfile2 = new File (FTPAdress+&quot;/&quot;+playerName+&quot;.txt&quot;);
+			if (myfile1.lastModified() &lt; myfile2.lastModified()) {
+				characterfile = characterfile2;
+			}
+		} else if (File1 == false &amp;&amp; File2 == true) {
+			characterfile = characterfile2;
+		} else if (File1 == false &amp;&amp; File2 == false) {
+			c.println(playerName+&quot;: character file not found.&quot;);
+			return null;
+		}
+		try {
+			line = characterfile.readLine();
+		} catch(IOException ioexception) {
+			c.println(playerName+&quot;: error loading file.&quot;);
+			return null;
+		}
+		while(EndOfFile == false &amp;&amp; line != null) {
+			line = line.trim();
+			int spot = line.indexOf(&quot;=&quot;);
+			if (spot &gt; -1) {
+				token = line.substring(0, spot);
+				token = token.trim();
+				token2 = line.substring(spot + 1);
+				token2 = token2.trim();
+				token3 = token2.split(&quot;\t&quot;);
+				switch (ReadMode) {
+					case 1:
+						if (token.equals(&quot;character-username&quot;)) {
+							if (c.playerName.equalsIgnoreCase(token2)) {
+							} else {
+								return null;
+							}
+						} else if (token.equals(&quot;character-password&quot;)) {
+							if (c.playerPass.equalsIgnoreCase(token2)) {
+							c = new client(socket,slot);
+							} else {
+								return null;
+							}
+						}
+						break;
+					case 2:
+						if (token.equals(&quot;character-height&quot;)) {
+							c.heightLevel = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-posx&quot;)) {
+							c.teleportToX = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-posy&quot;)) {
+							c.teleportToY = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-rights&quot;)) {
+							c.playerRights = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-ismember&quot;)) {
+							c.playerIsMember = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-messages&quot;)) {
+							c.playerMessages = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-lastconnection&quot;)) {
+							c.playerLastConnect = token2;
+						} else if (token.equals(&quot;character-lastlogin&quot;)) {
+							c.playerLastLogin = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-gametime&quot;)) {
+							c.playerGameTime = Integer.parseInt(token2);
+						} else if (token.equals(&quot;character-gamecount&quot;)) {
+							c.playerGameCount = Integer.parseInt(token2);
+						}
+						break;
+					case 3:
+						if (token.equals(&quot;character-equip&quot;)) {
+							c.playerEquipment[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerEquipmentN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 4:
+						if (token.equals(&quot;character-look&quot;)) {
+							c.playerLook[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+						}
+						break;
+					case 5:
+						if (token.equals(&quot;character-skill&quot;)) {
+							c.playerLevel[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerXP[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 6:
+						if (token.equals(&quot;character-item&quot;)) {
+							c.playerItems[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerItemsN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 7:
+						if (token.equals(&quot;character-bank&quot;)) {
+							c.bankItems[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.bankItemsN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 8:
+						if (token.equals(&quot;character-friend&quot;)) {
+							c.friends[Integer.parseInt(token3[0])] = Long.parseLong(token3[1]);
+						}
+						break;
+					case 9:
+						if (token.equals(&quot;character-ignore&quot;)) {
+							c.ignores[Integer.parseInt(token3[0])] = Long.parseLong(token3[1]);
+						}
+						break;
+				}
+			} else {
+				if (line.equals(&quot;[ACCOUNT]&quot;)) {		ReadMode = 1;
+				} else if (line.equals(&quot;[CHARACTER]&quot;)) {	ReadMode = 2;
+				} else if (line.equals(&quot;[EQUIPMENT]&quot;)) {	ReadMode = 3;
+				} else if (line.equals(&quot;[LOOK]&quot;)) {		ReadMode = 4;
+				} else if (line.equals(&quot;[SKILLS]&quot;)) {		ReadMode = 5;
+				} else if (line.equals(&quot;[ITEMS]&quot;)) {		ReadMode = 6;
+				} else if (line.equals(&quot;[BANK]&quot;)) {		ReadMode = 7;
+				} else if (line.equals(&quot;[FRIENDS]&quot;)) {		ReadMode = 8;
+				} else if (line.equals(&quot;[IGNORES]&quot;)) {		ReadMode = 9;
+				} else if (line.equals(&quot;[EOF]&quot;)) {		try { characterfile.close(); } catch(IOException ioexception) { } return c;
+				}
+			}
+			try {
+				line = characterfile.readLine();
+			} catch(IOException ioexception1) { EndOfFile = true; }
+		}
+		try { characterfile.close(); } catch(IOException ioexception) { }
+		return null;
+	}		
+	
+	private void directFlushoutStream() throws java.io.IOException
+	{
+		out.write(outStream.buffer, 0, outStream.currentOffset);
+		outStream.currentOffset = 0;		// reset
+		out.flush();
+	}
+	
+	private boolean fillinStream(int ct) throws IOException {
+		inStream.currentOffset = 0;
+		if(in.available() &gt;= ct) {
+			inStream.currentOffset = 0;
+			in.read(inStream.buffer, 0, ct);
+			return true;
+		}
+		return false;
+	}
+
+}
+[/code]
+
+and now the Run.bat this is after i try to login not before
+
+[code]
+Server Online 43594
+ClientHandler: Accepted from localhost:4294
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x6076ab
+inStreamSessionKey[1]: 0x4c9f839
+inStreamSessionKey[2]: 0x124f0cc
+inStreamSessionKey[3]: 0x32c7a8a
+outStreamSessionKey[0]: 0x6076dd
+outStreamSessionKey[1]: 0x4c9f86b
+outStreamSessionKey[2]: 0x124f0fe
+outStreamSessionKey[3]: 0x32c7abc
+null
+ClientHandler: Accepted from localhost:4296
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x1674f56
+inStreamSessionKey[1]: 0x934b8c
+inStreamSessionKey[2]: 0x33c5ee5
+inStreamSessionKey[3]: 0x619e85
+outStreamSessionKey[0]: 0x1674f88
+outStreamSessionKey[1]: 0x934bbe
+outStreamSessionKey[2]: 0x33c5f17
+outStreamSessionKey[3]: 0x619eb7
+null
+ClientHandler: Accepted from localhost:4297
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x4f5dc2b
+inStreamSessionKey[1]: 0x3e46c93
+inStreamSessionKey[2]: 0x253b2cc
+inStreamSessionKey[3]: 0x5e53797
+outStreamSessionKey[0]: 0x4f5dc5d
+outStreamSessionKey[1]: 0x3e46cc5
+outStreamSessionKey[2]: 0x253b2fe
+outStreamSessionKey[3]: 0x5e537c9
+null
+[/code]
+any help would be nice :D (and maybe even rep o.o) &lt;------- this was never said</description>
+    
+    <lastBuildDate>Thu, 06 Aug 2009 04:20:22 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/login-and-then-a-null-and-then-nothing-lol/293200.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Login and then a null and then nothing lol</title>
+        <dc:creator><![CDATA[@doom_j doom_j]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/doom_j">@doom_j</a> wrote:</p>
+          <blockquote>
+              <p>ok well thanks to lester from rune-server he helpped me get saving and loading done on the WL base i had wheni was removing TPC and the update saving an loading well now theres a no problem =\ i am hoping some one who has done this before can help me. mabe even graham could help me <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> since he made the tut well w/e on that so heres the IOClient.java and the Run.bat i hope some one will be able to help me  :o</p>
+<p>IOClien.java</p>
+<pre><code class="lang-auto">import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+
+/**
+ * Represents a client that has connected but has not yet logged in.
+ * @author Graham
+ *
+ */
+public class IOClient {
+	
+	/**
+	 * When the client connected.
+	 */
+	private long connectedAt;
+	
+	/**
+	 * The timeout value in seconds.
+	 */
+	private static final int TIMEOUT = 1;
+	
+	/**
+	 * The client's current state.
+	 * @author Graham
+	 *
+	 */
+	private static enum State {
+		LOGIN_START,
+		LOGIN_READ1,
+		LOGIN_READ2,
+	}
+	
+	private State state = State.LOGIN_START;
+
+	private Socket socket;
+	private String connectedFrom;
+	
+	private stream outStream = new stream(new byte[client.bufferSize]);
+	private stream inStream = new stream(new byte[client.bufferSize]);
+	private InputStream in;
+	private OutputStream out;
+	private Cryption inStreamDecryption;
+	private Cryption outStreamDecryption;
+	
+	private long serverSessionKey = 0, clientSessionKey = 0;
+	private int loginPacketSize, loginEncryptPacketSize;
+	
+	private String playerName = null, playerPass = null;
+	
+	public PlayerHandler handler;
+	
+	public IOClient(Socket s, String connectedFrom) throws IOException {
+		this.socket = s;
+		this.connectedFrom = connectedFrom;
+		this.outStream.currentOffset = 0;
+		this.inStream.currentOffset = 0;
+		this.in = s.getInputStream();
+		this.out = s.getOutputStream();
+		this.serverSessionKey = ((long)(java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long)(java.lang.Math.random() * 99999999D);
+		this.connectedAt = System.currentTimeMillis();
+		IOHostList.add(connectedFrom);
+	}
+	
+	public void destruct(boolean close) {
+		if(close &amp;&amp; this.socket != null) {
+			IOHostList.remove(connectedFrom);
+			try {
+				this.socket.close();
+			} catch(Exception e) {}
+		}
+		this.socket = null;
+		this.outStream = null;
+		this.inStream = null;
+		this.in = null;
+		this.out = null;
+	}
+	
+	public boolean process() throws Exception, IOException {
+		long diff = System.currentTimeMillis() - connectedAt;
+		if(diff &gt; (TIMEOUT*1000)) {
+			throw new Exception("Timeout.");
+		}
+		if(state == State.LOGIN_START) {
+			if(fillinStream(2)) {
+				if(inStream.readUnsignedByte() != 14) {
+					throw new Exception("Expect login byte 14 from client.");
+				}
+				// this is part of the usename. Maybe it's used as a hash to select the appropriate
+				// login server
+				@SuppressWarnings("unused")
+				int namePart = inStream.readUnsignedByte();
+				for(int i = 0; i &lt; 8; i++) out.write(0);		// is being ignored by the client
+				// login response - 0 means exchange session key to establish encryption
+				// Note that we could use 2 right away to skip the cryption part, but i think this
+				// won't work in one case when the cryptor class is not set and will throw a NullPointerException
+				out.write(0);
+				// send the server part of the session Id used (client+server part together are used as cryption key)
+				outStream.writeQWord(serverSessionKey);
+				directFlushoutStream();
+				state = State.LOGIN_READ1;
+			}
+		} else if(state == State.LOGIN_READ1) {
+			if(fillinStream(2)) {
+				int loginType = inStream.readUnsignedByte();	// this is either 16 (new login) or 18 (reconnect after lost connection)
+				if(loginType != 16 &amp;&amp; loginType != 18) {
+					throw new Exception("Unexpected login type "+loginType);
+				}
+				loginPacketSize = inStream.readUnsignedByte();
+				loginEncryptPacketSize = loginPacketSize-(36+1+1+2);	// the size of the RSA encrypted part (containing password)
+				misc.println_debug("LoginPacket size: "+loginPacketSize+", RSA packet size: "+loginEncryptPacketSize);
+				if(loginEncryptPacketSize &lt;= 0) {
+					throw new Exception("Zero RSA packet size");
+				}
+				state = State.LOGIN_READ2;
+			}
+		} else if(state == State.LOGIN_READ2) {
+			if(fillinStream(loginPacketSize)) {
+				if(inStream.readUnsignedByte() != 255 || inStream.readUnsignedWord() != 317) {
+					throw new Exception("Wrong login packet magic ID (expected 255, 317)");
+				}
+				int lowMemoryVersion = inStream.readUnsignedByte();
+				misc.println_debug("Client type: "+((lowMemoryVersion==1) ? "low" : "high")+" memory version");
+				for(int i = 0; i &lt; 9; i++) {
+					misc.println_debug("dataFileVersion["+i+"]: 0x"+Integer.toHexString(inStream.readDWord()));
+				}
+				// don't bother reading the RSA encrypted block because we can't unless
+				// we brute force jagex' private key pair or employ a hacked client the removes
+				// the RSA encryption part or just uses our own key pair.
+				// Our current approach is to deactivate the RSA encryption of this block
+				// clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod
+				// effectively rendering this tranformation inactive
+				loginEncryptPacketSize--;		// don't count length byte
+				int tmp = inStream.readUnsignedByte();
+				if(loginEncryptPacketSize != tmp) {
+					throw new Exception("Encrypted packet data length ("+loginEncryptPacketSize+") different from length byte thereof ("+tmp+")");
+				}
+				tmp = inStream.readUnsignedByte();
+				if(tmp != 10) {
+					throw new Exception("Encrypted packet Id was "+tmp+" but expected 10");
+				}
+				clientSessionKey = inStream.readQWord();
+				serverSessionKey = inStream.readQWord();
+				misc.println("UserId: "+inStream.readDWord());
+				playerName = inStream.readString();
+				if(playerName == null || playerName.length() == 0) throw new Exception("Blank username.");
+				playerPass = inStream.readString();
+				misc.println("Ident: "+playerName+":"+playerPass);
+
+				int sessionKey[] = new int[4];
+				sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+				sessionKey[1] = (int)clientSessionKey;
+				sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+				sessionKey[3] = (int)serverSessionKey;
+
+				for(int i = 0; i &lt; 4; i++)
+					misc.println_debug("inStreamSessionKey["+i+"]: 0x"+Integer.toHexString(sessionKey[i]));
+
+				inStreamDecryption = new Cryption(sessionKey);
+				for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+
+				for(int i = 0; i &lt; 4; i++)
+					misc.println_debug("outStreamSessionKey["+i+"]: 0x"+Integer.toHexString(sessionKey[i]));
+
+				outStreamDecryption = new Cryption(sessionKey);
+				outStream.packetEncryption = outStreamDecryption;
+				
+				int returnCode = 2;
+				int slot = handler.getFreeSlot();
+				client c = null;
+				if(server.playerHandler.updateRunning) {
+					// updating
+					returnCode = 14;
+				} else if(slot == -1) {
+					// world full!
+					returnCode = 7;
+				} else if(handler.isPlayerOn(playerName)) {
+					returnCode = 5;
+				} else {
+					client loadgame = loadgame(socket, slot, playerName, playerPass);
+					if(loadgame != null) {
+						c.loadmoreinfo(); //whatever your loadmoreinfo is called
+					} else {
+						c = new client(socket, slot);
+					}				}
+				if(c != null) {
+					c.playerName = playerName;
+					c.playerPass = playerPass;
+					c.inStreamDecryption = inStreamDecryption;
+					c.outStreamDecryption = outStreamDecryption;
+					c.inStream = inStream;
+					c.outStream = outStream;
+					c.in = in;
+					c.out = out;
+					c.packetSize = 0;
+					c.packetType = -1;
+					c.readPtr = 0;
+					c.writePtr = 0;
+					c.handler = handler;
+					c.isActive = true;
+				}
+				
+				// CHANGE ADMINS HERE
+				if(playerName.equals("Graham") &amp;&amp; c != null) {
+					c.playerRights = 2;
+				}
+				
+				out.write(returnCode);
+				if(returnCode == 2) {
+					handler.addClient(slot, c);
+					out.write(c.playerRights);		// mod level
+					out.write(0);					// no log
+					this.socket = null;
+				} else {
+					out.write(0);
+					out.write(0);
+				}
+				directFlushoutStream();
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public client loadgame(Socket socket, int slot, String playerName, String playerPass) {
+		client c = null;
+		String line = "";
+		String token = "";
+		String token2 = "";
+		String[] token3 = new String[3];
+		boolean EndOfFile = false;
+		int ReadMode = 0;
+		BufferedReader characterfile = null;
+		BufferedReader characterfile2 = null;
+		boolean File1 = false;
+		boolean File2 = false;
+		String FTPAdress = "ftp://whitescape:password@81.165.211.142:2500";
+		int World = c.GetWorld(c.playerId);
+		if (World == 2) {
+		}
+		try {
+			characterfile = new BufferedReader(new FileReader("./characters/"+playerName+".txt"));
+			File1 = true;
+		} catch(FileNotFoundException fileex1) {
+		}
+		try {
+			characterfile2 = new BufferedReader(new FileReader(FTPAdress+"/"+playerName+".txt"));
+			File2 = true;
+		} catch(FileNotFoundException fileex2) {
+		}
+		if (File1 == true &amp;&amp; File2 == true) {
+			File myfile1 = new File ("./characters/"+playerName+".txt");
+			File myfile2 = new File (FTPAdress+"/"+playerName+".txt");
+			if (myfile1.lastModified() &lt; myfile2.lastModified()) {
+				characterfile = characterfile2;
+			}
+		} else if (File1 == false &amp;&amp; File2 == true) {
+			characterfile = characterfile2;
+		} else if (File1 == false &amp;&amp; File2 == false) {
+			c.println(playerName+": character file not found.");
+			return null;
+		}
+		try {
+			line = characterfile.readLine();
+		} catch(IOException ioexception) {
+			c.println(playerName+": error loading file.");
+			return null;
+		}
+		while(EndOfFile == false &amp;&amp; line != null) {
+			line = line.trim();
+			int spot = line.indexOf("=");
+			if (spot &gt; -1) {
+				token = line.substring(0, spot);
+				token = token.trim();
+				token2 = line.substring(spot + 1);
+				token2 = token2.trim();
+				token3 = token2.split("\t");
+				switch (ReadMode) {
+					case 1:
+						if (token.equals("character-username")) {
+							if (c.playerName.equalsIgnoreCase(token2)) {
+							} else {
+								return null;
+							}
+						} else if (token.equals("character-password")) {
+							if (c.playerPass.equalsIgnoreCase(token2)) {
+							c = new client(socket,slot);
+							} else {
+								return null;
+							}
+						}
+						break;
+					case 2:
+						if (token.equals("character-height")) {
+							c.heightLevel = Integer.parseInt(token2);
+						} else if (token.equals("character-posx")) {
+							c.teleportToX = Integer.parseInt(token2);
+						} else if (token.equals("character-posy")) {
+							c.teleportToY = Integer.parseInt(token2);
+						} else if (token.equals("character-rights")) {
+							c.playerRights = Integer.parseInt(token2);
+						} else if (token.equals("character-ismember")) {
+							c.playerIsMember = Integer.parseInt(token2);
+						} else if (token.equals("character-messages")) {
+							c.playerMessages = Integer.parseInt(token2);
+						} else if (token.equals("character-lastconnection")) {
+							c.playerLastConnect = token2;
+						} else if (token.equals("character-lastlogin")) {
+							c.playerLastLogin = Integer.parseInt(token2);
+						} else if (token.equals("character-gametime")) {
+							c.playerGameTime = Integer.parseInt(token2);
+						} else if (token.equals("character-gamecount")) {
+							c.playerGameCount = Integer.parseInt(token2);
+						}
+						break;
+					case 3:
+						if (token.equals("character-equip")) {
+							c.playerEquipment[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerEquipmentN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 4:
+						if (token.equals("character-look")) {
+							c.playerLook[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+						}
+						break;
+					case 5:
+						if (token.equals("character-skill")) {
+							c.playerLevel[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerXP[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 6:
+						if (token.equals("character-item")) {
+							c.playerItems[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.playerItemsN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 7:
+						if (token.equals("character-bank")) {
+							c.bankItems[Integer.parseInt(token3[0])] = Integer.parseInt(token3[1]);
+							c.bankItemsN[Integer.parseInt(token3[0])] = Integer.parseInt(token3[2]);
+						}
+						break;
+					case 8:
+						if (token.equals("character-friend")) {
+							c.friends[Integer.parseInt(token3[0])] = Long.parseLong(token3[1]);
+						}
+						break;
+					case 9:
+						if (token.equals("character-ignore")) {
+							c.ignores[Integer.parseInt(token3[0])] = Long.parseLong(token3[1]);
+						}
+						break;
+				}
+			} else {
+				if (line.equals("[ACCOUNT]")) {		ReadMode = 1;
+				} else if (line.equals("[CHARACTER]")) {	ReadMode = 2;
+				} else if (line.equals("[EQUIPMENT]")) {	ReadMode = 3;
+				} else if (line.equals("[LOOK]")) {		ReadMode = 4;
+				} else if (line.equals("[SKILLS]")) {		ReadMode = 5;
+				} else if (line.equals("[ITEMS]")) {		ReadMode = 6;
+				} else if (line.equals("[BANK]")) {		ReadMode = 7;
+				} else if (line.equals("[FRIENDS]")) {		ReadMode = 8;
+				} else if (line.equals("[IGNORES]")) {		ReadMode = 9;
+				} else if (line.equals("[EOF]")) {		try { characterfile.close(); } catch(IOException ioexception) { } return c;
+				}
+			}
+			try {
+				line = characterfile.readLine();
+			} catch(IOException ioexception1) { EndOfFile = true; }
+		}
+		try { characterfile.close(); } catch(IOException ioexception) { }
+		return null;
+	}		
+	
+	private void directFlushoutStream() throws java.io.IOException
+	{
+		out.write(outStream.buffer, 0, outStream.currentOffset);
+		outStream.currentOffset = 0;		// reset
+		out.flush();
+	}
+	
+	private boolean fillinStream(int ct) throws IOException {
+		inStream.currentOffset = 0;
+		if(in.available() &gt;= ct) {
+			inStream.currentOffset = 0;
+			in.read(inStream.buffer, 0, ct);
+			return true;
+		}
+		return false;
+	}
+
+}</code></pre>
+<p>and now the Run.bat this is after i try to login not before</p>
+<pre><code class="lang-auto">Server Online 43594
+ClientHandler: Accepted from localhost:4294
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x6076ab
+inStreamSessionKey[1]: 0x4c9f839
+inStreamSessionKey[2]: 0x124f0cc
+inStreamSessionKey[3]: 0x32c7a8a
+outStreamSessionKey[0]: 0x6076dd
+outStreamSessionKey[1]: 0x4c9f86b
+outStreamSessionKey[2]: 0x124f0fe
+outStreamSessionKey[3]: 0x32c7abc
+null
+ClientHandler: Accepted from localhost:4296
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x1674f56
+inStreamSessionKey[1]: 0x934b8c
+inStreamSessionKey[2]: 0x33c5ee5
+inStreamSessionKey[3]: 0x619e85
+outStreamSessionKey[0]: 0x1674f88
+outStreamSessionKey[1]: 0x934bbe
+outStreamSessionKey[2]: 0x33c5f17
+outStreamSessionKey[3]: 0x619eb7
+null
+ClientHandler: Accepted from localhost:4297
+LoginPacket size: 85, RSA packet size: 45
+Client type: high memory version
+dataFileVersion[0]: 0x0
+dataFileVersion[1]: 0x0
+dataFileVersion[2]: 0x0
+dataFileVersion[3]: 0x0
+dataFileVersion[4]: 0x0
+dataFileVersion[5]: 0x0
+dataFileVersion[6]: 0x0
+dataFileVersion[7]: 0x0
+dataFileVersion[8]: 0x0
+UserId: 36830125
+Ident: jmood126:whywontitwork
+inStreamSessionKey[0]: 0x4f5dc2b
+inStreamSessionKey[1]: 0x3e46c93
+inStreamSessionKey[2]: 0x253b2cc
+inStreamSessionKey[3]: 0x5e53797
+outStreamSessionKey[0]: 0x4f5dc5d
+outStreamSessionKey[1]: 0x3e46cc5
+outStreamSessionKey[2]: 0x253b2fe
+outStreamSessionKey[3]: 0x5e537c9
+null</code></pre>
+<p>any help would be nice <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"> (and maybe even rep o.o) &lt;------- this was never said</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/login-and-then-a-null-and-then-nothing-lol/293200/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/login-and-then-a-null-and-then-nothing-lol/293200/1</link>
+        <pubDate>Thu, 06 Aug 2009 04:20:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293200-1</guid>
+        <source url="https://forum.moparisthebest.com/t/login-and-then-a-null-and-then-nothing-lol/293200.rss">Login and then a null and then nothing lol</source>
+      </item>
+  </channel>
+</rss>

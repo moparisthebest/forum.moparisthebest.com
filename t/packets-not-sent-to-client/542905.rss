@@ -1,0 +1,702 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Packets not sent to Client</title>
+    <link>https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905</link>
+    <description>Whenever I try to log in to the Client, the message packet isn&#39;t being sent for some reason. Any ideas?
+[CODE]
+package com.runescape.revised.logic.net.io;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+
+import com.runescape.GameEngine;
+import com.runescape.revised.logic.encryption.ISAACRandomGen;
+import com.runescape.revised.logic.entity.Entity;
+import com.runescape.revised.logic.entity.player.Player;
+import com.runescape.revised.logic.task.TaskSystem;
+
+/**
+ * Represents a Thread for the Client
+ * connecting to the Server.
+ * 
+ * @author Josh
+ *
+ */
+public class ClientThread implements Runnable {
+
+	private Socket socket;
+	private Thread clientThread;
+	// private LWThread&lt;Client&gt; clientThreadList = new LWThread&lt;Client&gt;(2000);
+	private InputStream inputStream;
+	private OutputStream outputStream;
+	private IoPacketBuffer inStream;
+	private IoPacketBuffer outStream;
+	private ISAACRandomGen inStreamDecryption;
+	private ISAACRandomGen outStreamDecryption;
+	private byte opcode;
+	private byte size;
+	private boolean isClientConnected = false;
+
+	/**
+	 * The constructor.
+	 * 
+	 * @param socket
+	 * 			The Socket we wish to connect
+	 * 			with.
+	 */
+	public ClientThread(final Socket socket) {
+		this.setSocket(socket);
+		this.setClientThread(new Thread(this));
+		this.getClientThread().start();
+		try {
+			this.setInputStream(socket.getInputStream());
+			this.setOutputStream(socket.getOutputStream());
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Runnable#run()
+	 */
+	@Override
+	public void run() {
+		this.setOutStream(new IoPacketBuffer(new byte[100000]));
+		this.getOutStream().setCurrentOffset(0);
+		this.setInStream(new IoPacketBuffer(new byte[10000]));
+		this.getInStream().setCurrentOffset(0);
+		long serverSessionKey = ((long) (Math.random() * 99999999D) &lt;&lt; 32) + (long) (Math.random() * 99999999D);
+		long clientSessionKey = 0;
+		this.fillInStream(2);
+		if (this.getInStream().readUnsignedByte() != 14) {
+			return;
+		}
+		this.getInStream().readUnsignedByte();
+		for (int i = 0; i &lt; 8; i++) {
+			try {
+				this.getOutputStream().write(0);
+			} catch (final IOException ioe) {
+				ioe.printStackTrace();
+			}
+		}
+		try {
+			this.getOutputStream().write(0);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		this.getOutStream().writeQWord(serverSessionKey);
+		this.flushOutStream();
+		this.fillInStream(2);
+		final int loginType = this.getInStream().readUnsignedByte();
+		if ((loginType != 16) &amp;&amp; (loginType != 18)) {
+			return;
+		}
+		final int loginPacketSize = this.getInStream().readUnsignedByte();
+		int loginEncryptPacketSize = loginPacketSize - 40;
+		if (loginEncryptPacketSize &lt;= 0) {
+			return;
+		}
+		this.fillInStream(loginPacketSize);
+		if (this.getInStream().readUnsignedByte() != 255) {
+			return;
+		}
+		final short revision = (short) this.getInStream().readUnsignedWord();
+		if (revision != 317) {
+			System.out.println(&quot;Revision is not 317.&quot;);
+			return;
+		}
+		/* switch (revision) {
+			case 317:
+				System.out.println(&quot;Revision #317 supported!&quot;);
+				new Login317();
+				break;
+			case 474:
+				System.out.println(&quot;Revision #474 supported!&quot;);
+				new Login474();
+				break;
+			case 562:
+				System.out.println(&quot;Revision #562 supported!&quot;);
+				new Login562();
+				break;
+			default:
+				System.out.println(&quot;No revision supported!&quot;);
+				break;
+			} */
+		this.getInStream().readUnsignedByte(); // memory.
+		for (int i = 0; i &lt; 9; i++) {
+			Integer.toHexString(this.getInStream().readDWord());
+		}
+		loginEncryptPacketSize--;
+		int tmp = this.getInStream().readUnsignedByte();
+		if (loginEncryptPacketSize != tmp) {
+			return;
+		}
+		tmp = this.getInStream().readUnsignedByte();
+		if (tmp != 10) {
+			return;
+		}
+		clientSessionKey = this.getInStream().readQWord();
+		serverSessionKey = this.getInStream().readQWord();
+		@SuppressWarnings(&quot;unused&quot;)
+		final int userID = this.getInStream().readDWord();
+		final String name = this.getInStream().readString();
+		@SuppressWarnings(&quot;unused&quot;)
+		final String password = this.getInStream().readString();
+		final int[] sessionKey = new int[4];
+		sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+		sessionKey[1] = (int) clientSessionKey;
+		sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+		sessionKey[3] = (int) serverSessionKey;
+		for (int i = 0; i &lt; 4; i++) {
+			Integer.toHexString(sessionKey[i]);
+		}
+		this.setInStreamDecryption(new ISAACRandomGen(sessionKey));
+		for (byte i = 0; i &lt; 4; i++) {
+			sessionKey[i] += 50;
+		}
+		for (byte i = 0; i &lt; 4; i++) {
+			Integer.toHexString(sessionKey[i]);
+		}
+		this.setOutStreamDecryption(new ISAACRandomGen(sessionKey));
+		this.getOutStream().setPacketEncryption(this.getOutStreamDecryption());
+		try {
+			this.getOutputStream().write(2);
+			this.getOutputStream().write(0);
+			this.getOutputStream().write(0);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		// this.getOutStream().createFrame(249);
+		// this.getOutStream().writeByteA(1);
+		// this.getOutStream().writeWordA(1);
+		// this.getOutStream().createFrame(107);
+		this.getOutStream().createFrame(253);
+		this.getOutStream().writeString(&quot;Welcome to RS3 Newstart!&quot;);
+		this.setOpcode((byte) -1);
+		this.setSize((byte) 0);
+		this.setClientConnected(true);
+		final Entity player = new Player(name);
+		new TaskSystem(player, this.getOutStream());
+		final GameEngine gameEngine = new GameEngine((Player) player);
+		gameEngine.getPlayerList().add((Player) player);
+	}
+
+	public boolean parsePackets() {
+		try {
+			int avail = this.getInputStream().available();
+			if (avail == 0) {
+				return false;
+			}
+			// Important note: doesn&#39;t work yet because we don&#39;t know the lengths of any possible
+			// incoming packets so we can&#39;t parse them and might miss the one or other ending up
+			// with screwing the encryption
+			if (this.getOpcode() == -1) {
+				this.setOpcode((byte) (this.getInputStream().read() &amp; 0xff));
+				if (this.getInStreamDecryption() != null) {
+					this.setOpcode((byte) ((this.getOpcode() - this.getInStreamDecryption().getNextKey()) &amp; 0xff));
+				}
+				avail--;
+				this.setSize((byte) avail);
+			}
+			this.fillInStream(this.getSize());
+			this.setOpcode((byte) -1);
+		} catch (final Exception e) {
+			e.printStackTrace();
+			this.setClientConnected(false);
+		}
+		return true;
+	}
+
+	public void flushOutStream() {
+		try {
+			this.getOutputStream().write(this.getOutStream().getBuffer(), 0, this.getOutStream().currentOffset);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		this.getOutStream().setCurrentOffset(0);
+	}
+
+	public void fillInStream(final int forceRead) {
+		this.getInStream().setCurrentOffset(0);
+		try {
+			this.getInputStream().read(this.getInStream().getBuffer(), 0, forceRead);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+	}
+
+	public void setSocket(final Socket socket) {
+		this.socket = socket;
+	}
+
+	public Socket getSocket() {
+		return this.socket;
+	}
+
+	public void setClientThread(final Thread clientThread) {
+		this.clientThread = clientThread;
+	}
+
+	public Thread getClientThread() {
+		return this.clientThread;
+	}
+
+	public void setInputStream(final InputStream inputStream) {
+		this.inputStream = inputStream;
+	}
+
+	public InputStream getInputStream() {
+		return this.inputStream;
+	}
+
+	public void setOutputStream(final OutputStream outputStream) {
+		this.outputStream = outputStream;
+	}
+
+	public OutputStream getOutputStream() {
+		return this.outputStream;
+	}
+
+	public void setInStream(final IoPacketBuffer inStream) {
+		this.inStream = inStream;
+	}
+
+	public IoPacketBuffer getInStream() {
+		return this.inStream;
+	}
+
+	public void setOutStream(final IoPacketBuffer outStream) {
+		this.outStream = outStream;
+	}
+
+	public IoPacketBuffer getOutStream() {
+		return this.outStream;
+	}
+
+	public void setInStreamDecryption(final ISAACRandomGen inStreamDecryption) {
+		this.inStreamDecryption = inStreamDecryption;
+	}
+
+	public ISAACRandomGen getInStreamDecryption() {
+		return this.inStreamDecryption;
+	}
+
+	public void setOutStreamDecryption(final ISAACRandomGen outStreamDecryption) {
+		this.outStreamDecryption = outStreamDecryption;
+	}
+
+	public ISAACRandomGen getOutStreamDecryption() {
+		return this.outStreamDecryption;
+	}
+
+	public void setOpcode(final byte opcode) {
+		this.opcode = opcode;
+	}
+
+	public byte getOpcode() {
+		return this.opcode;
+	}
+
+	public void setSize(final byte size) {
+		this.size = size;
+	}
+
+	public byte getSize() {
+		return this.size;
+	}
+
+	public void setClientConnected(final boolean isClientConnected) {
+		this.isClientConnected = isClientConnected;
+	}
+
+	public boolean isClientConnected() {
+		return this.isClientConnected;
+	}
+}
+[/CODE]
+The message &quot;Welcome to RS3 Newstart!&quot; isn&#39;t displaying. All I get is the following image:
+[IMG]http://i57.tinypic.com/2nqw1dv.png[/img]
+
+Can anyone also tell me why the update masks server-sided have a special order they go in? Doesn&#39;t make much sense to me at all.</description>
+    
+    <lastBuildDate>Thu, 08 May 2014 13:00:30 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Packets not sent to Client</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <p>Never mind. I got it to work. Close please.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/3</link>
+        <pubDate>Thu, 08 May 2014 13:00:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-542905-3</guid>
+        <source url="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905.rss">Packets not sent to Client</source>
+      </item>
+      <item>
+        <title>Packets not sent to Client</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <ol>
+<li>
+<p>You must send the initial sector upon successful login in order to be able to successfully send a chat-box message.</p>
+</li>
+<li>
+<p>Everything you do when writing information to the client must match the order that it is read in, including masks even though they do not seem order dependent.</p>
+</li>
+</ol>
+<p>iirc the masks current state changes whenever the client checks for an update, for example we send an appearance update, the masks value is let’s say for example 50 (cba to check) as the client checks for a mask update each failed check the masks state changes and the client then expects a new mask value (if succeeded) for the next mask, wash, rinse, repeat until we get to the appearance mask, which then gets handled appropriately (assuming the client is unmodified, of course).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/2</link>
+        <pubDate>Thu, 08 May 2014 01:37:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-542905-2</guid>
+        <source url="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905.rss">Packets not sent to Client</source>
+      </item>
+      <item>
+        <title>Packets not sent to Client</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <p>Whenever I try to log in to the Client, the message packet isn’t being sent for some reason. Any ideas?</p>
+<p>[CODE]<br>
+package <a href="http://com.runescape.revised.logic.net.io" rel="nofollow noopener">com.runescape.revised.logic.net.io</a>;</p>
+<p>import java.io.IOException;<br>
+import java.io.InputStream;<br>
+import java.io.OutputStream;<br>
+import java.net.Socket;</p>
+<p>import com.runescape.GameEngine;<br>
+import com.runescape.revised.logic.encryption.ISAACRandomGen;<br>
+import com.runescape.revised.logic.entity.Entity;<br>
+import com.runescape.revised.logic.entity.player.Player;<br>
+import com.runescape.revised.logic.task.TaskSystem;</p>
+<p>/**</p>
+<ul>
+<li>Represents a Thread for the Client</li>
+<li>connecting to the Server.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Josh</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class ClientThread implements Runnable {</p>
+<pre><code>private Socket socket;
+private Thread clientThread;
+// private LWThread&lt;Client&gt; clientThreadList = new LWThread&lt;Client&gt;(2000);
+private InputStream inputStream;
+private OutputStream outputStream;
+private IoPacketBuffer inStream;
+private IoPacketBuffer outStream;
+private ISAACRandomGen inStreamDecryption;
+private ISAACRandomGen outStreamDecryption;
+private byte opcode;
+private byte size;
+private boolean isClientConnected = false;
+
+/**
+ * The constructor.
+ * 
+ * @param socket
+ * 			The Socket we wish to connect
+ * 			with.
+ */
+public ClientThread(final Socket socket) {
+	this.setSocket(socket);
+	this.setClientThread(new Thread(this));
+	this.getClientThread().start();
+	try {
+		this.setInputStream(socket.getInputStream());
+		this.setOutputStream(socket.getOutputStream());
+	} catch (final IOException ioe) {
+		ioe.printStackTrace();
+	}
+}
+
+/*
+ * (non-Javadoc)
+ * @see java.lang.Runnable#run()
+ */
+@Override
+public void run() {
+	this.setOutStream(new IoPacketBuffer(new byte[100000]));
+	this.getOutStream().setCurrentOffset(0);
+	this.setInStream(new IoPacketBuffer(new byte[10000]));
+	this.getInStream().setCurrentOffset(0);
+	long serverSessionKey = ((long) (Math.random() * 99999999D) &lt;&lt; 32) + (long) (Math.random() * 99999999D);
+	long clientSessionKey = 0;
+	this.fillInStream(2);
+	if (this.getInStream().readUnsignedByte() != 14) {
+		return;
+	}
+	this.getInStream().readUnsignedByte();
+	for (int i = 0; i &lt; 8; i++) {
+		try {
+			this.getOutputStream().write(0);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+	}
+	try {
+		this.getOutputStream().write(0);
+	} catch (final IOException ioe) {
+		ioe.printStackTrace();
+	}
+	this.getOutStream().writeQWord(serverSessionKey);
+	this.flushOutStream();
+	this.fillInStream(2);
+	final int loginType = this.getInStream().readUnsignedByte();
+	if ((loginType != 16) &amp;&amp; (loginType != 18)) {
+		return;
+	}
+	final int loginPacketSize = this.getInStream().readUnsignedByte();
+	int loginEncryptPacketSize = loginPacketSize - 40;
+	if (loginEncryptPacketSize &lt;= 0) {
+		return;
+	}
+	this.fillInStream(loginPacketSize);
+	if (this.getInStream().readUnsignedByte() != 255) {
+		return;
+	}
+	final short revision = (short) this.getInStream().readUnsignedWord();
+	if (revision != 317) {
+		System.out.println("Revision is not 317.");
+		return;
+	}
+	/* switch (revision) {
+		case 317:
+			System.out.println("Revision #317 supported!");
+			new Login317();
+			break;
+		case 474:
+			System.out.println("Revision #474 supported!");
+			new Login474();
+			break;
+		case 562:
+			System.out.println("Revision #562 supported!");
+			new Login562();
+			break;
+		default:
+			System.out.println("No revision supported!");
+			break;
+		} */
+	this.getInStream().readUnsignedByte(); // memory.
+	for (int i = 0; i &lt; 9; i++) {
+		Integer.toHexString(this.getInStream().readDWord());
+	}
+	loginEncryptPacketSize--;
+	int tmp = this.getInStream().readUnsignedByte();
+	if (loginEncryptPacketSize != tmp) {
+		return;
+	}
+	tmp = this.getInStream().readUnsignedByte();
+	if (tmp != 10) {
+		return;
+	}
+	clientSessionKey = this.getInStream().readQWord();
+	serverSessionKey = this.getInStream().readQWord();
+	@SuppressWarnings("unused")
+	final int userID = this.getInStream().readDWord();
+	final String name = this.getInStream().readString();
+	@SuppressWarnings("unused")
+	final String password = this.getInStream().readString();
+	final int[] sessionKey = new int[4];
+	sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+	sessionKey[1] = (int) clientSessionKey;
+	sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+	sessionKey[3] = (int) serverSessionKey;
+	for (int i = 0; i &lt; 4; i++) {
+		Integer.toHexString(sessionKey[i]);
+	}
+	this.setInStreamDecryption(new ISAACRandomGen(sessionKey));
+	for (byte i = 0; i &lt; 4; i++) {
+		sessionKey[i] += 50;
+	}
+	for (byte i = 0; i &lt; 4; i++) {
+		Integer.toHexString(sessionKey[i]);
+	}
+	this.setOutStreamDecryption(new ISAACRandomGen(sessionKey));
+	this.getOutStream().setPacketEncryption(this.getOutStreamDecryption());
+	try {
+		this.getOutputStream().write(2);
+		this.getOutputStream().write(0);
+		this.getOutputStream().write(0);
+	} catch (final IOException ioe) {
+		ioe.printStackTrace();
+	}
+	// this.getOutStream().createFrame(249);
+	// this.getOutStream().writeByteA(1);
+	// this.getOutStream().writeWordA(1);
+	// this.getOutStream().createFrame(107);
+	this.getOutStream().createFrame(253);
+	this.getOutStream().writeString("Welcome to RS3 Newstart!");
+	this.setOpcode((byte) -1);
+	this.setSize((byte) 0);
+	this.setClientConnected(true);
+	final Entity player = new Player(name);
+	new TaskSystem(player, this.getOutStream());
+	final GameEngine gameEngine = new GameEngine((Player) player);
+	gameEngine.getPlayerList().add((Player) player);
+}
+
+public boolean parsePackets() {
+	try {
+		int avail = this.getInputStream().available();
+		if (avail == 0) {
+			return false;
+		}
+		// Important note: doesn't work yet because we don't know the lengths of any possible
+		// incoming packets so we can't parse them and might miss the one or other ending up
+		// with screwing the encryption
+		if (this.getOpcode() == -1) {
+			this.setOpcode((byte) (this.getInputStream().read() &amp; 0xff));
+			if (this.getInStreamDecryption() != null) {
+				this.setOpcode((byte) ((this.getOpcode() - this.getInStreamDecryption().getNextKey()) &amp; 0xff));
+			}
+			avail--;
+			this.setSize((byte) avail);
+		}
+		this.fillInStream(this.getSize());
+		this.setOpcode((byte) -1);
+	} catch (final Exception e) {
+		e.printStackTrace();
+		this.setClientConnected(false);
+	}
+	return true;
+}
+
+public void flushOutStream() {
+	try {
+		this.getOutputStream().write(this.getOutStream().getBuffer(), 0, this.getOutStream().currentOffset);
+	} catch (final IOException ioe) {
+		ioe.printStackTrace();
+	}
+	this.getOutStream().setCurrentOffset(0);
+}
+
+public void fillInStream(final int forceRead) {
+	this.getInStream().setCurrentOffset(0);
+	try {
+		this.getInputStream().read(this.getInStream().getBuffer(), 0, forceRead);
+	} catch (final IOException ioe) {
+		ioe.printStackTrace();
+	}
+}
+
+public void setSocket(final Socket socket) {
+	this.socket = socket;
+}
+
+public Socket getSocket() {
+	return this.socket;
+}
+
+public void setClientThread(final Thread clientThread) {
+	this.clientThread = clientThread;
+}
+
+public Thread getClientThread() {
+	return this.clientThread;
+}
+
+public void setInputStream(final InputStream inputStream) {
+	this.inputStream = inputStream;
+}
+
+public InputStream getInputStream() {
+	return this.inputStream;
+}
+
+public void setOutputStream(final OutputStream outputStream) {
+	this.outputStream = outputStream;
+}
+
+public OutputStream getOutputStream() {
+	return this.outputStream;
+}
+
+public void setInStream(final IoPacketBuffer inStream) {
+	this.inStream = inStream;
+}
+
+public IoPacketBuffer getInStream() {
+	return this.inStream;
+}
+
+public void setOutStream(final IoPacketBuffer outStream) {
+	this.outStream = outStream;
+}
+
+public IoPacketBuffer getOutStream() {
+	return this.outStream;
+}
+
+public void setInStreamDecryption(final ISAACRandomGen inStreamDecryption) {
+	this.inStreamDecryption = inStreamDecryption;
+}
+
+public ISAACRandomGen getInStreamDecryption() {
+	return this.inStreamDecryption;
+}
+
+public void setOutStreamDecryption(final ISAACRandomGen outStreamDecryption) {
+	this.outStreamDecryption = outStreamDecryption;
+}
+
+public ISAACRandomGen getOutStreamDecryption() {
+	return this.outStreamDecryption;
+}
+
+public void setOpcode(final byte opcode) {
+	this.opcode = opcode;
+}
+
+public byte getOpcode() {
+	return this.opcode;
+}
+
+public void setSize(final byte size) {
+	this.size = size;
+}
+
+public byte getSize() {
+	return this.size;
+}
+
+public void setClientConnected(final boolean isClientConnected) {
+	this.isClientConnected = isClientConnected;
+}
+
+public boolean isClientConnected() {
+	return this.isClientConnected;
+}
+</code></pre>
+<p>}<br>
+[/CODE]<br>
+The message “Welcome to RS3 Newstart!” isn’t displaying. All I get is the following image:<br>
+<img src="http://i57.tinypic.com/2nqw1dv.png" alt width="" height=""></p>
+<p>Can anyone also tell me why the update masks server-sided have a special order they go in? Doesn’t make much sense to me at all.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905/1</link>
+        <pubDate>Thu, 08 May 2014 00:25:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-542905-1</guid>
+        <source url="https://forum.moparisthebest.com/t/packets-not-sent-to-client/542905.rss">Packets not sent to Client</source>
+      </item>
+  </channel>
+</rss>

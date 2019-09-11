@@ -1,0 +1,688 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>On the complexity of event-driven game server logic</title>
+    <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537</link>
+    <description>[url=http://en.wikipedia.org/wiki/Event-driven_finite-state_machine]Event-driven finite-state machine - Wikipedia, the free encyclopedia[/url]
+[url=http://en.wikipedia.org/wiki/Actor_model]Actor model - Wikipedia, the free encyclopedia[/url]
+[url=http://en.wikipedia.org/wiki/Coroutine]Coroutine - Wikipedia, the free encyclopedia[/url]
+[url=http://en.wikipedia.org/wiki/Fiber_(computer_science)]Fiber (computer science) - Wikipedia, the free encyclopedia[/url]
+[url=http://en.wikipedia.org/wiki/Continuation]Continuation - Wikipedia, the free encyclopedia[/url]
+[url=http://web.media.mit.edu/~lieber/Lieberary/OOP/Act-1/Concurrent-OOP-in-Act-1.html]Concurrent Object-Oriented Programming in Act 1[/url]
+
+[url=http://www.kegel.com/c10k.html]The C10K problem[/url]
+[url=http://mmcgrana.github.com/2010/07/threaded-vs-evented-servers.html]Threaded vs Evented Servers[/url]
+[url=http://www.csd.uoc.gr/~hy527/papers/threads-ousterhout.pdf]Why Threads Are A Bad Idea (for most purposes)[/url]
+[url=http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf]Why Events Are A Bad Idea (for high-concurrency servers)[/url]
+[url=http://www.mailinator.com/tymaPaulMultithreaded.pdf]Thousands of Threads and Blocking I/O - The old way to write Java Servers is New again (and way better)[/url]
+
+[url=http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf]Actors that Unify Threads and Events[/url]
+[url=http://www.sics.se/~adam/pt/]Protothreads - Lightweight, Stackless Threads in C[/url]
+[url=http://www.gevent.org/]gevent: A coroutine-based network library for Python[/url]
+[url=http://blog.gregweber.info/posts/2011-06-16-high-performance-rb-part3]Greg Weber&#39;s Programming Blog - High Performance Ruby Part 3: non-blocking IO and web application scalability[/url]
+[url=http://kalogirou.net/2005/08/10/multithreaded-game-scripting-with-stackless-python/]Multithreaded Game Scripting with Stackless Python « Thoughts Serializer[/url]
+
+just some links which are related to what i will be discussing here.
+
+events often times make our lives easier by reducing complexity of code and making it more efficient.
+
+for example, where in older private servers a dedicated thread was spawned per player for I/O, newer servers made use of event-driven interfaces which allowed one to demultiplex I/O.
+before, each thread would most likely be in a [i]blocking[/i] state, only woken up and scheduled to take up CPU time when a read operation completed. this worked fine for small numbers of clients, but as the number grew, it failed to keep up.
+the [url=http://www.rune-server.org/programming/application-development/tutorials/280292-understanding-java-nio-reactor-design-pattern.html]reactor pattern[/url] allowed us to conveniently only need one thread no matter the number of clients. using non-blocking I/O, there is no need for dedicated threads to be woken up. instead, the reactor explicitly states interest in events and was notified when they occurred. this avoided the cost of things like context switching and excessive pre-emption with CPU load saturation. logically, this scaled well and gracefully degraded with load.
+
+using events also helps prevent polling and redundancy.
+instead of continuously checking to see if a player is in an area (warning: bad code ahead)...
+[code]void tick() {
+    for (Player player : players) {
+        if (player.moved &amp;&amp; player.x &gt;= AREA_X1 &amp;&amp; player.y &gt;= AREA_Y1 &amp;&amp; player.x &lt;= AREA_X2 &amp;&amp; player.y &lt;= AREA_Y2) {
+            ... area-specific logic here ...
+        }
+    }
+}[/code]
+we can implement something called inversion of control and decouple this into events and event listeners:
+[code]EventSubscriber&lt;MovementEvent&gt; movement_listener = EventSubscriber&lt;MovementEvent&gt;() {
+
+            public boolean satisfied(MovementEvent event) {
+                Player player = event.player;
+                return player.x &gt;= AREA_X1 &amp;&amp; player.y &gt;= AREA_Y1 &amp;&amp; player.x &lt;= AREA_X2 &amp;&amp; player.y &lt;= AREA_Y2;
+            }
+
+            public void handle(MovementEvent event) {
+                ... area-specific logic here ...
+            }
+        });
+[/code]
+this helps separate our concerns and make developing much easier.
+
+since events allow code to listen for specific changes, they are also used for completion events of asynchronous operations. this [i]proactive[/i] use of completion events contrasts with the previously mentioned reactors and their readiness events.
+[code]
+...
+Future&lt;Set&lt;?&gt;&gt; _results = database.query(&quot;select * from operations where blocking=1&quot;);
+/* this blocks the current thread waiting */
+Set&lt;?&gt; results = _results.get();
+...
+[/code]
+traditionally, like earlier with sockets, one needed a dedicated thread for such blocking database I/O.
+
+with the advent of using thread pools for server logic, we introduced the idea of small, atomic units of work, or [i]tasks[/i]. given that a thread pool uses a limited number of workers, tasks have a few logical constraints with them to acheive performance:
+&lt;blockquote&gt;But the thread pool is a leaky abstraction. That is, the pool hides a lot of details from us, but to use it effectively we do need to be aware of some things a pool does under the covers so that we can avoid inadvertently hitting performance and correctness pitfalls. Here&#39;s the summary up front:
+
+[ul][*]Tasks should be small, but not too small, otherwise performance overheads will dominate.
+[*]Tasks should avoid blocking (waiting idly for other events, including inbound messages or contested locks), otherwise the pool won&#39;t consistently utilize the hardware well -- and, in the extreme worst case, the pool could even deadlock.[/ul]&lt;/blockquote&gt;
+(source: [url=http://drdobbs.com/go-parallel/article/showArticle.jhtml?articleID=216500409]Dr. Dobb&#39;s | Go Parallel | Use Thread Pools Correctly: Keep Tasks Short and Nonblocking | Dr. Dobb&#39;s and Intel Go Parallel Programming[/url])
+
+now it becomes apparent that we can&#39;t do such blocking within the logic pool. instead, we rely on having another pool somewhere handling database I/O, and using the completion listener facility mentioned earlier:
+[code]
+...
+database.query(&quot;select * from operations where blocking=1&quot;, new CompletionHandler&lt;Set&lt;?&gt;&gt;() {
+
+    public void completed(Set&lt;?&gt; results) {
+        /* complete our stuff here */
+    }
+});
+/* return immediately and don&#39;t block */
+[/code]
+
+as it turns out, blocking operations don&#39;t necessarily always deal with low-level conceptualizations of I/O, through sockets and databases.
+
+in runescape, we actually see a lot of blocking operations that block instead on interaction (I/O) from players themselves.
+for example, take quests. quests are logically separated into discrete steps or stages. a stage associated with a player is state.
+quests themselves are easily modelled as event-driven finite-state machines:
+
+[url=http://pastebin.com/raw.php?i=gH9MP0TL]http://pastebin.com/raw.php?i=gH9MP0TL[/url]
+[code]	public void handleNpc(Npc npc, Player owner) throws Exception {
+		owner.setBusy(true);
+		npc.blockedBy(owner);
+		Quest q = owner.getQuest(11);
+		if(q != null) {
+			if(q.finished()) {
+				questFinished(npc, owner);
+			} else {
+				switch(q.getStage()) {
+					case 0:	//Coming from Romeo
+						comingFromRomeo(npc, owner);
+						break;
+						
+					case 1:	//Has message for Romeo
+						hasMessage(npc, owner);
+						break;
+					case 2:	//Delivered message to Romeo
+						deliveredMessage(npc, owner);
+						break;
+					case 3:	//Talked to Father Lawrence
+						didYouFind(npc, owner);
+						break;
+					case 4:	//Talked to apothecary
+						if(owner.getInventory().countId(57) &gt; 0) {
+							hasPotion(npc, owner);
+						} else {
+							notHasPotion(npc, owner);
+						}
+						break;
+					case 5:	//Given Juliet potion
+						afterPotion(npc, owner);
+						break;
+					
+				}
+			}
+		} else {
+			questNotStarted(npc, owner);
+		}
+	}[/code]
+
+using events here makes sense, as npcs react to player interaction in a way dependent on quest stage. 
+
+a common issue people have with this system is that there are too many separate ways of dealing with the event. indeed, the logic for the quest crosses multiple distinct NpcHandlers here:
+[url=http://pastebin.com/LqN5JJqu]Romeo.java[/url]
+[url=http://pastebin.com/gH9MP0TL]Juliet.java[/url]
+[url=http://pastebin.com/AWLfVTAu]Apothecary.java[/url]
+[url=http://pastebin.com/re6ahKmq]Father_Lawrence.java[/url]
+
+instead, it is proposed to centralize these smaller state machines across borders into one consistent interface. it is argued that the entirety of the quest logic ought to be placed under a single event-driven, state-dependent [i]actor[/i] (minus the fact actors use a messaging system with explicit producers/consumers) representing the quest, whose incoming messages are events it has interest in. this way events for romeo, juliet, apothecary, and father lawrence all can be easily managed and associated with a single quest. these actors could be implemented in their own threads, blocking on some incoming event queue, or, much more logically, internally use fine event listeners which forward and demultiplex to a central actor event listener. in practice, both have similar semantics: actors wait for messages to be routed to them, and when they are, they react. using a thread (blocking on a message queue) is far more heavy-weight than than handling it in whatever thread dispatches events, though.
+&lt;blockquote&gt;On mainstream platforms such as the JVM [16], an equally attractive implementation was as yet missing. Their standard concurrency constructs, shared-memory threads with locks, suffer from high initialization and context-switching overhead as well as high memory consumption. Therefore, the interleaving of independent computations is often modelled in an event-driven style on these platforms. However, programming in an explicitly event-driven style is complicated and error-prone, because it involves an inversion of control.&lt;/blockquote&gt;
+(source: [url=http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf]http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf[/url])
+[code]
+...
+class RomeoHandler implements NpcHandler {
+
+    void handleNpc(Npc npc, Player owner) throws Exception {
+        act(new NpcEvent(owner, npc));
+    }
+}
+...
+void act(Event evt) {
+    switch (state) {
+        case COMING_FROM_ROMEO:
+            switch (evt.type) {
+                case NPC_EVENT:
+                    ...
+                    break;
+                ... 
+            }
+            break;
+        ...
+    } 
+}
+[/code]
+
+there is still a problem, however. take this code, for example:
+[code]	private final void comingFromRomeo(final Npc npc, final Player owner) {
+		World.getDelayedEventHandler().add(new DelayedQuestChat(owner, npc, new String[] {&quot;Juliet, I come from Romeo&quot;, &quot;He begs me tell you he cares still&quot;}, true) {
+			public void finished() {
+				World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {&quot;Take this message to him&quot;}) {
+					public void finished() {
+						World.getDelayedEventHandler().add(new DelayedQuestChat(owner, npc, new String[] {&quot;Certainly, I will deliver your message straight away&quot;}) {
+							public void finished() {
+								World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {&quot;It may be our only hope&quot;}) {
+									public void finished() {
+										World.getDelayedEventHandler().add(new SingleEvent(owner, 1500) {
+											public void action() {
+												owner.sendMessage(&quot;Juliet gives you a message&quot;);
+												owner.getInventory().add(new InvItem(56, 1));
+												owner.sendInventory();
+												owner.incQuestCompletionStage(11);
+												owner.setBusy(false);
+												npc.unblock();
+											}
+										});
+									}
+								});
+							}
+						});
+					}
+				});
+			}
+		});
+	}[/code]
+a DelayedQuestChat represents an asynchronous operation, and it uses a similar completion listener mechanism as introduced earlier. it doesn&#39;t take very long, however, for the ugliness to become apparent in this approach. developers explicitly write callbacks for handling completion events, which themselves are nested in such callbacks etc. the flow of logic becomes fragmented and difficult to visualize.
+
+the actor solution to this problem is to expand the number of states and/or events to cope:
+[code]void act(Event evt) {
+    switch (state) {
+        case COMING_FROM_ROMEO_A:
+            switch (evt.type) {
+                case COMPLETION_A:
+                    ...
+                    break;
+                case COMPLETION_B:
+                    ...
+                    break;
+                ...
+            }
+            break;
+        case COMING_FROM_ROMEO_B:
+            switch (evt.type) {
+                case COMPLETION_A:
+                    ...
+                    break;
+                case COMPLETION_B:
+                    ...
+                    break;
+                ...
+            }
+            break;
+    }
+}[/code]
+
+note we&#39;ve reached a trade-off here between state and input space sizes.
+our actors are merely finite state machines, or finite automata. two types of finite automata exist: [i]deterministic[/i] and [i]non-deterministic[/i]. a deterministic automaton has a definite successor state given a input, while non-deterministic ones do not.
+adapting our quest actor to handle the added completion events turns out to have majorly the same impact as converting an NFA into a DFA i.e. state explosion.
+as can be clearly seen, this exposed interface is not much cleaner to developers than the deeply nested completion listeners.
+
+the event interface here presents a known problem:
+&lt;blockquote&gt;For these high-concurrency systems, event-based programming tends to obfuscate the control ﬂow of the application. For instance, many event systems “call” a method in another module by sending an event and expect a “return” from that method via a similar event mechanism. In order to understand the application, the programmer must mentally match these call/return pairs, even when they are in different parts of the code. Furthermore, these call/return pairs often require the programmer to manually save and restore live state. This process, referred to as “stack ripping” by Adya et al. [1], is a major burden for programmers who wish to use event systems. Finally, this obfuscation of the program’s control ﬂow can also lead to subtle race conditions and logic errors due to unexpected message arrivals.&lt;/blockquote&gt;
+(source: [url=http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf]http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf[/url])
+&lt;blockquote&gt;The solution is to use non-blocking IO so that another thread of execution can work while one is waiting on IO. node.js is well known for doing this. However, the callback style used by node.js is much more difficult to write, maintain, and reason about, particularly when there are multiple IO actions in one request. Instead of a simple, synchronous flow, you have to have a callback for every IO action. Ruby was always fundamentally capable of non-blocking IO, especially after EventMachine was released, but that style of programming was never appealing.&lt;/blockquote&gt;
+(source: [url=http://blog.gregweber.info/posts/2011-06-16-high-performance-rb-part3]Greg Weber&#39;s Programming Blog - High Performance Ruby Part 3: non-blocking IO and web application scalability[/url])
+&lt;blockquote&gt;An event-driven model does not support a blocking wait abstraction. Therefore, programmers of such systems frequently need to use state machines to implement control flow for high-level logic that cannot be expressed as a single event handler. Unlike state machines that are part of a system specification, the control-flow state machines typically have no formal specication, but are created on-the-fly by the programmer. Experience has shown that the need for explicit state machines to manage control flow makes event-driven programming difficult [3, 25, 26, 35]. With the words of Levis et al. [26]: “This approach is natural for reactive processing and for interfacing with hardware, but complicates sequencing high-level operations, as a logically blocking sequence must be written in a state-machine style.”&lt;/blockquote&gt;
+(source: [url=http://www.sics.se/~adam/dunkels06protothreads.pdf]http://www.sics.se/~adam/dunkels06protothreads.pdf[/url])</description>
+    
+    <lastBuildDate>Thu, 27 Jun 2013 22:06:15 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>On the complexity of event-driven game server logic</title>
+        <dc:creator><![CDATA[@xxxtilllyxxx xxxtilllyxxx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xxxtilllyxxx">@xxxtilllyxxx</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:4, topic:417537”][quote author=Rodgerwilco link=topic=520092.msg3787548#msg3787548 date=1318996280]<br>
+Bumped for greatness. Learned quite a bit and it allowed me to open my mind to see different view points.<br>
+[/quote][/quote]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/5</link>
+        <pubDate>Thu, 27 Jun 2013 22:06:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417537-5</guid>
+        <source url="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss">On the complexity of event-driven game server logic</source>
+      </item>
+      <item>
+        <title>On the complexity of event-driven game server logic</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="3" data-topic="417537">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/rodgerwilco/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Rodgerwilco:</div>
+<blockquote>
+<p>Bumped for greatness. Learned quite a bit and it allowed me to open my mind to see different view points.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/4</link>
+        <pubDate>Sat, 10 Dec 2011 16:48:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417537-4</guid>
+        <source url="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss">On the complexity of event-driven game server logic</source>
+      </item>
+      <item>
+        <title>On the complexity of event-driven game server logic</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>Bumped for greatness. Learned quite a bit and it allowed me to open my mind to see different view points.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/3</link>
+        <pubDate>Wed, 19 Oct 2011 03:51:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417537-3</guid>
+        <source url="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss">On the complexity of event-driven game server logic</source>
+      </item>
+      <item>
+        <title>On the complexity of event-driven game server logic</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>it’s right:</p>
+<p><code>	private final void questNotStarted(final Npc npc, final Player owner) {
+		npc.blockedBy(owner);
+		owner.setBusy(true);
+		World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {"romeo, romeo wherefore art thou romeo", "Bold adventurer, have you seen Romeo on your travels?", "Skinny guy, a bit wishy washy, head full of poetry"}, true) {
+			public void finished() {
+				World.getDelayedEventHandler().add(new SingleEvent(owner, 1500) {
+					public void action() {
+						final String[] options0 = {"Yes i have met him", "No, i think i would have remembered if I had", "I guess i could find him", "I think you could do better"};
+						owner.setBusy(false);
+						owner.sendMenu(options0);
+						owner.setMenuHandler(new MenuHandler(options0) {
+							public void handleReply(final int option, final String reply) {
+								owner.setBusy(true);
+								for(Player informee : owner.getViewArea().getPlayersInView()) {
+									informee.informOfChatMessage(new ChatMessage(owner, reply, npc));
+								}
+								switch(option) {
+									case 0:
+									case 1:
+										final String[] messages1 = {"Could you please deliver him a message?"};
+										World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages1) {
+											public void finished() {
+												World.getDelayedEventHandler().add(new SingleEvent(owner, 1500) {
+													public void action() {
+														final String[] options1 = {"Certainly, I will do so straight away", "No, I have better things to do"};
+														owner.setBusy(false);
+														owner.sendMenu(options1);
+														owner.setMenuHandler(new MenuHandler(options1) {
+															public void handleReply(final int option, final String reply) {
+																owner.setBusy(true);
+																for(Player informee : owner.getViewArea().getPlayersInView()) {
+																	informee.informOfChatMessage(new ChatMessage(owner, reply, npc));
+																}
+																switch(option) {
+																	case 0:
+																		final String[] messages2 = {"It may be our only hope"};
+																		World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages2) {
+																			public void finished() {
+																				owner.sendMessage("Juliet hands you a message");
+																				owner.getInventory().add(new InvItem(56, 1));
+																				owner.sendInventory();
+																				owner.addQuest(11, 5);
+																				owner.incQuestCompletionStage(11);
+																				owner.setBusy(false);
+																				npc.unblock();
+																			}
+																		});
+																		break;
+																	case 1:
+																		final String[] messages3 = {"I will not keep you from them, goodbye."};
+																		World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages3) {
+																			public void finished() {
+																				owner.setBusy(false);
+																				npc.unblock();
+																			}
+																		});
+																		break;
+																}
+																owner.setBusy(false);
+																npc.unblock();
+															}
+														});
+													}
+												});
+											}
+										});
+										break;
+									case 2:
+										final String[] messages4 = {"That is most kind of you", "Could you please deliver a message to him?"};
+										World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages4) {
+											public void finished() {
+												final String[] messages5 = {"Certainly, I will deliver your message straight away"};
+												World.getDelayedEventHandler().add(new DelayedQuestChat(owner, npc, messages5) {
+													public void finished() {
+														final String[] messages6 = {"It may be our only hope"};
+														World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages6) {
+															public void finished() {
+																owner.sendMessage("Juliet hands you a message");
+																owner.getInventory().add(new InvItem(56, 1));
+																owner.sendInventory();
+																owner.addQuest(11, 5);
+																owner.incQuestCompletionStage(11);
+																owner.setBusy(false);
+																npc.unblock();
+															}
+														});
+													}
+												});
+											}
+										});
+										break;
+									case 3:
+										final String[] messages7 = {"He has his good points", "He doesn't spend all day on the internet at least"};
+										World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, messages7) {
+											public void finished() {
+												owner.setBusy(false);
+												npc.unblock();
+											}
+										});
+										break;
+								}
+							}
+						});
+					}
+				});
+			}
+		});
+	}</code><br>
+dealing with code like this is ugly and hard to work with for experienced programmers; how will content developers fare?</p>
+<p>the solution to this problem is to reconcile the scalable “evented” model with the easy “threaded” model.</p>
+<blockquote>EVE uses a special Stackless version of Python to implement game logic, both on the server and the client. This approach makes the creation of game logic much simpler than traditionally possible. The control structures provided by Stackless allow for a more "procedural synchronous" model, rather than an "event driven asynchronous", or thread pooling.
+<p>What this effectively means is that very many actors can perform tiny tasks without the added complexity or overhead of the other two execution models. Our game logic scripters are thus freed from many of the mundane tasks associated with models that don’t benefit from the control structures provided by Stackless and often bogg down the creative process of writing interesting game behavior.</p>
+</blockquote><br>
+(source: <a href="http://wiki.eveonline.com/en/wiki/How_is_the_game_logic_implemented_in_EVE" data-bbcode="true" rel="nofollow noopener">How is the game logic implemented in EVE - EVElopedia - The EVE Online Wiki</a>)
+<blockquote>The amazing opportunity with Ruby 1.9 is to use Ruby’s fibers to abstract away the callbacks and just write normal code that looks synchronous. Each IO action is performed inside a fiber that is paused during the IO, allowing other fibers to run. When the IO is finished, the fiber can be resumed. And this style is actually not that hard to manage- it only has to be done once by the library writer- the implementation details become transparent to the library user.</blockquote>
+(source: [url=http://blog.gregweber.info/posts/2011-06-16-high-performance-rb-part3]Greg Weber's Programming Blog - High Performance Ruby Part 3: non-blocking IO and web application scalability[/url])
+<p><span class="bbcode-i">fibers</span> are light-weight processes of execution which utilize cooperative multitasking as opposed to preemption. they’re often also called “microthreads”, “protothreads”, and “coroutines”. fibers explicitly yield time to other tasks to execute, and map many-to-many across native, heavy-weight threads.<br>
+over the already developed task framework used for writing server logic, fibers can be implemented over tasks to support blocking operations inherently in their design. when they block, they yield to other tasks as opposed to expensively wasting a pooled worker.</p>
+<p>internally, a fiber is often implemented using something called <span class="bbcode-i">continuations</span>. a continuation encapsulates the state of execution at any time. when a fiber yields, a snapshot of it’s state is taken and the task is rescheduled. when a fiber is resumed, it restores state from the snapshot and jumps back into the code. in our case, a fiber would be resumed when the appropriate completion event arrives.</p>
+<p><code>	private final void deliveredMessage(final Npc npc, final Player owner) {
+		World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {"Ah, it seems that you can deliver a message after all", "My faith in you is restored"},true) {
+			public void finished() {
+				owner.setBusy(false);
+				npc.unblock();
+			}
+		});
+	}</code><br>
+could be rewritten as</p>
+<pre><code class="lang-auto">juliet.bind(new EventSubscriber&lt;NpcInteractionEvent&gt;() {
+
+    void handle(NpcInteractionEvent evt) {
+        Player player = evt.player();
+        Npc juliet = evt.target();
+        Stage stage = player.progress(RomeoAndJulietQuest.this);
+        switch (stage) {
+            case DELIVERED_MESSAGE:
+                player.occupy(juliet);
+                /* we yield while tell() takes place asynchronously */
+                npc.tell(player, "Ah, it seems that you can deliver a message after all", "My faith in you is restored").yield();
+                player.release(juliet);
+                break;
+             ...
+        }
+    }
+});</code></pre>
+<p>although in practice such logic would be implemented in a dynamic scripting language</p>
+<p>unfortunately, given the way the standard JVM works (the non-standard da vinci machine has an implementation), continuations are nearly impossible to implement in pure java without falling back to bytecode instrumentation.</p>
+<p>i’m currently working on implementing continuations in my own server as to simplify the complex event-driven logic, but i do also have to focus on school so i can’t guarantee anything. there are however existing generalized solutions out there (though they’re probably more difficult to deal with than a specialized solution):<br>
+<a href="http://blogs.oracle.com/sundararajan/entry/continuations_for_java" data-bbcode="true" rel="nofollow noopener">Continuations for Java (A. Sundararajan’s Weblog)</a><br>
+<a href="http://rifers.org/wiki/display/RIFE/Web+continuations" data-bbcode="true" rel="nofollow noopener">RIFE Web continuations</a><br>
+<a href="http://www.malhar.net/sriram/kilim/" data-bbcode="true" rel="nofollow noopener">Kilim</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/2</link>
+        <pubDate>Sun, 09 Oct 2011 04:02:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417537-2</guid>
+        <source url="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss">On the complexity of event-driven game server logic</source>
+      </item>
+      <item>
+        <title>On the complexity of event-driven game server logic</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://en.wikipedia.org/wiki/Event-driven_finite-state_machine" data-bbcode="true" rel="nofollow noopener">Event-driven finite-state machine - Wikipedia, the free encyclopedia</a><br>
+<a href="http://en.wikipedia.org/wiki/Actor_model" data-bbcode="true" rel="nofollow noopener">Actor model - Wikipedia, the free encyclopedia</a><br>
+<a href="http://en.wikipedia.org/wiki/Coroutine" data-bbcode="true" rel="nofollow noopener">Coroutine - Wikipedia, the free encyclopedia</a><br>
+<a href="http://en.wikipedia.org/wiki/Fiber_(computer_science)" data-bbcode="true" rel="nofollow noopener">Fiber (computer science) - Wikipedia, the free encyclopedia</a><br>
+<a href="http://en.wikipedia.org/wiki/Continuation" data-bbcode="true" rel="nofollow noopener">Continuation - Wikipedia, the free encyclopedia</a><br>
+<a href="http://web.media.mit.edu/~lieber/Lieberary/OOP/Act-1/Concurrent-OOP-in-Act-1.html" data-bbcode="true" rel="nofollow noopener">Concurrent Object-Oriented Programming in Act 1</a></p>
+<p><a href="http://www.kegel.com/c10k.html" data-bbcode="true" rel="nofollow noopener">The C10K problem</a><br>
+<a href="http://mmcgrana.github.com/2010/07/threaded-vs-evented-servers.html" data-bbcode="true" rel="nofollow noopener">Threaded vs Evented Servers</a><br>
+<a href="http://www.csd.uoc.gr/~hy527/papers/threads-ousterhout.pdf" data-bbcode="true" rel="nofollow noopener">Why Threads Are A Bad Idea (for most purposes)</a><br>
+<a href="http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf" data-bbcode="true" rel="nofollow noopener">Why Events Are A Bad Idea (for high-concurrency servers)</a><br>
+<a href="http://www.mailinator.com/tymaPaulMultithreaded.pdf" data-bbcode="true" rel="nofollow noopener">Thousands of Threads and Blocking I/O - The old way to write Java Servers is New again (and way better)</a></p>
+<p><a href="http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf" data-bbcode="true" rel="nofollow noopener">Actors that Unify Threads and Events</a><br>
+<a href="http://www.sics.se/~adam/pt/" data-bbcode="true" rel="nofollow noopener">Protothreads - Lightweight, Stackless Threads in C</a><br>
+<a href="http://www.gevent.org/" data-bbcode="true" rel="nofollow noopener">gevent: A coroutine-based network library for Python</a><br>
+<a href="http://blog.gregweber.info/posts/2011-06-16-high-performance-rb-part3" data-bbcode="true" rel="nofollow noopener">Greg Weber’s Programming Blog - High Performance Ruby Part 3: non-blocking IO and web application scalability</a><br>
+<a href="http://kalogirou.net/2005/08/10/multithreaded-game-scripting-with-stackless-python/" data-bbcode="true" rel="nofollow noopener">Multithreaded Game Scripting with Stackless Python « Thoughts Serializer</a></p>
+<p>just some links which are related to what i will be discussing here.</p>
+<p>events often times make our lives easier by reducing complexity of code and making it more efficient.</p>
+<p>for example, where in older private servers a dedicated thread was spawned per player for I/O, newer servers made use of event-driven interfaces which allowed one to demultiplex I/O.<br>
+before, each thread would most likely be in a <span class="bbcode-i">blocking</span> state, only woken up and scheduled to take up CPU time when a read operation completed. this worked fine for small numbers of clients, but as the number grew, it failed to keep up.<br>
+the <a href="http://www.rune-server.org/programming/application-development/tutorials/280292-understanding-java-nio-reactor-design-pattern.html" data-bbcode="true" rel="nofollow noopener">reactor pattern</a> allowed us to conveniently only need one thread no matter the number of clients. using non-blocking I/O, there is no need for dedicated threads to be woken up. instead, the reactor explicitly states interest in events and was notified when they occurred. this avoided the cost of things like context switching and excessive pre-emption with CPU load saturation. logically, this scaled well and gracefully degraded with load.</p>
+<p>using events also helps prevent polling and redundancy.<br>
+instead of continuously checking to see if a player is in an area (warning: bad code ahead)…</p>
+<p><code>void tick() {
+    for (Player player : players) {
+        if (player.moved &amp;&amp; player.x &gt;= AREA_X1 &amp;&amp; player.y &gt;= AREA_Y1 &amp;&amp; player.x &lt;= AREA_X2 &amp;&amp; player.y &lt;= AREA_Y2) {
+            ... area-specific logic here ...
+        }
+    }
+}</code><br>
+we can implement something called inversion of control and decouple this into events and event listeners:</p>
+<p>[code]EventSubscriber movement_listener = EventSubscriber() {</p>
+<pre><code>        public boolean satisfied(MovementEvent event) {
+            Player player = event.player;
+            return player.x &gt;= AREA_X1 &amp;&amp; player.y &gt;= AREA_Y1 &amp;&amp; player.x &lt;= AREA_X2 &amp;&amp; player.y &lt;= AREA_Y2;
+        }
+
+        public void handle(MovementEvent event) {
+            ... area-specific logic here ...
+        }
+    });
+</code></pre>
+<p>[/code]<br>
+this helps separate our concerns and make developing much easier.</p>
+<p>since events allow code to listen for specific changes, they are also used for completion events of asynchronous operations. this <span class="bbcode-i">proactive</span> use of completion events contrasts with the previously mentioned reactors and their readiness events.</p>
+<pre><code class="lang-auto">...
+Future&lt;Set&lt;?&gt;&gt; _results = database.query("select * from operations where blocking=1");
+/* this blocks the current thread waiting */
+Set&lt;?&gt; results = _results.get();
+...</code></pre>
+<p>traditionally, like earlier with sockets, one needed a dedicated thread for such blocking database I/O.</p>
+<p>with the advent of using thread pools for server logic, we introduced the idea of small, atomic units of work, or <span class="bbcode-i">tasks</span>. given that a thread pool uses a limited number of workers, tasks have a few logical constraints with them to acheive performance:</p>
+<blockquote>But the thread pool is a leaky abstraction. That is, the pool hides a lot of details from us, but to use it effectively we do need to be aware of some things a pool does under the covers so that we can avoid inadvertently hitting performance and correctness pitfalls. Here's the summary up front:
+<p>[ul][<em>]Tasks should be small, but not too small, otherwise performance overheads will dominate.<br>
+[</em>]Tasks should avoid blocking (waiting idly for other events, including inbound messages or contested locks), otherwise the pool won’t consistently utilize the hardware well – and, in the extreme worst case, the pool could even deadlock.[/ul]</p>
+</blockquote><br>
+(source: <a href="http://drdobbs.com/go-parallel/article/showArticle.jhtml?articleID=216500409" data-bbcode="true" rel="nofollow noopener">Dr. Dobb’s | Go Parallel | Use Thread Pools Correctly: Keep Tasks Short and Nonblocking | Dr. Dobb’s and Intel Go Parallel Programming</a>)
+<p>now it becomes apparent that we can’t do such blocking within the logic pool. instead, we rely on having another pool somewhere handling database I/O, and using the completion listener facility mentioned earlier:</p>
+<pre><code class="lang-auto">...
+database.query("select * from operations where blocking=1", new CompletionHandler&lt;Set&lt;?&gt;&gt;() {
+
+    public void completed(Set&lt;?&gt; results) {
+        /* complete our stuff here */
+    }
+});
+/* return immediately and don't block */</code></pre>
+<p>as it turns out, blocking operations don’t necessarily always deal with low-level conceptualizations of I/O, through sockets and databases.</p>
+<p>in runescape, we actually see a lot of blocking operations that block instead on interaction (I/O) from players themselves.<br>
+for example, take quests. quests are logically separated into discrete steps or stages. a stage associated with a player is state.<br>
+quests themselves are easily modelled as event-driven finite-state machines:</p>
+<p><a href="http://pastebin.com/raw.php?i=gH9MP0TL" data-bbcode="true" rel="nofollow noopener">http://pastebin.com/raw.php?i=gH9MP0TL</a></p>
+<p>[code]	public void handleNpc(Npc npc, Player owner) throws Exception {<br>
+owner.setBusy(true);<br>
+npc.blockedBy(owner);<br>
+Quest q = owner.getQuest(11);<br>
+if(q != null) {<br>
+if(q.finished()) {<br>
+questFinished(npc, owner);<br>
+} else {<br>
+switch(q.getStage()) {<br>
+case 0:	//Coming from Romeo<br>
+comingFromRomeo(npc, owner);<br>
+break;</p>
+<pre><code>				case 1:	//Has message for Romeo
+					hasMessage(npc, owner);
+					break;
+				case 2:	//Delivered message to Romeo
+					deliveredMessage(npc, owner);
+					break;
+				case 3:	//Talked to Father Lawrence
+					didYouFind(npc, owner);
+					break;
+				case 4:	//Talked to apothecary
+					if(owner.getInventory().countId(57) &gt; 0) {
+						hasPotion(npc, owner);
+					} else {
+						notHasPotion(npc, owner);
+					}
+					break;
+				case 5:	//Given Juliet potion
+					afterPotion(npc, owner);
+					break;
+				
+			}
+		}
+	} else {
+		questNotStarted(npc, owner);
+	}
+}[/code]
+</code></pre>
+<p>using events here makes sense, as npcs react to player interaction in a way dependent on quest stage.</p>
+<p>a common issue people have with this system is that there are too many separate ways of dealing with the event. indeed, the logic for the quest crosses multiple distinct NpcHandlers here:<br>
+<a href="http://pastebin.com/LqN5JJqu" data-bbcode="true" rel="nofollow noopener">Romeo.java</a><br>
+<a href="http://pastebin.com/gH9MP0TL" data-bbcode="true" rel="nofollow noopener">Juliet.java</a><br>
+<a href="http://pastebin.com/AWLfVTAu" data-bbcode="true" rel="nofollow noopener">Apothecary.java</a><br>
+<a href="http://pastebin.com/re6ahKmq" data-bbcode="true" rel="nofollow noopener">Father_Lawrence.java</a></p>
+<p>instead, it is proposed to centralize these smaller state machines across borders into one consistent interface. it is argued that the entirety of the quest logic ought to be placed under a single event-driven, state-dependent <span class="bbcode-i">actor</span> (minus the fact actors use a messaging system with explicit producers/consumers) representing the quest, whose incoming messages are events it has interest in. this way events for romeo, juliet, apothecary, and father lawrence all can be easily managed and associated with a single quest. these actors could be implemented in their own threads, blocking on some incoming event queue, or, much more logically, internally use fine event listeners which forward and demultiplex to a central actor event listener. in practice, both have similar semantics: actors wait for messages to be routed to them, and when they are, they react. using a thread (blocking on a message queue) is far more heavy-weight than than handling it in whatever thread dispatches events, though.</p>
+<blockquote>On mainstream platforms such as the JVM [16], an equally attractive implementation was as yet missing. Their standard concurrency constructs, shared-memory threads with locks, suffer from high initialization and context-switching overhead as well as high memory consumption. Therefore, the interleaving of independent computations is often modelled in an event-driven style on these platforms. However, programming in an explicitly event-driven style is complicated and error-prone, because it involves an inversion of control.</blockquote>
+(source: [url=http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf]http://lamp.epfl.ch/~phaller/doc/haller07actorsunify.pdf[/url])
+[code]
+...
+class RomeoHandler implements NpcHandler {
+<pre><code>void handleNpc(Npc npc, Player owner) throws Exception {
+    act(new NpcEvent(owner, npc));
+}
+</code></pre>
+<p>}<br>
+…<br>
+void act(Event evt) {<br>
+switch (state) {<br>
+case COMING_FROM_ROMEO:<br>
+switch (evt.type) {<br>
+case NPC_EVENT:<br>
+…<br>
+break;<br>
+…<br>
+}<br>
+break;<br>
+…<br>
+}<br>
+}<br>
+[/code]</p>
+<p>there is still a problem, however. take this code, for example:</p>
+<p><code>	private final void comingFromRomeo(final Npc npc, final Player owner) {
+		World.getDelayedEventHandler().add(new DelayedQuestChat(owner, npc, new String[] {"Juliet, I come from Romeo", "He begs me tell you he cares still"}, true) {
+			public void finished() {
+				World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {"Take this message to him"}) {
+					public void finished() {
+						World.getDelayedEventHandler().add(new DelayedQuestChat(owner, npc, new String[] {"Certainly, I will deliver your message straight away"}) {
+							public void finished() {
+								World.getDelayedEventHandler().add(new DelayedQuestChat(npc, owner, new String[] {"It may be our only hope"}) {
+									public void finished() {
+										World.getDelayedEventHandler().add(new SingleEvent(owner, 1500) {
+											public void action() {
+												owner.sendMessage("Juliet gives you a message");
+												owner.getInventory().add(new InvItem(56, 1));
+												owner.sendInventory();
+												owner.incQuestCompletionStage(11);
+												owner.setBusy(false);
+												npc.unblock();
+											}
+										});
+									}
+								});
+							}
+						});
+					}
+				});
+			}
+		});
+	}</code><br>
+a DelayedQuestChat represents an asynchronous operation, and it uses a similar completion listener mechanism as introduced earlier. it doesn’t take very long, however, for the ugliness to become apparent in this approach. developers explicitly write callbacks for handling completion events, which themselves are nested in such callbacks etc. the flow of logic becomes fragmented and difficult to visualize.</p>
+<p>the actor solution to this problem is to expand the number of states and/or events to cope:</p>
+<p><code>void act(Event evt) {
+    switch (state) {
+        case COMING_FROM_ROMEO_A:
+            switch (evt.type) {
+                case COMPLETION_A:
+                    ...
+                    break;
+                case COMPLETION_B:
+                    ...
+                    break;
+                ...
+            }
+            break;
+        case COMING_FROM_ROMEO_B:
+            switch (evt.type) {
+                case COMPLETION_A:
+                    ...
+                    break;
+                case COMPLETION_B:
+                    ...
+                    break;
+                ...
+            }
+            break;
+    }
+}</code></p>
+<p>note we’ve reached a trade-off here between state and input space sizes.<br>
+our actors are merely finite state machines, or finite automata. two types of finite automata exist: <span class="bbcode-i">deterministic</span> and <span class="bbcode-i">non-deterministic</span>. a deterministic automaton has a definite successor state given a input, while non-deterministic ones do not.<br>
+adapting our quest actor to handle the added completion events turns out to have majorly the same impact as converting an NFA into a DFA i.e. state explosion.<br>
+as can be clearly seen, this exposed interface is not much cleaner to developers than the deeply nested completion listeners.</p>
+<p>the event interface here presents a known problem:</p>
+<blockquote>For these high-concurrency systems, event-based programming tends to obfuscate the control ﬂow of the application. For instance, many event systems “call” a method in another module by sending an event and expect a “return” from that method via a similar event mechanism. In order to understand the application, the programmer must mentally match these call/return pairs, even when they are in different parts of the code. Furthermore, these call/return pairs often require the programmer to manually save and restore live state. This process, referred to as “stack ripping” by Adya et al. [1], is a major burden for programmers who wish to use event systems. Finally, this obfuscation of the program’s control ﬂow can also lead to subtle race conditions and logic errors due to unexpected message arrivals.</blockquote>
+(source: [url=http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf]http://capriccio.cs.berkeley.edu/pubs/threads-hotos-2003.pdf[/url])
+<blockquote>The solution is to use non-blocking IO so that another thread of execution can work while one is waiting on IO. node.js is well known for doing this. However, the callback style used by node.js is much more difficult to write, maintain, and reason about, particularly when there are multiple IO actions in one request. Instead of a simple, synchronous flow, you have to have a callback for every IO action. Ruby was always fundamentally capable of non-blocking IO, especially after EventMachine was released, but that style of programming was never appealing.</blockquote>
+(source: [url=http://blog.gregweber.info/posts/2011-06-16-high-performance-rb-part3]Greg Weber's Programming Blog - High Performance Ruby Part 3: non-blocking IO and web application scalability[/url])
+<blockquote>An event-driven model does not support a blocking wait abstraction. Therefore, programmers of such systems frequently need to use state machines to implement control flow for high-level logic that cannot be expressed as a single event handler. Unlike state machines that are part of a system specification, the control-flow state machines typically have no formal specication, but are created on-the-fly by the programmer. Experience has shown that the need for explicit state machines to manage control flow makes event-driven programming difficult [3, 25, 26, 35]. With the words of Levis et al. [26]: “This approach is natural for reactive processing and for interfacing with hardware, but complicates sequencing high-level operations, as a logically blocking sequence must be written in a state-machine style.”</blockquote>
+(source: [url=http://www.sics.se/~adam/dunkels06protothreads.pdf]http://www.sics.se/~adam/dunkels06protothreads.pdf[/url])
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537/1</link>
+        <pubDate>Sun, 09 Oct 2011 04:01:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417537-1</guid>
+        <source url="https://forum.moparisthebest.com/t/on-the-complexity-of-event-driven-game-server-logic/417537.rss">On the complexity of event-driven game server logic</source>
+      </item>
+  </channel>
+</rss>

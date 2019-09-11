@@ -1,0 +1,762 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nonblocking server stops accepting connections</title>
+    <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959</link>
+    <description>Hello I just came here thinking you guys would probably can probably figure this one out.
+
+Problem is pretty odd to find but anyways I&#39;ll explain what happens the server functions properly doesn&#39;t really do much but send out one packet if the stream contains a certain type of packet.
+
+Since the packets don&#39;t arrive all at once and no kind of packet size gets sent. It works by detecting the first 0 byte 0x00. If it doesn&#39;t detect the 0 byte in 8192 bytes of read stream it drops connection.
+
+Now if you keep connecting to it normally sending correct packet you will get correct response and you can leave it flooding it for about 2 hours (as far as I&#39;ve tested) and it handles without any problems.
+
+Now if you keep connect to it with the same flooder but keep sending malformed packets (still terminated with 0 byte) now it never calls the send() function which does wakeup of Selector and puts a event to change socket to WRITE.
+
+So if the socket that connected is stuck in READ mode? How is that related exceeding some kind of resource forcing to not accept any more connections. I really don&#39;t understand this much hopefully someone can help me out.
+
+I got told that i&#39;m running out of system sockets which is certainly not true.
+
+I think i&#39;m running out of SelectionKey&#39;s which cancel themselves out when a person disconnects or forces drop.
+
+Although this problem is severe it actually fixes itself out in 30 minutes.
+
+Here is the source code
+[code=Java]
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.channels.spi.SelectorProvider;
+import java.util.*;
+
+public class PolicyServer implements Runnable {
+    public static final String POLICY_REQUEST = &quot;&lt;policy-file-request/&gt;&quot;;
+    public static final String POLICY_XML =
+        &quot;&lt;?xml version=\&quot;1.0\&quot;?&gt;&quot;
+        + &quot;&lt;cross-domain-policy&gt;&quot;
+        + &quot;&lt;allow-access-from domain=\&quot;*\&quot; to-ports=\&quot;*\&quot; /&gt;&quot;
+        + &quot;&lt;/cross-domain-policy&gt;&quot;
+        + (char)0;
+
+
+    // The host:port combination to listen on
+    private InetAddress hostAddress;
+    private int port;
+
+    // The channel on which we&#39;ll accept connections
+    private ServerSocketChannel serverChannel;
+
+    // The selector we&#39;ll be monitoring
+    private Selector selector;
+
+    // The buffer into which we&#39;ll read data when it&#39;s available
+    private ByteBuffer readBuffer = ByteBuffer.allocate(255);
+
+    // This decodes raw bytes into ascii data.
+    private CharsetDecoder asciiDecoder;
+
+    // A list of PendingChange instances
+    private List&lt;ChangeRequest&gt; pendingChanges = new LinkedList&lt;ChangeRequest&gt;();
+
+    // Maps a SocketChannel to a list of ByteBuffer instances
+    private Map&lt;SocketChannel, List&lt;ByteBuffer&gt;&gt; pendingData = new HashMap&lt;SocketChannel, List&lt;ByteBuffer&gt;&gt;();
+
+    public PolicyServer(InetAddress hostAddress, int port) throws IOException {
+        this.hostAddress = hostAddress;
+        this.port = port;
+        this.selector = this.initSelector();
+        this.asciiDecoder = Charset.forName(&quot;US-ASCII&quot;).newDecoder().onMalformedInput(
+                                CodingErrorAction.REPLACE).onUnmappableCharacter(
+                                CodingErrorAction.REPLACE);
+    }
+
+    public void send(SocketChannel socket, byte[] data) {
+        synchronized (this.pendingChanges) {
+            // Indicate we want the interest ops set changed
+            this.pendingChanges.add(new ChangeRequest(socket, ChangeRequest.CHANGEOPS, SelectionKey.OP_WRITE));
+
+            // And queue the data we want written
+            synchronized (this.pendingData) {
+                List&lt;ByteBuffer&gt; queue = (List&lt;ByteBuffer&gt;) this.pendingData.get(socket);
+                if (queue == null) {
+                    queue = new ArrayList&lt;ByteBuffer&gt;();
+                    this.pendingData.put(socket, queue);
+                }
+                queue.add(ByteBuffer.wrap(data));
+            }
+        }
+
+        // Finally, wake up our selecting thread so it can make the required changes
+        this.selector.wakeup();
+    }
+
+    public void run() {
+        while (true) {
+            try {
+                // Process any pending changes
+                synchronized (this.pendingChanges) {
+                    Iterator changes = this.pendingChanges.iterator();
+                    while (changes.hasNext()) {
+                        ChangeRequest change = (ChangeRequest) changes.next();
+                        changes.remove();
+                        if(change == null) continue;
+                        switch (change.type) {
+                        case ChangeRequest.CHANGEOPS:
+                            SelectionKey key = change.socket.keyFor(this.selector);
+                            try {
+                                if(key!=null)
+                                    key.interestOps(change.ops);
+                            } catch(Exception ex) {
+                                if (key!=null)
+                                    key.cancel();
+                            }
+                        }
+                    }
+                    this.pendingChanges.clear();
+                }
+
+                // Wait for an event one of the registered channels
+                this.selector.select();
+
+                // Iterate over the set of keys for which events are available
+                Iterator selectedKeys = this.selector.selectedKeys().iterator();
+                while (selectedKeys.hasNext()) {
+                    SelectionKey key = (SelectionKey) selectedKeys.next();
+                    selectedKeys.remove();
+
+                    if (!key.isValid()) {
+                        key.cancel();
+                        continue;
+                    }
+
+                    // Check what event is available and deal with it
+                    try {
+                        if (key.isAcceptable()) {
+                            this.accept(key);
+                        } else if (key.isReadable()) {
+                            this.read(key);
+                        } else if (key.isWritable()) {
+                            this.write(key);
+                        }
+                    } catch(IOException io) {
+                        this.pendingData.remove(key.channel());
+                        try {
+                            ((SocketChannel)key.channel()).socket().close();
+                        } catch (IOException e) {}
+                        key.channel().close();
+                        key.cancel();
+                        key.attach(null);
+                        key = null;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void accept(SelectionKey key) throws IOException {
+        // For an accept to be pending the channel must be a server socket channel.
+        ServerSocketChannel serverSocketChannel = (ServerSocketChannel) key.channel();
+
+        // Accept the connection and make it non-blocking
+        SocketChannel socketChannel = serverSocketChannel.accept();
+        Socket socket = socketChannel.socket();
+        socketChannel.configureBlocking(false);
+
+        // Register the new SocketChannel with our Selector, indicating
+        // we&#39;d like to be notified when there&#39;s data waiting to be read
+        // also contains a attachment of a new StringBuffer (for storing imcomplete/multi packets)
+        socketChannel.register(this.selector, SelectionKey.OP_READ, new StringBuffer());
+    }
+
+    private void read(SelectionKey key) throws IOException {
+        SocketChannel socketChannel = (SocketChannel) key.channel();
+
+        // Clear out our read buffer so it&#39;s ready for new data
+        this.readBuffer.clear();
+
+        // Attempt to read off the channel
+        int numRead = socketChannel.read(this.readBuffer);
+
+        if (numRead == -1) {
+            // Remote entity shut the socket down cleanly. Do the
+            // same from our end and cancel the channel.
+            throw new IOException(&quot;&quot;);
+        }
+
+        // Grab the StringBuffer we stored as the attachment
+        StringBuffer sb = (StringBuffer)key.attachment();
+
+        // Flips the readBuffer by setting the current position of
+        // packet stream to beginning.
+        // Append the data to the attachment StringBuffer
+        this.readBuffer.flip();
+        sb.append(this.asciiDecoder.decode(this.readBuffer).toString());
+        this.readBuffer.clear();
+
+        // Get the policy request as complete packet
+        if(sb.indexOf(&quot;\0&quot;) != -1) {
+            String packets = new String(sb.substring(0, sb.lastIndexOf(&quot;\0&quot;)+1));
+            sb.delete(0, sb.lastIndexOf(&quot;\0&quot;)+1);
+            if(packets.indexOf(POLICY_REQUEST) != -1)
+                send(socketChannel, POLICY_XML.getBytes());
+        } else if(sb.length() &gt;  8192) {
+            sb.setLength(0);
+            //Force disconnect.
+            throw new IOException(&quot;&quot;);
+        }
+    }
+
+    private void write(SelectionKey key) throws IOException {
+        SocketChannel socketChannel = (SocketChannel) key.channel();
+
+        synchronized (this.pendingData) {
+            List&lt;ByteBuffer&gt; queue = (List&lt;ByteBuffer&gt;) this.pendingData.get(socketChannel);
+
+            if(queue == null || queue.isEmpty()) {
+                // We wrote away all data, so we&#39;re no longer interested
+                // in writing on this socket. Switch back to waiting for
+                // data.
+                try {
+                    if (key!=null)
+                        key.interestOps(SelectionKey.OP_READ);
+                } catch(Exception ex) {
+                    if (key!=null)
+                        key.cancel();
+                }
+            }
+
+            // Write until there&#39;s not more data ...
+            while (!queue.isEmpty()) {
+                ByteBuffer buf = (ByteBuffer) queue.get(0);
+                socketChannel.write(buf);
+                if (buf.remaining() &gt; 0) {
+                    // ... or the socket&#39;s buffer fills up
+                    break;
+                }
+                queue.remove(0);
+            }
+        }
+    }
+
+    private Selector initSelector() throws IOException {
+        // Create a new selector
+        Selector socketSelector = SelectorProvider.provider().openSelector();
+
+        // Create a new non-blocking server socket channel
+        this.serverChannel = ServerSocketChannel.open();
+        serverChannel.configureBlocking(false);
+
+        // Bind the server socket to the specified address and port
+        InetSocketAddress isa = new InetSocketAddress(this.hostAddress, this.port);
+        serverChannel.socket().bind(isa);
+
+        // Register the server socket channel, indicating an interest in
+        // accepting new connections
+        serverChannel.register(socketSelector, SelectionKey.OP_ACCEPT);
+
+        return socketSelector;
+    }
+
+    public static void main(String[] args) {
+        try {
+            new Thread(new PolicyServer(null, 5556)).start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+import java.nio.channels.SocketChannel;
+
+public class ChangeRequest {
+    public static final int CHANGEOPS = 1;
+
+    public SocketChannel socket;
+    public int type;
+    public int ops;
+[/code]
+
+[code=Java]
+    public ChangeRequest(SocketChannel socket, int type, int ops) {
+        this.socket = socket;
+        this.type = type;
+        this.ops = ops;
+    }
+}
+[/code]
+
+Thanks I really appreciate all the help I can get.</description>
+    
+    <lastBuildDate>Mon, 20 Sep 2010 23:04:34 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“super_, post:10, topic:360959”]unless the selector is woken up you will not be receiving anything from select()[/quote]the regular undetermined blocking select function returns when there is at least one connection ready for its respective operation</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/11</link>
+        <pubDate>Mon, 20 Sep 2010 23:04:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-11</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>unless the selector is woken up you will not be receiving anything from select()</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/10</link>
+        <pubDate>Mon, 20 Sep 2010 21:55:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-10</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@pkedpker pkedpker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pkedpker">@pkedpker</a> wrote:</p>
+          <blockquote>
+              <p>Well either way I just find it strange that while I keep sending valid packets even if I mix it up and send a huge amount of packets packed into one packet it will process each one etc and all is okay and this loop of connecting sending receiving disconnecting. Yet one packet that doesn’t invoke the send method causes problems in some mysteries way and if repeated will hang (at 0% cpu).</p>
+<p>All in all i know it’s just a bad implementation oh well I didn’t want to use a external library such as MINA.</p>
+<p>Meh whats funny is that even if we all like the idea of asynchronous sockets the old way of doing things one thread per client never screws up even though of it’s inefficiency haha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/9</link>
+        <pubDate>Mon, 20 Sep 2010 04:16:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-9</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“super_, post:7, topic:360959”]pkedpker, on windows, the maximum # of sockets bound to a selector is usually capped to 64. be wary.[/quote]the windows jvm overrides that</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/8</link>
+        <pubDate>Mon, 20 Sep 2010 00:30:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-8</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>pkedpker, on windows, the maximum # of sockets bound to a selector is usually capped to 64. be wary.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/7</link>
+        <pubDate>Sun, 19 Sep 2010 21:51:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-7</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="1" data-topic="360959">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/pkedpker/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> pkedpker:</div>
+<blockquote>
+<p>I got told that i’m running out of system sockets which is certainly not true.</p>
+</blockquote>
+</aside>
+<p>What exactly makes you think this isn’t the problem?  All operating systems have a set limit on how many sockets a program can use, and sometimes it’s rather tricky to change that per-program.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/6</link>
+        <pubDate>Sun, 19 Sep 2010 17:07:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-6</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>and i found it liek over a year ago and talked about it and suddenly every1 wanted to use it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/5</link>
+        <pubDate>Sun, 19 Sep 2010 17:05:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-5</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“super_, post:3, topic:360959”]lol trend fags obsessed with netty now[/quote]wat?? i found out about netty a few weeks ago when browsin for a decent networking solution that wasnt mina.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/4</link>
+        <pubDate>Sun, 19 Sep 2010 15:16:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-4</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>lol trend fags obsessed with netty now</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/3</link>
+        <pubDate>Sun, 19 Sep 2010 14:35:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-3</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>idno but use netty instead, much bettar: <a href="http://jboss.org/netty" rel="nofollow noopener">http://jboss.org/netty</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/2</link>
+        <pubDate>Sun, 19 Sep 2010 13:47:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-2</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+      <item>
+        <title>Nonblocking server stops accepting connections</title>
+        <dc:creator><![CDATA[@pkedpker pkedpker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pkedpker">@pkedpker</a> wrote:</p>
+          <blockquote>
+              <p>Hello I just came here thinking you guys would probably can probably figure this one out.</p>
+<p>Problem is pretty odd to find but anyways I’ll explain what happens the server functions properly doesn’t really do much but send out one packet if the stream contains a certain type of packet.</p>
+<p>Since the packets don’t arrive all at once and no kind of packet size gets sent. It works by detecting the first 0 byte 0x00. If it doesn’t detect the 0 byte in 8192 bytes of read stream it drops connection.</p>
+<p>Now if you keep connecting to it normally sending correct packet you will get correct response and you can leave it flooding it for about 2 hours (as far as I’ve tested) and it handles without any problems.</p>
+<p>Now if you keep connect to it with the same flooder but keep sending malformed packets (still terminated with 0 byte) now it never calls the send() function which does wakeup of Selector and puts a event to change socket to WRITE.</p>
+<p>So if the socket that connected is stuck in READ mode? How is that related exceeding some kind of resource forcing to not accept any more connections. I really don’t understand this much hopefully someone can help me out.</p>
+<p>I got told that i’m running out of system sockets which is certainly not true.</p>
+<p>I think i’m running out of SelectionKey’s which cancel themselves out when a person disconnects or forces drop.</p>
+<p>Although this problem is severe it actually fixes itself out in 30 minutes.</p>
+<p>Here is the source code</p>
+<pre><code class="lang-auto">import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.channels.spi.SelectorProvider;
+import java.util.*;
+
+public class PolicyServer implements Runnable {
+    public static final String POLICY_REQUEST = "&lt;policy-file-request/&gt;";
+    public static final String POLICY_XML =
+        "&lt;?xml version=\"1.0\"?&gt;"
+        + "&lt;cross-domain-policy&gt;"
+        + "&lt;allow-access-from domain=\"*\" to-ports=\"*\" /&gt;"
+        + "&lt;/cross-domain-policy&gt;"
+        + (char)0;
+
+
+    // The host:port combination to listen on
+    private InetAddress hostAddress;
+    private int port;
+
+    // The channel on which we'll accept connections
+    private ServerSocketChannel serverChannel;
+
+    // The selector we'll be monitoring
+    private Selector selector;
+
+    // The buffer into which we'll read data when it's available
+    private ByteBuffer readBuffer = ByteBuffer.allocate(255);
+
+    // This decodes raw bytes into ascii data.
+    private CharsetDecoder asciiDecoder;
+
+    // A list of PendingChange instances
+    private List&lt;ChangeRequest&gt; pendingChanges = new LinkedList&lt;ChangeRequest&gt;();
+
+    // Maps a SocketChannel to a list of ByteBuffer instances
+    private Map&lt;SocketChannel, List&lt;ByteBuffer&gt;&gt; pendingData = new HashMap&lt;SocketChannel, List&lt;ByteBuffer&gt;&gt;();
+
+    public PolicyServer(InetAddress hostAddress, int port) throws IOException {
+        this.hostAddress = hostAddress;
+        this.port = port;
+        this.selector = this.initSelector();
+        this.asciiDecoder = Charset.forName("US-ASCII").newDecoder().onMalformedInput(
+                                CodingErrorAction.REPLACE).onUnmappableCharacter(
+                                CodingErrorAction.REPLACE);
+    }
+
+    public void send(SocketChannel socket, byte[] data) {
+        synchronized (this.pendingChanges) {
+            // Indicate we want the interest ops set changed
+            this.pendingChanges.add(new ChangeRequest(socket, ChangeRequest.CHANGEOPS, SelectionKey.OP_WRITE));
+
+            // And queue the data we want written
+            synchronized (this.pendingData) {
+                List&lt;ByteBuffer&gt; queue = (List&lt;ByteBuffer&gt;) this.pendingData.get(socket);
+                if (queue == null) {
+                    queue = new ArrayList&lt;ByteBuffer&gt;();
+                    this.pendingData.put(socket, queue);
+                }
+                queue.add(ByteBuffer.wrap(data));
+            }
+        }
+
+        // Finally, wake up our selecting thread so it can make the required changes
+        this.selector.wakeup();
+    }
+
+    public void run() {
+        while (true) {
+            try {
+                // Process any pending changes
+                synchronized (this.pendingChanges) {
+                    Iterator changes = this.pendingChanges.iterator();
+                    while (changes.hasNext()) {
+                        ChangeRequest change = (ChangeRequest) changes.next();
+                        changes.remove();
+                        if(change == null) continue;
+                        switch (change.type) {
+                        case ChangeRequest.CHANGEOPS:
+                            SelectionKey key = change.socket.keyFor(this.selector);
+                            try {
+                                if(key!=null)
+                                    key.interestOps(change.ops);
+                            } catch(Exception ex) {
+                                if (key!=null)
+                                    key.cancel();
+                            }
+                        }
+                    }
+                    this.pendingChanges.clear();
+                }
+
+                // Wait for an event one of the registered channels
+                this.selector.select();
+
+                // Iterate over the set of keys for which events are available
+                Iterator selectedKeys = this.selector.selectedKeys().iterator();
+                while (selectedKeys.hasNext()) {
+                    SelectionKey key = (SelectionKey) selectedKeys.next();
+                    selectedKeys.remove();
+
+                    if (!key.isValid()) {
+                        key.cancel();
+                        continue;
+                    }
+
+                    // Check what event is available and deal with it
+                    try {
+                        if (key.isAcceptable()) {
+                            this.accept(key);
+                        } else if (key.isReadable()) {
+                            this.read(key);
+                        } else if (key.isWritable()) {
+                            this.write(key);
+                        }
+                    } catch(IOException io) {
+                        this.pendingData.remove(key.channel());
+                        try {
+                            ((SocketChannel)key.channel()).socket().close();
+                        } catch (IOException e) {}
+                        key.channel().close();
+                        key.cancel();
+                        key.attach(null);
+                        key = null;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void accept(SelectionKey key) throws IOException {
+        // For an accept to be pending the channel must be a server socket channel.
+        ServerSocketChannel serverSocketChannel = (ServerSocketChannel) key.channel();
+
+        // Accept the connection and make it non-blocking
+        SocketChannel socketChannel = serverSocketChannel.accept();
+        Socket socket = socketChannel.socket();
+        socketChannel.configureBlocking(false);
+
+        // Register the new SocketChannel with our Selector, indicating
+        // we'd like to be notified when there's data waiting to be read
+        // also contains a attachment of a new StringBuffer (for storing imcomplete/multi packets)
+        socketChannel.register(this.selector, SelectionKey.OP_READ, new StringBuffer());
+    }
+
+    private void read(SelectionKey key) throws IOException {
+        SocketChannel socketChannel = (SocketChannel) key.channel();
+
+        // Clear out our read buffer so it's ready for new data
+        this.readBuffer.clear();
+
+        // Attempt to read off the channel
+        int numRead = socketChannel.read(this.readBuffer);
+
+        if (numRead == -1) {
+            // Remote entity shut the socket down cleanly. Do the
+            // same from our end and cancel the channel.
+            throw new IOException("");
+        }
+
+        // Grab the StringBuffer we stored as the attachment
+        StringBuffer sb = (StringBuffer)key.attachment();
+
+        // Flips the readBuffer by setting the current position of
+        // packet stream to beginning.
+        // Append the data to the attachment StringBuffer
+        this.readBuffer.flip();
+        sb.append(this.asciiDecoder.decode(this.readBuffer).toString());
+        this.readBuffer.clear();
+
+        // Get the policy request as complete packet
+        if(sb.indexOf("\0") != -1) {
+            String packets = new String(sb.substring(0, sb.lastIndexOf("\0")+1));
+            sb.delete(0, sb.lastIndexOf("\0")+1);
+            if(packets.indexOf(POLICY_REQUEST) != -1)
+                send(socketChannel, POLICY_XML.getBytes());
+        } else if(sb.length() &gt;  8192) {
+            sb.setLength(0);
+            //Force disconnect.
+            throw new IOException("");
+        }
+    }
+
+    private void write(SelectionKey key) throws IOException {
+        SocketChannel socketChannel = (SocketChannel) key.channel();
+
+        synchronized (this.pendingData) {
+            List&lt;ByteBuffer&gt; queue = (List&lt;ByteBuffer&gt;) this.pendingData.get(socketChannel);
+
+            if(queue == null || queue.isEmpty()) {
+                // We wrote away all data, so we're no longer interested
+                // in writing on this socket. Switch back to waiting for
+                // data.
+                try {
+                    if (key!=null)
+                        key.interestOps(SelectionKey.OP_READ);
+                } catch(Exception ex) {
+                    if (key!=null)
+                        key.cancel();
+                }
+            }
+
+            // Write until there's not more data ...
+            while (!queue.isEmpty()) {
+                ByteBuffer buf = (ByteBuffer) queue.get(0);
+                socketChannel.write(buf);
+                if (buf.remaining() &gt; 0) {
+                    // ... or the socket's buffer fills up
+                    break;
+                }
+                queue.remove(0);
+            }
+        }
+    }
+
+    private Selector initSelector() throws IOException {
+        // Create a new selector
+        Selector socketSelector = SelectorProvider.provider().openSelector();
+
+        // Create a new non-blocking server socket channel
+        this.serverChannel = ServerSocketChannel.open();
+        serverChannel.configureBlocking(false);
+
+        // Bind the server socket to the specified address and port
+        InetSocketAddress isa = new InetSocketAddress(this.hostAddress, this.port);
+        serverChannel.socket().bind(isa);
+
+        // Register the server socket channel, indicating an interest in
+        // accepting new connections
+        serverChannel.register(socketSelector, SelectionKey.OP_ACCEPT);
+
+        return socketSelector;
+    }
+
+    public static void main(String[] args) {
+        try {
+            new Thread(new PolicyServer(null, 5556)).start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+import java.nio.channels.SocketChannel;
+
+public class ChangeRequest {
+    public static final int CHANGEOPS = 1;
+
+    public SocketChannel socket;
+    public int type;
+    public int ops;</code></pre>
+<pre><code class="lang-auto">    public ChangeRequest(SocketChannel socket, int type, int ops) {
+        this.socket = socket;
+        this.type = type;
+        this.ops = ops;
+    }
+}</code></pre>
+<p>Thanks I really appreciate all the help I can get.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959/1</link>
+        <pubDate>Sun, 19 Sep 2010 06:11:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-360959-1</guid>
+        <source url="https://forum.moparisthebest.com/t/nonblocking-server-stops-accepting-connections/360959.rss">Nonblocking server stops accepting connections</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,1784 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Any good coders want a challenge? Fix my playerhandler!</title>
+    <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484</link>
+    <description>this is the only thing keeping my server from having it&#39;s grand-opening! my freaking playerhandler isnt working. Here it is, can someoen find the problem:
+
+import java.io.*;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+
+public class PlayerHandler {
+
+	// Remark: the player structures are just a temporary solution for now
+	// Later we will avoid looping through all the players for each player
+	// by making use of a hash table maybe based on map regions (8x8 granularity should be ok)
+	public static final int maxPlayers = 200;
+	public static Player players[] = new Player[maxPlayers];
+	public int playerSlotSearchStart = 1;			// where we start searching at when adding a new player
+	public static String kickNick = &quot;&quot;;
+	public static boolean kickAllPlayers = false;
+	public static String messageToAll = &quot;&quot;;
+	public static int playerCount=0;
+	public static String playersCurrentlyOn[] = new String[maxPlayers];
+	public static boolean updateAnnounced;
+	public static boolean updateRunning;
+	public static int updateSeconds;
+	public static long updateStartTime;
+
+	PlayerHandler() {
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			players[i] = null;
+		}
+	}
+
+	// a new client connected
+	public void newPlayerClient(java.net.Socket s, String connectedFrom) {
+		// first, search for a free slot
+		//int slot = -1, i = playerSlotSearchStart;
+		int slot = -1, i = 1;
+		do {
+			if(players[i] == null) {
+				slot = i;
+				break;
+			}
+			i++;
+			if(i &gt;= maxPlayers) i = 0;		// wrap around
+//		} while(i != playerSlotSearchStart);
+		} while(i &lt;= maxPlayers);
+
+		client newClient = new client(s, slot);
+		newClient.handler = this;
+		(new Thread(newClient)).start();
+		if(slot == -1) return;		// no free slot found - world is full
+		players[slot] = newClient;
+		players[slot].connectedFrom = connectedFrom;
+                updatePlayerNames();
+
+		// start at next slot when issuing the next search to speed it up
+		playerSlotSearchStart = slot + 1;
+		if(playerSlotSearchStart &gt; maxPlayers) playerSlotSearchStart = 1;
+		// Note that we don&#39;t use slot 0 because playerId zero does not function
+		// properly with the client.
+	}
+
+	public void destruct() {
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] == null) continue;
+			players[i].destruct();
+			players[i] = null;
+		}
+	}
+
+	public static int getPlayerCount() {
+		return playerCount;
+	}
+
+	public void updatePlayerNames(){
+		playerCount=0;
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] != null) {
+				playersCurrentlyOn[i] = players[i].playerName;
+                                playerCount++;
+			}
+			else {
+				playersCurrentlyOn[i] = &quot;&quot;;
+                        }
+		}
+	}
+
+	public static boolean isPlayerOn(String playerName) {
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(playersCurrentlyOn[i] != null){
+				if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return true;
+			}
+		}
+		return false;
+	}
+
+	public static int getPlayerID(String playerName) 
+{
+		for(int i = 0; i &lt; maxPlayers; i++) 
+{
+			if(playersCurrentlyOn[i] != null)
+ {
+				if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return i;
+			}
+		}
+		return -1;
+	}
+
+	public void process() {
+		if (messageToAll.length() &gt; 0) {
+			int msgTo=1;
+			do {
+				if(players[msgTo] != null) {
+					players[msgTo].globalMessage=messageToAll;
+				}
+				msgTo++;
+			} while(msgTo &lt; maxPlayers);
+			messageToAll=&quot;&quot;;
+		}
+		if (kickAllPlayers == true) {
+			int kickID = 1;
+			do {
+				if(players[kickID] != null) {
+					players[kickID].isKicked = true;
+				}
+				kickID++;
+			} while(kickID &lt; maxPlayers);
+			kickAllPlayers = false;
+		}
+
+		// at first, parse all the incoming data
+		// this has to be seperated from the outgoing part because we have to keep all the player data
+		// static, so each client gets exactly the same and not the one clients are ahead in time
+		// than the other ones.
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] == null || !players[i].isActive) continue;
+
+			players[i].actionAmount--;
+
+			players[i].preProcessing();
+			while(players[i].process());
+			players[i].postProcessing();
+
+			players[i].getNextPlayerMovement();
+
+			if(players[i].playerName.equalsIgnoreCase(kickNick))
+			{
+				players[i].kick();
+				kickNick=&quot;&quot;;
+			}
+			
+			if(players[i].disconnected) {
+                          	for(int i2 = 0; i2 &lt; server.npcHandler.maxNPCs; i2++) {
+                        if(server.npcHandler.npcs[i2] != null &amp;&amp; players[i] != null) {
+			if(server.npcHandler.npcs[i2].followPlayer == players[i].playerId &amp;&amp; server.npcHandler.npcs[i2] != null)
+		         server.npcHandler.npcs[i2].IsDead = true;
+                                } 
+                                }
+				if (players[i].savefile == true) {
+					if(saveGame(players[i])){
+                                                playerCount--;
+                                                savechar(players[i]);
+        					System.out.println(&quot;Game saved for player &quot;+players[i].playerName);
+					} else {
+						System.out.println(&quot;Could not save for &quot;+players[i].playerName);
+					};
+				} else {
+					System.out.println(&quot;Did not save for &quot;+players[i].playerName);
+				}
+				removePlayer(players[i]);
+				players[i] = null;
+			}
+		}
+
+		// loop through all players and do the updating stuff
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] == null || !players[i].isActive) continue;
+
+			Calendar cal = new GregorianCalendar();
+			int day = cal.get(Calendar.DAY_OF_MONTH);
+			int month = cal.get(Calendar.MONTH);
+			int year = cal.get(Calendar.YEAR);
+			int calc = ((year * 10000) + (month * 100) + day);
+			players[i].playerLastLogin = calc;
+			if(players[i].disconnected) {
+                          	for(int i3 = 0; i3 &lt; server.npcHandler.maxNPCs; i3++) {
+                                if(server.npcHandler.npcs[i3] != null &amp;&amp; players[i] != null) {
+			if(server.npcHandler.npcs[i3].followPlayer == players[i].playerId)
+		         server.npcHandler.npcs[i3].IsDead = true;
+                                } 
+                                }
+				if (players[i].savefile == true) {
+					if(saveGame(players[i])) {
+                                                playerCount--;
+                                                savechar(players[i]);
+						System.out.println(&quot;Game saved for player &quot;+players[i].playerName);
+					} else {
+						System.out.println(&quot;Could not save for &quot;+players[i].playerName);
+					};
+				} else {
+					System.out.println(&quot;Did not save for &quot;+players[i].playerName);
+				}
+				removePlayer(players[i]);
+				players[i] = null;
+			} else {
+				if(!players[i].initialized) {
+					players[i].initialize();
+					players[i].initialized = true;
+				} else {
+					players[i].update();
+				}
+			}
+		}
+
+		if (updateRunning &amp;&amp; !updateAnnounced) {
+			updateAnnounced = true;
+		}
+
+		if (updateRunning &amp;&amp; System.currentTimeMillis() - updateStartTime &gt; (updateSeconds*1000)) {
+			kickAllPlayers = true;
+			server.ShutDown = true;
+		}
+
+		// post processing
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] == null || !players[i].isActive) continue;
+
+			players[i].clearUpdateFlags();
+		}
+	}
+
+	public void updateNPC(Player plr, stream str) {
+		updateBlock.currentOffset = 0;
+		
+		str.createFrameVarSizeWord(65);
+		str.initBitAccess();
+		
+		str.writeBits(8, plr.npcListSize);
+		int size = plr.npcListSize;
+		plr.npcListSize = 0;
+		for(int i = 0; i &lt; size; i++) {
+			if(plr.RebuildNPCList == false &amp;&amp; plr.withinDistance(plr.npcList[i]) == true) {
+				plr.npcList[i].updateNPCMovement(str);
+				plr.npcList[i].appendNPCUpdateBlock(updateBlock);
+				plr.npcList[plr.npcListSize++] = plr.npcList[i];
+			} else {
+				int id = plr.npcList[i].npcId;
+				plr.npcInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+				str.writeBits(1, 1);
+				str.writeBits(2, 3);		// tells client to remove this npc from list
+			}
+		}
+
+		// iterate through all npcs to check whether there&#39;s new npcs to add
+		for(int i = 0; i &lt; NPCHandler.maxNPCs; i++) {
+			if(server.npcHandler.npcs[i] != null) {
+				int id = server.npcHandler.npcs[i].npcId;
+				if (plr.RebuildNPCList == false &amp;&amp; (plr.npcInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+					// npc already in npcList
+				} else if (plr.withinDistance(server.npcHandler.npcs[i]) == false) {
+					// out of sight
+				} else {
+					plr.addNewNPC(server.npcHandler.npcs[i], str, updateBlock);
+				}
+			}
+		}
+		
+		plr.RebuildNPCList = false;
+
+		if(updateBlock.currentOffset &gt; 0) {
+			str.writeBits(14, 16383);	// magic EOF - needed only when npc updateblock follows
+			str.finishBitAccess();
+
+			// append update block
+			str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+		} else {
+			str.finishBitAccess();
+		}
+		str.endFrameVarSizeWord();
+	}
+
+	private stream updateBlock = new stream(new byte[10000]);
+	// should actually be moved to client.java because it&#39;s very client specific
+	public void updatePlayer(Player plr, stream str) {
+		updateBlock.currentOffset = 0;
+		
+		if (updateRunning &amp;&amp; !updateAnnounced) {
+			str.createFrame(114);
+			str.writeWordBigEndian(updateSeconds*50/30);
+		}
+
+		// update thisPlayer
+		plr.updateThisPlayerMovement(str);		// handles walking/running and teleporting
+		// do NOT send chat text back to thisPlayer!
+		boolean saveChatTextUpdate = plr.chatTextUpdateRequired;
+		plr.chatTextUpdateRequired = false;
+		plr.appendPlayerUpdateBlock(updateBlock);
+		plr.chatTextUpdateRequired = saveChatTextUpdate;
+
+		str.writeBits(8, plr.playerListSize);
+		int size = plr.playerListSize;
+
+		// update/remove players that are already in the playerList
+		plr.playerListSize = 0;		// we&#39;re going to rebuild the list right away
+		for(int i = 0; i &lt; size; i++) {
+			// this update packet does not support teleporting of other players directly
+			// instead we&#39;re going to remove this player here and readd it right away below
+			if(plr.didTeleport == false &amp;&amp; plr.withinDistance(plr.playerList[i]) == true) {
+				plr.playerList[i].updatePlayerMovement(str);
+				plr.playerList[i].appendPlayerUpdateBlock(updateBlock);
+				plr.playerList[plr.playerListSize++] = plr.playerList[i];
+			} else {
+				int id = plr.playerList[i].playerId;
+				plr.playerInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+				str.writeBits(1, 1);
+				str.writeBits(2, 3);		// tells client to remove this char from list
+			}
+		}
+
+		// iterate through all players to check whether there&#39;s new players to add
+		for(int i = 0; i &lt; maxPlayers; i++) {
+			if(players[i] == null || players[i].isActive == false || players[i] == plr) {
+				//not existing, not active or you are that player
+			} else {
+				int id = players[i].playerId;
+				if(plr.didTeleport == false &amp;&amp; (plr.playerInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+					// player already in playerList
+				} else if(plr.withinDistance(players[i]) == false) {
+					// out of sight
+				} else {
+					plr.addNewPlayer(players[i], str, updateBlock);
+				}
+			}
+		}
+
+		if(updateBlock.currentOffset &gt; 0) {
+			str.writeBits(11, 2047);	// magic EOF - needed only when player updateblock follows
+			str.finishBitAccess();
+
+			// append update block
+			str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+		} else {
+			str.finishBitAccess();
+		}
+		str.endFrameVarSizeWord();
+	}
+
+	public int lastchatid = 1; //PM System
+
+	private void removePlayer(Player plr) {
+		if(plr.Privatechat != 2) { //PM System
+			for(int i = 1; i &lt; maxPlayers; i++) {
+				if (players[i] == null || players[i].isActive == false) continue;
+				players[i].pmupdate(plr.playerId, 0);
+			}
+		}
+		// anything can be done here like unlinking this player structure from any of the other existing structures
+		plr.destruct();
+	}
+
+public boolean savechar(Player plr) {
+		BufferedWriter characterfile = null;
+		try {
+			characterfile = new BufferedWriter(new FileWriter(&quot;./characters/&quot;+plr.playerName+&quot;.txt&quot;));
+/*ACCOUNT*/
+			characterfile.write(&quot;[ACCOUNT]&quot;, 0, 9);
+			characterfile.newLine();
+			characterfile.write(&quot;character-username = &quot;, 0, 21);
+			characterfile.write(plr.playerName, 0, plr.playerName.length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-password = &quot;, 0, 21);
+			characterfile.write(plr.playerPass, 0, plr.playerPass.length());
+			characterfile.newLine();
+			characterfile.newLine();
+/*CHARACTER*/
+			characterfile.write(&quot;[CHARACTER]&quot;, 0, 11);
+			characterfile.newLine();
+			characterfile.write(&quot;character-height = &quot;, 0, 19);
+			characterfile.write(Integer.toString(plr.heightLevel), 0, Integer.toString(plr.heightLevel).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-posx = &quot;, 0, 17);
+			characterfile.write(Integer.toString(plr.absX), 0, Integer.toString(plr.absX).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-posy = &quot;, 0, 17);
+			characterfile.write(Integer.toString(plr.absY), 0, Integer.toString(plr.absY).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-rights = &quot;, 0, 19);
+			characterfile.write(Integer.toString(plr.playerRights), 0, Integer.toString(plr.playerRights).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-ismember = &quot;, 0, 21);
+			characterfile.write(Integer.toString(plr.playerIsMember), 0, Integer.toString(plr.playerIsMember).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-messages = &quot;, 0, 21);
+			characterfile.write(Integer.toString(plr.playerMessages), 0, Integer.toString(plr.playerMessages).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-lastconnection = &quot;, 0, 27);
+			characterfile.write(plr.playerLastConnect, 0, plr.playerLastConnect.length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-lastlogin = &quot;, 0, 22);
+			characterfile.write(Integer.toString(plr.playerLastLogin), 0, Integer.toString(plr.playerLastLogin).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-energy = &quot;, 0, 19);
+			characterfile.write(Integer.toString(plr.playerEnergy), 0, Integer.toString(plr.playerEnergy).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-gametime = &quot;, 0, 21);
+			characterfile.write(Integer.toString(plr.playerGameTime), 0, Integer.toString(plr.playerGameTime).length());
+			characterfile.newLine();
+			characterfile.write(&quot;character-gamecount = &quot;, 0, 22);
+			characterfile.write(Integer.toString(plr.playerGameCount), 0, Integer.toString(plr.playerGameCount).length());
+			characterfile.newLine();
+			characterfile.newLine();
+/*EQUIPMENT*/
+			characterfile.write(&quot;[EQUIPMENT]&quot;, 0, 11);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.playerEquipment.length; i++) {
+				characterfile.write(&quot;character-equip = &quot;, 0, 18);
+				characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.write(Integer.toString(plr.playerEquipment[i]), 0, Integer.toString(plr.playerEquipment[i]).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.write(Integer.toString(plr.playerEquipmentN[i]), 0, Integer.toString(plr.playerEquipmentN[i]).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.newLine();
+			}
+			characterfile.newLine();
+/*LOOK*/
+			characterfile.write(&quot;[LOOK]&quot;, 0, 6);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.playerLook.length; i++) {
+				characterfile.write(&quot;character-look = &quot;, 0, 17);
+				characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.write(Integer.toString(plr.playerLook[i]), 0, Integer.toString(plr.playerLook[i]).length());
+				characterfile.newLine();
+			}
+			characterfile.newLine();
+/*SKILLS*/
+			characterfile.write(&quot;[SKILLS]&quot;, 0, 8);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.playerLevel.length; i++) {
+				characterfile.write(&quot;character-skill = &quot;, 0, 18);
+				characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.write(Integer.toString(plr.playerLevel[i]), 0, Integer.toString(plr.playerLevel[i]).length());
+				characterfile.write(&quot;	&quot;, 0, 1);
+				characterfile.write(Integer.toString(plr.playerXP[i]), 0, Integer.toString(plr.playerXP[i]).length());
+				characterfile.newLine();
+			}
+			characterfile.newLine();
+/*ITEMS*/
+			characterfile.write(&quot;[ITEMS]&quot;, 0, 7);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.playerItems.length; i++) {
+				if (plr.playerItems[i] &gt; 0) {
+					characterfile.write(&quot;character-item = &quot;, 0, 17);
+					characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Integer.toString(plr.playerItems[i]), 0, Integer.toString(plr.playerItems[i]).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Integer.toString(plr.playerItemsN[i]), 0, Integer.toString(plr.playerItemsN[i]).length());
+					characterfile.newLine();
+				}
+			}
+			characterfile.newLine();
+/*BANK*/
+			characterfile.write(&quot;[BANK]&quot;, 0, 6);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.bankItems.length; i++) {
+				if (plr.bankItems[i] &gt; 0) {
+					characterfile.write(&quot;character-bank = &quot;, 0, 17);
+					characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Integer.toString(plr.bankItems[i]), 0, Integer.toString(plr.bankItems[i]).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Integer.toString(plr.bankItemsN[i]), 0, Integer.toString(plr.bankItemsN[i]).length());
+					characterfile.newLine();
+				}
+			}
+			characterfile.newLine();
+/*FRIENDS*/
+			characterfile.write(&quot;[FRIENDS]&quot;, 0, 9);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.friends.length; i++) {
+				if (plr.friends[i] &gt; 0) {
+					characterfile.write(&quot;character-friend = &quot;, 0, 19);
+					characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Long.toString(plr.friends[i]), 0, Long.toString(plr.friends[i]).length());
+					characterfile.newLine();
+				}
+			}
+			characterfile.newLine();
+/*IGNORES*/
+			characterfile.write(&quot;[IGNORES]&quot;, 0, 9);
+			characterfile.newLine();
+			for (int i = 0; i &lt; plr.ignores.length; i++) {
+				if (plr.ignores[i] &gt; 0) {
+					characterfile.write(&quot;character-ignore = &quot;, 0, 19);
+					characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());
+					characterfile.write(&quot;	&quot;, 0, 1);
+					characterfile.write(Long.toString(plr.ignores[i]), 0, Long.toString(plr.ignores[i]).length());
+					characterfile.newLine();
+				}
+			}
+			characterfile.newLine();
+/*EOF*/
+			characterfile.write(&quot;[EOF]&quot;, 0, 5);
+			characterfile.newLine();
+			characterfile.newLine();
+			characterfile.close();
+		} catch(IOException ioexception) {
+			misc.println(plr.playerName+&quot;: error writing file.&quot;);
+			return false;
+		}
+		return true;
+	}
+	public boolean saveGame(Player plr)
+	{
+		PlayerSave tempSave = new PlayerSave(plr);
+		try
+		{
+			ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(&quot;./savedGames/&quot;+tempSave.playerName+&quot;.dat&quot;));
+			out.writeObject((PlayerSave)tempSave);
+			out.close();
+		}
+		catch(Exception e){
+			return false;
+		}
+		return true;
+	}
+
+	public void println_debug(String str, int ID, String Name) {
+		System.out.println(&quot;[client-&quot;+ID+&quot;-&quot;+Name+&quot;]: &quot;+str);
+	}
+}</description>
+    
+    <lastBuildDate>Mon, 10 Nov 2008 03:33:57 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@ziplock ziplock]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ziplock">@ziplock</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“roguex, post:8, topic:75484”]The last close brace at the end of the file has no open brace, which really should give you a parse error but you must be running slightly older JDK, try these.<br>
+1st<br>
+<a href="http://roguex.com/playerhandler1.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler1.txt</a></p>
+<p>2nd<br>
+<a href="http://roguex.com/playerhandler2.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler2.txt</a></p>
+<p>Let me know if they help?[/quote]</p>
+<p>Your fucking stupid… that guy quit…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/11</link>
+        <pubDate>Mon, 10 Nov 2008 03:33:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-11</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@roguex roguex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/roguex">@roguex</a> wrote:</p>
+          <blockquote>
+              <p>Don’t know why it showed up on the server help on first page then  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=6" title=":confused:" class="emoji" alt=":confused:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/10</link>
+        <pubDate>Mon, 10 Nov 2008 03:00:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-10</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@_Rich Rich]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rich">@_Rich</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“roguex, post:8, topic:75484”]The last close brace at the end of the file has no open brace, which really should give you a parse error but you must be running slightly older JDK, try these.<br>
+1st<br>
+<a href="http://roguex.com/playerhandler1.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler1.txt</a></p>
+<p>2nd<br>
+<a href="http://roguex.com/playerhandler2.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler2.txt</a></p>
+<p>Let me know if they help?[/quote]</p>
+<p>He doesn’t care, as you bumped a year and a half old topic.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/9</link>
+        <pubDate>Mon, 10 Nov 2008 02:52:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-9</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@roguex roguex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/roguex">@roguex</a> wrote:</p>
+          <blockquote>
+              <p>The last close brace at the end of the file has no open brace, which really should give you a parse error but you must be running slightly older JDK, try these.<br>
+1st<br>
+<a href="http://roguex.com/playerhandler1.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler1.txt</a></p>
+<p>2nd<br>
+<a href="http://roguex.com/playerhandler2.txt" class="onebox" target="_blank" rel="nofollow noopener">http://roguex.com/playerhandler2.txt</a></p>
+<p>Let me know if they help?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/8</link>
+        <pubDate>Mon, 10 Nov 2008 02:52:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-8</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@h4xx0rz h4xx0rz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/h4xx0rz">@h4xx0rz</a> wrote:</p>
+          <blockquote>
+              <p>wont work…still…read what the error says up top- the screenshot</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/7</link>
+        <pubDate>Sat, 07 Apr 2007 01:46:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-7</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@tythus tythus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tythus">@tythus</a> wrote:</p>
+          <blockquote>
+              <p>Use The File</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/6</link>
+        <pubDate>Sat, 07 Apr 2007 01:35:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-6</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@h4xx0rz h4xx0rz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/h4xx0rz">@h4xx0rz</a> wrote:</p>
+          <blockquote>
+              <p>edit* still wont work</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/5</link>
+        <pubDate>Sat, 07 Apr 2007 01:28:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-5</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@bib bib]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bib">@bib</a> wrote:</p>
+          <blockquote>
+              <p>np it worked?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/4</link>
+        <pubDate>Sat, 07 Apr 2007 01:27:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-4</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@h4xx0rz h4xx0rz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/h4xx0rz">@h4xx0rz</a> wrote:</p>
+          <blockquote>
+              <p>omg ty!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/3</link>
+        <pubDate>Sat, 07 Apr 2007 01:26:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-3</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@bib bib]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bib">@bib</a> wrote:</p>
+          <blockquote>
+              <p>here take mine… [code]import <a href="http://java.io" rel="nofollow noopener">java.io</a>.*;<br>
+import java.util.Calendar;<br>
+import java.util.GregorianCalendar;</p>
+<p>public class PlayerHandler {</p>
+<pre><code>// Remark: the player structures are just a temporary solution for now
+// Later we will avoid looping through all the players for each player
+// by making use of a hash table maybe based on map regions (8x8 granularity should be ok)
+public static final int maxPlayers = 200;
+public static Player players[] = new Player[maxPlayers];
+public int playerSlotSearchStart = 1;			// where we start searching at when adding a new player
+public static String kickNick = "";
+public static boolean kickAllPlayers = false;
+public static String messageToAll = "";
+public static int playerCount=0;
+public static String playersCurrentlyOn[] = new String[maxPlayers];
+public static boolean updateAnnounced;
+public static boolean updateRunning;
+public static int updateSeconds;
+public static long updateStartTime;
+
+PlayerHandler() {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		players[i] = null;
+	}
+}
+
+// a new client connected
+public void newPlayerClient(java.net.Socket s, String connectedFrom) {
+	// first, search for a free slot
+	//int slot = -1, i = playerSlotSearchStart;
+	int slot = -1, i = 1;
+	do {
+		if(players[i] == null) {
+			slot = i;
+			break;
+		}
+		i++;
+		if(i &gt;= maxPlayers) i = 0;		// wrap around
+</code></pre>
+<p>//		} while(i != playerSlotSearchStart);<br>
+} while(i &lt;= maxPlayers);</p>
+<pre><code>	client newClient = new client(s, slot);
+	newClient.handler = this;
+	(new Thread(newClient)).start();
+	if(slot == -1) return;		// no free slot found - world is full
+	players[slot] = newClient;
+	players[slot].connectedFrom = connectedFrom;
+            updatePlayerNames();
+
+	// start at next slot when issuing the next search to speed it up
+	playerSlotSearchStart = slot + 1;
+	if(playerSlotSearchStart &gt; maxPlayers) playerSlotSearchStart = 1;
+	// Note that we don't use slot 0 because playerId zero does not function
+	// properly with the client.
+}
+
+public void destruct() {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null) continue;
+		players[i].destruct();
+		players[i] = null;
+	}
+}
+
+public static int getPlayerCount() {
+	return playerCount;
+}
+
+public void updatePlayerNames(){
+	playerCount=0;
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] != null) {
+			playersCurrentlyOn[i] = players[i].playerName;
+                            playerCount++;
+		}
+		else {
+			playersCurrentlyOn[i] = "";
+                    }
+	}
+}
+
+public static boolean isPlayerOn(String playerName) {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(playersCurrentlyOn[i] != null){
+			if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return true;
+		}
+	}
+	return false;
+}
+
+public static int getPlayerID(String playerName) 
+</code></pre>
+<p>{<br>
+for(int i = 0; i &lt; maxPlayers; i++)<br>
+{<br>
+if(playersCurrentlyOn[i] != null)<br>
+{<br>
+if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return i;<br>
+}<br>
+}<br>
+return -1;<br>
+}</p>
+<pre><code>public void process() {
+	if (messageToAll.length() &gt; 0) {
+		int msgTo=1;
+		do {
+			if(players[msgTo] != null) {
+				players[msgTo].globalMessage=messageToAll;
+			}
+			msgTo++;
+		} while(msgTo &lt; maxPlayers);
+		messageToAll="";
+	}
+	if (kickAllPlayers == true) {
+		int kickID = 1;
+		do {
+			if(players[kickID] != null) {
+				players[kickID].isKicked = true;
+			}
+			kickID++;
+		} while(kickID &lt; maxPlayers);
+		kickAllPlayers = false;
+	}
+
+	// at first, parse all the incoming data
+	// this has to be seperated from the outgoing part because we have to keep all the player data
+	// static, so each client gets exactly the same and not the one clients are ahead in time
+	// than the other ones.
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		players[i].actionAmount--;
+
+		players[i].preProcessing();
+		while(players[i].process());
+		players[i].postProcessing();
+
+		players[i].getNextPlayerMovement();
+
+		if(players[i].playerName.equalsIgnoreCase(kickNick))
+		{
+			players[i].kick();
+			kickNick="";
+		}
+		
+		if(players[i].disconnected) {
+                      	for(int i2 = 0; i2 &lt; server.npcHandler.maxNPCs; i2++) {
+                    if(server.npcHandler.npcs[i2] != null &amp;&amp; players[i] != null) {
+		if(server.npcHandler.npcs[i2].followPlayer == players[i].playerId &amp;&amp; server.npcHandler.npcs[i2] != null)
+	         server.npcHandler.npcs[i2].IsDead = true;
+                            } 
+                            }
+			if (players[i].savefile == true) {
+				if(saveGame(players[i])){
+                                            playerCount--;
+                                            savechar(players[i]);
+    					System.out.println("Game saved for player "+players[i].playerName);
+				} else {
+					System.out.println("Could not save for "+players[i].playerName);
+				};
+			} else {
+				System.out.println("Did not save for "+players[i].playerName);
+			}
+			removePlayer(players[i]);
+			players[i] = null;
+		}
+	}
+
+	// loop through all players and do the updating stuff
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		Calendar cal = new GregorianCalendar();
+		int day = cal.get(Calendar.DAY_OF_MONTH);
+		int month = cal.get(Calendar.MONTH);
+		int year = cal.get(Calendar.YEAR);
+		int calc = ((year * 10000) + (month * 100) + day);
+		players[i].playerLastLogin = calc;
+		if(players[i].disconnected) {
+                      	for(int i3 = 0; i3 &lt; server.npcHandler.maxNPCs; i3++) {
+                            if(server.npcHandler.npcs[i3] != null &amp;&amp; players[i] != null) {
+		if(server.npcHandler.npcs[i3].followPlayer == players[i].playerId)
+	         server.npcHandler.npcs[i3].IsDead = true;
+                            } 
+                            }
+			if (players[i].savefile == true) {
+				if(saveGame(players[i])) {
+                                            playerCount--;
+                                            savechar(players[i]);
+					System.out.println("Game saved for player "+players[i].playerName);
+				} else {
+					System.out.println("Could not save for "+players[i].playerName);
+				};
+			} else {
+				System.out.println("Did not save for "+players[i].playerName);
+			}
+			removePlayer(players[i]);
+			players[i] = null;
+		} else {
+			if(!players[i].initialized) {
+				players[i].initialize();
+				players[i].initialized = true;
+			} else {
+				players[i].update();
+			}
+		}
+	}
+
+	if (updateRunning &amp;&amp; !updateAnnounced) {
+		updateAnnounced = true;
+	}
+
+	if (updateRunning &amp;&amp; System.currentTimeMillis() - updateStartTime &gt; (updateSeconds*1000)) {
+		kickAllPlayers = true;
+		server.ShutDown = true;
+	}
+
+	// post processing
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		players[i].clearUpdateFlags();
+	}
+}
+
+public void updateNPC(Player plr, stream str) {
+	updateBlock.currentOffset = 0;
+	
+	str.createFrameVarSizeWord(65);
+	str.initBitAccess();
+	
+	str.writeBits(8, plr.npcListSize);
+	int size = plr.npcListSize;
+	plr.npcListSize = 0;
+	for(int i = 0; i &lt; size; i++) {
+		if(plr.RebuildNPCList == false &amp;&amp; plr.withinDistance(plr.npcList[i]) == true) {
+			plr.npcList[i].updateNPCMovement(str);
+			plr.npcList[i].appendNPCUpdateBlock(updateBlock);
+			plr.npcList[plr.npcListSize++] = plr.npcList[i];
+		} else {
+			int id = plr.npcList[i].npcId;
+			plr.npcInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+			str.writeBits(1, 1);
+			str.writeBits(2, 3);		// tells client to remove this npc from list
+		}
+	}
+
+	// iterate through all npcs to check whether there's new npcs to add
+	for(int i = 0; i &lt; NPCHandler.maxNPCs; i++) {
+		if(server.npcHandler.npcs[i] != null) {
+			int id = server.npcHandler.npcs[i].npcId;
+			if (plr.RebuildNPCList == false &amp;&amp; (plr.npcInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+				// npc already in npcList
+			} else if (plr.withinDistance(server.npcHandler.npcs[i]) == false) {
+				// out of sight
+			} else {
+				plr.addNewNPC(server.npcHandler.npcs[i], str, updateBlock);
+			}
+		}
+	}
+	
+	plr.RebuildNPCList = false;
+
+	if(updateBlock.currentOffset &gt; 0) {
+		str.writeBits(14, 16383);	// magic EOF - needed only when npc updateblock follows
+		str.finishBitAccess();
+
+		// append update block
+		str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+	} else {
+		str.finishBitAccess();
+	}
+	str.endFrameVarSizeWord();
+}
+
+private stream updateBlock = new stream(new byte[10000]);
+// should actually be moved to client.java because it's very client specific
+public void updatePlayer(Player plr, stream str) {
+	updateBlock.currentOffset = 0;
+	
+	if (updateRunning &amp;&amp; !updateAnnounced) {
+		str.createFrame(114);
+		str.writeWordBigEndian(updateSeconds*50/30);
+	}
+
+	// update thisPlayer
+	plr.updateThisPlayerMovement(str);		// handles walking/running and teleporting
+	// do NOT send chat text back to thisPlayer!
+	boolean saveChatTextUpdate = plr.chatTextUpdateRequired;
+	plr.chatTextUpdateRequired = false;
+	plr.appendPlayerUpdateBlock(updateBlock);
+	plr.chatTextUpdateRequired = saveChatTextUpdate;
+
+	str.writeBits(8, plr.playerListSize);
+	int size = plr.playerListSize;
+
+	// update/remove players that are already in the playerList
+	plr.playerListSize = 0;		// we're going to rebuild the list right away
+	for(int i = 0; i &lt; size; i++) {
+		// this update packet does not support teleporting of other players directly
+		// instead we're going to remove this player here and readd it right away below
+		if(plr.didTeleport == false &amp;&amp; plr.withinDistance(plr.playerList[i]) == true) {
+			plr.playerList[i].updatePlayerMovement(str);
+			plr.playerList[i].appendPlayerUpdateBlock(updateBlock);
+			plr.playerList[plr.playerListSize++] = plr.playerList[i];
+		} else {
+			int id = plr.playerList[i].playerId;
+			plr.playerInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+			str.writeBits(1, 1);
+			str.writeBits(2, 3);		// tells client to remove this char from list
+		}
+	}
+
+	// iterate through all players to check whether there's new players to add
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || players[i].isActive == false || players[i] == plr) {
+			//not existing, not active or you are that player
+		} else {
+			int id = players[i].playerId;
+			if(plr.didTeleport == false &amp;&amp; (plr.playerInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+				// player already in playerList
+			} else if(plr.withinDistance(players[i]) == false) {
+				// out of sight
+			} else {
+				plr.addNewPlayer(players[i], str, updateBlock);
+			}
+		}
+	}
+
+	if(updateBlock.currentOffset &gt; 0) {
+		str.writeBits(11, 2047);	// magic EOF - needed only when player updateblock follows
+		str.finishBitAccess();
+
+		// append update block
+		str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+	} else {
+		str.finishBitAccess();
+	}
+	str.endFrameVarSizeWord();
+}
+
+public int lastchatid = 1; //PM System
+
+private void removePlayer(Player plr) {
+	if(plr.Privatechat != 2) { //PM System
+		for(int i = 1; i &lt; maxPlayers; i++) {
+			if (players[i] == null || players[i].isActive == false) continue;
+			players[i].pmupdate(plr.playerId, 0);
+		}
+	}
+	// anything can be done here like unlinking this player structure from any of the other existing structures
+	plr.destruct();
+}
+</code></pre>
+<p>public boolean savechar(Player plr) {<br>
+BufferedWriter characterfile = null;<br>
+try {<br>
+characterfile = new BufferedWriter(new FileWriter("./characters/"+plr.playerName+".txt"));<br>
+/<em>ACCOUNT</em>/<br>
+characterfile.write("[ACCOUNT]", 0, 9);<br>
+characterfile.newLine();<br>
+characterfile.write("character-username = ", 0, 21);<br>
+characterfile.write(plr.playerName, 0, plr.playerName.length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-password = “, 0, 21);<br>
+characterfile.write(plr.playerPass, 0, plr.playerPass.length());<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+/<em>CHARACTER</em>/<br>
+characterfile.write(”[CHARACTER]”, 0, 11);<br>
+characterfile.newLine();<br>
+characterfile.write("character-height = ", 0, 19);<br>
+characterfile.write(Integer.toString(plr.heightLevel), 0, Integer.toString(plr.heightLevel).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-posx = ", 0, 17);<br>
+characterfile.write(Integer.toString(plr.absX), 0, Integer.toString(plr.absX).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-posy = ", 0, 17);<br>
+characterfile.write(Integer.toString(plr.absY), 0, Integer.toString(plr.absY).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-rights = ", 0, 19);<br>
+characterfile.write(Integer.toString(plr.playerRights), 0, Integer.toString(plr.playerRights).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-ismember = ", 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerIsMember), 0, Integer.toString(plr.playerIsMember).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-messages = ", 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerMessages), 0, Integer.toString(plr.playerMessages).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-lastconnection = ", 0, 27);<br>
+characterfile.write(plr.playerLastConnect, 0, plr.playerLastConnect.length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-lastlogin = “, 0, 22);<br>
+characterfile.write(Integer.toString(plr.playerLastLogin), 0, Integer.toString(plr.playerLastLogin).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-energy = “, 0, 19);<br>
+characterfile.write(Integer.toString(plr.playerEnergy), 0, Integer.toString(plr.playerEnergy).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-gametime = “, 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerGameTime), 0, Integer.toString(plr.playerGameTime).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-gamecount = “, 0, 22);<br>
+characterfile.write(Integer.toString(plr.playerGameCount), 0, Integer.toString(plr.playerGameCount).length());<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+/<em>EQUIPMENT</em>/<br>
+characterfile.write(”[EQUIPMENT]”, 0, 11);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerEquipment.length; i++) {<br>
+characterfile.write(“character-equip = “, 0, 18);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerEquipment[i]), 0, Integer.toString(plr.playerEquipment[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerEquipmentN[i]), 0, Integer.toString(plr.playerEquipmentN[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>LOOK</em>/<br>
+characterfile.write(”[LOOK]”, 0, 6);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerLook.length; i++) {<br>
+characterfile.write(“character-look = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerLook[i]), 0, Integer.toString(plr.playerLook[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>SKILLS</em>/<br>
+characterfile.write(”[SKILLS]”, 0, 8);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerLevel.length; i++) {<br>
+characterfile.write(“character-skill = “, 0, 18);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerLevel[i]), 0, Integer.toString(plr.playerLevel[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerXP[i]), 0, Integer.toString(plr.playerXP[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>ITEMS</em>/<br>
+characterfile.write(”[ITEMS]”, 0, 7);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerItems.length; i++) {<br>
+if (plr.playerItems[i] &gt; 0) {<br>
+characterfile.write(“character-item = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerItems[i]), 0, Integer.toString(plr.playerItems[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerItemsN[i]), 0, Integer.toString(plr.playerItemsN[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>BANK</em>/<br>
+characterfile.write(”[BANK]”, 0, 6);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.bankItems.length; i++) {<br>
+if (plr.bankItems[i] &gt; 0) {<br>
+characterfile.write(“character-bank = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.bankItems[i]), 0, Integer.toString(plr.bankItems[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.bankItemsN[i]), 0, Integer.toString(plr.bankItemsN[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>FRIENDS</em>/<br>
+characterfile.write(”[FRIENDS]”, 0, 9);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.friends.length; i++) {<br>
+if (plr.friends[i] &gt; 0) {<br>
+characterfile.write(“character-friend = “, 0, 19);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Long.toString(plr.friends[i]), 0, Long.toString(plr.friends[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>IGNORES</em>/<br>
+characterfile.write(”[IGNORES]”, 0, 9);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.ignores.length; i++) {<br>
+if (plr.ignores[i] &gt; 0) {<br>
+characterfile.write(“character-ignore = “, 0, 19);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Long.toString(plr.ignores[i]), 0, Long.toString(plr.ignores[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>EOF</em>/<br>
+characterfile.write(”[EOF]”, 0, 5);<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+characterfile.close();<br>
+} catch(IOException ioexception) {<br>
+misc.println(plr.playerName+”: error writing file.”);<br>
+return false;<br>
+}<br>
+return true;<br>
+}<br>
+public boolean saveGame(Player plr)<br>
+{<br>
+PlayerSave tempSave = new PlayerSave(plr);<br>
+try<br>
+{<br>
+ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(”./savedGames/”+tempSave.playerName+”.dat”));<br>
+out.writeObject((PlayerSave)tempSave);<br>
+out.close();<br>
+}<br>
+catch(Exception e){<br>
+return false;<br>
+}<br>
+return true;<br>
+}</p>
+<pre><code>public void println_debug(String str, int ID, String Name) {
+	System.out.println("[client-"+ID+"-"+Name+"]: "+str);
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/2</link>
+        <pubDate>Sat, 07 Apr 2007 01:25:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-2</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+      <item>
+        <title>Any good coders want a challenge? Fix my playerhandler!</title>
+        <dc:creator><![CDATA[@h4xx0rz h4xx0rz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/h4xx0rz">@h4xx0rz</a> wrote:</p>
+          <blockquote>
+              <p>this is the only thing keeping my server from having it’s grand-opening! my freaking playerhandler isnt working. Here it is, can someoen find the problem:</p>
+<p>import <a href="http://java.io" rel="nofollow noopener">java.io</a>.*;<br>
+import java.util.Calendar;<br>
+import java.util.GregorianCalendar;</p>
+<p>public class PlayerHandler {</p>
+<pre><code>// Remark: the player structures are just a temporary solution for now
+// Later we will avoid looping through all the players for each player
+// by making use of a hash table maybe based on map regions (8x8 granularity should be ok)
+public static final int maxPlayers = 200;
+public static Player players[] = new Player[maxPlayers];
+public int playerSlotSearchStart = 1;			// where we start searching at when adding a new player
+public static String kickNick = "";
+public static boolean kickAllPlayers = false;
+public static String messageToAll = "";
+public static int playerCount=0;
+public static String playersCurrentlyOn[] = new String[maxPlayers];
+public static boolean updateAnnounced;
+public static boolean updateRunning;
+public static int updateSeconds;
+public static long updateStartTime;
+
+PlayerHandler() {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		players[i] = null;
+	}
+}
+
+// a new client connected
+public void newPlayerClient(java.net.Socket s, String connectedFrom) {
+	// first, search for a free slot
+	//int slot = -1, i = playerSlotSearchStart;
+	int slot = -1, i = 1;
+	do {
+		if(players[i] == null) {
+			slot = i;
+			break;
+		}
+		i++;
+		if(i &gt;= maxPlayers) i = 0;		// wrap around
+</code></pre>
+<p>//		} while(i != playerSlotSearchStart);<br>
+} while(i &lt;= maxPlayers);</p>
+<pre><code>	client newClient = new client(s, slot);
+	newClient.handler = this;
+	(new Thread(newClient)).start();
+	if(slot == -1) return;		// no free slot found - world is full
+	players[slot] = newClient;
+	players[slot].connectedFrom = connectedFrom;
+            updatePlayerNames();
+
+	// start at next slot when issuing the next search to speed it up
+	playerSlotSearchStart = slot + 1;
+	if(playerSlotSearchStart &gt; maxPlayers) playerSlotSearchStart = 1;
+	// Note that we don't use slot 0 because playerId zero does not function
+	// properly with the client.
+}
+
+public void destruct() {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null) continue;
+		players[i].destruct();
+		players[i] = null;
+	}
+}
+
+public static int getPlayerCount() {
+	return playerCount;
+}
+
+public void updatePlayerNames(){
+	playerCount=0;
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] != null) {
+			playersCurrentlyOn[i] = players[i].playerName;
+                            playerCount++;
+		}
+		else {
+			playersCurrentlyOn[i] = "";
+                    }
+	}
+}
+
+public static boolean isPlayerOn(String playerName) {
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(playersCurrentlyOn[i] != null){
+			if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return true;
+		}
+	}
+	return false;
+}
+
+public static int getPlayerID(String playerName) 
+</code></pre>
+<p>{<br>
+for(int i = 0; i &lt; maxPlayers; i++)<br>
+{<br>
+if(playersCurrentlyOn[i] != null)<br>
+{<br>
+if(playersCurrentlyOn[i].equalsIgnoreCase(playerName)) return i;<br>
+}<br>
+}<br>
+return -1;<br>
+}</p>
+<pre><code>public void process() {
+	if (messageToAll.length() &gt; 0) {
+		int msgTo=1;
+		do {
+			if(players[msgTo] != null) {
+				players[msgTo].globalMessage=messageToAll;
+			}
+			msgTo++;
+		} while(msgTo &lt; maxPlayers);
+		messageToAll="";
+	}
+	if (kickAllPlayers == true) {
+		int kickID = 1;
+		do {
+			if(players[kickID] != null) {
+				players[kickID].isKicked = true;
+			}
+			kickID++;
+		} while(kickID &lt; maxPlayers);
+		kickAllPlayers = false;
+	}
+
+	// at first, parse all the incoming data
+	// this has to be seperated from the outgoing part because we have to keep all the player data
+	// static, so each client gets exactly the same and not the one clients are ahead in time
+	// than the other ones.
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		players[i].actionAmount--;
+
+		players[i].preProcessing();
+		while(players[i].process());
+		players[i].postProcessing();
+
+		players[i].getNextPlayerMovement();
+
+		if(players[i].playerName.equalsIgnoreCase(kickNick))
+		{
+			players[i].kick();
+			kickNick="";
+		}
+		
+		if(players[i].disconnected) {
+                      	for(int i2 = 0; i2 &lt; server.npcHandler.maxNPCs; i2++) {
+                    if(server.npcHandler.npcs[i2] != null &amp;&amp; players[i] != null) {
+		if(server.npcHandler.npcs[i2].followPlayer == players[i].playerId &amp;&amp; server.npcHandler.npcs[i2] != null)
+	         server.npcHandler.npcs[i2].IsDead = true;
+                            } 
+                            }
+			if (players[i].savefile == true) {
+				if(saveGame(players[i])){
+                                            playerCount--;
+                                            savechar(players[i]);
+    					System.out.println("Game saved for player "+players[i].playerName);
+				} else {
+					System.out.println("Could not save for "+players[i].playerName);
+				};
+			} else {
+				System.out.println("Did not save for "+players[i].playerName);
+			}
+			removePlayer(players[i]);
+			players[i] = null;
+		}
+	}
+
+	// loop through all players and do the updating stuff
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		Calendar cal = new GregorianCalendar();
+		int day = cal.get(Calendar.DAY_OF_MONTH);
+		int month = cal.get(Calendar.MONTH);
+		int year = cal.get(Calendar.YEAR);
+		int calc = ((year * 10000) + (month * 100) + day);
+		players[i].playerLastLogin = calc;
+		if(players[i].disconnected) {
+                      	for(int i3 = 0; i3 &lt; server.npcHandler.maxNPCs; i3++) {
+                            if(server.npcHandler.npcs[i3] != null &amp;&amp; players[i] != null) {
+		if(server.npcHandler.npcs[i3].followPlayer == players[i].playerId)
+	         server.npcHandler.npcs[i3].IsDead = true;
+                            } 
+                            }
+			if (players[i].savefile == true) {
+				if(saveGame(players[i])) {
+                                            playerCount--;
+                                            savechar(players[i]);
+					System.out.println("Game saved for player "+players[i].playerName);
+				} else {
+					System.out.println("Could not save for "+players[i].playerName);
+				};
+			} else {
+				System.out.println("Did not save for "+players[i].playerName);
+			}
+			removePlayer(players[i]);
+			players[i] = null;
+		} else {
+			if(!players[i].initialized) {
+				players[i].initialize();
+				players[i].initialized = true;
+			} else {
+				players[i].update();
+			}
+		}
+	}
+
+	if (updateRunning &amp;&amp; !updateAnnounced) {
+		updateAnnounced = true;
+	}
+
+	if (updateRunning &amp;&amp; System.currentTimeMillis() - updateStartTime &gt; (updateSeconds*1000)) {
+		kickAllPlayers = true;
+		server.ShutDown = true;
+	}
+
+	// post processing
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || !players[i].isActive) continue;
+
+		players[i].clearUpdateFlags();
+	}
+}
+
+public void updateNPC(Player plr, stream str) {
+	updateBlock.currentOffset = 0;
+	
+	str.createFrameVarSizeWord(65);
+	str.initBitAccess();
+	
+	str.writeBits(8, plr.npcListSize);
+	int size = plr.npcListSize;
+	plr.npcListSize = 0;
+	for(int i = 0; i &lt; size; i++) {
+		if(plr.RebuildNPCList == false &amp;&amp; plr.withinDistance(plr.npcList[i]) == true) {
+			plr.npcList[i].updateNPCMovement(str);
+			plr.npcList[i].appendNPCUpdateBlock(updateBlock);
+			plr.npcList[plr.npcListSize++] = plr.npcList[i];
+		} else {
+			int id = plr.npcList[i].npcId;
+			plr.npcInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+			str.writeBits(1, 1);
+			str.writeBits(2, 3);		// tells client to remove this npc from list
+		}
+	}
+
+	// iterate through all npcs to check whether there's new npcs to add
+	for(int i = 0; i &lt; NPCHandler.maxNPCs; i++) {
+		if(server.npcHandler.npcs[i] != null) {
+			int id = server.npcHandler.npcs[i].npcId;
+			if (plr.RebuildNPCList == false &amp;&amp; (plr.npcInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+				// npc already in npcList
+			} else if (plr.withinDistance(server.npcHandler.npcs[i]) == false) {
+				// out of sight
+			} else {
+				plr.addNewNPC(server.npcHandler.npcs[i], str, updateBlock);
+			}
+		}
+	}
+	
+	plr.RebuildNPCList = false;
+
+	if(updateBlock.currentOffset &gt; 0) {
+		str.writeBits(14, 16383);	// magic EOF - needed only when npc updateblock follows
+		str.finishBitAccess();
+
+		// append update block
+		str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+	} else {
+		str.finishBitAccess();
+	}
+	str.endFrameVarSizeWord();
+}
+
+private stream updateBlock = new stream(new byte[10000]);
+// should actually be moved to client.java because it's very client specific
+public void updatePlayer(Player plr, stream str) {
+	updateBlock.currentOffset = 0;
+	
+	if (updateRunning &amp;&amp; !updateAnnounced) {
+		str.createFrame(114);
+		str.writeWordBigEndian(updateSeconds*50/30);
+	}
+
+	// update thisPlayer
+	plr.updateThisPlayerMovement(str);		// handles walking/running and teleporting
+	// do NOT send chat text back to thisPlayer!
+	boolean saveChatTextUpdate = plr.chatTextUpdateRequired;
+	plr.chatTextUpdateRequired = false;
+	plr.appendPlayerUpdateBlock(updateBlock);
+	plr.chatTextUpdateRequired = saveChatTextUpdate;
+
+	str.writeBits(8, plr.playerListSize);
+	int size = plr.playerListSize;
+
+	// update/remove players that are already in the playerList
+	plr.playerListSize = 0;		// we're going to rebuild the list right away
+	for(int i = 0; i &lt; size; i++) {
+		// this update packet does not support teleporting of other players directly
+		// instead we're going to remove this player here and readd it right away below
+		if(plr.didTeleport == false &amp;&amp; plr.withinDistance(plr.playerList[i]) == true) {
+			plr.playerList[i].updatePlayerMovement(str);
+			plr.playerList[i].appendPlayerUpdateBlock(updateBlock);
+			plr.playerList[plr.playerListSize++] = plr.playerList[i];
+		} else {
+			int id = plr.playerList[i].playerId;
+			plr.playerInListBitmap[id&gt;&gt;3] &amp;= ~(1 &lt;&lt; (id&amp;7));		// clear the flag
+			str.writeBits(1, 1);
+			str.writeBits(2, 3);		// tells client to remove this char from list
+		}
+	}
+
+	// iterate through all players to check whether there's new players to add
+	for(int i = 0; i &lt; maxPlayers; i++) {
+		if(players[i] == null || players[i].isActive == false || players[i] == plr) {
+			//not existing, not active or you are that player
+		} else {
+			int id = players[i].playerId;
+			if(plr.didTeleport == false &amp;&amp; (plr.playerInListBitmap[id&gt;&gt;3]&amp;(1 &lt;&lt; (id&amp;7))) != 0) {
+				// player already in playerList
+			} else if(plr.withinDistance(players[i]) == false) {
+				// out of sight
+			} else {
+				plr.addNewPlayer(players[i], str, updateBlock);
+			}
+		}
+	}
+
+	if(updateBlock.currentOffset &gt; 0) {
+		str.writeBits(11, 2047);	// magic EOF - needed only when player updateblock follows
+		str.finishBitAccess();
+
+		// append update block
+		str.writeBytes(updateBlock.buffer, updateBlock.currentOffset, 0);
+	} else {
+		str.finishBitAccess();
+	}
+	str.endFrameVarSizeWord();
+}
+
+public int lastchatid = 1; //PM System
+
+private void removePlayer(Player plr) {
+	if(plr.Privatechat != 2) { //PM System
+		for(int i = 1; i &lt; maxPlayers; i++) {
+			if (players[i] == null || players[i].isActive == false) continue;
+			players[i].pmupdate(plr.playerId, 0);
+		}
+	}
+	// anything can be done here like unlinking this player structure from any of the other existing structures
+	plr.destruct();
+}
+</code></pre>
+<p>public boolean savechar(Player plr) {<br>
+BufferedWriter characterfile = null;<br>
+try {<br>
+characterfile = new BufferedWriter(new FileWriter("./characters/"+plr.playerName+".txt"));<br>
+/<em>ACCOUNT</em>/<br>
+characterfile.write("[ACCOUNT]", 0, 9);<br>
+characterfile.newLine();<br>
+characterfile.write("character-username = ", 0, 21);<br>
+characterfile.write(plr.playerName, 0, plr.playerName.length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-password = “, 0, 21);<br>
+characterfile.write(plr.playerPass, 0, plr.playerPass.length());<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+/<em>CHARACTER</em>/<br>
+characterfile.write(”[CHARACTER]”, 0, 11);<br>
+characterfile.newLine();<br>
+characterfile.write("character-height = ", 0, 19);<br>
+characterfile.write(Integer.toString(plr.heightLevel), 0, Integer.toString(plr.heightLevel).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-posx = ", 0, 17);<br>
+characterfile.write(Integer.toString(plr.absX), 0, Integer.toString(plr.absX).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-posy = ", 0, 17);<br>
+characterfile.write(Integer.toString(plr.absY), 0, Integer.toString(plr.absY).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-rights = ", 0, 19);<br>
+characterfile.write(Integer.toString(plr.playerRights), 0, Integer.toString(plr.playerRights).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-ismember = ", 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerIsMember), 0, Integer.toString(plr.playerIsMember).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-messages = ", 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerMessages), 0, Integer.toString(plr.playerMessages).length());<br>
+characterfile.newLine();<br>
+characterfile.write("character-lastconnection = ", 0, 27);<br>
+characterfile.write(plr.playerLastConnect, 0, plr.playerLastConnect.length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-lastlogin = “, 0, 22);<br>
+characterfile.write(Integer.toString(plr.playerLastLogin), 0, Integer.toString(plr.playerLastLogin).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-energy = “, 0, 19);<br>
+characterfile.write(Integer.toString(plr.playerEnergy), 0, Integer.toString(plr.playerEnergy).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-gametime = “, 0, 21);<br>
+characterfile.write(Integer.toString(plr.playerGameTime), 0, Integer.toString(plr.playerGameTime).length());<br>
+characterfile.newLine();<br>
+characterfile.write(“character-gamecount = “, 0, 22);<br>
+characterfile.write(Integer.toString(plr.playerGameCount), 0, Integer.toString(plr.playerGameCount).length());<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+/<em>EQUIPMENT</em>/<br>
+characterfile.write(”[EQUIPMENT]”, 0, 11);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerEquipment.length; i++) {<br>
+characterfile.write(“character-equip = “, 0, 18);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerEquipment[i]), 0, Integer.toString(plr.playerEquipment[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerEquipmentN[i]), 0, Integer.toString(plr.playerEquipmentN[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>LOOK</em>/<br>
+characterfile.write(”[LOOK]”, 0, 6);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerLook.length; i++) {<br>
+characterfile.write(“character-look = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerLook[i]), 0, Integer.toString(plr.playerLook[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>SKILLS</em>/<br>
+characterfile.write(”[SKILLS]”, 0, 8);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerLevel.length; i++) {<br>
+characterfile.write(“character-skill = “, 0, 18);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerLevel[i]), 0, Integer.toString(plr.playerLevel[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerXP[i]), 0, Integer.toString(plr.playerXP[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+characterfile.newLine();<br>
+/<em>ITEMS</em>/<br>
+characterfile.write(”[ITEMS]”, 0, 7);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.playerItems.length; i++) {<br>
+if (plr.playerItems[i] &gt; 0) {<br>
+characterfile.write(“character-item = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerItems[i]), 0, Integer.toString(plr.playerItems[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.playerItemsN[i]), 0, Integer.toString(plr.playerItemsN[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>BANK</em>/<br>
+characterfile.write(”[BANK]”, 0, 6);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.bankItems.length; i++) {<br>
+if (plr.bankItems[i] &gt; 0) {<br>
+characterfile.write(“character-bank = “, 0, 17);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.bankItems[i]), 0, Integer.toString(plr.bankItems[i]).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Integer.toString(plr.bankItemsN[i]), 0, Integer.toString(plr.bankItemsN[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>FRIENDS</em>/<br>
+characterfile.write(”[FRIENDS]”, 0, 9);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.friends.length; i++) {<br>
+if (plr.friends[i] &gt; 0) {<br>
+characterfile.write(“character-friend = “, 0, 19);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Long.toString(plr.friends[i]), 0, Long.toString(plr.friends[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>IGNORES</em>/<br>
+characterfile.write(”[IGNORES]”, 0, 9);<br>
+characterfile.newLine();<br>
+for (int i = 0; i &lt; plr.ignores.length; i++) {<br>
+if (plr.ignores[i] &gt; 0) {<br>
+characterfile.write(“character-ignore = “, 0, 19);<br>
+characterfile.write(Integer.toString(i), 0, Integer.toString(i).length());<br>
+characterfile.write(”	“, 0, 1);<br>
+characterfile.write(Long.toString(plr.ignores[i]), 0, Long.toString(plr.ignores[i]).length());<br>
+characterfile.newLine();<br>
+}<br>
+}<br>
+characterfile.newLine();<br>
+/<em>EOF</em>/<br>
+characterfile.write(”[EOF]”, 0, 5);<br>
+characterfile.newLine();<br>
+characterfile.newLine();<br>
+characterfile.close();<br>
+} catch(IOException ioexception) {<br>
+misc.println(plr.playerName+”: error writing file.”);<br>
+return false;<br>
+}<br>
+return true;<br>
+}<br>
+public boolean saveGame(Player plr)<br>
+{<br>
+PlayerSave tempSave = new PlayerSave(plr);<br>
+try<br>
+{<br>
+ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(”./savedGames/”+tempSave.playerName+”.dat”));<br>
+out.writeObject((PlayerSave)tempSave);<br>
+out.close();<br>
+}<br>
+catch(Exception e){<br>
+return false;<br>
+}<br>
+return true;<br>
+}</p>
+<pre><code>public void println_debug(String str, int ID, String Name) {
+	System.out.println("[client-"+ID+"-"+Name+"]: "+str);
+}
+</code></pre>
+<p>}</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484/1</link>
+        <pubDate>Sat, 07 Apr 2007 01:15:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-75484-1</guid>
+        <source url="https://forum.moparisthebest.com/t/any-good-coders-want-a-challenge-fix-my-playerhandler/75484.rss">Any good coders want a challenge? Fix my playerhandler!</source>
+      </item>
+  </channel>
+</rss>

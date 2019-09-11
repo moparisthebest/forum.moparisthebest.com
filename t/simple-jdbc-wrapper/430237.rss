@@ -1,0 +1,1320 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Simple JDBC wrapper</title>
+    <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237</link>
+    <description>I needed a way to access database tables as objects without using big libraries like hibernate so I wrote a wrapper structure around JDBC. It may not be perfect but it shows my idea and works good enough for me, if any of you expand/improve it please post it back here :).
+
+[b]Entity.java[/b]
+[CODE]
+package org.sf.freelancer.db.entity;
+
+/**
+ * 
+ * @author rvbiljouw
+ * A class used for generic access to database entities.
+ */
+public interface Entity {
+
+}
+[/CODE]
+
+[b]Table.java[/b]
+[CODE]
+
+package org.sf.freelancer.db.entity;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+/**
+ * 
+ * @author rvbiljouw
+ * A class representing a table in the database.
+ */
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Table {
+
+	public String name();
+	
+}
+[/CODE]
+
+[b]Column.java[/b]
+[CODE]package org.sf.freelancer.db.entity;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Column {
+
+	public String name();
+	
+	public boolean autoincrement() default false;
+
+	public String keyColumn() default &quot;&quot;; // Not yet used, going to be used for linking FK columns with entities
+	
+	public String entity() default &quot;&quot;; // Not yet used, going to be used for linking FK columns with entities
+
+}
+[/CODE]
+
+[b]EntityFactory.java[/b]
+[CODE]package org.sf.freelancer.db.entity;
+
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.sql.*;
+
+import org.sf.freelancer.db.DbConnection;
+
+/**
+ * 
+ * @author rvbiljouw This class manages entities in the database.
+ * @param &lt;T&gt;
+ *            a type that is used for returning.
+ */
+public class EntityFactory&lt;T&gt; {
+	private DbConnection connection;
+	private Class&lt;T&gt; entityClass;
+
+	public EntityFactory(DbConnection connection, Class&lt;T&gt; entityClass) {
+		this.entityClass = entityClass;
+		this.connection = connection;
+
+		System.out.println(entityClass.getAnnotations().length);
+
+		if (!isValid()) {
+
+			for (Annotation annotation : this.entityClass
+					.getDeclaredAnnotations()) {
+				System.out.println(annotation.getClass().getName());
+			}
+
+			throw new RuntimeException(&quot;No idea what to do with &quot;
+					+ this.entityClass.getCanonicalName()
+					+ &quot; as it does not contain a table definition.&quot;);
+		}
+	}
+
+	/**
+	 * Return the connection wrapper that this entity factory is related to.
+	 * 
+	 * @return connection
+	 */
+	public DbConnection getConnection() {
+		return this.connection;
+	}
+
+	/**
+	 * Get the entity class
+	 * 
+	 * @return
+	 */
+	public Class&lt;T&gt; getEntityClass() {
+		return this.entityClass;
+	}
+
+	/**
+	 * Check if the entity has a table definition.
+	 * 
+	 * @return true/false
+	 */
+	private boolean isValid() {
+		return this.entityClass.isAnnotationPresent(Table.class);
+	}
+
+	/**
+	 * Get the name of the table definition
+	 * 
+	 * @return table name
+	 */
+	private String getTableName() {
+		return this.entityClass.getAnnotation(Table.class).name();
+	}
+
+	/**
+	 * Issue an update query for this entity
+	 * 
+	 * @param entity
+	 *            the entity to be updated
+	 * @return the entity updated.
+	 */
+	public boolean create(T entity, String... conditions) {
+		try {
+			Statement query = this.connection.getConnection().createStatement();
+			String queryString = &quot;INSERT INTO &quot; + getTableName() + &quot; &quot;;
+			String columnsString = &quot;(&quot;;
+			String valuesString = &quot; VALUES (&quot;;
+			int fieldCount = 0;
+			for (Field field : this.entityClass.getDeclaredFields()) {
+				if (field.isAnnotationPresent(Column.class)) {
+					Column column = field.getAnnotation(Column.class);
+
+					field.setAccessible(true);
+					if (!column.autoincrement()) {
+						columnsString += column.name()
+								+ (fieldCount == this.entityClass
+										.getDeclaredFields().length - 1 ? &quot;&quot;
+										: &quot;, &quot;);
+
+						valuesString += &quot;&#39;&quot;
+								+ field.get(entity)
+								+ &quot;&#39;&quot;
+								+ (fieldCount == this.entityClass
+										.getDeclaredFields().length - 1 ? &quot;&quot;
+										: &quot;, &quot;);
+					}
+					fieldCount++;
+				}
+			}
+			columnsString += &quot;)&quot;;
+			valuesString += &quot;)&quot;;
+			query.execute(queryString + columnsString + valuesString);
+			return query.getUpdateCount() &gt; 0;
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	/**
+	 * Issue an update query for this entity
+	 * 
+	 * @param entity
+	 *            the entity to be updated
+	 * @return the entity updated.
+	 */
+	public boolean update(T entity, String... conditions) {
+		try {
+			Statement query = this.connection.getConnection().createStatement();
+			String queryString = &quot;UPDATE &quot; + getTableName() + &quot; SET &quot;;
+
+			int fieldCount = 0;
+			for (Field field : this.entityClass.getDeclaredFields()) {
+				if (field.isAnnotationPresent(Column.class)) {
+					Column column = field.getAnnotation(Column.class);
+
+					field.setAccessible(true);
+					if (!column.autoincrement()) {
+
+						queryString += column.name()
+								+ &quot;=&#39;&quot;
+								+ field.get(entity)
+								+ &quot;&#39;&quot;
+								+ (fieldCount == this.entityClass
+										.getDeclaredFields().length - 1 ? &quot;&quot;
+										: &quot;,&quot;) + &quot; &quot;;
+					}
+					fieldCount++;
+				}
+			}
+
+			return query.executeUpdate(queryString
+					+ concatenateQueryConditions(conditions)) &gt; 0;
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	/**
+	 * Fetch a single result from the table
+	 * 
+	 * @param conditions
+	 *            selection conditions
+	 * @return entity
+	 */
+	public T get(String... conditions) {
+		try {
+			Statement query = this.connection.getConnection().createStatement();
+			if (!query.execute(&quot;SELECT * FROM &quot; + this.getTableName() + &quot; &quot;
+					+ concatenateQueryConditions(conditions))) {
+				return null;
+			} else {
+				ResultSet resultSet = query.getResultSet();
+				if (resultSet.next()) {
+
+					T aNewEntity = this.entityClass.newInstance();
+					for (Field field : this.entityClass.getDeclaredFields()) {
+						if (field.isAnnotationPresent(Column.class)) {
+							field.setAccessible(true);
+
+							Column column = field.getAnnotation(Column.class);
+							String columnName = column.name();
+
+							if (field.getType() == int.class) {
+								field.set(aNewEntity,
+										resultSet.getInt(columnName)); // Set
+																		// the
+																		// value
+																		// in
+								// the new entity
+							} else {
+								field.set(aNewEntity,
+										resultSet.getString(columnName));
+							}
+						}
+					}
+
+					return aNewEntity;
+				}
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	/**
+	 * Concatenates the query conditions
+	 * 
+	 * @param conditions
+	 *            the conditions as a dynamic array
+	 * @return conditions string
+	 */
+	private String concatenateQueryConditions(String... conditions) {
+		String whereClause = &quot;WHERE &quot;;
+		for (int i = 0; i &lt; conditions.length; i++) {
+			whereClause += conditions[i] + &quot;=&#39;&quot; + conditions[i + 1] + &quot;&#39;&quot;
+					+ (i + 1 == conditions.length - 1 ? &quot;&quot; : &quot;,&quot;);
+			i++;
+		}
+		return conditions.length &gt; 0 ? whereClause : &quot;&quot;;
+	}
+
+}
+[/CODE]
+
+[b]DbConnection.java[/b]
+[CODE]package org.sf.freelancer.db;
+
+import java.sql.Connection;
+
+/**
+ * 
+ * @author rvbiljouw
+ * Interface used for generic database access
+ * This is to allow the use of multiple dbms&#39;s.
+ */
+public interface DbConnection {
+	
+	/**
+	 * Do any initialization
+	 * This is mainly useful for jdbc3 where you
+	 * had to call Class.forName before being 
+	 * able to use a driver.
+	 */
+	public void init();
+	
+	/**
+	 * Attempt to connect to the database
+	 * @return true if succeeded
+	 */
+	public boolean connect();
+	
+	/**
+	 * Attempt to destroy the connection.
+	 * @return destroy
+	 */
+	public boolean destroy();
+	
+	/**
+	 * Gets a raw jdbc Connection object.
+	 * @return connection
+	 */
+	public Connection getConnection();
+
+}
+[/CODE]
+
+[b]MySQLConnection.java[/b]
+[CODE]
+package org.sf.freelancer.db;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+
+public class MySQLConnection implements DbConnection {
+	private Connection connection;
+
+	@Override
+	public void init() {
+		try {
+			Class.forName(&quot;com.mysql.jdbc.Driver&quot;);
+		} catch (Exception e) {
+			System.out.println(&quot;Failed to initialize database driver&quot;);
+		}
+	}
+
+	@Override
+	public boolean connect() {
+		try {
+
+			this.connection = DriverManager.getConnection(
+					&quot;jdbc:mysql://archlinux/lancerdb&quot;, &quot;rvbiljouw&quot;, &quot;*****&quot;);
+
+			return !this.connection.isClosed();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	@Override
+	public boolean destroy() {
+		try {
+			this.connection.close();
+			return true;
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	@Override
+	public Connection getConnection() {
+		return this.connection;
+	}
+
+}
+[/CODE]
+
+[b]Example stuff[/b]
+
+In this example case we create an entity class called User which we will then create, fetch and update.
+
+[b]User.java[/b]
+[CODE]
+package org.sf.freelancer.db.entity.impl;
+
+import org.sf.freelancer.db.entity.Column;
+import org.sf.freelancer.db.entity.Table;
+
+@Table(name = &quot;user&quot;)
+public class User {
+	
+	@Column(name = &quot;userId&quot;, autoincrement = true)
+	private int userId;
+	
+	@Column(name = &quot;profileId&quot;)
+	private int profileId;
+	
+	@Column(name = &quot;username&quot;)
+	private String username;
+	
+	@Column(name = &quot;password&quot;)
+	private String password;
+	
+	@Column(name = &quot;emailAddress&quot;)
+	private String emailAddress;
+	
+	@Column(name = &quot;emailAddressActive&quot;)
+	private int emailAddressActive;
+	
+	/**
+	 * Get the user id (PK) of this user
+	 * @return userId
+	 */
+	public int getUserId() {
+		return this.userId;
+	}
+	
+	/**
+	 * Get profile id (FK)
+	 * @return profileId
+	 */
+	public int getProfileId() {
+		return this.profileId;
+	}
+	
+	/**
+	 * Get the username for this user
+	 * @return username
+	 */
+	public String getUsername() {
+		return this.username;
+	}
+	
+	/**
+	 * Get the password for this user (should be md5&#39;d)
+	 * @return password
+	 */
+	public String getPassword() {
+		return this.password;
+	}
+	
+	/**
+	 * Get the email address associated with this email address
+	 * @return email address
+	 */
+	public String getEmailAddress() {
+		return this.emailAddress;
+	}
+	
+	/**
+	 * Check if the email address is validated (1 = active, 0 = inactive)
+	 * @return emailAddressActive
+	 */
+	public int getEmailAddressActive() {
+		return this.emailAddressActive;
+	}
+	
+	/**
+	 * Set the id of the profile this user is linked to
+	 * @param profileId the profile id
+	 */
+	public void setProfileId(int profileId) {
+		this.profileId = profileId;
+	}
+	
+	/**
+	 * Set the username of this user
+	 * @param username the username
+	 */
+	public void setUsername(String username) {
+		this.username = username;
+	}
+	
+	/**
+	 * Set the password of this user
+	 * @param password password
+	 */
+	public void setPassword(String password) {
+		this.password = password;
+	}
+	
+	/**
+	 * Set the email address of this user
+	 * @param emailAddress email address
+	 */
+	public void setEmailAddress(String emailAddress) {
+		this.emailAddress = emailAddress;
+	}
+	
+	/**
+	 * Set the flag that indicates whether the email address is active or not.
+	 * @param emailAddressActive (1 = active, 0 = inactive)
+	 */
+	public void setEmailAddressActive(int emailAddressActive) {
+		this.emailAddressActive = emailAddressActive;
+	}
+}
+[/CODE]
+
+[B]EntityTest.java[/B] - A test class for User.java
+[CODE]
+
+package org.sf.freelancer;
+
+import org.sf.freelancer.db.MySQLConnection;
+import org.sf.freelancer.db.entity.EntityFactory;
+import org.sf.freelancer.db.entity.impl.User;
+
+public class EntityTest {
+
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) {
+		/**
+		 * Initialize the connection.
+		 */
+		MySQLConnection connection = new MySQLConnection();
+		connection.init();
+		connection.connect();
+
+		/*
+		 * Create the EntityFactory for User
+		 */
+		EntityFactory&lt;User&gt; userFactory = new EntityFactory&lt;User&gt;(connection,
+				User.class);
+
+		/**
+		 * Create the User object.
+		 */
+		User user = new User();
+		user.setProfileId(1);
+		user.setUsername(&quot;rick&quot;);
+		user.setPassword(&quot;abcdefghijklmnopqrstuvwxyz&quot;);
+		user.setEmailAddress(&quot;r.biljouw@click2host.nl&quot;);
+		user.setEmailAddressActive(1);
+
+		/**
+		 * Add the User object to the database.
+		 */
+		if (!userFactory.create(user)) {
+			throw new RuntimeException(
+					&quot;Oops, something went wrong while adding the user to the database.&quot;);
+		}
+
+		user.setEmailAddressActive(0); // Change the value of emailAddressActive
+
+		/**
+		 * Run an update on a row in the table where userid = 1. Copies the
+		 * values of the entity into the row.
+		 */
+		if (!userFactory.update(user, &quot;userid&quot;, &quot;1&quot;)) {
+			throw new RuntimeException(
+					&quot;Oops, something went wrong while updating the user &quot;
+							+ user.getUsername());
+		}
+
+		/**
+		 * Fetch the user with a userId of 1.
+		 */
+		User ourUser = userFactory.get(&quot;userId&quot;, &quot;1&quot;);
+		if (ourUser != null) {
+			System.out.println(&quot;Succesfully fetched the user &quot;
+					+ ourUser.getUsername());
+		} else {
+			throw new RuntimeException(&quot;Oops, I couldn&#39;t fetch the user.&quot;);
+		}
+	}
+
+}
+[/CODE]
+
+Enjoy! [i]or not, ofcourse.[/i]</description>
+    
+    <lastBuildDate>Thu, 26 Jan 2012 07:02:59 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@_Rick1 _Rick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rick1">@_Rick1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="9" data-topic="430237">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/pwnd/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Pwnd:</div>
+<blockquote>
+<p>default say whatttttt</p>
+</blockquote>
+</aside>
+<p>???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/10</link>
+        <pubDate>Thu, 26 Jan 2012 07:02:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-10</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@Pwnd Pwnd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pwnd">@Pwnd</a> wrote:</p>
+          <blockquote>
+              <p>default say whatttttt</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/9</link>
+        <pubDate>Thu, 26 Jan 2012 02:16:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-9</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@_Rick1 _Rick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rick1">@_Rick1</a> wrote:</p>
+          <blockquote>
+              <p>An updated version is now available on github:<br>
+<a href="https://github.com/rbiljouw/SOOJDBC" class="onebox" target="_blank" rel="nofollow noopener">https://github.com/rbiljouw/SOOJDBC</a></p>
+<p>I will keep expanding on this “library” :).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/8</link>
+        <pubDate>Tue, 24 Jan 2012 19:38:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-8</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>I like it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/7</link>
+        <pubDate>Mon, 23 Jan 2012 19:59:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-7</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@_Rick1 _Rick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rick1">@_Rick1</a> wrote:</p>
+          <blockquote>
+              <p>I made some updates to this and I think I’m going to release it as a library… I’ll post it when I get home from work as some faggot who works here got ip banned and I can’t access mitb through work laptop. I sad story, I know.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/6</link>
+        <pubDate>Mon, 23 Jan 2012 10:34:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-6</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>I had to write something similar however i ended used a connection pool as i found when i had multiple clients it often blocked or got slow.</p>
+<p>I like the structure you have good job</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/5</link>
+        <pubDate>Mon, 23 Jan 2012 02:42:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-5</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Nueb35, post:3, topic:430237”][quote author=SpeedIsMeh link=topic=532915.msg3895472#msg3895472 date=1327265958]<br>
+Wow use of annotations, that’s rare to see around here, well done!<br>
+(inb4javacup)<br>
+[/quote]</p>
+<p>I’ve never even seen that before[/quote]<br>
+really?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/4</link>
+        <pubDate>Mon, 23 Jan 2012 01:40:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-4</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@nueb35 Nueb35]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nueb35">@nueb35</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:2, topic:430237”]Wow use of annotations, that’s rare to see around here, well done!<br>
+(inb4javacup)[/quote]</p>
+<p>I’ve never even seen that before</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/3</link>
+        <pubDate>Mon, 23 Jan 2012 00:53:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-3</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>Wow use of annotations, that’s rare to see around here, well done!<br>
+(inb4javacup)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/2</link>
+        <pubDate>Sun, 22 Jan 2012 20:59:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-2</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+      <item>
+        <title>Simple JDBC wrapper</title>
+        <dc:creator><![CDATA[@_Rick1 _Rick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rick1">@_Rick1</a> wrote:</p>
+          <blockquote>
+              <p>I needed a way to access database tables as objects without using big libraries like hibernate so I wrote a wrapper structure around JDBC. It may not be perfect but it shows my idea and works good enough for me, if any of you expand/improve it please post it back here :).</p>
+<p><span class="bbcode-b">Entity.java</span></p>
+<pre><code class="lang-auto">package org.sf.freelancer.db.entity;
+
+/**
+ * 
+ * @author rvbiljouw
+ * A class used for generic access to database entities.
+ */
+public interface Entity {
+
+}</code></pre>
+<p><span class="bbcode-b">Table.java</span></p>
+<pre><code class="lang-auto">
+package org.sf.freelancer.db.entity;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+/**
+ * 
+ * @author rvbiljouw
+ * A class representing a table in the database.
+ */
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Table {
+
+	public String name();
+	
+}</code></pre>
+<p><span class="bbcode-b">Column.java</span></p>
+<p>[CODE]package org.sf.freelancer.db.entity;</p>
+<p>import java.lang.annotation.Retention;<br>
+import java.lang.annotation.RetentionPolicy;</p>
+<p><span class="mention">@Retention</span>(RetentionPolicy.RUNTIME)<br>
+public <span class="mention">@interface</span> Column {</p>
+<pre><code>public String name();
+
+public boolean autoincrement() default false;
+
+public String keyColumn() default ""; // Not yet used, going to be used for linking FK columns with entities
+
+public String entity() default ""; // Not yet used, going to be used for linking FK columns with entities
+</code></pre>
+<p>}<br>
+[/CODE]</p>
+<p><span class="bbcode-b">EntityFactory.java</span></p>
+<p>[CODE]package org.sf.freelancer.db.entity;</p>
+<p>import java.lang.annotation.Annotation;<br>
+import java.lang.reflect.Field;<br>
+import java.sql.*;</p>
+<p>import org.sf.freelancer.db.DbConnection;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<span class="mention">@author</span> rvbiljouw This class manages entities in the database.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> </li>
+<li>
+<pre><code>       a type that is used for returning.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public class EntityFactory {<br>
+private DbConnection connection;<br>
+private Class entityClass;</p>
+<pre><code>public EntityFactory(DbConnection connection, Class&lt;T&gt; entityClass) {
+	this.entityClass = entityClass;
+	this.connection = connection;
+
+	System.out.println(entityClass.getAnnotations().length);
+
+	if (!isValid()) {
+
+		for (Annotation annotation : this.entityClass
+				.getDeclaredAnnotations()) {
+			System.out.println(annotation.getClass().getName());
+		}
+
+		throw new RuntimeException("No idea what to do with "
+				+ this.entityClass.getCanonicalName()
+				+ " as it does not contain a table definition.");
+	}
+}
+
+/**
+ * Return the connection wrapper that this entity factory is related to.
+ * 
+ * @return connection
+ */
+public DbConnection getConnection() {
+	return this.connection;
+}
+
+/**
+ * Get the entity class
+ * 
+ * @return
+ */
+public Class&lt;T&gt; getEntityClass() {
+	return this.entityClass;
+}
+
+/**
+ * Check if the entity has a table definition.
+ * 
+ * @return true/false
+ */
+private boolean isValid() {
+	return this.entityClass.isAnnotationPresent(Table.class);
+}
+
+/**
+ * Get the name of the table definition
+ * 
+ * @return table name
+ */
+private String getTableName() {
+	return this.entityClass.getAnnotation(Table.class).name();
+}
+
+/**
+ * Issue an update query for this entity
+ * 
+ * @param entity
+ *            the entity to be updated
+ * @return the entity updated.
+ */
+public boolean create(T entity, String... conditions) {
+	try {
+		Statement query = this.connection.getConnection().createStatement();
+		String queryString = "INSERT INTO " + getTableName() + " ";
+		String columnsString = "(";
+		String valuesString = " VALUES (";
+		int fieldCount = 0;
+		for (Field field : this.entityClass.getDeclaredFields()) {
+			if (field.isAnnotationPresent(Column.class)) {
+				Column column = field.getAnnotation(Column.class);
+
+				field.setAccessible(true);
+				if (!column.autoincrement()) {
+					columnsString += column.name()
+							+ (fieldCount == this.entityClass
+									.getDeclaredFields().length - 1 ? ""
+									: ", ");
+
+					valuesString += "'"
+							+ field.get(entity)
+							+ "'"
+							+ (fieldCount == this.entityClass
+									.getDeclaredFields().length - 1 ? ""
+									: ", ");
+				}
+				fieldCount++;
+			}
+		}
+		columnsString += ")";
+		valuesString += ")";
+		query.execute(queryString + columnsString + valuesString);
+		return query.getUpdateCount() &gt; 0;
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+	return false;
+}
+
+/**
+ * Issue an update query for this entity
+ * 
+ * @param entity
+ *            the entity to be updated
+ * @return the entity updated.
+ */
+public boolean update(T entity, String... conditions) {
+	try {
+		Statement query = this.connection.getConnection().createStatement();
+		String queryString = "UPDATE " + getTableName() + " SET ";
+
+		int fieldCount = 0;
+		for (Field field : this.entityClass.getDeclaredFields()) {
+			if (field.isAnnotationPresent(Column.class)) {
+				Column column = field.getAnnotation(Column.class);
+
+				field.setAccessible(true);
+				if (!column.autoincrement()) {
+
+					queryString += column.name()
+							+ "='"
+							+ field.get(entity)
+							+ "'"
+							+ (fieldCount == this.entityClass
+									.getDeclaredFields().length - 1 ? ""
+									: ",") + " ";
+				}
+				fieldCount++;
+			}
+		}
+
+		return query.executeUpdate(queryString
+				+ concatenateQueryConditions(conditions)) &gt; 0;
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+	return false;
+}
+
+/**
+ * Fetch a single result from the table
+ * 
+ * @param conditions
+ *            selection conditions
+ * @return entity
+ */
+public T get(String... conditions) {
+	try {
+		Statement query = this.connection.getConnection().createStatement();
+		if (!query.execute("SELECT * FROM " + this.getTableName() + " "
+				+ concatenateQueryConditions(conditions))) {
+			return null;
+		} else {
+			ResultSet resultSet = query.getResultSet();
+			if (resultSet.next()) {
+
+				T aNewEntity = this.entityClass.newInstance();
+				for (Field field : this.entityClass.getDeclaredFields()) {
+					if (field.isAnnotationPresent(Column.class)) {
+						field.setAccessible(true);
+
+						Column column = field.getAnnotation(Column.class);
+						String columnName = column.name();
+
+						if (field.getType() == int.class) {
+							field.set(aNewEntity,
+									resultSet.getInt(columnName)); // Set
+																	// the
+																	// value
+																	// in
+							// the new entity
+						} else {
+							field.set(aNewEntity,
+									resultSet.getString(columnName));
+						}
+					}
+				}
+
+				return aNewEntity;
+			}
+		}
+
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+	return null;
+}
+
+/**
+ * Concatenates the query conditions
+ * 
+ * @param conditions
+ *            the conditions as a dynamic array
+ * @return conditions string
+ */
+private String concatenateQueryConditions(String... conditions) {
+	String whereClause = "WHERE ";
+	for (int i = 0; i &lt; conditions.length; i++) {
+		whereClause += conditions[i] + "='" + conditions[i + 1] + "'"
+				+ (i + 1 == conditions.length - 1 ? "" : ",");
+		i++;
+	}
+	return conditions.length &gt; 0 ? whereClause : "";
+}
+</code></pre>
+<p>}<br>
+[/CODE]</p>
+<p><span class="bbcode-b">DbConnection.java</span></p>
+<p>[CODE]package org.sf.freelancer.db;</p>
+<p>import java.sql.Connection;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> rvbiljouw</p>
+</li>
+<li>
+<p>Interface used for generic database access</p>
+</li>
+<li>
+<p>This is to allow the use of multiple dbms’s.<br>
+*/<br>
+public interface DbConnection {</p>
+<p>/**</p>
+<ul>
+<li>Do any initialization</li>
+<li>This is mainly useful for jdbc3 where you</li>
+<li>had to call Class.forName before being</li>
+<li>able to use a driver.<br>
+*/<br>
+public void init();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Attempt to connect to the database</li>
+<li>
+<a class="mention" href="/u/return">@return</a> true if succeeded<br>
+*/<br>
+public boolean connect();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Attempt to destroy the connection.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> destroy<br>
+*/<br>
+public boolean destroy();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets a raw jdbc Connection object.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> connection<br>
+*/<br>
+public Connection getConnection();</li>
+</ul>
+</li>
+</ul>
+<p>}<br>
+[/CODE]</p>
+<p><span class="bbcode-b">MySQLConnection.java</span></p>
+<pre><code class="lang-auto">package org.sf.freelancer.db;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+
+public class MySQLConnection implements DbConnection {
+	private Connection connection;
+
+	@Override
+	public void init() {
+		try {
+			Class.forName("com.mysql.jdbc.Driver");
+		} catch (Exception e) {
+			System.out.println("Failed to initialize database driver");
+		}
+	}
+
+	@Override
+	public boolean connect() {
+		try {
+
+			this.connection = DriverManager.getConnection(
+					"jdbc:mysql://archlinux/lancerdb", "rvbiljouw", "*****");
+
+			return !this.connection.isClosed();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	@Override
+	public boolean destroy() {
+		try {
+			this.connection.close();
+			return true;
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	@Override
+	public Connection getConnection() {
+		return this.connection;
+	}
+
+}</code></pre>
+<p><span class="bbcode-b">Example stuff</span></p>
+<p>In this example case we create an entity class called User which we will then create, fetch and update.</p>
+<p><span class="bbcode-b">User.java</span></p>
+<pre><code class="lang-auto">package org.sf.freelancer.db.entity.impl;
+
+import org.sf.freelancer.db.entity.Column;
+import org.sf.freelancer.db.entity.Table;
+
+@Table(name = "user")
+public class User {
+	
+	@Column(name = "userId", autoincrement = true)
+	private int userId;
+	
+	@Column(name = "profileId")
+	private int profileId;
+	
+	@Column(name = "username")
+	private String username;
+	
+	@Column(name = "password")
+	private String password;
+	
+	@Column(name = "emailAddress")
+	private String emailAddress;
+	
+	@Column(name = "emailAddressActive")
+	private int emailAddressActive;
+	
+	/**
+	 * Get the user id (PK) of this user
+	 * @return userId
+	 */
+	public int getUserId() {
+		return this.userId;
+	}
+	
+	/**
+	 * Get profile id (FK)
+	 * @return profileId
+	 */
+	public int getProfileId() {
+		return this.profileId;
+	}
+	
+	/**
+	 * Get the username for this user
+	 * @return username
+	 */
+	public String getUsername() {
+		return this.username;
+	}
+	
+	/**
+	 * Get the password for this user (should be md5'd)
+	 * @return password
+	 */
+	public String getPassword() {
+		return this.password;
+	}
+	
+	/**
+	 * Get the email address associated with this email address
+	 * @return email address
+	 */
+	public String getEmailAddress() {
+		return this.emailAddress;
+	}
+	
+	/**
+	 * Check if the email address is validated (1 = active, 0 = inactive)
+	 * @return emailAddressActive
+	 */
+	public int getEmailAddressActive() {
+		return this.emailAddressActive;
+	}
+	
+	/**
+	 * Set the id of the profile this user is linked to
+	 * @param profileId the profile id
+	 */
+	public void setProfileId(int profileId) {
+		this.profileId = profileId;
+	}
+	
+	/**
+	 * Set the username of this user
+	 * @param username the username
+	 */
+	public void setUsername(String username) {
+		this.username = username;
+	}
+	
+	/**
+	 * Set the password of this user
+	 * @param password password
+	 */
+	public void setPassword(String password) {
+		this.password = password;
+	}
+	
+	/**
+	 * Set the email address of this user
+	 * @param emailAddress email address
+	 */
+	public void setEmailAddress(String emailAddress) {
+		this.emailAddress = emailAddress;
+	}
+	
+	/**
+	 * Set the flag that indicates whether the email address is active or not.
+	 * @param emailAddressActive (1 = active, 0 = inactive)
+	 */
+	public void setEmailAddressActive(int emailAddressActive) {
+		this.emailAddressActive = emailAddressActive;
+	}
+}</code></pre>
+<p><span class="bbcode-b">EntityTest.java</span> - A test class for User.java</p>
+<pre><code class="lang-auto">
+package org.sf.freelancer;
+
+import org.sf.freelancer.db.MySQLConnection;
+import org.sf.freelancer.db.entity.EntityFactory;
+import org.sf.freelancer.db.entity.impl.User;
+
+public class EntityTest {
+
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) {
+		/**
+		 * Initialize the connection.
+		 */
+		MySQLConnection connection = new MySQLConnection();
+		connection.init();
+		connection.connect();
+
+		/*
+		 * Create the EntityFactory for User
+		 */
+		EntityFactory&lt;User&gt; userFactory = new EntityFactory&lt;User&gt;(connection,
+				User.class);
+
+		/**
+		 * Create the User object.
+		 */
+		User user = new User();
+		user.setProfileId(1);
+		user.setUsername("rick");
+		user.setPassword("abcdefghijklmnopqrstuvwxyz");
+		user.setEmailAddress("r.biljouw@click2host.nl");
+		user.setEmailAddressActive(1);
+
+		/**
+		 * Add the User object to the database.
+		 */
+		if (!userFactory.create(user)) {
+			throw new RuntimeException(
+					"Oops, something went wrong while adding the user to the database.");
+		}
+
+		user.setEmailAddressActive(0); // Change the value of emailAddressActive
+
+		/**
+		 * Run an update on a row in the table where userid = 1. Copies the
+		 * values of the entity into the row.
+		 */
+		if (!userFactory.update(user, "userid", "1")) {
+			throw new RuntimeException(
+					"Oops, something went wrong while updating the user "
+							+ user.getUsername());
+		}
+
+		/**
+		 * Fetch the user with a userId of 1.
+		 */
+		User ourUser = userFactory.get("userId", "1");
+		if (ourUser != null) {
+			System.out.println("Succesfully fetched the user "
+					+ ourUser.getUsername());
+		} else {
+			throw new RuntimeException("Oops, I couldn't fetch the user.");
+		}
+	}
+
+}</code></pre>
+<p>Enjoy! <span class="bbcode-i">or not, ofcourse.</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237/1</link>
+        <pubDate>Sun, 22 Jan 2012 16:59:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430237-1</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-jdbc-wrapper/430237.rss">Simple JDBC wrapper</source>
+      </item>
+  </channel>
+</rss>

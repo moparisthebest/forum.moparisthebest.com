@@ -1,0 +1,634 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Validation for incoming connections</title>
+    <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965</link>
+    <description>Just a simple utility class that will validate incoming connections and make sure that:
+
+- the host isn&#39;t banned (ip banning)
+- the host isn&#39;t connecting faster than 1 time in an [I]x[/I] time period (host throttling, making sure they aren&#39;t connecting too fast)
+- the host doesn&#39;t already have [I]x[/I] amount of connections made (can only have a certain amount of clients connected)
+
+[CODE=java]package com.emerald.utility;
+
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.emerald.game.character.player.LoginResponse;
+
+/**
+ * Handles and validates all incoming connections received by the server to
+ * ensure that the server does not fall victim to attacks by a socket flooder or
+ * a connection from a banned host.
+ * 
+ * @author lare96
+ */
+public final class ConnectionHandler {
+
+    /**
+     * The throttle interval for incoming connections.
+     */
+    private static final long CONNECTION_INTERVAL = 1000;
+
+    /**
+     * The maximum amount of connections that can be active at a time.
+     */
+    private static final int CONNECTION_AMOUNT = 1;
+
+    /**
+     * The map of registered connections.
+     */
+    private static Map&lt;String, Connection&gt; connections = new ConcurrentHashMap&lt;&gt;();
+
+    /**
+     * The set of banned hosts.
+     */
+    private static Set&lt;String&gt; banned = Collections.synchronizedSet(new HashSet&lt;String&gt;());
+
+    /**
+     * The default constructor.
+     * 
+     * @throws UnsupportedOperationException
+     *             if this class is instantiated.
+     */
+    private ConnectionHandler() {
+        throw new UnsupportedOperationException(
+            &quot;This class cannot be instantiated!&quot;);
+    }
+
+    /**
+     * Evaluates this host and returns a {@link LoginResponse} that determines
+     * the result of evaluation.
+     * 
+     * @param host
+     *            the host that will be evaluated.
+     * @return the login response as a result of evaluating the host.
+     */
+    public static LoginResponse evaluate(String host) {
+        if (host.equals(&quot;127.0.0.1&quot;) || host.equals(&quot;localhost&quot;)) {
+            return LoginResponse.NORMAL;
+        }
+
+        Optional&lt;Connection&gt; connection = Optional.ofNullable(connections.putIfAbsent(
+            host, new Connection()));
+
+        if (connection.isPresent()) {
+            Connection c = connection.get();
+
+            if (c.sessionLimit()) {
+                return LoginResponse.LOGIN_LIMIT_EXCEEDED;
+            } else if (c.throttleLimit()) {
+                return LoginResponse.LOGIN_ATTEMPTS_EXCEEDED;
+            } else if (banned.contains(host)) {
+                return LoginResponse.ACCOUNT_DISABLED;
+            }
+
+            c.increment();
+            c.getThrottler().reset();
+        }
+        return LoginResponse.NORMAL;
+    }
+
+    /**
+     * Removes this host from the connection map or reduces the amount of
+     * connections currently registered to this host.
+     * 
+     * @param host
+     *            the host that will be removed.
+     * @throws IllegalStateException
+     *             if the specified host is not registered within the connection
+     *             map.
+     */
+    public static void remove(String host) {
+        if (host.equals(&quot;127.0.0.1&quot;) || host.equals(&quot;localhost&quot;)) {
+            return;
+        }
+
+        Optional&lt;Connection&gt; connection = Optional.ofNullable(connections.get(host));
+        Connection c = connection.orElseThrow(() -&gt; new IllegalStateException(
+            &quot;Host was not registered with the connection map!&quot;));
+
+        if (c.decrement() &lt; 1) {
+            connections.remove(c);
+        }
+    }
+
+    /**
+     * Gets the set of banned hosts.
+     * 
+     * @return the set of banned hosts.
+     */
+    public static Set&lt;String&gt; getBanned() {
+        return banned;
+    }
+
+    /**
+     * A container class that represents one registered host in the
+     * {@link #connections} map.
+     * 
+     * @author lare96
+     */
+    @SuppressWarnings(&quot;unused&quot;)
+    private static final class Connection {
+
+        /**
+         * The amount of sessions bound to this connection.
+         */
+        private int amount;
+
+        /**
+         * The {@link Timer} used to time connection intervals.
+         */
+        private final Timer throttler = new Timer().reset();
+
+        /**
+         * Determines if the maximum amount of connections has been reached.
+         * 
+         * @return {@code true} if the amount of connections is above or equal
+         *         to {@link #CONNECTION_AMOUNT}, {@code false} otherwise.
+         */
+        public boolean sessionLimit() {
+            return amount &gt;= CONNECTION_AMOUNT;
+        }
+
+        /**
+         * Determines if the host is connecting too fast and needs to be
+         * throttled.
+         * 
+         * @return {@code true} if the host needs to be throttled, {@code false}
+         *         otherwise.
+         */
+        public boolean throttleLimit() {
+            return throttler.get() &lt;= CONNECTION_INTERVAL;
+        }
+
+        /**
+         * Increments the amount of sessions bound to this connection.
+         * 
+         * @return the amount after the increment completes.
+         */
+        public int increment() {
+            amount++;
+            return amount;
+        }
+
+        /**
+         * Decrements the amount of sessions bound to this connection.
+         * 
+         * @return the amount after the decrement completes.
+         */
+        public int decrement() {
+            amount--;
+            return amount;
+        }
+
+        /**
+         * Gets the amount of sessions bound to this connection.
+         * 
+         * @return the amount of sessions bound to this connection.
+         */
+        public int getAmount() {
+            return amount;
+        }
+
+        /**
+         * Gets the timer used to time connection intervals.
+         * 
+         * @return the timer used to time connection intervals.
+         */
+        public Timer getThrottler() {
+            return throttler;
+        }
+    }
+}[/CODE]</description>
+    
+    <lastBuildDate>Sat, 27 Sep 2014 17:01:09 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>So what if someone uses reflection to create an instance? It’s not like the class has any member functions that someone could maliciously operate on. In the end, the implementation is not very well as anywhere within the entire program you could wreak havoc by invoking the publicly available functors. The ideal implementation would actually create an instance of the class with members that are only accessible within certain classes. Side note, it’s more annoying to implement such feature in Java, C++ is superior.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/8</link>
+        <pubDate>Sat, 27 Sep 2014 17:01:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-8</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:3, topic:546965”][quote author=Ashi link=topic=665863.msg4451483#msg4451483 date=1411778974]<br>
+Yes! You’re finally throwing an exception in a private constructor!<br>
+[/quote]<br>
+it’s redundant, really. an external user of this class would not be able to access the constructor, thus the second “fail safe” that prevents an instance being created is unnecessary.[/quote]<br>
+How is it redundant? What if you created an inner instance? Reflection too.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/7</link>
+        <pubDate>Sat, 27 Sep 2014 12:13:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-7</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Feels like a piece of middlewear…note to self…rsps…middlewear</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/6</link>
+        <pubDate>Sat, 27 Sep 2014 08:41:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-6</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:3, topic:546965”][quote author=Ashi link=topic=665863.msg4451483#msg4451483 date=1411778974]<br>
+Yes! You’re finally throwing an exception in a private constructor!<br>
+[/quote]<br>
+it’s redundant, really. an external user of this class would not be able to access the constructor, thus the second “fail safe” that prevents an instance being created is unnecessary.[/quote]<br>
+lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/5</link>
+        <pubDate>Sat, 27 Sep 2014 07:07:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-5</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:3, topic:546965”][quote author=Ashi link=topic=665863.msg4451483#msg4451483 date=1411778974]<br>
+Yes! You’re finally throwing an exception in a private constructor!<br>
+[/quote]<br>
+it’s redundant, really. an external user of this class would not be able to access the constructor, thus the second “fail safe” that prevents an instance being created is unnecessary.[/quote]<br>
+Reflection? At least now you are forced to edit the bytecode if you absolutely want to make an instance of a class that has no instanced members</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/4</link>
+        <pubDate>Sat, 27 Sep 2014 06:51:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-4</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="546965">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ashi/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ashi:</div>
+<blockquote>
+<p>Yes! You’re finally throwing an exception in a private constructor!</p>
+</blockquote>
+</aside>
+<p>it’s redundant, really. an external user of this class would not be able to access the constructor, thus the second “fail safe” that prevents an instance being created is unnecessary.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/3</link>
+        <pubDate>Sat, 27 Sep 2014 06:11:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-3</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>Yes! You’re finally throwing an exception in a private constructor!</p>
+<p>I’d personally use the filters provided by many network API’s. Netty would be able to handle timeouts, limits etc., too.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/2</link>
+        <pubDate>Sat, 27 Sep 2014 00:49:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-2</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+      <item>
+        <title>Validation for incoming connections</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Just a simple utility class that will validate incoming connections and make sure that:</p>
+<ul>
+<li>the host isn’t banned (ip banning)</li>
+<li>the host isn’t connecting faster than 1 time in an [I]x[/I] time period (host throttling, making sure they aren’t connecting too fast)</li>
+<li>the host doesn’t already have [I]x[/I] amount of connections made (can only have a certain amount of clients connected)</li>
+</ul>
+<p>[CODE=java]package com.emerald.utility;</p>
+<p>import java.util.Collections;<br>
+import java.util.HashSet;<br>
+import java.util.Map;<br>
+import java.util.Optional;<br>
+import java.util.Set;<br>
+import java.util.concurrent.ConcurrentHashMap;</p>
+<p>import com.emerald.game.character.player.LoginResponse;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Handles and validates all incoming connections received by the server to</p>
+</li>
+<li>
+<p>ensure that the server does not fall victim to attacks by a socket flooder or</p>
+</li>
+<li>
+<p>a connection from a banned host.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public final class ConnectionHandler {</p>
+<p>/**</p>
+<ul>
+<li>The throttle interval for incoming connections.<br>
+*/<br>
+private static final long CONNECTION_INTERVAL = 1000;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The maximum amount of connections that can be active at a time.<br>
+*/<br>
+private static final int CONNECTION_AMOUNT = 1;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The map of registered connections.<br>
+*/<br>
+private static Map&lt;String, Connection&gt; connections = new ConcurrentHashMap&lt;&gt;();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The set of banned hosts.<br>
+*/<br>
+private static Set banned = Collections.synchronizedSet(new HashSet());</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The default constructor.</li>
+<li>
+</li>
+<li>
+<span class="mention">@throws</span> UnsupportedOperationException</li>
+<li>
+<pre><code>        if this class is instantiated.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+private ConnectionHandler() {<br>
+throw new UnsupportedOperationException(<br>
+“This class cannot be instantiated!”);<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Evaluates this host and returns a {<a class="mention" href="/u/link">@link</a> LoginResponse} that determines</p>
+</li>
+<li>
+<p>the result of evaluation.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> host</p>
+</li>
+<li>
+<pre><code>       the host that will be evaluated.
+</code></pre>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> the login response as a result of evaluating the host.<br>
+*/<br>
+public static LoginResponse evaluate(String host) {<br>
+if (host.equals(“127.0.0.1”) || host.equals(“localhost”)) {<br>
+return LoginResponse.NORMAL;<br>
+}</p>
+<p>Optional connection = Optional.ofNullable(connections.putIfAbsent(<br>
+host, new Connection()));</p>
+<p>if (connection.isPresent()) {<br>
+Connection c = connection.get();</p>
+<pre><code> if (c.sessionLimit()) {
+     return LoginResponse.LOGIN_LIMIT_EXCEEDED;
+ } else if (c.throttleLimit()) {
+     return LoginResponse.LOGIN_ATTEMPTS_EXCEEDED;
+ } else if (banned.contains(host)) {
+     return LoginResponse.ACCOUNT_DISABLED;
+ }
+
+ c.increment();
+ c.getThrottler().reset();
+</code></pre>
+<p>}<br>
+return LoginResponse.NORMAL;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Removes this host from the connection map or reduces the amount of</li>
+<li>connections currently registered to this host.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> host</li>
+<li>
+<pre><code>       the host that will be removed.
+</code></pre>
+</li>
+<li>
+<span class="mention">@throws</span> IllegalStateException</li>
+<li>
+<pre><code>        if the specified host is not registered within the connection
+</code></pre>
+</li>
+<li>
+<pre><code>        map.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public static void remove(String host) {<br>
+if (host.equals(“127.0.0.1”) || host.equals(“localhost”)) {<br>
+return;<br>
+}</p>
+<pre><code> Optional&lt;Connection&gt; connection = Optional.ofNullable(connections.get(host));
+ Connection c = connection.orElseThrow(() -&gt; new IllegalStateException(
+     "Host was not registered with the connection map!"));
+
+ if (c.decrement() &lt; 1) {
+     connections.remove(c);
+ }
+</code></pre>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>Gets the set of banned hosts.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the set of banned hosts.<br>
+*/<br>
+public static Set getBanned() {<br>
+return banned;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>A container class that represents one registered host in the</p>
+</li>
+<li>
+<p>{<a class="mention" href="/u/link">@link</a> <span class="hashtag">#connections</span>} map.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+<span class="mention">@SuppressWarnings</span>(“unused”)<br>
+private static final class Connection {</p>
+<p>/**</p>
+<ul>
+<li>The amount of sessions bound to this connection.<br>
+*/<br>
+private int amount;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The {<a class="mention" href="/u/link">@link</a> Timer} used to time connection intervals.<br>
+*/<br>
+private final Timer throttler = new Timer().reset();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Determines if the maximum amount of connections has been reached.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> {<a class="mention" href="/u/code">@code</a> true} if the amount of connections is above or equal</li>
+<li>
+<pre><code>    to {@link #CONNECTION_AMOUNT}, {@code false} otherwise.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public boolean sessionLimit() {<br>
+return amount &gt;= CONNECTION_AMOUNT;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Determines if the host is connecting too fast and needs to be</li>
+<li>throttled.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> {<a class="mention" href="/u/code">@code</a> true} if the host needs to be throttled, {<a class="mention" href="/u/code">@code</a> false}</li>
+<li>
+<pre><code>    otherwise.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public boolean throttleLimit() {<br>
+return throttler.get() &lt;= CONNECTION_INTERVAL;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Increments the amount of sessions bound to this connection.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the amount after the increment completes.<br>
+*/<br>
+public int increment() {<br>
+amount++;<br>
+return amount;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Decrements the amount of sessions bound to this connection.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the amount after the decrement completes.<br>
+*/<br>
+public int decrement() {<br>
+amount–;<br>
+return amount;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the amount of sessions bound to this connection.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the amount of sessions bound to this connection.<br>
+*/<br>
+public int getAmount() {<br>
+return amount;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the timer used to time connection intervals.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the timer used to time connection intervals.<br>
+*/<br>
+public Timer getThrottler() {<br>
+return throttler;<br>
+}<br>
+}<br>
+}[/CODE]</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965/1</link>
+        <pubDate>Fri, 26 Sep 2014 21:31:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-546965-1</guid>
+        <source url="https://forum.moparisthebest.com/t/validation-for-incoming-connections/546965.rss">Validation for incoming connections</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,923 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+    <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155</link>
+    <description>Not sure if this has been released or not?  :| but anyway, I&#39;ll go ahead with it.
+
+[url=http://up.ht/IEZFZp]Download netty deps[/url]
+[url=http://up.ht/IF1QvS]Download and replace your util, net and task[/url]
+[url=http://up.ht/IEZPQi]Download .classpath and .project (not required)[/url]
+
+After you&#39;ve added those, replace your Server.java with:
+
+[code]package server;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.text.DecimalFormat;
+import java.util.concurrent.Executors;
+import org.jboss.netty.bootstrap.ServerBootstrap;
+import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
+import org.jboss.netty.util.HashedWheelTimer;
+import server.event.CycleEventHandler;
+import server.event.Task;
+import server.event.TaskScheduler;
+import server.world.StillGraphicsManager;
+import server.world.PlayerManager;
+import server.net.PipelineFactory;
+import server.util.log.Logger;
+
+/**
+ * Server.java
+ *
+ * @author Sanity
+ * @author Graham
+ * @author Blake
+ * @author Ryan Lmctruck30
+ *
+ */
+
+public class Server {
+
+	
+	
+	public static PlayerManager playerManager = null;
+	private static StillGraphicsManager stillGraphicsManager = null;
+	
+	public static boolean sleeping;
+	public static final int cycleRate;
+	public static boolean UpdateServer = false;
+	public static long lastMassSave = System.currentTimeMillis();
+	private static long cycleTime, cycles, totalCycleTime, sleepTime;
+	private static DecimalFormat debugPercentFormat;
+	public static boolean shutdownServer = false;		
+	public static boolean shutdownClientHandler;			
+	public static int serverlistenerPort; 
+
+	/**
+	 * The task scheduler.
+	 */
+	private static final TaskScheduler scheduler = new TaskScheduler();
+
+	/**
+	 * Gets the task scheduler.
+	 * @return The task scheduler.
+	 */
+	public static TaskScheduler getTaskScheduler() {
+		return scheduler;
+	}
+	
+	static {
+		if(!Config.SERVER_DEBUG) {
+			serverlistenerPort = 43594;
+		} else {
+			serverlistenerPort = 43594;
+		}
+		cycleRate = 600;
+		shutdownServer = false;
+		sleepTime = 0;
+		debugPercentFormat = new DecimalFormat(&quot;0.0#%&quot;);
+	}
+        
+	public static void main(java.lang.String args[]) throws NullPointerException, IOException {
+		/**
+		 * Starting Up Server
+		 */
+		long startTime = System.currentTimeMillis();
+		System.setOut(new Logger(System.out));
+		System.setErr(new Logger(System.err));
+	
+		bind();
+                
+                
+		playerManager = PlayerManager.getSingleton();
+		playerManager.setupRegionPlayers();
+		stillGraphicsManager = new StillGraphicsManager();
+
+		//all all your .initialize() methods here. didn&#39;t import connection,
+		  do it yourself. ;)
+
+		Connection.initialize();
+
+		
+		/**
+		 * Server Successfully Loaded 
+		 */
+                long endTime = System.currentTimeMillis();
+                long elapsed = endTime-startTime;
+                System.out.println(&quot;Server started up in &quot;+elapsed+&quot; ms&quot;);
+		System.out.println(&quot;Server listening on port 127.0.0.1:&quot; + serverlistenerPort);
+		
+                
+                
+                /**
+		 * Main Server Tick
+		 */
+		scheduler.schedule(new Task() {
+			@Override
+                    protected void execute() {
+                        CycleEventHandler.getSingleton().process();
+                        }
+                });
+		
+	}
+	
+	
+	
+	public static boolean playerExecuted = false;
+	
+	public static long getSleepTimer() {
+		return sleepTime;
+	}
+
+	
+	public static StillGraphicsManager getStillGraphicsManager() {
+		return stillGraphicsManager;
+	}
+	
+	public static PlayerManager getPlayerManager() {
+		return playerManager;
+	}
+	
+	public static ObjectManager getObjectManager() {
+		return objectManager;
+	}
+
+        private static void bind() {
+            ServerBootstrap serverBootstrap = new ServerBootstrap (new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()));
+            serverBootstrap.setPipelineFactory (new PipelineFactory(new HashedWheelTimer()));
+            serverBootstrap.bind (new InetSocketAddress(serverlistenerPort));	
+        }
+	
+}[/code]
+
+You&#39;ll have to do some importing and adding.
+
+Go into Client.java and change methods to these:
+
+[code]	public Client(Channel s, int _playerId) {
+		super(_playerId);
+		this.session = s;
+		synchronized(this) {
+			outStream = new Stream(new byte[Config.BUFFER_SIZE]);
+			outStream.currentOffset = 0;
+		
+		inStream = new Stream(new byte[Config.BUFFER_SIZE]);
+		inStream.currentOffset = 0;
+		buffer = new byte[Config.BUFFER_SIZE];
+                }
+	}[/code]
+[code]	private Channel session;[/code]
+[code]	public void queueMessage(Packet arg1) {
+		synchronized (queuedPackets) {
+			queuedPackets.add(arg1);
+		}
+	}
+
+	public boolean processQueuedPackets() {
+		synchronized (queuedPackets) {
+			Packet p = null;
+			while ((p = queuedPackets.poll()) != null) {
+				inStream.currentOffset = 0;
+				packetType = p.getOpcode();
+				packetSize = p.getLength();
+				inStream.buffer = p.getPayload().array();
+				if (packetType &gt; 0) {
+					PacketHandler.processPacket(this, packetType, packetSize);
+				}
+			}
+		}
+		return true;
+	}[/code]
+[code]	public Future&lt;?&gt; getCurrentTask() {
+		return currentTask;
+	}
+	
+	public synchronized Stream getInStream() {
+		return inStream;
+	}
+	
+	public synchronized int getPacketType() {
+		return packetType;
+	}
+	
+	public synchronized int getPacketSize() {
+		return packetSize;
+	}
+	
+	public synchronized Stream getOutStream() {
+		return outStream;
+	}[/code]
+[code]	public void destruct() {
+		if(session == null) 
+			return;
+		//PlayerSaving.getSingleton().requestSave(playerId);
+
+		if (inPits)
+			Server.fightPits.removePlayerFromPits(playerId);
+		if (clanId &gt;= 0)
+			Server.clanChat.leaveClan(playerId, clanId);
+		Misc.println(&quot;[DEREGISTERED]: &quot;+playerName+&quot;&quot;);
+		CycleEventHandler.getSingleton().stopEvents(this);
+		disconnected = true;
+		session.close();
+		session = null;
+		inStream = null;
+		outStream = null;
+		isActive = false;
+		buffer = null;
+		super.destruct();
+	}
+[/code]
+
+Now add the imports:
+[code]
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.Channel;
+import server.net.Packet.Type;[/code]
+
+Replace your [url=http://up.ht/IF1rK3]PlayerHandler[/url]
+
+Replace these in Player.java with your old methods:
+[code]	private ISAACCipher inStreamDecryption = null, outStreamDecryption = null;
+	
+	public void setInStreamDecryption(ISAACCipher inStreamDecryption) {
+		this.inStreamDecryption = inStreamDecryption;
+	}
+
+	public void setOutStreamDecryption(ISAACCipher outStreamDecryption) {
+		this.outStreamDecryption = outStreamDecryption;
+	}[/code]
+
+Now import:
+[code]import server.util.ISAACCipher;[/code]
+
+
+NEXT BIT IS UP TO YOU, YOU DON&#39;T HAVE TO DO THIS.
+IF YOU DON&#39;T DO THIS, COMMENT OUT EVERYTHING TO DO WITH PlayerManager AND StillGraphics.
+
+Download these [url=http://up.ht/IF2aLd]Graphics[/url]
+
+Add this in Player.java:
+
+[code]	public boolean withinDistance(int absX, int getY, int getHeightLevel) {
+		if (this.getHeightLevel() != getHeightLevel)
+			return false;
+		int deltaX = this.getX() - absX, deltaY = this.getY() - getY;
+		return deltaX &lt;= 15 &amp;&amp; deltaX &gt;= -16 &amp;&amp; deltaY &lt;= 15 &amp;&amp; deltaY &gt;= -16;
+	}
+	
+	public int getHeightLevel;
+	public int getHeightLevel() {
+	return getHeightLevel;
+	}[/code]
+
+Now add this in PlayerAssistant.java:
+[code]	public void sendStillGraphics(int id, int heightS, int y, int x, int timeBCS) {
+		c.getOutStream().createFrame(85);
+		c.getOutStream().writeByteC(y - (c.mapRegionY * 8));
+		c.getOutStream().writeByteC(x - (c.mapRegionX * 8));
+		c.getOutStream().createFrame(4);
+		c.getOutStream().writeByte(0);// Tiles away (X &gt;&gt; 4 + Y &amp; 7)
+											// //Tiles away from
+		// absX and absY.
+		c.getOutStream().writeWord(id); // Graphic ID.
+		c.getOutStream().writeByte(heightS); // Height of the graphic when
+													// cast.
+		c.getOutStream().writeWord(timeBCS); // Time before the graphic
+													// plays.
+		c.flushOutStream();
+	}[/code]
+
+
+Compiler:
+[code]@echo off
+&quot;C:\Program Files\Java\jdk1.7.0_02\bin\javac.exe&quot; -classpath deps/log4j-1.2.15.jar;deps/jython.jar;deps/xstream.jar;deps/netty.jar;deps/mysql.jar;deps/poi.jar;deps/slf4j.jar;deps/slf4j-nop.jar -d bin src\server\world\map\*.java src\server\event\*.java src\server\model\items\*.java src\server\model\minigames\*.java src\server\model\npcs\*.java src\server\model\objects\*.java src\server\model\players\*.java src\server\model\players\skills\*.java src\server\model\players\packets\*.java src\server\model\shops\*.java src\server\task\*.java src\server\util\*.java src\server\world\*.java src\server\util\log\*.java src\server\*.java src\server\net\login\*.java src\server\net\*.java 
+pause[/code]
+
+Run:
+[code]@echo off
+title Project Insanity
+java -Xmx800m -cp bin;deps/poi.jar;deps/netty.jar;deps/mysql.jar;deps/slf4j.jar;deps/slf4j-nop.jar;deps/jython.jar;log4j-1.2.15.jar; server.Server
+pause[/code]
+
+
+Credits:
+bob is bob/arrowzftw
+Me
+
+protip: snipp w[g&#39;spadgsiai[[isgi[p</description>
+    
+    <lastBuildDate>Sun, 13 Apr 2014 19:44:46 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>isnt going to make your server hold 2000 players by any means but if anyone needs the files you can find them in the average PI</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/78">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/78</link>
+        <pubDate>Sun, 13 Apr 2014 19:44:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-78</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@nathanz nathanz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nathanz">@nathanz</a> wrote:</p>
+          <blockquote>
+              <p>Anyone have the files for this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/77">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/77</link>
+        <pubDate>Tue, 08 Apr 2014 22:45:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-77</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@n10si_t n10si t]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/n10si_t">@n10si_t</a> wrote:</p>
+          <blockquote>
+              <p>Sorry for the grave dig, but can someone reupload the netty deps?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/76">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/76</link>
+        <pubDate>Sun, 22 Jul 2012 20:51:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-76</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@belhelmiel belhelmiel]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/belhelmiel">@belhelmiel</a> wrote:</p>
+          <blockquote>
+              <p>Epic tut. Will probably use. Favorited. But why don’t you just tell us what to edit in server.java instead of just telling us to replace the whole thing. Lol :P. Not too big of a deal though. Thanks for tut.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/75">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/75</link>
+        <pubDate>Fri, 06 Jul 2012 09:45:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-75</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“asshole_rule, post:73, topic:440155”][quote author=Fridder link=topic=542836.msg3990555#msg3990555 date=1336521328]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<pre><code class="lang-auto">[5/8/12 7:11 PM]: [Logging in]: Hi666
+[5/8/12 7:11 PM]: returncode:5</code></pre>
+<p>And every time I press ‘log in’ it says in the command prompt, ‘returncode:5’ while telling me my account is already logged in. Does this have to do with PlayerHandler? Which class?</p>
+</blockquote>
+</aside>
+<p>I think a thread is being blocked, kinda like a deadlock. I’m not really sure, but that has happened to me before with an unrelated deadlock.</p>
+</blockquote>
+</aside>
+<p>How would I go about fixing it?<br>
+[/quote]</p>
+<p>Undo this shit, lol.[/quote]</p>
+<p>Its all backed up :p.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/74">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/74</link>
+        <pubDate>Wed, 09 May 2012 01:39:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-74</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fridder, post:72, topic:440155”][quote author=asshole_rule link=topic=542836.msg3990546#msg3990546 date=1336520355]</p>
+<aside class="quote">
+<blockquote>
+<pre><code class="lang-auto">[5/8/12 7:11 PM]: [Logging in]: Hi666
+[5/8/12 7:11 PM]: returncode:5</code></pre>
+<p>And every time I press ‘log in’ it says in the command prompt, ‘returncode:5’ while telling me my account is already logged in. Does this have to do with PlayerHandler? Which class?</p>
+</blockquote>
+</aside>
+<p>I think a thread is being blocked, kinda like a deadlock. I’m not really sure, but that has happened to me before with an unrelated deadlock.<br>
+[/quote]</p>
+<p>How would I go about fixing it?[/quote]</p>
+<p>Undo this shit, lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/73">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/73</link>
+        <pubDate>Wed, 09 May 2012 01:12:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-73</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“asshole_rule, post:71, topic:440155”][quote author=Fridder link=topic=542836.msg3990527#msg3990527 date=1336518893]</p>
+<pre><code class="lang-auto">[5/8/12 7:11 PM]: [Logging in]: Hi666
+[5/8/12 7:11 PM]: returncode:5</code></pre>
+<p>And every time I press ‘log in’ it says in the command prompt, ‘returncode:5’ while telling me my account is already logged in. Does this have to do with PlayerHandler? Which class?<br>
+[/quote]</p>
+<p>I think a thread is being blocked, kinda like a deadlock. I’m not really sure, but that has happened to me before with an unrelated deadlock.[/quote]</p>
+<p>How would I go about fixing it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/72">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/72</link>
+        <pubDate>Tue, 08 May 2012 23:55:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-72</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fridder, post:69, topic:440155”]<code>
+[5/8/12 7:11 PM]: [Logging in]: Hi666
+[5/8/12 7:11 PM]: returncode:5
+</code><br>
+And every time I press ‘log in’ it says in the command prompt, ‘returncode:5’ while telling me my account is already logged in. Does this have to do with PlayerHandler? Which class?[/quote]</p>
+<p>I think a thread is being blocked, kinda like a deadlock. I’m not really sure, but that has happened to me before with an unrelated deadlock.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/71">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/71</link>
+        <pubDate>Tue, 08 May 2012 23:39:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-71</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Jacob5 Jacob_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jacob5">@Jacob5</a> wrote:</p>
+          <blockquote>
+              <p>Did you remove the old five second time out from process?</p>
+<p>Project Insanity has a time out system, if no packet is received (or data) in five seconds the player is disconnected.</p>
+<p>Response code five is ‘Character already logged in’</p>
+<p>You can find a list <a href="http://rswiki.moparisthebest.com/index.php?title=317_Protocol#Response_Codes" data-bbcode="true" rel="nofollow noopener">here.</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/70">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/70</link>
+        <pubDate>Tue, 08 May 2012 23:29:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-70</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">[5/8/12 7:11 PM]: [Logging in]: Hi666
+[5/8/12 7:11 PM]: returncode:5</code></pre>
+<p>And every time I press ‘log in’ it says in the command prompt, ‘returncode:5’ while telling me my account is already logged in. Does this have to do with PlayerHandler? Which class?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/69">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/69</link>
+        <pubDate>Tue, 08 May 2012 23:14:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-69</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>a (shit) idea to block multiple clients</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/68">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/68</link>
+        <pubDate>Sun, 06 May 2012 18:08:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-68</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Int Bauk, post:66, topic:440155”][quote author=TheHolyGrail link=topic=542836.msg3988772#msg3988772 date=1336279627]<br>
+.classpath and .project are files created while using Eclipse. They have absolutely nothing to do with netty. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+[/quote]</p>
+<p>really? shit didn’t know… -.-</p>
+<p>you might also want to add like a uid system for this <code>			if(uid == 0 || uid == Config.CLIENT_UID) {
+				System.out.println("Client using wrong uid.");
+				channel.close();
+				return false;
+		}</code></p>
+<p>^ wouldn’t use that, but it’s an [size=12pt]<span class="bbcode-u"><span class="bbcode-i"><span class="bbcode-b">example.</span></span></span>[/size][/quote]<br>
+UID wouldn’t really help at all…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/67">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/67</link>
+        <pubDate>Sun, 06 May 2012 15:13:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-67</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="61" data-topic="440155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/theholygrail/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> TheHolyGrail:</div>
+<blockquote>
+<p>.classpath and .project are files created while using Eclipse. They have absolutely nothing to do with netty. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>really? shit didn’t know… -.-</p>
+<p>you might also want to add like a uid system for this <code>			if(uid == 0 || uid == Config.CLIENT_UID) {
+				System.out.println("Client using wrong uid.");
+				channel.close();
+				return false;
+		}</code></p>
+<p>^ wouldn’t use that, but it’s an [size=12pt]<span class="bbcode-u"><span class="bbcode-i"><span class="bbcode-b">example.</span></span></span>[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/66">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/66</link>
+        <pubDate>Sun, 06 May 2012 14:58:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-66</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@the_wanderer The Wanderer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_wanderer">@the_wanderer</a> wrote:</p>
+          <blockquote>
+              <p>you forgot a bracket.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/65">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/65</link>
+        <pubDate>Sun, 06 May 2012 09:02:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-65</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@dannydude8 dannydude8]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dannydude8">@dannydude8</a> wrote:</p>
+          <blockquote>
+              <p>[code]<br>
+src\server\model\players\Client.java:874:  expected<br>
+inStream.currentOffset = 0;<br>
+^<br>
+src\server\model\players\Client.java:875:  expected<br>
+packetType = p.getId();<br>
+^<br>
+src\server\model\players\Client.java:876:  expected<br>
+packetSize = p.getLength();<br>
+^<br>
+src\server\model\players\Client.java:877:  expected<br>
+inStream.buffer = p.getData();<br>
+^<br>
+src\server\model\players\Client.java:878: illegal start of type<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:878:  expected<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:878: ‘;’ expected<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:878: illegal start of type<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:878:  expected<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:878: ‘;’ expected<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:880: illegal start of type<br>
+PacketHandler.processPacket(this, packetType, packetSize<br>
+);<br>
+^<br>
+src\server\model\players\Client.java:880: illegal start of type<br>
+PacketHandler.processPacket(this, packetType, packetSize<br>
+);<br>
+^<br>
+src\server\model\players\Client.java:880:  expected<br>
+PacketHandler.processPacket(this, packetType, packetSize<br>
+);<br>
+^<br>
+src\server\model\players\Client.java:880:  expected<br>
+PacketHandler.processPacket(this, packetType, packetSize<br>
+);</p>
+<p>^<br>
+src\server\model\players\Client.java:882: class, interface, or enum expected<br>
+timeOutCounter = 0;<br>
+^<br>
+src\server\model\players\Client.java:883: class, interface, or enum expected<br>
+return true;<br>
+^<br>
+src\server\model\players\Client.java:884: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:886: class, interface, or enum expected<br>
+public synchronized boolean processPacket(Packet p) {<br>
+^<br>
+src\server\model\players\Client.java:890: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:892: class, interface, or enum expected<br>
+packetType = p.getId();<br>
+^<br>
+src\server\model\players\Client.java:893: class, interface, or enum expected<br>
+packetSize = p.getLength();<br>
+^<br>
+src\server\model\players\Client.java:894: class, interface, or enum expected<br>
+inStream.buffer = p.getData();<br>
+^<br>
+src\server\model\players\Client.java:895: class, interface, or enum expected<br>
+if(packetType &gt; 0) {<br>
+^<br>
+src\server\model\players\Client.java:898: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:900: class, interface, or enum expected<br>
+return true;<br>
+^<br>
+src\server\model\players\Client.java:901: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:905: class, interface, or enum expected<br>
+public void correctCoordinates() {<br>
+^<br>
+src\server\model\players\Client.java:908: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:911: class, interface, or enum expected<br>
+sendMessage(“Your wave will start in 10 seconds.”);<br>
+^<br>
+src\server\model\players\Client.java:912: class, interface, or enum expected<br>
+EventManager.getSingleton().addEvent(new Event() {<br>
+^<br>
+src\server\model\players\Client.java:913: class, interface, or enum expected<br>
+public void execute(EventContainer c) {<br>
+^<br>
+src\server\model\players\Client.java:915: class, interface, or enum expected<br>
+c.stop();<br>
+^<br>
+src\server\model\players\Client.java:916: class, interface, or enum expected<br>
+}<br>
+^<br>
+src\server\model\players\Client.java:919: class, interface, or enum expected<br>
+}<br>
+^<br>
+34 errors<br>
+Press any key to continue . . .[/code]</p>
+<p>Any suggestions?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/64">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/64</link>
+        <pubDate>Sun, 06 May 2012 06:28:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-64</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@the_wanderer The Wanderer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_wanderer">@the_wanderer</a> wrote:</p>
+          <blockquote>
+              <p>frugooscape had 3 worlds with 1400 players on each one.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/63">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/63</link>
+        <pubDate>Sun, 06 May 2012 05:47:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-63</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="61" data-topic="440155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/theholygrail/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> TheHolyGrail:</div>
+<blockquote>
+<p>.classpath and .project are files created while using Eclipse. They have absolutely nothing to do with netty. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>Did you not notice the “(not required)” ?  It has to do with netty partially because some noobs just don’t know how to add the jar into the eclipse classpath at all.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/62">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/62</link>
+        <pubDate>Sun, 06 May 2012 05:41:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-62</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@TheHolyGrail TheHolyGrail]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/theholygrail">@TheHolyGrail</a> wrote:</p>
+          <blockquote>
+              <p>.classpath and .project are files created while using Eclipse. They have absolutely nothing to do with netty. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/61">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/61</link>
+        <pubDate>Sun, 06 May 2012 04:47:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-61</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@enzo42 enzo42]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enzo42">@enzo42</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Jacob_, post:59, topic:440155”][quote author=enzo42 link=topic=542836.msg3988576#msg3988576 date=1336259466]<br>
+Anyway u can do this for Delta?<br>
+No shit like “Delta sucks use crappy PI pl0x” please.<br>
+[/quote]</p>
+<p>It wouldn’t be hard…[/quote]</p>
+<p>Mmm, ill give it a try.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/60">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/60</link>
+        <pubDate>Sat, 05 May 2012 23:18:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-60</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Jacob5 Jacob_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jacob5">@Jacob5</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“enzo42, post:58, topic:440155”]Anyway u can do this for Delta?<br>
+No shit like “Delta sucks use crappy PI pl0x” please.[/quote]</p>
+<p>It wouldn’t be hard…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/59">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/59</link>
+        <pubDate>Sat, 05 May 2012 23:15:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-59</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@enzo42 enzo42]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enzo42">@enzo42</a> wrote:</p>
+          <blockquote>
+              <p>Anyway u can do this for Delta?<br>
+No shit like “Delta sucks use crappy PI pl0x” please.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/58">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/58</link>
+        <pubDate>Sat, 05 May 2012 23:11:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-58</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mystic-Effect, post:56, topic:440155”][quote author=imsuperman05 link=topic=542836.msg3987713#msg3987713 date=1336151565]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>why go over 2000…</p>
+</blockquote>
+</aside>
+<p>why not? i’d host the maximum amount of people on one server before updating took longer than 600 ms cuz i’m a cheap ass.</p>
+<p>edit<br>
+<span class="mention">@s_</span> you would need to create a custom serializer to make use of the akka remote actors in a rsps, correct?</p>
+</blockquote>
+</aside>
+<p>I don’t think there would ever be over 2k players in one rsps…<br>
+[/quote]</p>
+<p>near-reality has way more than 2k players.[/quote]<br>
+cause they have been around since the beginning<br>
+also your sig shows how r-s has some stupid members</p>
+<p>what i’m trying to say is that; there is no real reason to reach more than 2k players because it will take over 2 years to reach that amount or be able to hold more than 2k players.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/57">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/57</link>
+        <pubDate>Sat, 05 May 2012 22:18:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-57</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@Mystic-Effect Mystic-Effect]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mystic-effect">@Mystic-Effect</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:53, topic:440155”][quote author=The Wanderer link=topic=542836.msg3987398#msg3987398 date=1336091243]</p>
+<aside class="quote">
+<blockquote>
+<p>why go over 2000…</p>
+</blockquote>
+</aside>
+<p>why not? i’d host the maximum amount of people on one server before updating took longer than 600 ms cuz i’m a cheap ass.</p>
+<p>edit<br>
+<span class="mention">@s_</span> you would need to create a custom serializer to make use of the akka remote actors in a rsps, correct?<br>
+[/quote]<br>
+I don’t think there would ever be over 2k players in one rsps…[/quote]</p>
+<p>near-reality has way more than 2k players.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/56">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/56</link>
+        <pubDate>Sat, 05 May 2012 22:12:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-56</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@marcbob marcbob]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/marcbob">@marcbob</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:53, topic:440155”][quote author=The Wanderer link=topic=542836.msg3987398#msg3987398 date=1336091243]</p>
+<aside class="quote">
+<blockquote>
+<p>why go over 2000…</p>
+</blockquote>
+</aside>
+<p>why not? i’d host the maximum amount of people on one server before updating took longer than 600 ms cuz i’m a cheap ass.</p>
+<p>edit<br>
+<span class="mention">@s_</span> you would need to create a custom serializer to make use of the akka remote actors in a rsps, correct?<br>
+[/quote]<br>
+I don’t think there would ever be over 2k players in one rsps…[/quote]</p>
+<p>Soulsplit.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/55">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/55</link>
+        <pubDate>Fri, 04 May 2012 22:32:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-55</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+      <item>
+        <title>Adding netty networking to Project Insanity, proven to hold 2,000+ players</title>
+        <dc:creator><![CDATA[@m1lkman m1lkman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m1lkman">@m1lkman</a> wrote:</p>
+          <blockquote>
+              <p>Jagex would be the first to do it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/54">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155/54</link>
+        <pubDate>Fri, 04 May 2012 19:12:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-440155-54</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-netty-networking-to-project-insanity-proven-to-hold-2-000-players/440155.rss">Adding netty networking to Project Insanity, proven to hold 2,000+ players</source>
+      </item>
+  </channel>
+</rss>

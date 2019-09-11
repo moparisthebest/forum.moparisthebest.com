@@ -1,0 +1,1067 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+    <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748</link>
+    <description>so i&#39;d like to share with some this tool that i wrote a while back , will introduce how to properly do what&#39;s being described in title using ASM,however new version of it is much more enhanced since it support many other deobbers like control flow , opaque predicates and unnecessary params removers, but for now just make use of this :p.
+
+[b][ASM] ZKM Strings Deobber(normal flow, obviously what rs has), Unneeded casts and dead code remover transformers[/b]
+
+[b]ClassTransformer.java[/b]
+[code]package com.divicusframework.deobfuscator.transformers;
+
+import org.objectweb.asm.tree.ClassNode;
+
+/**
+ * 
+ * 
+ * @author Divine
+ */
+public abstract class ClassTransformer {
+
+    protected ClassTransformer ct;
+
+    public ClassTransformer(ClassTransformer ct) {
+        this.ct = ct;
+    }
+
+    public void transform(ClassNode cn) {
+        if (ct != null) {
+            ct.transform(cn);
+        }
+    }
+}
+[/code]
+
+
+[b]MethodTransformer.java[/b]
+[code]
+package com.divicusframework.deobfuscator.transformers;
+
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ * 
+ * @author Divine
+ */
+public abstract class MethodTransformer {
+
+    protected MethodTransformer mt;
+
+    public MethodTransformer(MethodTransformer mt) {
+        this.mt = mt;
+    }
+
+    public void transform(MethodNode mn) {
+        if (mt != null) {
+            mt.transform(mn);
+        }
+    }
+}
+[/code]
+
+[b]KeyGrabTransformer.java[/b]
+[code]
+package com.divicusframework.deobfuscator.transformers;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TableSwitchInsnNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class KeysGrabTransformer extends MethodTransformer implements Opcodes {
+
+    public KeysGrabTransformer(MethodTransformer c) {
+        super(c);
+    }
+    private List&lt;Integer&gt; keys = new ArrayList&lt;Integer&gt;();
+
+    public List&lt;Integer&gt; getKeys() {
+        return keys;
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        boolean start = false;
+        AbstractInsnNode node = null;
+
+
+        for (Iterator&lt;AbstractInsnNode&gt; ai = mn.instructions.iterator(); ai.hasNext();) {
+            node = ai.next();
+            if (node instanceof TableSwitchInsnNode) {
+                start = true;
+            }
+
+            if (start &amp;&amp; node instanceof InsnNode) {
+                //lower boundary reached?
+                if (node.getOpcode() == IXOR) {
+                    return;
+                }
+                //add keys
+                InsnNode in = (InsnNode) node;
+                final int op = in.getOpcode();
+                keys.add(op - 3);//since ICONST_0 has val 3 and adds 1 all way up to ICONST_5
+            } else if (node instanceof IntInsnNode) {
+                IntInsnNode iin = (IntInsnNode) node;
+                if (iin.getOpcode() == BIPUSH || iin.getOpcode() == SIPUSH) {
+                    keys.add(iin.operand);
+                }
+            }
+        }
+
+    }
+}
+
+[/code]
+
+[b]RemoveDeadCodeTransformer.java[/b]
+[code]
+/*
+ * To change this template, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package com.divicusframework.deobfuscator.transformers;
+
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicInterpreter;
+import org.objectweb.asm.tree.analysis.BasicValue;
+import org.objectweb.asm.tree.analysis.Frame;
+
+/**
+ *
+ * @author Divine
+ */
+public class RemoveDeadCodeTransformer extends MethodTransformer {
+
+    private String owner;
+
+    public RemoveDeadCodeTransformer(String owner, MethodTransformer m) {
+        super(m);
+        this.owner = owner;
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        Analyzer&lt;BasicValue&gt; a = new Analyzer&lt;BasicValue&gt;(new BasicInterpreter());
+        try {
+            a.analyze(owner, mn);
+            Frame&lt;BasicValue&gt;[] frames = a.getFrames();
+            AbstractInsnNode[] insns = mn.instructions.toArray();
+            for (int i = 0; i &lt; frames.length; ++i) {
+                if (frames[i] == null &amp;&amp; !(insns[i] instanceof LabelNode)) {
+                    mn.instructions.remove(insns[i]);
+                }
+            }
+        } catch (AnalyzerException ignored) {
+            ignored.printStackTrace();
+        }
+
+
+    }
+}
+
+[/code]
+
+[b]RemoveUnusedCastTransformer.java[/b]
+[code]
+package com.divicusframework.deobfuscator.transformers;
+
+import static org.objectweb.asm.Opcodes.CHECKCAST;
+
+import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicValue;
+import org.objectweb.asm.tree.analysis.Frame;
+import org.objectweb.asm.tree.analysis.SimpleVerifier;
+
+
+/**
+ * 
+ * 
+ * @author Divine
+ */
+public class RemoveUnusedCastTransformer extends MethodTransformer {
+
+    String owner;
+
+    public RemoveUnusedCastTransformer(String owner, MethodTransformer mt) {
+        super(mt);
+        this.owner = owner;
+    }
+
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        Analyzer&lt;BasicValue&gt; a = new Analyzer&lt;BasicValue&gt;(new SimpleVerifier());
+        try {
+            a.analyze(owner, mn);
+            Frame&lt;BasicValue&gt;[] frames = a.getFrames();
+            AbstractInsnNode[] insns = mn.instructions.toArray();
+            for (int i = 0; i &lt; insns.length; ++i) {
+                AbstractInsnNode insn = insns[i];
+                if (insn.getOpcode() == CHECKCAST) {
+                    Frame&lt;BasicValue&gt; f = frames[i];
+                    if (f != null &amp;&amp; f.getStackSize() &gt; 0) {
+                        Object operand = f.getStack(f.getStackSize() - 1);
+                        Class&lt;?&gt; to, from;
+                        try {
+                            to = getClass(((TypeInsnNode) insn).desc);
+                            from = getClass(((BasicValue) operand).getType());
+                        } catch (ClassNotFoundException t) {
+                            continue;
+                        }
+                        if (to.isAssignableFrom(from)) {
+                            mn.instructions.remove(insn);
+                        }
+                    }
+                }
+            }
+        } catch (AnalyzerException ignored) {
+        }
+
+    }
+
+    private Class&lt;?&gt; getClass(String desc)
+            throws ClassNotFoundException {
+        ClassLoader classLoader = getClass().getClassLoader();
+        return Class.forName(desc.replace(&#39;/&#39;, &#39;.&#39;), false, classLoader);
+    }
+
+    private Class&lt;?&gt; getClass(Type t) throws ClassNotFoundException {
+        if (t.getSort() == Type.OBJECT) {
+            return getClass(t.getInternalName());
+        }
+        return getClass(t.getDescriptor());
+    }
+}
+
+[/code]
+
+[b]StringDeobberTransformer.java[/b]
+[code]
+package com.divicusframework.deobfuscator.transformers;
+
+import java.util.Iterator;
+import java.util.List;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class StringDeobberTransformer extends MethodTransformer implements Opcodes {
+
+    final List&lt;Integer&gt; keys;
+
+    public StringDeobberTransformer(MethodTransformer mt, List&lt;Integer&gt; keys) {
+        super(mt);
+        this.keys = keys;
+    }
+
+    public static String XorEnc(String s, List&lt;Integer&gt; keys) {
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0, j = 0; i &lt; s.toCharArray().length; i++, j++) {
+            sb.append((char) (s.charAt(i) ^ keys.get(j % keys.size())));
+        }
+        return sb.toString();
+
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        AbstractInsnNode node = null;
+        for (Iterator&lt;AbstractInsnNode&gt; ai = mn.instructions.iterator(); ai.hasNext();) {
+            node = ai.next();
+            if (node instanceof LdcInsnNode) {
+                LdcInsnNode ldc = (LdcInsnNode) node;
+                if (!(ldc.cst instanceof String)) {
+                    continue;
+                }
+                AbstractInsnNode is1 = ai.next();
+                AbstractInsnNode is2 = ai.next();
+                if (is1 instanceof MethodInsnNode &amp;&amp; is1.getOpcode() == INVOKESTATIC
+                        &amp;&amp; is2 instanceof MethodInsnNode &amp;&amp; is2.getOpcode() == INVOKESTATIC) {
+                    mn.instructions.insertBefore(ldc, new LdcInsnNode(XorEnc((String) ldc.cst, keys)));
+                    mn.instructions.remove(ldc);
+                    mn.instructions.remove(is1);//z(Ljava/lang/String;)[C
+                    mn.instructions.remove(is2);//z([C)Ljava/lang/String;
+
+                }
+
+            }
+        }
+
+    }
+}
+[/code]
+
+[b]ZkmClassTransformer.java[/b]
+[code]
+package com.divicusframework.deobfuscator.transformers;
+
+import java.util.Iterator;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class ZkmClassTransformer extends ClassTransformer {
+
+    public ZkmClassTransformer(ClassTransformer c) {
+        super(c);
+    }
+
+    @Override
+    public void transform(ClassNode cn) {
+
+        super.transform(cn);
+        System.out.println(&quot;Generic Strings Decryption for Class &quot; + cn.name);
+        System.out.println(&quot;--------------------------------------------&quot;);
+        System.out.println();
+        MethodNode next = null;
+        ////////////////////////Grab encryption keys.
+        KeysGrabTransformer kg = new KeysGrabTransformer(null);
+        kg.transform(cn.methods.get(cn.methods.size() - 1));//transform only last metho
+        System.out.println(&quot;Grabbed String Encryption keys for class : &quot; + cn.name);
+        for (Iterator&lt;MethodNode&gt; fi = cn.methods.iterator(); fi.hasNext();) {
+            next = fi.next();
+
+            ////////////////////////Strings Obfuscation Removal.
+            new StringDeobberTransformer(null, kg.getKeys()).transform(next);
+            System.out.println(&quot;Deobfuscated all strings in method : &quot; + next.name + &quot; &quot; + next.desc);
+            /*///////////////////////////////////////////////
+            //Remove Unused Casting
+            //////////////////////////////////*/
+            new RemoveUnusedCastTransformer(cn.name, null).transform(next);
+            System.out.println(&quot;Removed all unnessary casts in method : &quot; + next.name + &quot; &quot; + next.desc);
+
+            new RemoveDeadCodeTransformer(cn.name, null).transform(next);
+            System.out.println(&quot;Removed all dead code in method: &quot; + next.name + &quot; &quot; + next.desc);
+
+        }
+
+
+    }
+}
+
+[/code]
+
+
+[b][size=14pt]Output Examples [/size][/b]
+
+[b]1)String Decyption/Replacement:[/b]
+FROM
+[code]String[] encrypted = {z(z(&quot;#!@&quot;)),z(z(&quot;AJ@!&quot;)),z(z(&quot;s*&amp;&quot;)),z(z(&quot;lA24b*V0h&quot;))};[/code]
+TO
+[code]String[] decrypted = {&quot;see&quot;,&quot;how&quot;,&quot;its&quot;,&quot;decrypted&quot;};[/code]
+
+[b]2)Unnecessary Casting Removing:[/b]
+FROM
+[code]String[] s = (String[])(String[])((Object[])(Object[])(someObject)[0])[2][/code]
+TO
+[code]String[] s = (String[])((Object[])(someObject)[0])[2][/code]
+
+[b]3)Dead Code Removing:[/b]
+FROM
+[code]
+public void a()
+{
+   int a;//dead code
+   System.out.println(&quot;hello&quot;);
+ }
+[/code]
+TO
+[code]
+public void a()
+{
+   System.out.println(&quot;hello&quot;);
+ }
+[/code]
+
+[b]PS:[/b] No control flow fixer or opaque predicates remover transformers have been introduced in this code.</description>
+    
+    <lastBuildDate>Wed, 11 Jan 2012 19:04:15 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="15" data-topic="423748">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/marneus901/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Marneus901:</div>
+<blockquote>
+<p>frank, shut up.</p>
+</blockquote>
+</aside>
+<p>who the fuck are you?<br>
+he’s correct</p>
+<p>ROFL.<br>
+<a href="http://mail.java2s.com/Open-Source/Java/Byte-Code/asm/ch7/sec2/RemoveUnusedCastTransformer.java.htm" class="onebox" target="_blank" rel="nofollow noopener">http://mail.java2s.com/Open-Source/Java/Byte-Code/asm/ch7/sec2/RemoveUnusedCastTransformer.java.htm</a><br>
+I bet all the string decrypt stuff was from the other threads posted here too.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/16</link>
+        <pubDate>Wed, 11 Jan 2012 19:04:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-16</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@Marneus901 Marneus901]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/marneus901">@Marneus901</a> wrote:</p>
+          <blockquote>
+              <p>frank, shut up.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/15</link>
+        <pubDate>Thu, 08 Dec 2011 05:24:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-15</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>learn to code, it is pretty easy to remove most obfuscation</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/14</link>
+        <pubDate>Thu, 08 Dec 2011 03:29:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-14</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@_Discardedx21 `Discardedx2`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_discardedx21">@_Discardedx21</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:11, topic:423748”]Great job. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:">  Are you planning on extending it to do the other things you mentioned, like control flow, opaque predicates, dummy variables and the like?</p>
+<p>I’d love to be able to use this and automatically provide de-compiled deobs at <a href="http://www.moparisthebest.com/rs/%5B/quote%5D" rel="nofollow noopener">http://www.moparisthebest.com/rs/[/quote]</a></p>
+<p>gl with that u need a lot more then just the average deobfuscator to get a deob to work above 669 lol, even fernflower fails hard</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/13</link>
+        <pubDate>Thu, 08 Dec 2011 01:23:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-13</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@D_i_v_i_n_e1 D i v i n e :]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/d_i_v_i_n_e1">@D_i_v_i_n_e1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:11, topic:423748”]Great job. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:">  Are you planning on extending it to do the other things you mentioned, like control flow, opaque predicates, dummy variables and the like?</p>
+<p>I’d love to be able to use this and automatically provide de-compiled deobs at <a href="http://www.moparisthebest.com/rs/%5B/quote%5D" rel="nofollow noopener">http://www.moparisthebest.com/rs/[/quote]</a><br>
+thanks, and yes i have control flow fixer but i am still working on the graph for a  very generic and global (for all obfuscators) opaque predicates remover where it reconstruct methods and remove unnecessary params with its corresponding instructions for dummy conditional checks etc … <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/12</link>
+        <pubDate>Fri, 02 Dec 2011 18:27:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-12</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Great job. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:">  Are you planning on extending it to do the other things you mentioned, like control flow, opaque predicates, dummy variables and the like?</p>
+<p>I’d love to be able to use this and automatically provide de-compiled deobs at <a href="http://www.moparisthebest.com/rs/">http://www.moparisthebest.com/rs/</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/11</link>
+        <pubDate>Fri, 02 Dec 2011 16:57:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-11</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="8" data-topic="423748">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>Gives me cant find image errors plz halp</p>
+</blockquote>
+</aside>
+<p>No cheating bro <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/10</link>
+        <pubDate>Fri, 02 Dec 2011 06:32:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-10</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@vortex vortex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vortex">@vortex</a> wrote:</p>
+          <blockquote>
+              <p>It was made before they made it Playforia</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/9</link>
+        <pubDate>Fri, 02 Dec 2011 01:03:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-9</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Gives me cant find image errors plz halp</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/8</link>
+        <pubDate>Thu, 01 Dec 2011 23:20:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-8</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@vortex vortex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vortex">@vortex</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:5, topic:423748”]id love me sum minigolf aimbots[/quote]nade, RLN and some other dude already made one - <a href="http://www.servbit.org/dev.zip" rel="nofollow noopener">http://www.servbit.org/dev.zip</a><br>
+I’m more interested in the other games though and as far as I know, they all use ZKM string encryption but it’s not quite the same as with RS</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/7</link>
+        <pubDate>Thu, 01 Dec 2011 23:13:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-7</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@Rictoo Rictoo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rictoo">@Rictoo</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="423748">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>id love me sum minigolf aimbots</p>
+</blockquote>
+</aside>
+<p>been there done that. would require reversing of some server-side algos.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/6</link>
+        <pubDate>Thu, 01 Dec 2011 23:09:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-6</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>id love me sum minigolf aimbots</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/5</link>
+        <pubDate>Thu, 01 Dec 2011 22:44:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-5</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@vortex vortex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vortex">@vortex</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“D i v i n e :, post:3, topic:423748”][quote author=vortex link=topic=526404.msg3833990#msg3833990 date=1322772766]<br>
+Have you tried this on any Playray apps?<br>
+[/quote]<br>
+:eek:[/quote]What? Playray is way more popular and cooler than RuneScape <img src="http://i.imgur.com/10xLz.gif" alt width="60" height="40"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/4</link>
+        <pubDate>Thu, 01 Dec 2011 21:03:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-4</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@D_i_v_i_n_e1 D i v i n e :]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/d_i_v_i_n_e1">@D_i_v_i_n_e1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="423748">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/vortex/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> vortex:</div>
+<blockquote>
+<p>Have you tried this on any Playray apps?</p>
+</blockquote>
+</aside>
+<p>:eek:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/3</link>
+        <pubDate>Thu, 01 Dec 2011 20:54:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-3</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@vortex vortex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vortex">@vortex</a> wrote:</p>
+          <blockquote>
+              <p>Have you tried this on any Playray apps?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/2</link>
+        <pubDate>Thu, 01 Dec 2011 20:52:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-2</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+      <item>
+        <title>[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</title>
+        <dc:creator><![CDATA[@D_i_v_i_n_e1 D i v i n e :]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/d_i_v_i_n_e1">@D_i_v_i_n_e1</a> wrote:</p>
+          <blockquote>
+              <p>so i’d like to share with some this tool that i wrote a while back , will introduce how to properly do what’s being described in title using ASM,however new version of it is much more enhanced since it support many other deobbers like control flow , opaque predicates and unnecessary params removers, but for now just make use of this :p.</p>
+<p><span class="bbcode-b">[ASM] ZKM Strings Deobber(normal flow, obviously what rs has), Unneeded casts and dead code remover transformers</span></p>
+<p><span class="bbcode-b">ClassTransformer.java</span></p>
+<p>[code]package com.divicusframework.deobfuscator.transformers;</p>
+<p>import org.objectweb.asm.tree.ClassNode;</p>
+<p>/**<br>
+*<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Divine<br>
+*/<br>
+public abstract class ClassTransformer {</p>
+<p>protected ClassTransformer ct;</p>
+<p>public ClassTransformer(ClassTransformer ct) {<br>
+this.ct = ct;<br>
+}</p>
+<p>public void transform(ClassNode cn) {<br>
+if (ct != null) {<br>
+ct.transform(cn);<br>
+}<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+<p><span class="bbcode-b">MethodTransformer.java</span></p>
+<pre><code class="lang-auto">package com.divicusframework.deobfuscator.transformers;
+
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ * 
+ * @author Divine
+ */
+public abstract class MethodTransformer {
+
+    protected MethodTransformer mt;
+
+    public MethodTransformer(MethodTransformer mt) {
+        this.mt = mt;
+    }
+
+    public void transform(MethodNode mn) {
+        if (mt != null) {
+            mt.transform(mn);
+        }
+    }
+}</code></pre>
+<p><span class="bbcode-b">KeyGrabTransformer.java</span></p>
+<pre><code class="lang-auto">package com.divicusframework.deobfuscator.transformers;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TableSwitchInsnNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class KeysGrabTransformer extends MethodTransformer implements Opcodes {
+
+    public KeysGrabTransformer(MethodTransformer c) {
+        super(c);
+    }
+    private List&lt;Integer&gt; keys = new ArrayList&lt;Integer&gt;();
+
+    public List&lt;Integer&gt; getKeys() {
+        return keys;
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        boolean start = false;
+        AbstractInsnNode node = null;
+
+
+        for (Iterator&lt;AbstractInsnNode&gt; ai = mn.instructions.iterator(); ai.hasNext();) {
+            node = ai.next();
+            if (node instanceof TableSwitchInsnNode) {
+                start = true;
+            }
+
+            if (start &amp;&amp; node instanceof InsnNode) {
+                //lower boundary reached?
+                if (node.getOpcode() == IXOR) {
+                    return;
+                }
+                //add keys
+                InsnNode in = (InsnNode) node;
+                final int op = in.getOpcode();
+                keys.add(op - 3);//since ICONST_0 has val 3 and adds 1 all way up to ICONST_5
+            } else if (node instanceof IntInsnNode) {
+                IntInsnNode iin = (IntInsnNode) node;
+                if (iin.getOpcode() == BIPUSH || iin.getOpcode() == SIPUSH) {
+                    keys.add(iin.operand);
+                }
+            }
+        }
+
+    }
+}
+</code></pre>
+<p><span class="bbcode-b">RemoveDeadCodeTransformer.java</span></p>
+<pre><code class="lang-auto">/*
+ * To change this template, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package com.divicusframework.deobfuscator.transformers;
+
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicInterpreter;
+import org.objectweb.asm.tree.analysis.BasicValue;
+import org.objectweb.asm.tree.analysis.Frame;
+
+/**
+ *
+ * @author Divine
+ */
+public class RemoveDeadCodeTransformer extends MethodTransformer {
+
+    private String owner;
+
+    public RemoveDeadCodeTransformer(String owner, MethodTransformer m) {
+        super(m);
+        this.owner = owner;
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        Analyzer&lt;BasicValue&gt; a = new Analyzer&lt;BasicValue&gt;(new BasicInterpreter());
+        try {
+            a.analyze(owner, mn);
+            Frame&lt;BasicValue&gt;[] frames = a.getFrames();
+            AbstractInsnNode[] insns = mn.instructions.toArray();
+            for (int i = 0; i &lt; frames.length; ++i) {
+                if (frames[i] == null &amp;&amp; !(insns[i] instanceof LabelNode)) {
+                    mn.instructions.remove(insns[i]);
+                }
+            }
+        } catch (AnalyzerException ignored) {
+            ignored.printStackTrace();
+        }
+
+
+    }
+}
+</code></pre>
+<p><span class="bbcode-b">RemoveUnusedCastTransformer.java</span></p>
+<pre><code class="lang-auto">package com.divicusframework.deobfuscator.transformers;
+
+import static org.objectweb.asm.Opcodes.CHECKCAST;
+
+import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicValue;
+import org.objectweb.asm.tree.analysis.Frame;
+import org.objectweb.asm.tree.analysis.SimpleVerifier;
+
+
+/**
+ * 
+ * 
+ * @author Divine
+ */
+public class RemoveUnusedCastTransformer extends MethodTransformer {
+
+    String owner;
+
+    public RemoveUnusedCastTransformer(String owner, MethodTransformer mt) {
+        super(mt);
+        this.owner = owner;
+    }
+
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        Analyzer&lt;BasicValue&gt; a = new Analyzer&lt;BasicValue&gt;(new SimpleVerifier());
+        try {
+            a.analyze(owner, mn);
+            Frame&lt;BasicValue&gt;[] frames = a.getFrames();
+            AbstractInsnNode[] insns = mn.instructions.toArray();
+            for (int i = 0; i &lt; insns.length; ++i) {
+                AbstractInsnNode insn = insns[i];
+                if (insn.getOpcode() == CHECKCAST) {
+                    Frame&lt;BasicValue&gt; f = frames[i];
+                    if (f != null &amp;&amp; f.getStackSize() &gt; 0) {
+                        Object operand = f.getStack(f.getStackSize() - 1);
+                        Class&lt;?&gt; to, from;
+                        try {
+                            to = getClass(((TypeInsnNode) insn).desc);
+                            from = getClass(((BasicValue) operand).getType());
+                        } catch (ClassNotFoundException t) {
+                            continue;
+                        }
+                        if (to.isAssignableFrom(from)) {
+                            mn.instructions.remove(insn);
+                        }
+                    }
+                }
+            }
+        } catch (AnalyzerException ignored) {
+        }
+
+    }
+
+    private Class&lt;?&gt; getClass(String desc)
+            throws ClassNotFoundException {
+        ClassLoader classLoader = getClass().getClassLoader();
+        return Class.forName(desc.replace('/', '.'), false, classLoader);
+    }
+
+    private Class&lt;?&gt; getClass(Type t) throws ClassNotFoundException {
+        if (t.getSort() == Type.OBJECT) {
+            return getClass(t.getInternalName());
+        }
+        return getClass(t.getDescriptor());
+    }
+}
+</code></pre>
+<p><span class="bbcode-b">StringDeobberTransformer.java</span></p>
+<pre><code class="lang-auto">package com.divicusframework.deobfuscator.transformers;
+
+import java.util.Iterator;
+import java.util.List;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class StringDeobberTransformer extends MethodTransformer implements Opcodes {
+
+    final List&lt;Integer&gt; keys;
+
+    public StringDeobberTransformer(MethodTransformer mt, List&lt;Integer&gt; keys) {
+        super(mt);
+        this.keys = keys;
+    }
+
+    public static String XorEnc(String s, List&lt;Integer&gt; keys) {
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0, j = 0; i &lt; s.toCharArray().length; i++, j++) {
+            sb.append((char) (s.charAt(i) ^ keys.get(j % keys.size())));
+        }
+        return sb.toString();
+
+    }
+
+    @Override
+    public void transform(MethodNode mn) {
+        super.transform(mn);
+        AbstractInsnNode node = null;
+        for (Iterator&lt;AbstractInsnNode&gt; ai = mn.instructions.iterator(); ai.hasNext();) {
+            node = ai.next();
+            if (node instanceof LdcInsnNode) {
+                LdcInsnNode ldc = (LdcInsnNode) node;
+                if (!(ldc.cst instanceof String)) {
+                    continue;
+                }
+                AbstractInsnNode is1 = ai.next();
+                AbstractInsnNode is2 = ai.next();
+                if (is1 instanceof MethodInsnNode &amp;&amp; is1.getOpcode() == INVOKESTATIC
+                        &amp;&amp; is2 instanceof MethodInsnNode &amp;&amp; is2.getOpcode() == INVOKESTATIC) {
+                    mn.instructions.insertBefore(ldc, new LdcInsnNode(XorEnc((String) ldc.cst, keys)));
+                    mn.instructions.remove(ldc);
+                    mn.instructions.remove(is1);//z(Ljava/lang/String;)[C
+                    mn.instructions.remove(is2);//z([C)Ljava/lang/String;
+
+                }
+
+            }
+        }
+
+    }
+}</code></pre>
+<p><span class="bbcode-b">ZkmClassTransformer.java</span></p>
+<pre><code class="lang-auto">package com.divicusframework.deobfuscator.transformers;
+
+import java.util.Iterator;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodNode;
+
+/**
+ *
+ * @author Divine
+ */
+public class ZkmClassTransformer extends ClassTransformer {
+
+    public ZkmClassTransformer(ClassTransformer c) {
+        super(c);
+    }
+
+    @Override
+    public void transform(ClassNode cn) {
+
+        super.transform(cn);
+        System.out.println("Generic Strings Decryption for Class " + cn.name);
+        System.out.println("--------------------------------------------");
+        System.out.println();
+        MethodNode next = null;
+        ////////////////////////Grab encryption keys.
+        KeysGrabTransformer kg = new KeysGrabTransformer(null);
+        kg.transform(cn.methods.get(cn.methods.size() - 1));//transform only last metho
+        System.out.println("Grabbed String Encryption keys for class : " + cn.name);
+        for (Iterator&lt;MethodNode&gt; fi = cn.methods.iterator(); fi.hasNext();) {
+            next = fi.next();
+
+            ////////////////////////Strings Obfuscation Removal.
+            new StringDeobberTransformer(null, kg.getKeys()).transform(next);
+            System.out.println("Deobfuscated all strings in method : " + next.name + " " + next.desc);
+            /*///////////////////////////////////////////////
+            //Remove Unused Casting
+            //////////////////////////////////*/
+            new RemoveUnusedCastTransformer(cn.name, null).transform(next);
+            System.out.println("Removed all unnessary casts in method : " + next.name + " " + next.desc);
+
+            new RemoveDeadCodeTransformer(cn.name, null).transform(next);
+            System.out.println("Removed all dead code in method: " + next.name + " " + next.desc);
+
+        }
+
+
+    }
+}
+</code></pre>
+<p><span class="bbcode-b">[size=14pt]Output Examples [/size]</span></p>
+<p><span class="bbcode-b">1)String Decyption/Replacement:</span><br>
+FROM</p>
+<pre><code class="lang-auto"></code></pre>
+<p>TO</p>
+<pre><code class="lang-auto"></code></pre>
+<p><span class="bbcode-b">2)Unnecessary Casting Removing:</span><br>
+FROM</p>
+<pre><code class="lang-auto"></code></pre>
+<p>TO</p>
+<pre><code class="lang-auto"></code></pre>
+<p><span class="bbcode-b">3)Dead Code Removing:</span><br>
+FROM</p>
+<pre><code class="lang-auto">public void a()
+{
+   int a;//dead code
+   System.out.println("hello");
+ }</code></pre>
+<p>TO</p>
+<pre><code class="lang-auto">public void a()
+{
+   System.out.println("hello");
+ }</code></pre>
+<p><span class="bbcode-b">PS:</span> No control flow fixer or opaque predicates remover transformers have been introduced in this code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748/1</link>
+        <pubDate>Thu, 01 Dec 2011 20:37:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423748-1</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-zkm-strings-deobber-unneeded-casts-and-dead-code-remover-transformers/423748.rss">[ASM] ZKM Strings Deobber, Unneeded casts and dead code remover transformers</source>
+      </item>
+  </channel>
+</rss>

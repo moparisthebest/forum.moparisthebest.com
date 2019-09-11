@@ -1,0 +1,581 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Cracking the Allatori string encryption</title>
+    <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659</link>
+    <description>Alright, so I noticed a Java application obfuscated with a obfuscator called &quot;Allatori&quot;, and I wanted to see if the string encryption is hard to reverse. Well, it wasn&#39;t :P
+
+Let&#39;s download the application at [url=http://www.allatori.com/downloads/Allatori-1.8-Demo.zip]http://www.allatori.com/downloads/Allatori-1.8-Demo.zip[/url] and extract the archive. The classes are at lib/allatori.jar. Now let&#39;s pick a random class and hope that it has encrypted strings in it (I picked the class &#39;com.allatori.Watermark&#39;).
+
+I found this:
+&lt;blockquote&gt;        if(ks.A() == null) {
+          lr.b([b]tp.a[/b]([b]&quot;Wzyryrff}av{v5~fvzu: Bb`igbuz~+\177Ql\027}C5]{H5LqL{&quot;[/b]));
+          System.exit(0);
+        }&lt;/blockquote&gt;
+Ok, we found a string and the static decryption method [i]a[/i] in the class [i]tp[/i]. Now let’s get back to the archive root and decompile the class tp. Like expected, the control flow is fucked and decompiling produces a mess, so we’ll fire up the Sun java disassembler (javap).
+
+[code]
+public static java.lang.String a(java.lang.String);
+  Code:
+   0:   new     #6; //class java/lang/String
+   3:   dup
+   4:   aload_0
+   5:   invokevirtual   #10; //Method java/lang/String.length:()I
+   8:   newarray char
+   10:  bipush  85
+   12:  swap
+   13:  dup
+   14:  arraylength
+   15:  iconst_1
+   16:  isub
+   17:  dup_x2
+   18:  istore_3
+   19:  astore_1
+   20:  istore_2
+   21:  iflt    80
+   24:  aload_1
+   25:  iload_3
+   26:  aload_0
+   27:  iload_3
+   28:  invokevirtual   #14; //Method java/lang/String.charAt:(I)C
+   31:  iload_2
+   32:  ixor
+   33:  i2c
+   34:  swap
+   35:  dup_x1
+   36:  iload_2
+   37:  ixor
+   38:  i2c
+   39:  bipush  63
+   41:  iand
+   42:  i2c
+   43:  istore_2
+   44:  castore
+   45:  iinc    3, -1
+   48:  iload_3
+   49:  iflt    80
+   52:  aload_1
+   53:  iload_3
+   54:  aload_0
+   55:  iload_3
+   56:  invokevirtual   #14; //Method java/lang/String.charAt:(I)C
+   59:  iload_2
+   60:  ixor
+   61:  i2c
+   62:  swap
+   63:  dup_x1
+   64:  iload_2
+   65:  ixor
+   66:  i2c
+   67:  bipush  63
+   69:  iand
+   70:  i2c
+   71:  istore_2
+   72:  castore
+   73:  iinc    3, -1
+   76:  iload_3
+   77:  goto    21
+   80:  aload_1
+   81:  invokespecial   #18; //Method java/lang/String.&quot;&lt;init&gt;&quot;:([C)V
+   84:  areturn
+[/code]
+
+Now let’s see how the magic happens. A new string object is allocated in the beginning and left to the stack, then a char array of the length of the source string is allocated. After this, a mysterious integer [b]85[/b] is pushed on the stack, assumably it is a key used in the decryption, let’s call it [b]KEY0[/b]. Next, the length of the array is pushed and subtracted by one, and by the looks of it, the source string contents will be iterated backwards. 
+
+Alright, the next imporant part is how the stack is saved to local variables, it is important so that we’ll know what the variables in the slots represent. At slot 0, there’s the source string which was passed as an argument, then the array, KEY0 and iterator position in slot 3. On the stack, there is now the new string object, uninitialized, and a copy of the current iterator position. 
+
+Next there’s a conditional branch, to check if the iteration is done and if the string is fully decrypted. The stack is filled again with the local variables and a char is read from the source string and XORed with KEY0. After this, KEY0 is XORed with the current iterator position and ANDed with a new mysterious integer of [b]63[/b], which we’ll call [b]KEY1[/b] from now on. The char read from the source string, and XORed with KEY0 is written to the array and iterator position is decremented by one.
+
+Then there’s a conditional branch, and things are looking scarily familiar. Could this be a copy of the previous code block? Yep, I don’t know why, but it is. Alright, so the procedure is repeated until every character is decrypted and the iterator position has reached -1. We’ve finished analyzing the decryption code. Now we’re left wondering if KEY0 and KEY1 are dynamic, are they different for every obfuscated program? After trying the obfuscator, we notice that the keys are constant.
+
+85 and 63.
+85 in binary is 1010101, so it seems like an ok bitmask for XORing.
+63 is 00111111, as a bitmask in a AND operation it nulls the 2 high bits.
+KEY0 is kept below 64 to keep the UTF8 constant valid when XORed.
+
+So now we can decrypt strings crypted by Allatori! (and crypt new ones to replace the old)
+
+[code]
+  public final static String decrypt(String encrypted) {
+    char[] array = encrypted.toCharArray();
+    decrypt(array);
+    return new String(array);
+  }
+
+  public final static void decrypt(char[] source) {
+    final int KEY0 = 0x55;
+    final int KEY1 = 0x3f;
+    int pos = source.length - 1;
+    int xor = KEY0;
+    while(pos &gt;= 0) {
+      source[pos] ^= xor;
+      xor = pos ^ xor &amp; KEY1;
+      pos--;
+    }
+  }
+[/code]
+
+Oh yeah, and:
+[code]
+&quot;Wzyryrff}av{v5~fvzu: Bb`igbuz~+\177Ql\027}C5]{H5LqL{&quot;
+
+stands for
+
+”Configuration error. Watermark key is not set.”
+[/code]
+
+[code]
+What&#39;s this
+&quot;dY_U\25\34TRB\34QR\21XW^_E^I\11HBRVY\6PNHJXoZk^rYhN{&quot;
+[/code]
+
+(I just whipped this topic up, my english probably sucks, after all I&#39;m not native english speaker... And not every instruction of the code is explained.)
+
+Enjoy!</description>
+    
+    <lastBuildDate>Tue, 06 Sep 2011 01:23:17 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“veer, post:12, topic:177659”][quote author=cidiom link=topic=238584.msg3728513#msg3728513 date=1314465719]<br>
+I realize this topic has not been updated for a couple years, but just in case anyone stumbles across the code posted by k00dr, there is one slight issue.  Because of operator precedence in Java, bitwise ANDs get executed before bitwise XORs.</p>
+<p>You will need to substitute this line:<br>
+xor = pos ^ xor &amp; KEY1;<br>
+for this instead:<br>
+xor = (pos ^ xor) &amp; KEY1;</p>
+<p>Have fun!<br>
+[/quote]</p>
+<p>Is this why k00dr’s method works on only select strings?[/quote]</p>
+<p>Following up on my post, this is quite an interesting error that went unnoticed for a very long time. It was almost like a heisenbug to me earlier, given the vast number of cases that xor &amp; KEY1 = xor due to shorter length strings. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/17</link>
+        <pubDate>Tue, 06 Sep 2011 01:23:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-17</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Evil1 Evil_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evil1">@Evil1</a> wrote:</p>
+          <blockquote>
+              <p>omg, someone joined this forum to help instead of flame/troll, I like this g(uy|irl). Kudos.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/16</link>
+        <pubDate>Sun, 28 Aug 2011 02:47:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-16</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@cidiom cidiom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cidiom">@cidiom</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“slavemaster, post:14, topic:177659”][quote author=cidiom link=topic=238584.msg3729080#msg3729080 date=1314489659]</p>
+<aside class="quote">
+<blockquote>
+<p>Is this why k00dr’s method works on only select strings?</p>
+</blockquote>
+</aside>
+<p>Yes, I believe that is correct.  It appeared to work for smaller strings, but had issues for longer ones.  This update should resolve that issue.<br>
+[/quote]</p>
+<p>Out of curiosity, /who/ exactly are you? Do you have a means of extra-forum communication?[/quote]<br>
+Nobody in particular, just someone who likes tinkering with Java and solving problems.  Feel free to email me, should be a link on the left.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/15</link>
+        <pubDate>Sun, 28 Aug 2011 00:31:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-15</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@slavemaster veer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/slavemaster">@slavemaster</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“cidiom, post:13, topic:177659”][quote author=slavemaster link=topic=238584.msg3728603#msg3728603 date=1314469719]<br>
+Is this why k00dr’s method works on only select strings?<br>
+[/quote]</p>
+<p>Yes, I believe that is correct.  It appeared to work for smaller strings, but had issues for longer ones.  This update should resolve that issue.[/quote]</p>
+<p>Out of curiosity, /who/ exactly are you? Do you have a means of extra-forum communication?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/14</link>
+        <pubDate>Sun, 28 Aug 2011 00:03:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-14</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@cidiom cidiom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cidiom">@cidiom</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="12" data-topic="177659">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/slavemaster/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> slavemaster:</div>
+<blockquote>
+<p>Is this why k00dr’s method works on only select strings?</p>
+</blockquote>
+</aside>
+<p>Yes, I believe that is correct.  It appeared to work for smaller strings, but had issues for longer ones.  This update should resolve that issue.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/13</link>
+        <pubDate>Sun, 28 Aug 2011 00:00:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-13</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@slavemaster veer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/slavemaster">@slavemaster</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“cidiom, post:11, topic:177659”]I realize this topic has not been updated for a couple years, but just in case anyone stumbles across the code posted by k00dr, there is one slight issue.  Because of operator precedence in Java, bitwise ANDs get executed before bitwise XORs.</p>
+<p>You will need to substitute this line:<br>
+xor = pos ^ xor &amp; KEY1;<br>
+for this instead:<br>
+xor = (pos ^ xor) &amp; KEY1;</p>
+<p>Have fun![/quote]</p>
+<p>Is this why k00dr’s method works on only select strings?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/12</link>
+        <pubDate>Sat, 27 Aug 2011 18:28:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-12</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@cidiom cidiom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cidiom">@cidiom</a> wrote:</p>
+          <blockquote>
+              <p>I realize this topic has not been updated for a couple years, but just in case anyone stumbles across the code posted by k00dr, there is one slight issue.  Because of operator precedence in Java, bitwise ANDs get executed before bitwise XORs.</p>
+<p>You will need to substitute this line:<br>
+xor = pos ^ xor &amp; KEY1;<br>
+for this instead:<br>
+xor = (pos ^ xor) &amp; KEY1;</p>
+<p>Have fun!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/11</link>
+        <pubDate>Sat, 27 Aug 2011 17:21:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-11</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Jacmob, post:6, topic:177659”][quote author=BAsh(CntLgn) link=topic=238584.msg2030114#msg2030114 date=1202041839]<br>
+Interesting. One of the key things about string encryption is that somewhere, somehow the string has to be decrypted in order to be displayed in a meaningful way to the user. That is how I beat ruler’s pathetic string encryption in ibot (also alltori i believe). You had calls to I.I(123) where I is a class and the next I (capital i) is a static method. The method would extract the string from a file that was called an image file (but wasn’t) which contained all the strings in the program. The number passed to the method was an index and at that index it would read the length and then the string. The way to beat it was to simply make the calls to I.I ourselves. Go through the source of the program looking for pushint invokestatic then call I.I with the appropriate argument and simply replace it with an ldc instruction. Easy.<br>
+[/quote]<br>
+JShrink does that - ruler uses allatori + jshrink, neither of which go far to conceal the strings.</p>
+<p>Nice explanation, thanks :)[/quote]</p>
+<p>nice, something i found out in 2007 and have since made common knowledge… very nice</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/10</link>
+        <pubDate>Sun, 01 Nov 2009 14:10:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-10</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Jacmob Jacmob]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jacmob">@Jacmob</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="7" data-topic="177659">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/cheese_police/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> Cheese_Police:</div>
+<blockquote>
+<p>shameless bump?</p>
+</blockquote>
+</aside>
+<p>moar deob threads<br>
+!!</p>
+<p>Nah, I was just too retarded to read the dates when I was linked last night.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/9</link>
+        <pubDate>Sun, 01 Nov 2009 14:05:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-9</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@CheatoX CheatoX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheatox">@CheatoX</a> wrote:</p>
+          <blockquote>
+              <p>for some reason this ain’t correct, after a certain amount of chars of a string, it starts to fuck up</p>
+<p>Example</p>
+<pre><code class="lang-auto">hO[tSONPaUTY^YSGFSGJRJNNNYp]nxR~p]uU1U|YdJgY|]fgSr7eSw_QY^UUYV^YIZ]O
+QKS\6NOD[JNNNY=QM9HuvTwSvY2KdYy7mNkZ%^iI!HmRL[S]PPRCFUFU
+S^I@SDNSHUTCI=Pq^xHsR;</code></pre>
+<p>get’s decrypted to:</p>
+<pre><code class="lang-auto"> se Mouse Wheel to zoom on worldmap and each individual bot
+dou",%`#,)#+`"/4`&amp;/2`-%.5J$2!'`7/2,$`-!0`4/`#(!.'%`6)%7J$2!'`"/4`4/ ïðåî á íåîõ ÷éôè ïðôéïîó ïî ôèáô ìïãáôéïn</code></pre>
+<p>i guess that’s not how it should be</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/8</link>
+        <pubDate>Sun, 01 Nov 2009 13:46:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-8</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Jacmob, post:6, topic:177659”][quote author=BAsh(CntLgn) link=topic=238584.msg2030114#msg2030114 date=1202041839]<br>
+Interesting. One of the key things about string encryption is that somewhere, somehow the string has to be decrypted in order to be displayed in a meaningful way to the user. That is how I beat ruler’s pathetic string encryption in ibot (also alltori i believe). You had calls to I.I(123) where I is a class and the next I (capital i) is a static method. The method would extract the string from a file that was called an image file (but wasn’t) which contained all the strings in the program. The number passed to the method was an index and at that index it would read the length and then the string. The way to beat it was to simply make the calls to I.I ourselves. Go through the source of the program looking for pushint invokestatic then call I.I with the appropriate argument and simply replace it with an ldc instruction. Easy.<br>
+[/quote]<br>
+JShrink does that - ruler uses allatori + jshrink, neither of which go far to conceal the strings.</p>
+<p>Nice explanation, thanks :)[/quote]</p>
+<p>shameless bump?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/7</link>
+        <pubDate>Sun, 01 Nov 2009 03:38:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-7</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Jacmob Jacmob]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jacmob">@Jacmob</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="5" data-topic="177659">
+<div class="title">
+<div class="quote-controls"></div>
+ BAsh(CntLgn):</div>
+<blockquote>
+<p>Interesting. One of the key things about string encryption is that somewhere, somehow the string has to be decrypted in order to be displayed in a meaningful way to the user. That is how I beat ruler’s pathetic string encryption in ibot (also alltori i believe). You had calls to I.I(123) where I is a class and the next I (capital i) is a static method. The method would extract the string from a file that was called an image file (but wasn’t) which contained all the strings in the program. The number passed to the method was an index and at that index it would read the length and then the string. The way to beat it was to simply make the calls to I.I ourselves. Go through the source of the program looking for pushint invokestatic then call I.I with the appropriate argument and simply replace it with an ldc instruction. Easy.</p>
+</blockquote>
+</aside>
+<p>JShrink does that - ruler uses allatori + jshrink, neither of which go far to conceal the strings.</p>
+<p>Nice explanation, thanks <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/6</link>
+        <pubDate>Sun, 01 Nov 2009 00:31:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-6</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@BAsh_CntLgn BAsh(CntLgn)]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash_cntlgn">@BAsh_CntLgn</a> wrote:</p>
+          <blockquote>
+              <p>Interesting. One of the key things about string encryption is that somewhere, somehow the string has to be decrypted in order to be displayed in a meaningful way to the user. That is how I beat ruler’s pathetic string encryption in ibot (also alltori i believe). You had calls to I.I(123) where I is a class and the next I (capital i) is a static method. The method would extract the string from a file that was called an image file (but wasn’t) which contained all the strings in the program. The number passed to the method was an index and at that index it would read the length and then the string. The way to beat it was to simply make the calls to I.I ourselves. Go through the source of the program looking for pushint invokestatic then call I.I with the appropriate argument and simply replace it with an ldc instruction. Easy.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/5</link>
+        <pubDate>Sun, 03 Feb 2008 12:30:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-5</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>i like this a lot, very intresting read <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/4</link>
+        <pubDate>Sat, 02 Feb 2008 23:36:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-4</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@White_Castle White Castle]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/white_castle">@White_Castle</a> wrote:</p>
+          <blockquote>
+              <p>Heh, a while back I tried to crack ZKM’s string obfuscation scheme (looks similar to that, but somewhat more complex). In the end, I resorted to loading the class in question along with a bytecode representation, and grabbing the decoded strings from memory. Creds for not doing what I did :).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/3</link>
+        <pubDate>Sat, 02 Feb 2008 05:13:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-3</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>i wont use this, but i enjoyed the explaination.<br>
+if i ever come across string encryption i can referance this =]<br>
+thanks</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/2</link>
+        <pubDate>Sat, 02 Feb 2008 04:45:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-2</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+      <item>
+        <title>Cracking the Allatori string encryption</title>
+        <dc:creator><![CDATA[@k00dr k00dr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k00dr">@k00dr</a> wrote:</p>
+          <blockquote>
+              <p>Alright, so I noticed a Java application obfuscated with a obfuscator called “Allatori”, and I wanted to see if the string encryption is hard to reverse. Well, it wasn’t <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>Let’s download the application at <a href="http://www.allatori.com/downloads/Allatori-1.8-Demo.zip" data-bbcode="true" rel="nofollow noopener">http://www.allatori.com/downloads/Allatori-1.8-Demo.zip</a> and extract the archive. The classes are at lib/allatori.jar. Now let’s pick a random class and hope that it has encrypted strings in it (I picked the class ‘com.allatori.Watermark’).</p>
+<p>I found this:</p>
+<blockquote>        if(ks.A() == null) {
+          lr.b([b]tp.a[/b]([b]"Wzyryrff}av{v5~fvzu: Bb`igbuz~+\177Ql\027}C5]{H5LqL{"[/b]));
+          System.exit(0);
+        }</blockquote>
+Ok, we found a string and the static decryption method [i]a[/i] in the class [i]tp[/i]. Now let’s get back to the archive root and decompile the class tp. Like expected, the control flow is fucked and decompiling produces a mess, so we’ll fire up the Sun java disassembler (javap).
+<pre><code class="lang-auto">public static java.lang.String a(java.lang.String);
+  Code:
+   0:   new     #6; //class java/lang/String
+   3:   dup
+   4:   aload_0
+   5:   invokevirtual   #10; //Method java/lang/String.length:()I
+   8:   newarray char
+   10:  bipush  85
+   12:  swap
+   13:  dup
+   14:  arraylength
+   15:  iconst_1
+   16:  isub
+   17:  dup_x2
+   18:  istore_3
+   19:  astore_1
+   20:  istore_2
+   21:  iflt    80
+   24:  aload_1
+   25:  iload_3
+   26:  aload_0
+   27:  iload_3
+   28:  invokevirtual   #14; //Method java/lang/String.charAt:(I)C
+   31:  iload_2
+   32:  ixor
+   33:  i2c
+   34:  swap
+   35:  dup_x1
+   36:  iload_2
+   37:  ixor
+   38:  i2c
+   39:  bipush  63
+   41:  iand
+   42:  i2c
+   43:  istore_2
+   44:  castore
+   45:  iinc    3, -1
+   48:  iload_3
+   49:  iflt    80
+   52:  aload_1
+   53:  iload_3
+   54:  aload_0
+   55:  iload_3
+   56:  invokevirtual   #14; //Method java/lang/String.charAt:(I)C
+   59:  iload_2
+   60:  ixor
+   61:  i2c
+   62:  swap
+   63:  dup_x1
+   64:  iload_2
+   65:  ixor
+   66:  i2c
+   67:  bipush  63
+   69:  iand
+   70:  i2c
+   71:  istore_2
+   72:  castore
+   73:  iinc    3, -1
+   76:  iload_3
+   77:  goto    21
+   80:  aload_1
+   81:  invokespecial   #18; //Method java/lang/String."&lt;init&gt;":([C)V
+   84:  areturn</code></pre>
+<p>Now let’s see how the magic happens. A new string object is allocated in the beginning and left to the stack, then a char array of the length of the source string is allocated. After this, a mysterious integer <span class="bbcode-b">85</span> is pushed on the stack, assumably it is a key used in the decryption, let’s call it <span class="bbcode-b">KEY0</span>. Next, the length of the array is pushed and subtracted by one, and by the looks of it, the source string contents will be iterated backwards.</p>
+<p>Alright, the next imporant part is how the stack is saved to local variables, it is important so that we’ll know what the variables in the slots represent. At slot 0, there’s the source string which was passed as an argument, then the array, KEY0 and iterator position in slot 3. On the stack, there is now the new string object, uninitialized, and a copy of the current iterator position.</p>
+<p>Next there’s a conditional branch, to check if the iteration is done and if the string is fully decrypted. The stack is filled again with the local variables and a char is read from the source string and XORed with KEY0. After this, KEY0 is XORed with the current iterator position and ANDed with a new mysterious integer of <span class="bbcode-b">63</span>, which we’ll call <span class="bbcode-b">KEY1</span> from now on. The char read from the source string, and XORed with KEY0 is written to the array and iterator position is decremented by one.</p>
+<p>Then there’s a conditional branch, and things are looking scarily familiar. Could this be a copy of the previous code block? Yep, I don’t know why, but it is. Alright, so the procedure is repeated until every character is decrypted and the iterator position has reached -1. We’ve finished analyzing the decryption code. Now we’re left wondering if KEY0 and KEY1 are dynamic, are they different for every obfuscated program? After trying the obfuscator, we notice that the keys are constant.</p>
+<p>85 and 63.<br>
+85 in binary is 1010101, so it seems like an ok bitmask for XORing.<br>
+63 is 00111111, as a bitmask in a AND operation it nulls the 2 high bits.<br>
+KEY0 is kept below 64 to keep the UTF8 constant valid when XORed.</p>
+<p>So now we can decrypt strings crypted by Allatori! (and crypt new ones to replace the old)</p>
+<pre><code class="lang-auto">  public final static String decrypt(String encrypted) {
+    char[] array = encrypted.toCharArray();
+    decrypt(array);
+    return new String(array);
+  }
+
+  public final static void decrypt(char[] source) {
+    final int KEY0 = 0x55;
+    final int KEY1 = 0x3f;
+    int pos = source.length - 1;
+    int xor = KEY0;
+    while(pos &gt;= 0) {
+      source[pos] ^= xor;
+      xor = pos ^ xor &amp; KEY1;
+      pos--;
+    }
+  }</code></pre>
+<p>Oh yeah, and:</p>
+<pre><code class="lang-auto">"Wzyryrff}av{v5~fvzu: Bb`igbuz~+\177Ql\027}C5]{H5LqL{"
+
+stands for
+
+”Configuration error. Watermark key is not set.”</code></pre>
+<pre><code class="lang-auto">What's this
+"dY_U\25\34TRB\34QR\21XW^_E^I\11HBRVY\6PNHJXoZk^rYhN{"</code></pre>
+<p>(I just whipped this topic up, my english probably sucks, after all I’m not native english speaker… And not every instruction of the code is explained.)</p>
+<p>Enjoy!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659/1</link>
+        <pubDate>Sat, 02 Feb 2008 02:47:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-177659-1</guid>
+        <source url="https://forum.moparisthebest.com/t/cracking-the-allatori-string-encryption/177659.rss">Cracking the Allatori string encryption</source>
+      </item>
+  </channel>
+</rss>

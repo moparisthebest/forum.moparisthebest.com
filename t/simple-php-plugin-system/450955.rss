@@ -1,0 +1,423 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Simple PHP Plugin System</title>
+    <link>https://forum.moparisthebest.com/t/simple-php-plugin-system/450955</link>
+    <description>[b]IPlugin.php[/b]
+[code] 
+&lt;?php
+
+interface IPlugin {
+    // Attach hooks to the plugin object
+    public function setHooks();
+    public function pluginInfo();
+    // Set for plugins not activated
+    public function deactivated();
+}
+
+?&gt;
+[/code]
+ 
+[b]Plugins.php[/b]
+[code]
+&lt;?php
+
+define(&#39;PLUGINS_DIR&#39;, getcwd() . &#39;/plugins&#39;);
+require_once(&#39;IPlugin.php&#39;);
+
+class Plugins {
+    
+    private static $plugins = array();
+    private static $hooks = array();
+    private static $pluginCount = 0;
+    private static $hookCount = 0;
+    
+    public static function loadPlugins() {
+        $dir = opendir(PLUGINS_DIR);
+        // Scan the plugins directory for the appropriate PHP files
+        while (($fileName = readdir($dir)) !== false) {
+            if (stripos($fileName, &#39;.php&#39;) === false)
+                continue;
+            
+            $name = str_replace(&#39;.php&#39;, &#39;&#39;, $fileName);
+            // Add plugin files to array
+            array_push(self::$plugins, array(
+                &#39;name&#39; =&gt; $name,
+                &#39;filename&#39; =&gt; $fileName,
+                &#39;filepath&#39; =&gt; PLUGINS_DIR . &#39;/&#39; . $fileName
+            ));
+            self::$pluginCount++;
+            self::addPluginHook($name, true);
+        }
+    }
+    
+    public static function addPluginHook($name, $activate) {
+        $hooks = self::$hooks;
+        // Check for the existence of a hook in the hooks array, if found, activate it
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            if (in_array($name, $hooks[$hookIndex])) {
+                if ($hooks[$hookIndex][&#39;name&#39;] != $name)
+                    continue;
+                
+                self::$hooks[$hookIndex][&#39;activate&#39;] = true;
+                self::$hookCount++;
+                return;
+            }
+        }
+        
+        // Add it to the hooks array
+        array_push(self::$hooks, array(
+            &#39;name&#39; =&gt; $name,
+            &#39;activate&#39; =&gt; $activate
+        ));
+        self::$hookCount++;
+    }
+    
+    public static function removePluginHook($name) {
+        $hooks = self::$hooks;
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            if ($hooks[$hookIndex][&#39;name&#39;] != $name)
+                continue;
+            
+            self::$hookCount--;
+            self::$hooks[$hookIndex][&#39;activate&#39;] = false;
+        }
+    }
+    
+    public static function runPluginHooks($hook) {
+        $plugins = self::$plugins;
+        $hooks = self::$hooks;
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            $plugin = self::getPluginObject($hooks[$hookIndex][&#39;name&#39;]);
+            if (!$hooks[$hookIndex][&#39;activate&#39;]) {
+                $plugin-&gt;deactivated();
+                continue;
+            }
+            
+            $pluginHooks = count($plugin-&gt;setHooks());
+            for ($pluginHookIndex = 0; $pluginHookIndex &lt; $pluginHooks; $pluginHookIndex++) {
+                if (strcasecmp($pluginHooks[$pluginHookIndex], $hook) != 0)
+                    continue;
+            }
+            
+            $hookActivateFunc = &#39;activate_&#39; . $hook;
+            $func = is_callable(array($plugin, $hookActivateFunc));
+            if ($func)
+                $plugin-&gt;$hookActivateFunc();
+        }
+    }
+    
+    public static function getPluginObject($name) {
+        $plugins = self::$plugins;
+        for ($pluginIndex = 0; $pluginIndex &lt; count($plugins); $pluginIndex++) {
+            if ($plugins[$pluginIndex][&#39;name&#39;] != $name)
+                continue;
+            
+            include_once(PLUGINS_DIR . &#39;/&#39; . $name . &#39;.php&#39;);
+            return new $plugins[$pluginIndex][&#39;name&#39;]();
+        }
+        
+        return null;
+    }
+    
+    public static function getPluginCount() {
+        return self::$pluginCount;
+    }
+    
+    public static function getHookCount() {
+        return self::$hookCount;
+    }
+    
+    public static function getPlugins() {
+        return self::$plugins;
+    }
+    
+    public static function getHooks() {
+        return self::$hooks;
+    }
+}
+
+?&gt;
+[/code]
+ 
+Those two should be in the same directory, seperated from the plugins themselves. The name of the file should reflect the plugin class. Here is what a plugin looks like, 
+[b]./plugins/TestPlugin.php[/b],
+[code]
+&lt;?php
+
+class TestPlugin implements IPlugin {
+    
+    public function setHooks() {
+        return array(
+            &#39;index_bottom&#39;,
+            &#39;index_content&#39;
+        );
+    }
+    
+    public function pluginInfo() {
+        return array(
+            &#39;name&#39; =&gt; &#39;Test Plugin&#39;,
+            &#39;version&#39; =&gt; 1.1
+        );
+    }
+    
+    public function activate_index_bottom() {
+        echo &#39;&lt;p&gt;This will activate if the index_bottom hook is used.&lt;/p&gt;&#39;;
+    }
+    
+    public function activate_index_content() {
+        echo &#39;&lt;p&gt;This will activate if the index_content hook is used.&lt;/p&gt;&#39;;
+    }
+
+    public function deactivated() {
+        // Something? Nothing?
+    }
+}
+
+?&gt;
+[/code]
+ 
+And in your index.php or wherever you want to run hooks, use something like,
+[code]
+&lt;?php
+
+require(&#39;Plugins.php&#39;);
+Plugins::loadPlugins();
+
+// More code ...
+ 
+echo &#39;
+ &lt;html&gt;
+    &lt;head&gt;
+    &lt;/head&gt;
+
+    &lt;body&gt;
+        &lt;p&gt;Random content here.&lt;/p&gt;&#39;;
+        
+Plugins::runPluginHooks(&#39;index_header&#39;);
+Plugins::runPluginHooks(&#39;index_content&#39;);
+echo &#39;  &lt;hr /&gt;&#39;;
+Plugins::runPluginHooks(&#39;index_bottom&#39;);
+ 
+echo &#39;
+        &lt;p&gt;More random content here.&lt;/p&gt;
+    &lt;/body&gt;
+ &lt;/html&gt;&#39;;
+ 
+ ?&gt;
+[/code]
+ 
+This file would run three different hooks.</description>
+    
+    <lastBuildDate>Mon, 23 Jul 2012 22:33:13 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/simple-php-plugin-system/450955.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Simple PHP Plugin System</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">IPlugin.php</span></p>
+<pre><code class="lang-auto">&lt;?php
+
+interface IPlugin {
+    // Attach hooks to the plugin object
+    public function setHooks();
+    public function pluginInfo();
+    // Set for plugins not activated
+    public function deactivated();
+}
+
+?&gt;</code></pre>
+<p><span class="bbcode-b">Plugins.php</span></p>
+<pre><code class="lang-auto">&lt;?php
+
+define('PLUGINS_DIR', getcwd() . '/plugins');
+require_once('IPlugin.php');
+
+class Plugins {
+    
+    private static $plugins = array();
+    private static $hooks = array();
+    private static $pluginCount = 0;
+    private static $hookCount = 0;
+    
+    public static function loadPlugins() {
+        $dir = opendir(PLUGINS_DIR);
+        // Scan the plugins directory for the appropriate PHP files
+        while (($fileName = readdir($dir)) !== false) {
+            if (stripos($fileName, '.php') === false)
+                continue;
+            
+            $name = str_replace('.php', '', $fileName);
+            // Add plugin files to array
+            array_push(self::$plugins, array(
+                'name' =&gt; $name,
+                'filename' =&gt; $fileName,
+                'filepath' =&gt; PLUGINS_DIR . '/' . $fileName
+            ));
+            self::$pluginCount++;
+            self::addPluginHook($name, true);
+        }
+    }
+    
+    public static function addPluginHook($name, $activate) {
+        $hooks = self::$hooks;
+        // Check for the existence of a hook in the hooks array, if found, activate it
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            if (in_array($name, $hooks[$hookIndex])) {
+                if ($hooks[$hookIndex]['name'] != $name)
+                    continue;
+                
+                self::$hooks[$hookIndex]['activate'] = true;
+                self::$hookCount++;
+                return;
+            }
+        }
+        
+        // Add it to the hooks array
+        array_push(self::$hooks, array(
+            'name' =&gt; $name,
+            'activate' =&gt; $activate
+        ));
+        self::$hookCount++;
+    }
+    
+    public static function removePluginHook($name) {
+        $hooks = self::$hooks;
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            if ($hooks[$hookIndex]['name'] != $name)
+                continue;
+            
+            self::$hookCount--;
+            self::$hooks[$hookIndex]['activate'] = false;
+        }
+    }
+    
+    public static function runPluginHooks($hook) {
+        $plugins = self::$plugins;
+        $hooks = self::$hooks;
+        for ($hookIndex = 0; $hookIndex &lt; count($hooks); $hookIndex++) {
+            $plugin = self::getPluginObject($hooks[$hookIndex]['name']);
+            if (!$hooks[$hookIndex]['activate']) {
+                $plugin-&gt;deactivated();
+                continue;
+            }
+            
+            $pluginHooks = count($plugin-&gt;setHooks());
+            for ($pluginHookIndex = 0; $pluginHookIndex &lt; $pluginHooks; $pluginHookIndex++) {
+                if (strcasecmp($pluginHooks[$pluginHookIndex], $hook) != 0)
+                    continue;
+            }
+            
+            $hookActivateFunc = 'activate_' . $hook;
+            $func = is_callable(array($plugin, $hookActivateFunc));
+            if ($func)
+                $plugin-&gt;$hookActivateFunc();
+        }
+    }
+    
+    public static function getPluginObject($name) {
+        $plugins = self::$plugins;
+        for ($pluginIndex = 0; $pluginIndex &lt; count($plugins); $pluginIndex++) {
+            if ($plugins[$pluginIndex]['name'] != $name)
+                continue;
+            
+            include_once(PLUGINS_DIR . '/' . $name . '.php');
+            return new $plugins[$pluginIndex]['name']();
+        }
+        
+        return null;
+    }
+    
+    public static function getPluginCount() {
+        return self::$pluginCount;
+    }
+    
+    public static function getHookCount() {
+        return self::$hookCount;
+    }
+    
+    public static function getPlugins() {
+        return self::$plugins;
+    }
+    
+    public static function getHooks() {
+        return self::$hooks;
+    }
+}
+
+?&gt;</code></pre>
+<p>Those two should be in the same directory, seperated from the plugins themselves. The name of the file should reflect the plugin class. Here is what a plugin looks like,<br>
+<span class="bbcode-b">./plugins/TestPlugin.php</span>,</p>
+<pre><code class="lang-auto">&lt;?php
+
+class TestPlugin implements IPlugin {
+    
+    public function setHooks() {
+        return array(
+            'index_bottom',
+            'index_content'
+        );
+    }
+    
+    public function pluginInfo() {
+        return array(
+            'name' =&gt; 'Test Plugin',
+            'version' =&gt; 1.1
+        );
+    }
+    
+    public function activate_index_bottom() {
+        echo '&lt;p&gt;This will activate if the index_bottom hook is used.&lt;/p&gt;';
+    }
+    
+    public function activate_index_content() {
+        echo '&lt;p&gt;This will activate if the index_content hook is used.&lt;/p&gt;';
+    }
+
+    public function deactivated() {
+        // Something? Nothing?
+    }
+}
+
+?&gt;</code></pre>
+<p>And in your index.php or wherever you want to run hooks, use something like,</p>
+<pre><code class="lang-auto">&lt;?php
+
+require('Plugins.php');
+Plugins::loadPlugins();
+
+// More code ...
+ 
+echo '
+ &lt;html&gt;
+    &lt;head&gt;
+    &lt;/head&gt;
+
+    &lt;body&gt;
+        &lt;p&gt;Random content here.&lt;/p&gt;';
+        
+Plugins::runPluginHooks('index_header');
+Plugins::runPluginHooks('index_content');
+echo '  &lt;hr /&gt;';
+Plugins::runPluginHooks('index_bottom');
+ 
+echo '
+        &lt;p&gt;More random content here.&lt;/p&gt;
+    &lt;/body&gt;
+ &lt;/html&gt;';
+ 
+ ?&gt;</code></pre>
+<p>This file would run three different hooks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simple-php-plugin-system/450955/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simple-php-plugin-system/450955/1</link>
+        <pubDate>Mon, 23 Jul 2012 22:33:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450955-1</guid>
+        <source url="https://forum.moparisthebest.com/t/simple-php-plugin-system/450955.rss">Simple PHP Plugin System</source>
+      </item>
+  </channel>
+</rss>

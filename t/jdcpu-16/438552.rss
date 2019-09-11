@@ -1,0 +1,849 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>jDCPU-16</title>
+    <link>https://forum.moparisthebest.com/t/jdcpu-16/438552</link>
+    <description>https://github.com/RuneTekk/jDCPU-16/
+
+DCPU-16 basic implementation in java.
+specs: http://0x10c.com/doc/dcpu-16.txt
+
+example executes:
+
+[code=asm]
+; Try some basic stuff
+SET A, 0x30              ; 7c01 0030
+SET [0x1000], 0x20       ; 7de1 1000 0020
+SUB A, [0x1000]          ; 7803 1000
+IFN A, 0x10              ; c00d 
+   SET PC, crash         ; 7dc1 001a [*]
+                      
+; Do a loopy thing
+SET I, 10                ; a861
+SET A, 0x2000            ; 7c01 2000
+:loop         
+SET [0x2000+I], [A]      ; 2161 2000
+SUB I, 1                 ; 8463
+IFN I, 0                 ; 806d
+   SET PC, loop          ; 7dc1 000d [*]
+        
+; Call a subroutine
+SET X, 0x4               ; 9031
+JSR testsub              ; 7c10 0018 [*]
+SET PC, crash            ; 7dc1 001a [*]
+        
+:testsub      
+SHL X, 4                 ; 9037
+SET PC, POP              ; 61c1
+                        
+; Hang forever. X should now be 0x40 if everything went right.
+:crash        
+SET PC, crash            ; 7dc1 001a [*]
+[/code]</description>
+    
+    <lastBuildDate>Sun, 15 Apr 2012 05:48:00 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>I think most of the bugs have been taken care of now. I added some new examples on the repository included an XTEA implementation:</p>
+<p>If I’m not mistaken the deciphering sub routine will take more cycles because of some extra added instructions. Program takes 4,239 cycles to encipher and decipher 32 bits of data using a 64 bit key.</p>
+<pre><code class="lang-auto">;                     _____               _______   _    _         
+;                    |  __ \             |__   __| | |  | |
+;                    | |__) |   _ _ __   ___| | ___| | _| | __ 
+;                    |  _  / | | | '_ \ / _ \ |/ _ \ |/ / |/ /  
+;                    | | \ \ |_| | | | |  __/ |  __/   &lt;|   &lt;   
+;                    |_|  \_\__,_|_| |_|\___|_|\___|_|\_\_|\_\
+;                                    
+;                                   xtea.dasm
+;
+;  Notes: Running subroutines within a subroutine is not allowed and will need to be
+;         fixed so that it is possible to do so. Register A is used for most calculations
+;		  coupled with the stack because there needs to be a solid state mediator. 
+;
+
+; Push the two values we want to encipher.
+SET PUSH, 0x20      ; rounds
+SET PUSH, 0x000A    ; k3
+SET PUSH, 0x000B    ; k2
+SET PUSH, 0x000C    ; k1
+SET PUSH, 0x000D    ; k0
+SET PUSH, 0x0001    ; v1
+SET PUSH, 0x0000    ; v0
+JSR encipher        ; Memory address pushed to stack of where the data was stored.
+SET A, POP          ; Fetch the memory address pushed to the stack in the previous sub routine.
+SET PUSH, 0x20      ; rounds
+SET PUSH, 0x000A    ; k3
+SET PUSH, 0x000B    ; k2
+SET PUSH, 0x000C    ; k1
+SET PUSH, 0x000D    ; k0
+SET PUSH, [1+A]     ; v1
+SET PUSH, [A]       ; v0
+JSR decipher        ; Memory address pushed to stack of where the data was stored.
+SET PC, kill
+
+; Sub routine to encipher.
+:encipher
+	SET Z, POP           ; Store the sub routine reference.
+	                     ; Pop all the parameters off the stack.
+	SET [0x2000], POP    ; v0
+	SET [0x2001], POP    ; v1
+	SET [0x2002], POP    ; k0
+	SET [0x2003], POP    ; k1
+	SET [0x2004], POP    ; k2
+	SET [0x2005], POP    ; k3
+	SET [0x2006], POP    ; rounds
+	SET [0x2007], 0xF1BB ; Calculated ratio.
+	SET [0x2008], 0x0000 ; Sum
+	SET I, 0x0           ; Set the iterator for the loop to zero
+	:encipherloop
+		SET A, [0x2001]           ; Set register A to v1
+		SHR A, 4                  ; Weird endian-ness.
+		SET PUSH, A               ; Push the expression onto the stack.
+		SET A, [0x2001]           ; Set register A to v1
+		SHL A, 5                  ; Weird endian-ness.
+		XOR A, POP                ; Evaluate the last expression with the current one.
+		ADD A, [0x2001]           ; Add v1 to register A.
+		SET PUSH, A               ; Push the expresison onto the stack.
+		SET A, [0x2008]           ; Set register A to the sum.
+		AND A, 0x3                ; Bit AND A to get the current key.
+		SET A, [0x2002+A]         ; Set register A to current key.
+		ADD A, [0x2008]           ; Add sum.
+		XOR A, POP                ; Set register A to XOR and the previous expression.
+		ADD [0x2000], A           ; Add the previous expression to v0.
+		ADD [0x2008], [0x2007]    ; Add the delta to sum.
+		SET A, [0x2000]           ; Set register A to v0
+		SHR A, 4                  ; Weird endian-ness.
+		SET PUSH, A               ; Push the expression onto the stack.
+		SET A, [0x2000]           ; Set register A to v0
+		SHL A, 5                  ; Weird endian-ness.
+		XOR A, POP                ; Evaluate the last expression with the current one.
+		ADD A, [0x2000]           ; Add v0 to register A.
+		SET PUSH, A               ; Push the expresison onto the stack.
+		SET A, [0x2008]           ; Set register A to the sum.
+		SHL A, 11                 ; Weird endian-ness.
+		AND A, 0x3                ; Bit AND A to get the current key.
+		SET A, [0x2002+A]         ; Set register A to current key.
+		ADD A, [0x2008]           ; Add sum.
+		XOR A, POP                ; Set register A to XOR and the previous expression.
+		ADD [0x2001], A           ; Add the previous expression to v0.
+		ADD I, 0x1
+		IFG [0x2006], I
+			set PC, encipherloop	
+	SET PUSH, 0x2000              ; Push the address that the data is located at.
+	SET PC, Z                     ; Jump back to the point where the routine was called.
+
+; Subroutine to decipher
+:decipher
+	SET Z, POP              ; Store the sub routine reference.
+	                        ; Pop all the parameters off the stack.
+	SET [0x2000], POP    ; v0
+	SET [0x2001], POP    ; v1
+	SET [0x2002], POP    ; k0
+	SET [0x2003], POP    ; k1
+	SET [0x2004], POP    ; k2
+	SET [0x2005], POP    ; k3
+	SET [0x2006], POP    ; rounds
+	SET [0x2007], 0xF1BB ; Calculated ratio.
+	SET [0x2008], [0x2006]
+	MUL [0x2008], [0x2007]
+	SET I, 0x0
+	:eloop
+		SET A, [0x2000]           ; Set register A to v1
+		SHR A, 4                  ; Weird endian-ness.
+		SET PUSH, A               ; Push the expression onto the stack.
+		SET A, [0x2000]           ; Set register A to v1
+		SHL A, 5                  ; Weird endian-ness.
+		XOR A, POP                ; Evaluate the last expression with the current one.
+		ADD A, [0x2000]           ; Add v1 to register A.
+		SET PUSH, A               ; Push the expresison onto the stack.
+		SET A, [0x2008]           ; Set register A to the sum.
+		SHL A, 11                 ; Weird endian-ness.
+		AND A, 0x3                ; Bit AND A to get the current key.
+		SET A, [0x2002+A]         ; Set register A to current key.
+		ADD A, [0x2008]           ; Add sum.
+		XOR A, POP                ; Set register A to XOR and the previous expression.
+		SUB [0x2001], A           ; Add the previous expression to v0.
+		SUB [0x2008], [0x2007]    ; Add the delta to sum.
+		SET A, [0x2001]           ; Set register A to v0
+		SHR A, 4                  ; Weird endian-ness.
+		SET PUSH, A               ; Push the expression onto the stack.
+		SET A, [0x2001]           ; Set register A to v0
+		SHL A, 5                  ; Weird endian-ness.
+		XOR A, POP                ; Evaluate the last expression with the current one.
+		ADD A, [0x2001]           ; Add v0 to register A.
+		SET PUSH, A               ; Push the expresison onto the stack.
+		SET A, [0x2008]           ; Set register A to the sum.
+		AND A, 0x3                ; Bit AND A to get the current key.
+		SET A, [0x2002+A]         ; Set register A to current key.
+		ADD A, [0x2008]           ; Add sum.
+		XOR A, POP                ; Set register A to XOR and the previous expression.
+		SUB [0x2000], A           ; Add the previous expression to v0.
+		ADD I, 0x1
+		IFG [0x2006], I
+			set PC, eloop
+	SET PUSH, 0x2000     ; Push the address that the data is located at.
+	SET PC, Z            ; Jump back to the point where the routine was called.
+
+; Just in case we are feeling a bit down :(
+:kill</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/29</link>
+        <pubDate>Sun, 15 Apr 2012 05:48:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-29</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@shrogg shrogg]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shrogg">@shrogg</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://0x10c.com/" class="onebox" target="_blank" rel="nofollow noopener">http://0x10c.com/</a><br>
+I am now done here…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/28</link>
+        <pubDate>Fri, 13 Apr 2012 12:31:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-28</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="25" data-topic="438552">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/sppt/40/44_1.png" class="avatar"> sppt:</div>
+<blockquote>
+<p>We should get a community up and running here, dedicated to trolling through hacking other ships <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>yes</p>
+<aside class="quote quote-modified" data-post="26" data-topic="438552">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/imthenull/40/1273_1.png" class="avatar"> imthenull:</div>
+<blockquote>
+<p>i do not get anything in this thread, is this an assembler parser? or what…</p>
+</blockquote>
+</aside>
+<p>sorta</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/27</link>
+        <pubDate>Mon, 09 Apr 2012 02:40:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-27</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>i do not get anything in this thread, is this an assembler parser? or what…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/26</link>
+        <pubDate>Mon, 09 Apr 2012 02:03:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-26</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sppt sppt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sppt">@sppt</a> wrote:</p>
+          <blockquote>
+              <p>We should get a community up and running here, dedicated to trolling through hacking other ships <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/25</link>
+        <pubDate>Mon, 09 Apr 2012 01:16:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-25</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p><div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/sMvCO.png" title="sMvCO.png" rel="nofollow noopener"><img src="http://i.imgur.com/sMvCO.png" alt width="690" height="387"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">sMvCO.png</span><span class="informations">1366×768</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>dat display</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/24</link>
+        <pubDate>Sat, 07 Apr 2012 20:49:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-24</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@Daginith Daginith]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/daginith">@Daginith</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">; Try some basic stuff
+SET A, 0x30              ; 7c01 0030
+SET [0x1000], 0x20       ; 7de1 1000 0020
+SUB A, [0x1000]          ; 7803 1000
+IFN A, 0x10              ; c00d 
+   SET PC, crash         ; 7dc1 001a [*]
+                      
+; Do a loopy thing
+SET I, 10                ; a861
+SET A, 0x2000            ; 7c01 2000
+:loop         
+SET [0x2000+I], [A]      ; 2161 2000
+SUB I, 1                 ; 8463
+IFN I, 0                 ; 806d
+   SET PC, loop          ; 7dc1 000d [*]
+        
+; Call a subroutine
+SET X, 0x4               ; 9031
+JSR testsub              ; 7c10 0018 [*]
+SET PC, crash            ; 7dc1 001a [*]
+        
+:testsub      
+SHL X, 4                 ; 9037
+SET PC, POP              ; 61c1
+                        
+; Hang forever. X should now be 0x40 if everything went right.
+:crash        
+SET PC, crash            ; 7dc1 001a [*]</code></pre>
+<p>More of a brainfuck than BrainFuck. :3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/23</link>
+        <pubDate>Sat, 07 Apr 2012 19:53:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-23</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>fork that shit and fix it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/22</link>
+        <pubDate>Fri, 06 Apr 2012 16:21:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-22</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:20, topic:438552”][quote author=Davidi2 link=topic=541260.msg3965712#msg3965712 date=1333686814]<br>
+pretty sure he’s just always blind and defiant<br>
+[/quote]</p>
+<p>CORRECT![/quote]sarcasm aside, shut up</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/21</link>
+        <pubDate>Fri, 06 Apr 2012 04:38:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-21</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="19" data-topic="438552">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>pretty sure he’s just always blind and defiant</p>
+</blockquote>
+</aside>
+<p>CORRECT!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/20</link>
+        <pubDate>Fri, 06 Apr 2012 04:35:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-20</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>pretty sure he’s just always blind and defiant</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/19</link>
+        <pubDate>Fri, 06 Apr 2012 04:33:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-19</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:17, topic:438552”][quote author=_s link=topic=541260.msg3965704#msg3965704 date=1333685757]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965703#msg3965703 date=1333685475]</p>
+<p>[quote author=_s link=topic=541260.msg3965701#msg3965701 date=1333685239]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965698#msg3965698 date=1333684971]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords</p>
+</blockquote>
+</aside>
+<p>because it works exactly the same if you truncate the data?<br>
+[/quote]did you even read the part of the spec that concerns the overflow register, and how a 32 bit addition requires usage of it because registers are words?</p>
+<p>also regarding your edit, no it isn’t use a short -_-</p>
+</blockquote>
+</aside>
+<ul>
+<li>16 bit unsigned words &lt;-</li>
+</ul>
+<p>To make matters less complicated I just use dwords.<br>
+[/quote]a char in Java is an unsigned word??? jesus christ</p>
+</blockquote>
+</aside>
+<p>is it really going to bug you if I don’t change it? which I’m not.[/quote]are you just being blind and defiant to prove something or is changing one declaration really too fucking hard.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/18</link>
+        <pubDate>Fri, 06 Apr 2012 04:27:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-18</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:16, topic:438552"][quote author=sinisoul link=topic=541260.msg3965703#msg3965703 date=1333685475]</p>
+<p>[quote author=_s link=topic=541260.msg3965701#msg3965701 date=1333685239]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965698#msg3965698 date=1333684971]</p>
+<p>[quote author=_s link=topic=541260.msg3965693#msg3965693 date=1333684170]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords</p>
+</blockquote>
+</aside>
+<p>because it works exactly the same if you truncate the data?<br>
+[/quote]did you even read the part of the spec that concerns the overflow register, and how a 32 bit addition requires usage of it because registers are words?</p>
+<p>also regarding your edit, no it isn’t use a short -_-</p>
+</blockquote>
+</aside>
+<ul>
+<li>16 bit unsigned words &lt;-</li>
+</ul>
+<p>To make matters less complicated I just use dwords.<br>
+[/quote]a char in Java is an unsigned word??? jesus christ[/quote]</p>
+<p>is it really going to bug you if I don’t change it? which I’m not.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/17</link>
+        <pubDate>Fri, 06 Apr 2012 04:25:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-17</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:15, topic:438552”][quote author=_s link=topic=541260.msg3965701#msg3965701 date=1333685239]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965698#msg3965698 date=1333684971]</p>
+<p>[quote author=_s link=topic=541260.msg3965693#msg3965693 date=1333684170]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords</p>
+</blockquote>
+</aside>
+<p>because it works exactly the same if you truncate the data?<br>
+[/quote]did you even read the part of the spec that concerns the overflow register, and how a 32 bit addition requires usage of it because registers are words?</p>
+<p>also regarding your edit, no it isn’t use a short -_-</p>
+</blockquote>
+</aside>
+<ul>
+<li>16 bit unsigned words &lt;-</li>
+</ul>
+<p>To make matters less complicated I just use dwords.[/quote]a char in Java is an unsigned word??? jesus christ</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/16</link>
+        <pubDate>Fri, 06 Apr 2012 04:15:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-16</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:14, topic:438552"][quote author=sinisoul link=topic=541260.msg3965698#msg3965698 date=1333684971]</p>
+<p>[quote author=_s link=topic=541260.msg3965693#msg3965693 date=1333684170]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965689#msg3965689 date=1333683074]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords</p>
+</blockquote>
+</aside>
+<p>because it works exactly the same if you truncate the data?<br>
+[/quote]did you even read the part of the spec that concerns the overflow register, and how a 32 bit addition requires usage of it because registers are words?</p>
+<p>also regarding your edit, no it isn’t use a short -_-[/quote]</p>
+<ul>
+<li>16 bit unsigned words &lt;-</li>
+</ul>
+<p>To make matters less complicated I just use dwords.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/15</link>
+        <pubDate>Fri, 06 Apr 2012 04:11:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-15</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:13, topic:438552”][quote author=_s link=topic=541260.msg3965693#msg3965693 date=1333684170]</p>
+<p>[quote author=sinisoul link=topic=541260.msg3965689#msg3965689 date=1333683074]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords</p>
+</blockquote>
+</aside>
+<p>because it works exactly the same if you truncate the data?[/quote]did you even read the part of the spec that concerns the overflow register, and how a 32 bit addition requires usage of it because registers are words?</p>
+<p>also regarding your edit, no it isn’t use a short -_-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/14</link>
+        <pubDate>Fri, 06 Apr 2012 04:07:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-14</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:12, topic:438552"][quote author=sinisoul link=topic=541260.msg3965689#msg3965689 date=1333683074]</p>
+<p>[quote author=_s link=topic=541260.msg3965683#msg3965683 date=1333682138]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik<br>
+[/quote]then why do you use dwords[/quote]</p>
+<p>because it works exactly the same? dam jvm is hateful of them words</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/13</link>
+        <pubDate>Fri, 06 Apr 2012 04:02:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-13</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:11, topic:438552”][quote author=_s link=topic=541260.msg3965683#msg3965683 date=1333682138]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords</p>
+</blockquote>
+</aside>
+<p>ik[/quote]then why do you use dwords</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/12</link>
+        <pubDate>Fri, 06 Apr 2012 03:49:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-12</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:10, topic:438552"][quote author=sinisoul link=topic=541260.msg3965678#msg3965678 date=1333680775]</p>
+<aside class="quote">
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut<br>
+[/quote]memory access operates in words not dwords[/quote]</p>
+<p>ik</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/11</link>
+        <pubDate>Fri, 06 Apr 2012 03:31:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-11</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:9, topic:438552”][quote author=_s link=topic=541260.msg3965670#msg3965670 date=1333680024]<br>
+ha<br>
+[/quote]</p>
+<p>wut[/quote]memory access operates in words not dwords</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/10</link>
+        <pubDate>Fri, 06 Apr 2012 03:15:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-10</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="8" data-topic="438552">
+<div class="title">
+<div class="quote-controls"></div>
+ _s:</div>
+<blockquote>
+<p>ha</p>
+</blockquote>
+</aside>
+<p>wut</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/9</link>
+        <pubDate>Fri, 06 Apr 2012 02:52:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-9</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>ha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/8</link>
+        <pubDate>Fri, 06 Apr 2012 02:40:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-8</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fat Cookies, post:2, topic:438552”][code=java]<br>
+package org.sini;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Cell.java</p>
+</li>
+<li>
+<p><a class="mention" href="/u/version">@version</a> 1.0.0<br>
+*/<br>
+public final class Cell {</p>
+<p>/**</p>
+<ul>
+<li>The value of this cell.<br>
+*/<br>
+int v;</li>
+</ul>
+</li>
+</ul>
+<p>}<br>
+[/code]</p>
+<p>That made me laugh, nevertheless looks like quite a nice clean implementation of the CPU, I presume you’ve written an assembler for it aswell!??[/quote]</p>
+<p>No I haven’t had the time yet.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/7</link>
+        <pubDate>Thu, 05 Apr 2012 14:43:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-7</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@Native1 Native^]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/native1">@Native1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“HcoJustin, post:5, topic:438552”][quote author=Native^ link=topic=541260.msg3965025#msg3965025 date=1333628700]<br>
+pardon me, but i do not understand what this is. could you please explain?<br>
+[/quote]</p>
+<p>Notch is working on a new game, 0x10c, and he’s trying to emulate the cpu using the recently released specs[/quote]<br>
+ah, okay. i was already wondering how he would implement that own space ship assembly concept.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/6</link>
+        <pubDate>Thu, 05 Apr 2012 12:56:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-6</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+      <item>
+        <title>jDCPU-16</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="438552">
+<div class="title">
+<div class="quote-controls"></div>
+ Native^:</div>
+<blockquote>
+<p>pardon me, but i do not understand what this is. could you please explain?</p>
+</blockquote>
+</aside>
+<p>Notch is working on a new game, 0x10c, and he’s trying to emulate the cpu using the recently released specs</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/jdcpu-16/438552/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/jdcpu-16/438552/5</link>
+        <pubDate>Thu, 05 Apr 2012 12:48:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-438552-5</guid>
+        <source url="https://forum.moparisthebest.com/t/jdcpu-16/438552.rss">jDCPU-16</source>
+      </item>
+  </channel>
+</rss>

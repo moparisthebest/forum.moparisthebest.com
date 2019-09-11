@@ -1,0 +1,486 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Concurrent RegionManager</title>
+    <link>https://forum.moparisthebest.com/t/concurrent-regionmanager/474919</link>
+    <description>Wrote an implementation that uses a ConcurrentMap as the underlying data structure (instead of an array).
+Anyway, this uses a ConcurrentHashMap, so all of the operations are either O(1) time complexity or close to it.
+
+Untested btw, but the key algorithm should work just fine (and the viewable regions part was adapted from existing code).
+
+[code]
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/**
+ * Allows concurrent region management.
+ * Lazy loading is used for region creation. In other words, a region is not
+ * created until the time that it is needed.
+ * It should be noted that there is currently no mechanism to remove regions
+ * that have seen extended disuse.
+ *
+ * @author Lothy
+ */
+public class RegionManager {
+
+    /**
+     * Singleton instance of the RegionManager.
+     */
+    private static final RegionManager INSTANCE = new RegionManager();
+
+    /**
+     * The region size. Note that this should be an even number.
+     */
+    public static final int REGION_SIZE = 32;
+    /**
+     * The halfway point in the region. This calculation relies on
+     * the region size being an even number.
+     */
+    private static final int LOWER_BOUND = (REGION_SIZE / 2) - 1;
+
+    /**
+     * The underlying map of regions.
+     */
+    private final ConcurrentMap&lt;Integer, Region&gt; regions =
+            new ConcurrentHashMap&lt;Integer, Region&gt;();
+
+    public RegionManager getInstance() {
+        return INSTANCE;
+    }
+
+    /**
+     * Given an pair of x and y co-ordinates, this method will create the
+     * key value that can be used to access the correct region.
+     *
+     * @param x The absolute x ordinate
+     * @param y The absolute y ordinate
+     * @return
+     */
+    private int getKey( int x, int y ) {
+        int keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+        int keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+        return (keyX &lt;&lt; 16) | keyY;
+    }
+
+    /**
+     * Adds a new region for the specified key, and returns it.
+     * If another thread beats this thread to creating a new region for the
+     * specified key then the already created region will be returned.
+     *
+     * @param key The key to map a new region to
+     * @return The region mapped to the specified key
+     */
+    private Region addNewRegion( int key ) {
+        Region r = new Region();
+        Region result = regions.putIfAbsent(key, r);
+
+        // If the result is null, we know the new region was added and should
+        // return it.
+        // Otherwise, another thread has already added a new region and their
+        // newly added region should be returned instead.
+        return result != null ? result : r;
+    }
+
+    /**
+     * Returns a region for the given keyX and keyY values.
+     * The keyX and keyY values are calculated as follows:
+     * keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+     * keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+     * &lt;p/&gt;
+     * Negative keyX and keyY values are considered invalid.
+     * If negative values are specified, this method returns null.
+     *
+     * @param keyX The x portion of the region key
+     * @param keyY The y mapping of the region key
+     * @return The region for the resulting key, or null if the specified
+     *         key arguments are negative.
+     */
+    private Region getRegionByKey( int keyX, int keyY ) {
+        if (keyX &lt; 0 || keyY &lt; 0) return null;
+
+        int key = (keyX &lt;&lt; 16) | keyY;
+        return getRegionByKey(key);
+    }
+
+    /**
+     * Returns the region that the specified key is mapped to.
+     * If the key currently has no region mapped to it, a new region is created.
+     *
+     * @param key The key to obtain the region for
+     * @return The region that the specified key maps to
+     */
+    private Region getRegionByKey( int key ) {
+        Region r = regions.get(key);
+        if (r == null) {
+            return addNewRegion(key);
+        }
+        return r;
+    }
+
+    /**
+     * Returns the region that the specified cartesian point is located within.
+     *
+     * @param p The cartesian point
+     * @return The region that the specified point is located within
+     */
+    public Region getRegion( Point p ) {
+        return getRegion(p.getX(), p.getY());
+    }
+
+    /**
+     * Returns the region that the specified co-ordinates are located within.
+     *
+     * @param x The absolute x ordinate
+     * @param y The absolute y ordinate
+     * @return The region that the specified co-ordinates are located within
+     */
+    public Region getRegion( int x, int y ) {
+        if (x &lt; 0 || y &lt; 0) {
+            throw new IllegalArgumentException(
+                    &quot;Non-negative co-ordinates: &quot; + x + &quot;, &quot; + y);
+        }
+
+        int key = getKey(x, y);
+        return getRegionByKey(key);
+    }
+
+    /**
+     * Returns the list of regions that are viewable by the specified
+     * cartesian point.
+     * The list returned includes the region that the specified point is
+     * located within.
+     * &lt;p/&gt;
+     * Additionally, three other regions are included. These regions are
+     * determined based on the location of the specified point within
+     * the region.
+     *
+     * @param p The cartesian point
+     * @return A list of regions that are viewable by the specified point
+     */
+    public List&lt;Region&gt; getViewableRegions( Point p ) {
+        return getViewableRegions(p.getX(), p.getY());
+    }
+
+    public List&lt;Region&gt; getViewableRegions( int x, int y ) {
+        if (x &lt; 0 || y &lt; 0) {
+            throw new IllegalArgumentException(
+                    &quot;Non-negative co-ordinates: &quot; + x + &quot;, &quot; + y);
+        }
+
+        List&lt;Region&gt; viewable = new ArrayList&lt;Region&gt;(10);
+        int keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+        int keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+        int curKey = (keyX &lt;&lt; 16) | keyY;
+
+        int relX = x % REGION_SIZE;
+        int relY = y % REGION_SIZE;
+
+        // Add the current region.
+        Region current = getRegionByKey(curKey);
+        viewable.add(current);
+
+        Region r;
+        if (relX &lt;= LOWER_BOUND) {
+            if (relY &lt;= LOWER_BOUND) {
+                r = getRegionByKey(keyX - 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX - 1, keyY - 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY - 1);
+                if (r != null) viewable.add(r);
+            } else {
+                r = getRegionByKey(keyX - 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX - 1, keyY + 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY + 1);
+                if (r != null) viewable.add(r);
+            }
+        } else {
+            if (relY &lt;= LOWER_BOUND) {
+                r = getRegionByKey(keyX + 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX + 1, keyY - 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY - 1);
+                if (r != null) viewable.add(r);
+            } else {
+                r = getRegionByKey(keyX + 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX + 1, keyY + 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY + 1);
+                if (r != null) viewable.add(r);
+            }
+        }
+
+        return viewable;
+    }
+}
+[/code]</description>
+    
+    <lastBuildDate>Fri, 21 Dec 2012 02:58:19 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/concurrent-regionmanager/474919.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Concurrent RegionManager</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>Interesting, thanks Lothy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/concurrent-regionmanager/474919/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/concurrent-regionmanager/474919/2</link>
+        <pubDate>Fri, 21 Dec 2012 02:58:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-474919-2</guid>
+        <source url="https://forum.moparisthebest.com/t/concurrent-regionmanager/474919.rss">Concurrent RegionManager</source>
+      </item>
+      <item>
+        <title>Concurrent RegionManager</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>Wrote an implementation that uses a ConcurrentMap as the underlying data structure (instead of an array).<br>
+Anyway, this uses a ConcurrentHashMap, so all of the operations are either O(1) time complexity or close to it.</p>
+<p>Untested btw, but the key algorithm should work just fine (and the viewable regions part was adapted from existing code).</p>
+<pre><code class="lang-auto">import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/**
+ * Allows concurrent region management.
+ * Lazy loading is used for region creation. In other words, a region is not
+ * created until the time that it is needed.
+ * It should be noted that there is currently no mechanism to remove regions
+ * that have seen extended disuse.
+ *
+ * @author Lothy
+ */
+public class RegionManager {
+
+    /**
+     * Singleton instance of the RegionManager.
+     */
+    private static final RegionManager INSTANCE = new RegionManager();
+
+    /**
+     * The region size. Note that this should be an even number.
+     */
+    public static final int REGION_SIZE = 32;
+    /**
+     * The halfway point in the region. This calculation relies on
+     * the region size being an even number.
+     */
+    private static final int LOWER_BOUND = (REGION_SIZE / 2) - 1;
+
+    /**
+     * The underlying map of regions.
+     */
+    private final ConcurrentMap&lt;Integer, Region&gt; regions =
+            new ConcurrentHashMap&lt;Integer, Region&gt;();
+
+    public RegionManager getInstance() {
+        return INSTANCE;
+    }
+
+    /**
+     * Given an pair of x and y co-ordinates, this method will create the
+     * key value that can be used to access the correct region.
+     *
+     * @param x The absolute x ordinate
+     * @param y The absolute y ordinate
+     * @return
+     */
+    private int getKey( int x, int y ) {
+        int keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+        int keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+        return (keyX &lt;&lt; 16) | keyY;
+    }
+
+    /**
+     * Adds a new region for the specified key, and returns it.
+     * If another thread beats this thread to creating a new region for the
+     * specified key then the already created region will be returned.
+     *
+     * @param key The key to map a new region to
+     * @return The region mapped to the specified key
+     */
+    private Region addNewRegion( int key ) {
+        Region r = new Region();
+        Region result = regions.putIfAbsent(key, r);
+
+        // If the result is null, we know the new region was added and should
+        // return it.
+        // Otherwise, another thread has already added a new region and their
+        // newly added region should be returned instead.
+        return result != null ? result : r;
+    }
+
+    /**
+     * Returns a region for the given keyX and keyY values.
+     * The keyX and keyY values are calculated as follows:
+     * keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+     * keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+     * &lt;p/&gt;
+     * Negative keyX and keyY values are considered invalid.
+     * If negative values are specified, this method returns null.
+     *
+     * @param keyX The x portion of the region key
+     * @param keyY The y mapping of the region key
+     * @return The region for the resulting key, or null if the specified
+     *         key arguments are negative.
+     */
+    private Region getRegionByKey( int keyX, int keyY ) {
+        if (keyX &lt; 0 || keyY &lt; 0) return null;
+
+        int key = (keyX &lt;&lt; 16) | keyY;
+        return getRegionByKey(key);
+    }
+
+    /**
+     * Returns the region that the specified key is mapped to.
+     * If the key currently has no region mapped to it, a new region is created.
+     *
+     * @param key The key to obtain the region for
+     * @return The region that the specified key maps to
+     */
+    private Region getRegionByKey( int key ) {
+        Region r = regions.get(key);
+        if (r == null) {
+            return addNewRegion(key);
+        }
+        return r;
+    }
+
+    /**
+     * Returns the region that the specified cartesian point is located within.
+     *
+     * @param p The cartesian point
+     * @return The region that the specified point is located within
+     */
+    public Region getRegion( Point p ) {
+        return getRegion(p.getX(), p.getY());
+    }
+
+    /**
+     * Returns the region that the specified co-ordinates are located within.
+     *
+     * @param x The absolute x ordinate
+     * @param y The absolute y ordinate
+     * @return The region that the specified co-ordinates are located within
+     */
+    public Region getRegion( int x, int y ) {
+        if (x &lt; 0 || y &lt; 0) {
+            throw new IllegalArgumentException(
+                    "Non-negative co-ordinates: " + x + ", " + y);
+        }
+
+        int key = getKey(x, y);
+        return getRegionByKey(key);
+    }
+
+    /**
+     * Returns the list of regions that are viewable by the specified
+     * cartesian point.
+     * The list returned includes the region that the specified point is
+     * located within.
+     * &lt;p/&gt;
+     * Additionally, three other regions are included. These regions are
+     * determined based on the location of the specified point within
+     * the region.
+     *
+     * @param p The cartesian point
+     * @return A list of regions that are viewable by the specified point
+     */
+    public List&lt;Region&gt; getViewableRegions( Point p ) {
+        return getViewableRegions(p.getX(), p.getY());
+    }
+
+    public List&lt;Region&gt; getViewableRegions( int x, int y ) {
+        if (x &lt; 0 || y &lt; 0) {
+            throw new IllegalArgumentException(
+                    "Non-negative co-ordinates: " + x + ", " + y);
+        }
+
+        List&lt;Region&gt; viewable = new ArrayList&lt;Region&gt;(10);
+        int keyX = (x - (x % REGION_SIZE)) / REGION_SIZE;
+        int keyY = (y - (y % REGION_SIZE)) / REGION_SIZE;
+        int curKey = (keyX &lt;&lt; 16) | keyY;
+
+        int relX = x % REGION_SIZE;
+        int relY = y % REGION_SIZE;
+
+        // Add the current region.
+        Region current = getRegionByKey(curKey);
+        viewable.add(current);
+
+        Region r;
+        if (relX &lt;= LOWER_BOUND) {
+            if (relY &lt;= LOWER_BOUND) {
+                r = getRegionByKey(keyX - 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX - 1, keyY - 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY - 1);
+                if (r != null) viewable.add(r);
+            } else {
+                r = getRegionByKey(keyX - 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX - 1, keyY + 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY + 1);
+                if (r != null) viewable.add(r);
+            }
+        } else {
+            if (relY &lt;= LOWER_BOUND) {
+                r = getRegionByKey(keyX + 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX + 1, keyY - 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY - 1);
+                if (r != null) viewable.add(r);
+            } else {
+                r = getRegionByKey(keyX + 1, keyY);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX + 1, keyY + 1);
+                if (r != null) viewable.add(r);
+
+                r = getRegionByKey(keyX, keyY + 1);
+                if (r != null) viewable.add(r);
+            }
+        }
+
+        return viewable;
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/concurrent-regionmanager/474919/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/concurrent-regionmanager/474919/1</link>
+        <pubDate>Fri, 21 Dec 2012 02:24:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-474919-1</guid>
+        <source url="https://forum.moparisthebest.com/t/concurrent-regionmanager/474919.rss">Concurrent RegionManager</source>
+      </item>
+  </channel>
+</rss>

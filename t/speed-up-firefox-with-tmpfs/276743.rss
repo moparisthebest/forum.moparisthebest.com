@@ -1,0 +1,563 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Speed up Firefox with tmpfs</title>
+    <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743</link>
+    <description>I did this out of curiosity and I can say that it does perform quite a lot faster, plus way fewer hard drive reads and writes should theoretically increase hard drive life and battery life on my laptop.  I made a slight change to the script that runs firefox, which syncs your profile before firefox runs, and then after and then unmounts the folder (therefore clearing all of your RAM when firefox is not running)
+
+This is just another of the many reasons to use linux, I&#39;d like to see you try this in windows ;)
+
+Original Source: http://www.verot.net/firefox_tmpfs.htm
+
+
+Speed up Firefox with tmpfs
+
+Firefox uses SQLlite to store most of its information, which makes it quite slow. As SQLite accesses are IO-bound, Firefox suffers when the disk is heavily used by other processes. Here is a solution to move the profile is a RAM partition, using tmpfs. Note that this solution has been exposed here. I am just presenting a modified solution, which uses rsync to sync the profile on RAM and on disk.
+Prepare your profile
+
+First, we need to prepare the profile, in order to make it lighter. The original author suggests these change of configuration (in about:config in Firefox):
+
+[code]set browser.cache.disk.capacity to 20000
+set browser.safebrowsing.enabled to false
+set browser.safebrowsing.malware.enabled to false[/code]
+
+Then copy your profile in another directory. Your profile is in ~/.mozilla/firefox/ and looks like xxxxxxxx.default. Create a new directory called profile and copy the contents of your profile into it. before doing that, delete the files urlclassifier*.sqlite in your profile, and empty your cache.
+
+[code]cd ~/.mozilla/firefox/
+mkdir profile
+cp -r *.default/* profile/[/code]
+
+Note that this tutorial assumes that you have only one Firefox profile. It can easily be adapted to several profiles. Here, we use the profile xxxxxxxx.default, but replace it with your own profile. Same for the user, which here is xxxx.
+Create RAM partition
+
+Add this entry in /etc/fstab:
+
+[code]firefox /home/xxxx/.mozilla/firefox/xxxxxxxx.default tmpfs size=128M,noauto,user,exec,uid=1000,gid=1000 0 0[/code]
+
+Of course, adapt the line above with your user name, your profile directory and the uid and gid.
+Test the profile in RAM
+
+You will need here to close Firefox, so note the following steps. Close Firefox. Then make sure that the profile is copied in ~/.mozilla/firefox/profile/. Empty your original profile directory, so that it is just an empty directory:
+[code]
+rm -Rf *.default/*[/code]
+
+Before we start Firefox, we need to mount the RAM partition, and copy over the contents of the profile into it. In the same vein, we will need to regularly copy back the profile in RAM into the profile directory, otherwise all changes to your profile will be lost when you turn off your computer.
+
+We use rsync for that (which is a better solution than using tar IMHO). We create a script that checks whether the profile is in RAM or not (checking for the presence of a .unpacked file). If it is not, we mount the RAM partition, and copy the profile over. If the profile is already in RAM, we synchronise the profile directory with the profile in RAM.
+
+Here is the script (I call it tmpfs_firefox.sh):
+
+[code]#!/bin/bash
+
+# Change this to match your correct profile
+PROFILE=&quot;xxxxxxxx.default&quot;
+
+cd &quot;${HOME}/.mozilla/firefox&quot;
+
+if test -z &quot;$(mount | grep -F &quot;${HOME}/.mozilla/firefox/${PROFILE}&quot; )&quot;
+then
+    mount &quot;${HOME}/.mozilla/firefox/${PROFILE}&quot;
+fi
+
+if test -f &quot;${PROFILE}/.unpacked&quot;
+then
+    rsync -av --delete --exclude .unpacked ./&quot;$PROFILE&quot;/ ./profile/
+else
+    rsync -av ./profile/ ./&quot;$PROFILE&quot;/
+    touch &quot;${PROFILE}/.unpacked&quot;
+fi
+
+exit[/code]
+
+You have closed Firefox. Run this script a first time, and it should mount the partition, and copy the profile over. Then, if you list the profile directory, you should see all the profile files:
+
+[code]~/tmpfs_firefox.sh
+ls ~/.mozilla/firefox/*.default/[/code]
+
+Run the script a second time. It should then synchronize the saved profile with the RAM profile.
+
+[code]~/tmpfs_firefox.sh
+
+# you should see something like:
+#    building file list ... done
+#    sent 36643 bytes  received 20 bytes  73326.00 bytes sec
+#    total size is 45390178  speedup is 1238.04[/code]
+
+Test Firefox
+
+First, make sure that the profile has been mounted correctly in the RAM partition. You can try to unmount the RAm partition, and run the above script again. If your profile is there, simply run Firefox. Hopefully, you will notice that it is real faster. You can see that easily with the so-called smart bar auto completion: results should be instantaneous.
+
+We now need to regularly synchronize the backup profile with profile in RAM. We could do that when you log out, but it is not reliable enough. Since we use rsync to synchronize the profiles, we can run it often. Set up a cron job which calls the above script each 5 or 10 minutes. So if your compter crashes, you will always have your profile saved just a few minutes ago.
+
+[code]crontab -e[/code]
+will let you edit your personal crontab, and a -l will list your jobs so you can verify it.
+
+[code]*/5 * * * * $HOME/tmpfs_firefox.sh[/code]
+
+We should also create a little script to start Firefox, so that we can make sure that the profile is loaded into RAM before Firefox loads. You can use this little script, and use it instead the normal Firefox shortcut:
+
+[code]#!/bin/bash
+# crontab: */5 * * * * $HOME/.tmpfs_firefox.sh
+~/tmpfs_firefox.sh
+firefox $1
+~/tmpfs_firefox.sh
+sleep 3
+umount firefox
+exit[/code]
+
+Conclusion
+
+So what we do is basically backup the profile, and use a script that mounts the normal Firefox profile directory in RAM, and synchronize back and forth the RAM profile with the backup profile. Each 5 minutes, the RAM profile is saved in the backup profile directory. Firefox should just work as before, except it will be noticeably faster as most of the disk access that it does will be done in RAM. And this only cost 128MB of your RAM!</description>
+    
+    <lastBuildDate>Thu, 06 Jan 2011 06:14:27 +0000</lastBuildDate>
+    <category>Technology</category>
+    <atom:link href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Just a quick update, I basically used this exact same mechanism to run minecraft on this server, and it’s crazy-fast. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/27</link>
+        <pubDate>Thu, 06 Jan 2011 06:14:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-27</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“kloplop321, post:25, topic:276743”](Long time since I have actually posted here)<br>
+I love how you can “mount” folders to a different location, file system or otherwise <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>how can I test to see if my cron job is truely active?[/quote]</p>
+<p>You could put a:</p>
+<p>date &gt;&gt; ~/logfile.log</p>
+<p>in the script and then verify for yourself that it is working I suppose.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/26</link>
+        <pubDate>Tue, 02 Jun 2009 05:06:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-26</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@kloplop321 kloplop321]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kloplop321">@kloplop321</a> wrote:</p>
+          <blockquote>
+              <p>(Long time since I have actually posted here)<br>
+I love how you can “mount” folders to a different location, file system or otherwise <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>how can I test to see if my cron job is truely active?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/25</link>
+        <pubDate>Tue, 02 Jun 2009 03:35:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-25</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“bowserjr2, post:22, topic:276743”][quote author=Moparisthebest link=topic=365399.msg2801039#msg2801039 date=1243435915]<br>
+Like the dev said, if the scoring algorithm isn’t provided the test is useless.  Want me to write a browser test like that and just give a good score to firefox and a bad one to everything else?  I can do that easily. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+[/quote]<br>
+The test is made in Javascript and you can read it if you want and find the algorithm.</p>
+<p>But what Spec has you computer? just wonder since firefox run slow on your computer before you used ram to save cache.[/quote]</p>
+<p>The Mozilla dev said the code was heavily obfuscated.</p>
+<p>This particular computer has 2GB of RAM, an Intel Core 2 Duo CPU T7300 @ 2.00GHz, which as I said before doesn’t matter where this is concerned, the difference in speed between your hard drive (in this case a SATA laptop hard drive) and your RAM is the speed you pick up.  Firefox was never slow for me, this just made it a lot faster.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/24</link>
+        <pubDate>Thu, 28 May 2009 16:20:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-24</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@eczema3 eczema3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eczema3">@eczema3</a> wrote:</p>
+          <blockquote>
+              <p>This worked perfectly, I can seriously notice the difference, thanks <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/23</link>
+        <pubDate>Thu, 28 May 2009 14:10:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-23</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@bowserjr2 Bowser jr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bowserjr2">@bowserjr2</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="21" data-topic="276743">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/moparisthebest/40/30_1.png" class="avatar"> Moparisthebest:</div>
+<blockquote>
+<p>Like the dev said, if the scoring algorithm isn’t provided the test is useless.  Want me to write a browser test like that and just give a good score to firefox and a bad one to everything else?  I can do that easily. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>The test is made in Javascript and you can read it if you want and find the algorithm.</p>
+<p>But what Spec has you computer? just wonder since firefox run slow on your computer before you used ram to save cache.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/22</link>
+        <pubDate>Wed, 27 May 2009 16:06:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-22</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Like the dev said, if the scoring algorithm isn’t provided the test is useless.  Want me to write a browser test like that and just give a good score to firefox and a bad one to everything else?  I can do that easily. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/21</link>
+        <pubDate>Wed, 27 May 2009 14:51:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-21</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@bowserjr2 Bowser jr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bowserjr2">@bowserjr2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“llib, post:19, topic:276743”][quote author=bowserjr2 link=topic=365399.msg2795034#msg2795034 date=1243021956]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Can you set the time in between ‘autosaves’?</p>
+</blockquote>
+</aside>
+<p>Yes, and manually save (Button in the settings program) all saved to a image file of your choose.<br>
+But have you any information about the speedgain in your trick, and how to test it, because of the speed of normal firefox(In the test <a href="http://service.futuremark.com/peacekeeper/" rel="nofollow noopener">http://service.futuremark.com/peacekeeper/</a>) is not very impressing.<br>
+[/quote]</p>
+<p><a href="http://groups.google.com/group/mozilla.dev.performance/browse_thread/thread/7f73f91841b9b2b9#" data-bbcode="true" rel="nofollow noopener">and according to the mozilla devs, this test isn’t very impressive.</a>  :rolleyes:[/quote]<br>
+They would not said the same if it was they who was leading over Safari, btw safari is shit.<br>
+One 2 good browsers, Opera and Firefox.(Don’t help with speed if you don’t have functionality.)</p>
+<p>Find a source that not produce any browser or is affected by this test and it would be better.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/20</link>
+        <pubDate>Wed, 27 May 2009 14:36:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-20</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@llib llib]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/llib">@llib</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“bowserjr2, post:17, topic:276743”][quote author=Moparisthebest link=topic=365399.msg2794377#msg2794377 date=1242975361]<br>
+Can you set the time in between ‘autosaves’?<br>
+[/quote]<br>
+Yes, and manually save (Button in the settings program) all saved to a image file of your choose.<br>
+But have you any information about the speedgain in your trick, and how to test it, because of the speed of normal firefox(In the test <a href="http://service.futuremark.com/peacekeeper/" rel="nofollow noopener">http://service.futuremark.com/peacekeeper/</a>) is not very impressing.[/quote]</p>
+<p><a href="http://groups.google.com/group/mozilla.dev.performance/browse_thread/thread/7f73f91841b9b2b9#" data-bbcode="true" rel="nofollow noopener">and according to the mozilla devs, this test isn’t very impressive.</a>  :rolleyes:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/19</link>
+        <pubDate>Tue, 26 May 2009 23:03:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-19</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I’d like to have a good test for it, but basically the only thing it speeds up is file i/o.  Reading/writing from the cache and the SQLite databases is where the real difference is, and I don’t quite know how to test those with actual numbers.  The hints while typing in the address bar are now instant, when they used to take at least a few seconds before, and loading websites with cached images seem instant too.  Not as scientific as I would like, but good enough for me.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/18</link>
+        <pubDate>Tue, 26 May 2009 03:49:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-18</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@bowserjr2 Bowser jr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bowserjr2">@bowserjr2</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="16" data-topic="276743">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/moparisthebest/40/30_1.png" class="avatar"> Moparisthebest:</div>
+<blockquote>
+<p>Can you set the time in between ‘autosaves’?</p>
+</blockquote>
+</aside>
+<p>Yes, and manually save (Button in the settings program) all saved to a image file of your choose.<br>
+But have you any information about the speedgain in your trick, and how to test it, because of the speed of normal firefox(In the test <a href="http://service.futuremark.com/peacekeeper/" rel="nofollow noopener">http://service.futuremark.com/peacekeeper/</a>) is not very impressing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/17</link>
+        <pubDate>Fri, 22 May 2009 19:52:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-17</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Can you set the time in between ‘autosaves’?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/16</link>
+        <pubDate>Fri, 22 May 2009 06:56:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-16</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@bowserjr2 Bowser jr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bowserjr2">@bowserjr2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:14, topic:276743”][quote author=bowserjr2 link=topic=365399.msg2793779#msg2793779 date=1242938641]<br>
+Thank you for the tips, did this with Opera in Windows 7, so no need for open-source.<br>
+Used the program RAMDisk.<br>
+[/quote]</p>
+<p>Eww. Anyway, how did you handle the syncing of the profile to and from the RAM?  Or does that program handle that as well?  What happens if you lose power?[/quote]<br>
+There is a option for saving the RAM disk on shutdown and autosave so I can put opera inside my ram and keep my settings and it is much easier to do than this. If Windows crash or BSoD I lose every change since last autosave.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/15</link>
+        <pubDate>Fri, 22 May 2009 03:56:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-15</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“bowserjr2, post:13, topic:276743”]Thank you for the tips, did this with Opera in Windows 7, so no need for open-source.<br>
+Used the program RAMDisk.[/quote]</p>
+<p>Eww. Anyway, how did you handle the syncing of the profile to and from the RAM?  Or does that program handle that as well?  What happens if you lose power?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/14</link>
+        <pubDate>Thu, 21 May 2009 21:24:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-14</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@bowserjr2 Bowser jr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bowserjr2">@bowserjr2</a> wrote:</p>
+          <blockquote>
+              <p>Thank you for the tips, did this with Opera in Windows 7, so no need for open-source.<br>
+Used the program RAMDisk.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/13</link>
+        <pubDate>Thu, 21 May 2009 20:44:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-13</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xEnt, post:11, topic:276743”]l2chrome nubs. faster than any of those, has incognito. once you get past the visuals and get used to where your bookmarks/settings are, its a great browser (for a lightweight browser atm).</p>
+<p>Only thing i prefer better in firefox is it’s spell checker, so much more accurate with many more dictionary entries.[/quote]</p>
+<p>Again, chrome does not have support for extensions, and though it is open source, it currently only runs on windows.  I’ll stick with the one browser that is cross-platform, open source, supports extensions, and gives me the same experience across all platforms.  If another browser will do the same I’ll be more than happy to try it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/12</link>
+        <pubDate>Tue, 19 May 2009 05:22:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-12</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@xEnt xEnt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xent">@xEnt</a> wrote:</p>
+          <blockquote>
+              <p>l2chrome nubs. faster than any of those, has incognito. once you get past the visuals and get used to where your bookmarks/settings are, its a great browser (for a lightweight browser atm).</p>
+<p>Only thing i prefer better in firefox is it’s spell checker, so much more accurate with many more dictionary entries.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/11</link>
+        <pubDate>Tue, 19 May 2009 03:31:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-11</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I’ve tried opera a few times since it went ‘free’ (it isn’t really free, but I don’t need to preach here), but always came back to firefox.  Opera isn’t open source, and it doesn’t support extensions.  As far as I’m concerned that makes it one tiny step better than IE, and only because it is cross-platform.</p>
+<p>Also, I’m sure firefox is faster than opera with this. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/10</link>
+        <pubDate>Mon, 18 May 2009 21:32:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-10</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@atrox atrox_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/atrox">@atrox</a> wrote:</p>
+          <blockquote>
+              <p>qft</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/9</link>
+        <pubDate>Mon, 18 May 2009 07:05:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-9</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>or you could just use opera which is faster even without this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/8</link>
+        <pubDate>Mon, 18 May 2009 03:05:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-8</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@llib llib]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/llib">@llib</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:6, topic:276743”]You really notice a difference when you go back to using firefox with your profile mounted on an actual hard drive, it is almost painfully slower than on RAM.</p>
+<p>I am trying to think of other applications that write a lot to the hard drive that I can do this same thing with, when I get time I may try it with KDE. :)[/quote]</p>
+<p>I would think amarok would benefit from this. Its database uses sql also. Or is it SQLlite…</p>
+<p>Dunno where amarok stores all that, but its just an idea.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/7</link>
+        <pubDate>Mon, 04 May 2009 23:34:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-7</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>You really notice a difference when you go back to using firefox with your profile mounted on an actual hard drive, it is almost painfully slower than on RAM.</p>
+<p>I am trying to think of other applications that write a lot to the hard drive that I can do this same thing with, when I get time I may try it with KDE. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/6</link>
+        <pubDate>Mon, 04 May 2009 23:17:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-6</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@llib llib]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/llib">@llib</a> wrote:</p>
+          <blockquote>
+              <p>Wow this is <span class="bbcode-i">really</span> nice</p>
+<p>I don’t think this post is getting as much recognition as it deserves &gt;.&gt;</p>
+<p>Loading images and pretty much everything is, way faster.</p>
+<p>Its amazing how that little delay here and there made things seem reeeeeally slow</p>
+<p>Edit:<br>
+Maybe one thing you could do to improve it would be to explain how to edit crontab a little more…still can’t figure it out in cli. I installed kcron and did it that way.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/5</link>
+        <pubDate>Mon, 04 May 2009 23:08:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-5</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fat Cookies, post:3, topic:276743”]Is sort of the same effect of a Live CD that runs in RAM expect this has a script backs up your profile? For some strange reason watching video is actualy slower when running a Live CD than a distro on a HD.</p>
+<p>Since Cheese Police is here… inb4wine sndrec32.exe[/quote]</p>
+<p>The reason livecds are generally slow is because you don’t have enough RAM to run an entire operating system and function as a harddrive for it.  This only uses a small amount of RAM and as a result, is much faster.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/4</link>
+        <pubDate>Fri, 01 May 2009 17:20:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-4</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+      <item>
+        <title>Speed up Firefox with tmpfs</title>
+        <dc:creator><![CDATA[@Fat_Cookies Fat Cookies]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fat_cookies">@Fat_Cookies</a> wrote:</p>
+          <blockquote>
+              <p>Is sort of the same effect of a Live CD that runs in RAM expect this has a script backs up your profile? For some strange reason watching video is actualy slower when running a Live CD than a distro on a HD.</p>
+<p>Since Cheese Police is here… inb4wine sndrec32.exe</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743/3</link>
+        <pubDate>Fri, 01 May 2009 16:02:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-276743-3</guid>
+        <source url="https://forum.moparisthebest.com/t/speed-up-firefox-with-tmpfs/276743.rss">Speed up Firefox with tmpfs</source>
+      </item>
+  </channel>
+</rss>

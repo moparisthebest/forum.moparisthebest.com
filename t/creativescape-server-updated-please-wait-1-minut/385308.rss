@@ -1,0 +1,809 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Creativescape Server Updated please wait 1 minut</title>
+    <link>https://forum.moparisthebest.com/t/creativescape-server-updated-please-wait-1-minut/385308</link>
+    <description>Hello there
+I am using creativescape and came upon some problems.
+When I just run the source without an autorestarter after some time it says,
+client updated please wait 1 minut.
+I am using an autorestarter now, 
+But I don&#39;t want to set it to 1 hours because that&#39;s annoying.
+I think it happens when noone logs in for a certain time.
+I think this is the code that makes it happern but I am not sure.
+
+
+[code]package server;
+
+import server.admin.GUI;
+import server.events.Event;
+import server.events.EventContainer;
+import server.events.EventManager;
+import server.hash.RehashManager;
+import server.io.IOThread;
+import server.WorldMap;
+import server.util.log.Log;
+import server.world.DialogueManager;
+import server.world.ItemManager;
+import server.world.NPCManager;
+import server.world.ObjectManager;
+import server.world.PlayerManager;
+import server.world.ShopManager;
+import server.world.NewsTicker;
+import server.world.PestControl;
+import server.world.FightPits;
+import server.world.CastleWars;
+import server.world.Weather;
+import server.world.WarriorsGuild;
+import server.world.StillGraphicsManager;
+import server.world.map.WalkingHandler;
+import java.sql.*;
+
+/**
+ * Server main class.
+ * 
+ * @author Winterlove
+ * @author Daiki
+ * @author Graham
+ * 
+ */
+public class Server {
+
+	public static final String CREDITS = &quot;CreativeScape\r\nAll credits goes to R0cky 0wnz\r\nBased on work by Winterlove, Daiki and Blake&quot;;
+
+	/**
+	 * We use this to synchronize any threads that deal with game logic.
+	 * Probably not the best way, but the easiest at the moment.
+	 */
+	public static Object gameLogicLock = new Object();
+
+	/**
+	 * Flag to say if debug mode is enabled.
+	 */
+	private static boolean debugModeEnabled = false;
+	public static int maxPlayersOnline;
+
+	/**
+	 * Shut down server flag.
+	 */
+	private static boolean shutdownServer = false;
+
+	/**
+	 * Manages/handlers/whatever you want to call them.
+	 */
+	public static PlayerManager playerManager = null;
+	private static IOThread ioThread = null;
+	private static ItemManager itemManager = null;
+	private static ObjectManager objectManager = null;
+	private static NPCManager npcManager = null;
+	private static DialogueManager dialogueManager = null;
+	private static StillGraphicsManager stillGraphicsManager = null;
+	private static ShopManager shopManager = null;
+	private static GUI gui = null;
+	private static NewsTicker nt = null;
+	private static PestControl pt = null;
+	public static Weather weather = null;
+	public static FightPits fp = null;
+	public static CastleWars cw = null;
+	public static WarriorsGuild wg = null;
+	public static WorldMap WorldMap = null;
+	public static int newUsersCounter;
+
+	public static int wildTeleX = 3027;
+	public static int wildTeleY = 3630;
+	public static int teleXMisc, teleYMisc;
+
+	private Server() {
+	}
+
+	public static void printUsage() {
+		System.out.println(&quot;Usage:&quot;);
+		System.out.println(&quot;    java com.rs.Server [debug/release] [gui/nogui]&quot;);
+		System.exit(0);
+	}
+
+	/**
+	 * Variables used to connect to the local SQL database.
+	 */
+	public static String MySQLURL = &quot;jdbc:mysql://creative-scape.net/creative_community&quot;, 
+		MySQLUser = &quot;creative_root&quot;, 
+		MySQLPassword = &quot;crsstaff&quot;;
+
+	/**
+	 * Java variable defined in the Java API, used to connect and execute quiries in SQL.
+	 */
+	public static Connection conn;
+
+	/**
+	 * Create a connection with the local SQL server using the variables decared above.
+	 */
+	public static void createConnection()
+	{
+		try 
+		{
+			Class.forName(&quot;com.mysql.jdbc.Driver&quot;).newInstance();
+			conn = DriverManager.getConnection(MySQLURL, MySQLUser, MySQLPassword);
+			System.out.println(&quot;Successfully connected to the SQL Database.&quot;);
+		} 
+		catch(Exception e) 
+		{	
+			e.printStackTrace();
+		}
+	}
+
+	private static int lastProcessTime = 0;
+	private static double averageProcessTime = -1;
+	public static double serverUptime = 0;
+	public static int days, hours, minutes, secundes;
+
+	public static void main(java.lang.String args[]) {
+		if (args.length &gt;= 2) {
+			if (args[0].equalsIgnoreCase(&quot;debug&quot;)) {
+				debugModeEnabled = true;
+			} else if (args[0].equalsIgnoreCase(&quot;release&quot;)) {
+				debugModeEnabled = false;
+			} else {
+				printUsage();
+			}
+			if (args[1].equalsIgnoreCase(&quot;gui&quot;)) {
+				gui = new GUI();
+			} else if (args[1].equalsIgnoreCase(&quot;nogui&quot;)) {
+				gui = null;
+			} else {
+				printUsage();
+			}
+		} else {
+			printUsage();
+		}
+		System.setOut(new Log(System.out));
+		System.setErr(new Log(System.err));
+		String[] credits = CREDITS.split(&quot;\r\n&quot;);
+		for (String credit : credits) {
+			System.out.println(credit);
+		}
+		System.out.println(&quot;&quot;);
+		System.out.println(&quot;Loading...&quot;);
+		//createConnection();
+		try {
+			RehashManager.rehash();
+			EventManager.initialise();
+			//VirtualWorld.init();
+			WalkingHandler.getSingleton().initialize();
+			playerManager = PlayerManager.getSingleton();
+			playerManager.setupRegionPlayers();
+			itemManager = new ItemManager();
+			objectManager = new ObjectManager();
+			npcManager = new NPCManager();
+			dialogueManager = new DialogueManager();
+			stillGraphicsManager = new StillGraphicsManager();
+			shopManager = new ShopManager();
+			ioThread = new IOThread();
+		nt = new NewsTicker();
+		pt = new PestControl();
+		fp = new FightPits();
+		cw = new CastleWars();
+		weather = new Weather();
+		wg = new WarriorsGuild();
+			(new Thread(ioThread, &quot;ioThread&quot;)).start();
+		} catch (Exception e) {
+			System.err
+					.println(&quot;Error starting server: &quot; + e.getMessage() + &quot;!&quot;);
+			e.printStackTrace();
+			if (gui != null)
+				gui.handleException(e);
+			System.exit(0);
+		}
+
+		// running this as an event should sort out all the threading issues we
+		// had
+		// I can&#39;t believe I didn&#39;t think of this!
+		EventManager.getSingleton().addGlobalEvent(null, new Event() {
+
+			@Override
+			public void execute(EventContainer container) {
+				long started = System.currentTimeMillis();
+				if (shutdownServer) {
+					System.out.println(&quot;Shutting down selector...&quot;);
+					ioThread.shutdown();
+					System.out.println(&quot;Shutting down event manager...&quot;);
+					EventManager.getSingleton().shutdown();
+					System.out.println(&quot;Shutting down player manager...&quot;);
+					playerManager.destruct();
+					System.out
+							.println(&quot;Shutting down periodic update event...&quot;);
+					container.stop();
+				} else {
+					itemManager.process();
+					objectManager.process();
+					npcManager.process();
+					playerManager.process();
+					shopManager.process();
+				}
+				secundes++;
+				if(secundes == 120){
+					minutes++;
+					secundes = 0;
+				}
+				if(minutes == 60){
+					hours++;
+					minutes = 0;
+				}
+				if(hours == 24){
+					days++;
+					hours = 0;
+				}
+				if(hours == 1 &amp;&amp; minutes == 59 &amp;&amp; secundes == 0){
+					getPlayerManager().updateSeconds = 16;
+					getPlayerManager().updateAnnounced = false;
+					getPlayerManager().updateRunning = true;
+					getPlayerManager().updateStartTime = System.currentTimeMillis();
+				}
+				long ended = System.currentTimeMillis();
+				Server.lastProcessTime = (int) (ended - started);
+				if (Server.averageProcessTime == -1) {
+					Server.averageProcessTime = lastProcessTime;
+				} else {
+					Server.averageProcessTime = (Server.averageProcessTime + lastProcessTime) / 2;
+				}
+			}
+
+			@Override
+			public void stop() {
+			}
+
+		}, Constants.CYCLE_TIME);
+
+	}
+
+     //height,absX,absY,toAbsX,toAbsY,type
+
+    public static final boolean checkPos(int height,int absX,int absY,int toAbsX,int toAbsY,int type)
+    {
+        return WalkingHandler.getSingleton().traversable(toAbsX, toAbsY, type);
+    }
+
+	public static DialogueManager getDialogueManager() {
+		return dialogueManager;
+	}
+
+	public static IOThread getIoThread() {
+		return ioThread;
+	}
+
+	public static ItemManager getItemManager() {
+		return itemManager;
+	}
+
+	public static ObjectManager getObjectManager() {
+		return objectManager;
+	}
+
+	public static PlayerManager getPlayerManager() {
+		return playerManager;
+	}
+
+	public static PestControl getPestControl() {
+		return pt;
+	}
+
+	public static FightPits getFightPits() {
+		return fp;
+	}
+
+	public static CastleWars getCastleWars() {
+		return cw;
+	}
+
+	public static WarriorsGuild getWarriorsGuild() {
+		return wg;
+	}
+
+	public static NPCManager getNpcManager() {
+		return npcManager;
+	}
+
+	public static StillGraphicsManager getStillGraphicsManager() {
+		return stillGraphicsManager;
+	}
+
+	public static ShopManager getShopManager() {
+		return shopManager;
+	}
+
+	public static boolean isDebugModeEnabled() {
+		return debugModeEnabled;
+	}
+
+	/**
+	 * @param gui
+	 *            the gui to set
+	 */
+	public static void setGui(GUI gui) {
+		Server.gui = gui;
+	}
+
+	/**
+	 * @return the gui
+	 */
+	public static GUI getGui() {
+		return gui;
+	}
+
+	/**
+	 * @param lastProcessTime
+	 *            the lastProcessTime to set
+	 */
+	public static void setLastProcessTime(int lastProcessTime) {
+		Server.lastProcessTime = lastProcessTime;
+	}
+
+	/**
+	 * @return the lastProcessTime
+	 */
+	public static int getLastProcessTime() {
+		return lastProcessTime;
+	}
+
+	/**
+	 * @param averageProcessTime
+	 *            the averageProcessTime to set
+	 */
+	public static void setAverageProcessTime(int averageProcessTime) {
+		Server.averageProcessTime = averageProcessTime;
+	}
+
+	/**
+	 * @return the averageProcessTime
+	 */
+	public static int getAverageProcessTime() {
+		return (int) Math.ceil(averageProcessTime);
+	}
+
+	public static void shutdown() {
+		shutdownServer = true;
+	}
+
+}
+[/code]
+I think it happens here but I am not sure any help? It can also happen in other files, anyone knows how to fix so that it doesn&#39;t update anymore if noone is online?
+			public void execute(EventContainer container) {
+				long started = System.currentTimeMillis();
+				if (shutdownServer) {
+					System.out.println(&quot;Shutting down selector...&quot;);
+					ioThread.shutdown();
+					System.out.println(&quot;Shutting down event manager...&quot;);
+					EventManager.getSingleton().shutdown();
+					System.out.println(&quot;Shutting down player manager...&quot;);
+					playerManager.destruct();
+					System.out
+							.println(&quot;Shutting down periodic update event...&quot;);
+					container.stop();
+				} else {
+					itemManager.process();
+					objectManager.process();
+					npcManager.process();
+					playerManager.process();
+					shopManager.process();
+				}
+				secundes++;
+				if(secundes == 120){
+					minutes++;
+					secundes = 0;
+				}
+				if(minutes == 60){
+					hours++;
+					minutes = 0;
+I hope someone can fix!</description>
+    
+    <lastBuildDate>Mon, 07 Mar 2011 14:56:27 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/creativescape-server-updated-please-wait-1-minut/385308.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Creativescape Server Updated please wait 1 minut</title>
+        <dc:creator><![CDATA[@artego artego]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/artego">@artego</a> wrote:</p>
+          <blockquote>
+              <p>Hello there<br>
+I am using creativescape and came upon some problems.<br>
+When I just run the source without an autorestarter after some time it says,<br>
+client updated please wait 1 minut.<br>
+I am using an autorestarter now,<br>
+But I don’t want to set it to 1 hours because that’s annoying.<br>
+I think it happens when noone logs in for a certain time.<br>
+I think this is the code that makes it happern but I am not sure.</p>
+<p>[code]package server;</p>
+<p>import server.admin.GUI;<br>
+import server.events.Event;<br>
+import server.events.EventContainer;<br>
+import server.events.EventManager;<br>
+import server.hash.RehashManager;<br>
+import server.io.IOThread;<br>
+import server.WorldMap;<br>
+import server.util.log.Log;<br>
+import server.world.DialogueManager;<br>
+import server.world.ItemManager;<br>
+import server.world.NPCManager;<br>
+import server.world.ObjectManager;<br>
+import server.world.PlayerManager;<br>
+import server.world.ShopManager;<br>
+import server.world.NewsTicker;<br>
+import server.world.PestControl;<br>
+import server.world.FightPits;<br>
+import server.world.CastleWars;<br>
+import server.world.Weather;<br>
+import server.world.WarriorsGuild;<br>
+import server.world.StillGraphicsManager;<br>
+import server.world.map.WalkingHandler;<br>
+import java.sql.*;</p>
+<p>/**</p>
+<ul>
+<li>Server main class.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Winterlove</li>
+<li>
+<span class="mention">@author</span> Daiki</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class Server {</p>
+<pre><code>public static final String CREDITS = "CreativeScape\r\nAll credits goes to R0cky 0wnz\r\nBased on work by Winterlove, Daiki and Blake";
+
+/**
+ * We use this to synchronize any threads that deal with game logic.
+ * Probably not the best way, but the easiest at the moment.
+ */
+public static Object gameLogicLock = new Object();
+
+/**
+ * Flag to say if debug mode is enabled.
+ */
+private static boolean debugModeEnabled = false;
+public static int maxPlayersOnline;
+
+/**
+ * Shut down server flag.
+ */
+private static boolean shutdownServer = false;
+
+/**
+ * Manages/handlers/whatever you want to call them.
+ */
+public static PlayerManager playerManager = null;
+private static IOThread ioThread = null;
+private static ItemManager itemManager = null;
+private static ObjectManager objectManager = null;
+private static NPCManager npcManager = null;
+private static DialogueManager dialogueManager = null;
+private static StillGraphicsManager stillGraphicsManager = null;
+private static ShopManager shopManager = null;
+private static GUI gui = null;
+private static NewsTicker nt = null;
+private static PestControl pt = null;
+public static Weather weather = null;
+public static FightPits fp = null;
+public static CastleWars cw = null;
+public static WarriorsGuild wg = null;
+public static WorldMap WorldMap = null;
+public static int newUsersCounter;
+
+public static int wildTeleX = 3027;
+public static int wildTeleY = 3630;
+public static int teleXMisc, teleYMisc;
+
+private Server() {
+}
+
+public static void printUsage() {
+	System.out.println("Usage:");
+	System.out.println("    java com.rs.Server [debug/release] [gui/nogui]");
+	System.exit(0);
+}
+
+/**
+ * Variables used to connect to the local SQL database.
+ */
+public static String MySQLURL = "jdbc:mysql://creative-scape.net/creative_community", 
+	MySQLUser = "creative_root", 
+	MySQLPassword = "crsstaff";
+
+/**
+ * Java variable defined in the Java API, used to connect and execute quiries in SQL.
+ */
+public static Connection conn;
+
+/**
+ * Create a connection with the local SQL server using the variables decared above.
+ */
+public static void createConnection()
+{
+	try 
+	{
+		Class.forName("com.mysql.jdbc.Driver").newInstance();
+		conn = DriverManager.getConnection(MySQLURL, MySQLUser, MySQLPassword);
+		System.out.println("Successfully connected to the SQL Database.");
+	} 
+	catch(Exception e) 
+	{	
+		e.printStackTrace();
+	}
+}
+
+private static int lastProcessTime = 0;
+private static double averageProcessTime = -1;
+public static double serverUptime = 0;
+public static int days, hours, minutes, secundes;
+
+public static void main(java.lang.String args[]) {
+	if (args.length &gt;= 2) {
+		if (args[0].equalsIgnoreCase("debug")) {
+			debugModeEnabled = true;
+		} else if (args[0].equalsIgnoreCase("release")) {
+			debugModeEnabled = false;
+		} else {
+			printUsage();
+		}
+		if (args[1].equalsIgnoreCase("gui")) {
+			gui = new GUI();
+		} else if (args[1].equalsIgnoreCase("nogui")) {
+			gui = null;
+		} else {
+			printUsage();
+		}
+	} else {
+		printUsage();
+	}
+	System.setOut(new Log(System.out));
+	System.setErr(new Log(System.err));
+	String[] credits = CREDITS.split("\r\n");
+	for (String credit : credits) {
+		System.out.println(credit);
+	}
+	System.out.println("");
+	System.out.println("Loading...");
+	//createConnection();
+	try {
+		RehashManager.rehash();
+		EventManager.initialise();
+		//VirtualWorld.init();
+		WalkingHandler.getSingleton().initialize();
+		playerManager = PlayerManager.getSingleton();
+		playerManager.setupRegionPlayers();
+		itemManager = new ItemManager();
+		objectManager = new ObjectManager();
+		npcManager = new NPCManager();
+		dialogueManager = new DialogueManager();
+		stillGraphicsManager = new StillGraphicsManager();
+		shopManager = new ShopManager();
+		ioThread = new IOThread();
+	nt = new NewsTicker();
+	pt = new PestControl();
+	fp = new FightPits();
+	cw = new CastleWars();
+	weather = new Weather();
+	wg = new WarriorsGuild();
+		(new Thread(ioThread, "ioThread")).start();
+	} catch (Exception e) {
+		System.err
+				.println("Error starting server: " + e.getMessage() + "!");
+		e.printStackTrace();
+		if (gui != null)
+			gui.handleException(e);
+		System.exit(0);
+	}
+
+	// running this as an event should sort out all the threading issues we
+	// had
+	// I can't believe I didn't think of this!
+	EventManager.getSingleton().addGlobalEvent(null, new Event() {
+
+		@Override
+		public void execute(EventContainer container) {
+			long started = System.currentTimeMillis();
+			if (shutdownServer) {
+				System.out.println("Shutting down selector...");
+				ioThread.shutdown();
+				System.out.println("Shutting down event manager...");
+				EventManager.getSingleton().shutdown();
+				System.out.println("Shutting down player manager...");
+				playerManager.destruct();
+				System.out
+						.println("Shutting down periodic update event...");
+				container.stop();
+			} else {
+				itemManager.process();
+				objectManager.process();
+				npcManager.process();
+				playerManager.process();
+				shopManager.process();
+			}
+			secundes++;
+			if(secundes == 120){
+				minutes++;
+				secundes = 0;
+			}
+			if(minutes == 60){
+				hours++;
+				minutes = 0;
+			}
+			if(hours == 24){
+				days++;
+				hours = 0;
+			}
+			if(hours == 1 &amp;&amp; minutes == 59 &amp;&amp; secundes == 0){
+				getPlayerManager().updateSeconds = 16;
+				getPlayerManager().updateAnnounced = false;
+				getPlayerManager().updateRunning = true;
+				getPlayerManager().updateStartTime = System.currentTimeMillis();
+			}
+			long ended = System.currentTimeMillis();
+			Server.lastProcessTime = (int) (ended - started);
+			if (Server.averageProcessTime == -1) {
+				Server.averageProcessTime = lastProcessTime;
+			} else {
+				Server.averageProcessTime = (Server.averageProcessTime + lastProcessTime) / 2;
+			}
+		}
+
+		@Override
+		public void stop() {
+		}
+
+	}, Constants.CYCLE_TIME);
+
+}
+
+ //height,absX,absY,toAbsX,toAbsY,type
+
+public static final boolean checkPos(int height,int absX,int absY,int toAbsX,int toAbsY,int type)
+{
+    return WalkingHandler.getSingleton().traversable(toAbsX, toAbsY, type);
+}
+
+public static DialogueManager getDialogueManager() {
+	return dialogueManager;
+}
+
+public static IOThread getIoThread() {
+	return ioThread;
+}
+
+public static ItemManager getItemManager() {
+	return itemManager;
+}
+
+public static ObjectManager getObjectManager() {
+	return objectManager;
+}
+
+public static PlayerManager getPlayerManager() {
+	return playerManager;
+}
+
+public static PestControl getPestControl() {
+	return pt;
+}
+
+public static FightPits getFightPits() {
+	return fp;
+}
+
+public static CastleWars getCastleWars() {
+	return cw;
+}
+
+public static WarriorsGuild getWarriorsGuild() {
+	return wg;
+}
+
+public static NPCManager getNpcManager() {
+	return npcManager;
+}
+
+public static StillGraphicsManager getStillGraphicsManager() {
+	return stillGraphicsManager;
+}
+
+public static ShopManager getShopManager() {
+	return shopManager;
+}
+
+public static boolean isDebugModeEnabled() {
+	return debugModeEnabled;
+}
+
+/**
+ * @param gui
+ *            the gui to set
+ */
+public static void setGui(GUI gui) {
+	Server.gui = gui;
+}
+
+/**
+ * @return the gui
+ */
+public static GUI getGui() {
+	return gui;
+}
+
+/**
+ * @param lastProcessTime
+ *            the lastProcessTime to set
+ */
+public static void setLastProcessTime(int lastProcessTime) {
+	Server.lastProcessTime = lastProcessTime;
+}
+
+/**
+ * @return the lastProcessTime
+ */
+public static int getLastProcessTime() {
+	return lastProcessTime;
+}
+
+/**
+ * @param averageProcessTime
+ *            the averageProcessTime to set
+ */
+public static void setAverageProcessTime(int averageProcessTime) {
+	Server.averageProcessTime = averageProcessTime;
+}
+
+/**
+ * @return the averageProcessTime
+ */
+public static int getAverageProcessTime() {
+	return (int) Math.ceil(averageProcessTime);
+}
+
+public static void shutdown() {
+	shutdownServer = true;
+}
+</code></pre>
+<p>}<br>
+[/code]<br>
+I think it happens here but I am not sure any help? It can also happen in other files, anyone knows how to fix so that it doesn’t update anymore if noone is online?<br>
+public void execute(EventContainer container) {<br>
+long started = System.currentTimeMillis();<br>
+if (shutdownServer) {<br>
+System.out.println(“Shutting down selector…”);<br>
+ioThread.shutdown();<br>
+System.out.println(“Shutting down event manager…”);<br>
+EventManager.getSingleton().shutdown();<br>
+System.out.println(“Shutting down player manager…”);<br>
+playerManager.destruct();<br>
+System.out<br>
+.println(“Shutting down periodic update event…”);<br>
+container.stop();<br>
+} else {<br>
+itemManager.process();<br>
+objectManager.process();<br>
+npcManager.process();<br>
+playerManager.process();<br>
+shopManager.process();<br>
+}<br>
+secundes++;<br>
+if(secundes == 120){<br>
+minutes++;<br>
+secundes = 0;<br>
+}<br>
+if(minutes == 60){<br>
+hours++;<br>
+minutes = 0;<br>
+I hope someone can fix!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/creativescape-server-updated-please-wait-1-minut/385308/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/creativescape-server-updated-please-wait-1-minut/385308/1</link>
+        <pubDate>Mon, 07 Mar 2011 14:56:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-385308-1</guid>
+        <source url="https://forum.moparisthebest.com/t/creativescape-server-updated-please-wait-1-minut/385308.rss">Creativescape Server Updated please wait 1 minut</source>
+      </item>
+  </channel>
+</rss>

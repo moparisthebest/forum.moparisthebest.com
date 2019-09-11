@@ -1,0 +1,875 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Actor Model</title>
+    <link>https://forum.moparisthebest.com/t/the-actor-model/521759</link>
+    <description>Hi all, I have recently begun studying [url=http://en.wikipedia.org/wiki/Actor_model]the actor model[/url]. After a few days, I decided to write my own implementation in Java, rather than my newly found love for C++ (sorry Enforcer). Anyway, I was hoping that someone with experience/knowledge in the subject to give me some criticism on my work so far. I know very few people here actually know about the subject, but it&#39;s still worth a shot.
+
+Here are the associated classes within my small &#39;library&#39;.
+[code=java]package com.hikilaka.actor;
+
+public interface Actor&lt;T&gt; extends Runnable
+{
+	/**
+	 * Sends a message to this actor
+	 * 
+	 * @param msg
+	 * 		The message to be sent
+	 * @throws InterruptedException
+	 */
+	public abstract void send(T msg) throws InterruptedException;
+}[/code]
+[code=java]package com.hikilaka.actor;
+
+import java.util.concurrent.Future;
+
+public interface FutureActor&lt;T, R&gt; extends Runnable
+{
+	/**
+	 * Sends a message to this actor and returns a future with the type of
+	 * result
+	 * 
+	 * @param msg
+	 *            The message to be sent
+	 * @return A calculated result
+	 * @throws InterruptedException
+	 */
+	public abstract Future&lt;R&gt; request(T msg) throws InterruptedException;
+}[/code]
+[code=java]package com.hikilaka.actor.future;
+
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * 
+ * @author Zack
+ * 
+ * @param &lt;M&gt;
+ *            The message type the actor recieves
+ * @param &lt;T&gt;
+ *            The type of result the actor will calculate
+ */
+public final class ActorFuture&lt;M, T&gt; implements Future&lt;T&gt;, Runnable
+{
+	private final M msg;
+	
+	private final Callable&lt;T&gt; callable;
+	
+	private final AtomicBoolean completed = new AtomicBoolean(false);
+	
+	private final AtomicReference&lt;T&gt; object = new AtomicReference&lt;T&gt;();
+	
+	private final Object lock = new Object();
+
+	public ActorFuture(M msg, Callable&lt;T&gt; callable)
+	{
+		this.msg = msg;
+		this.callable = callable;
+	}
+
+	// cannot cancel ActorFutures..
+	@Override
+	public boolean cancel(boolean mayInterruptIfRunning)
+	{
+		return false;
+	}
+
+	@Override
+	public boolean isCancelled()
+	{
+		return false;
+	}
+
+	@Override
+	public boolean isDone()
+	{
+		return completed.get();
+	}
+
+	@Override
+	public T get() throws InterruptedException, ExecutionException
+	{
+		synchronized (lock)
+		{
+			while (!completed.get())
+				lock.wait();
+		}
+		return object.get();
+	}
+
+	@Override
+	public T get(long timeout, TimeUnit unit) throws InterruptedException,
+			ExecutionException, TimeoutException
+	{
+		synchronized (lock)
+		{
+			while (!completed.get())
+				lock.wait(unit.toMillis(timeout));
+		}
+		return object.get();
+	}
+
+	@Override
+	public void run()
+	{
+		try
+		{
+			object.getAndSet(callable.call());
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+		}
+		synchronized (lock)
+		{
+			completed.getAndSet(true);
+			lock.notifyAll();
+		}
+	}
+
+	public M getMessage()
+	{
+		return msg;
+	}
+}
+[/code]
+
+
+Now, with these few classes, I have written a small rock paper scissor simulator to demonstrate the capabilities of actors. There is an unnecessarily large amount of threads used within the demo, but like I said, it&#39;s for demonstration purposes.
+[code=java]package com.hikilaka.actor.test.rps;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+
+import com.hikilaka.actor.Actor;
+
+public final class CoordinatorActor implements Actor&lt;String&gt;
+{
+	public static void main(String[] args) throws InterruptedException
+	{
+		PrintActor&lt;String&gt; printActor = PrintActor.spawn();
+		CoordinatorActor actor = spawn(printActor, 3);
+		actor.send(&quot;start&quot;);
+
+		actor.send(&quot;stop&quot;);
+	}
+
+	public static CoordinatorActor spawn(Actor&lt;String&gt; outputActor, int playerCount)
+	{
+		CoordinatorActor actor = new CoordinatorActor(outputActor, playerCount);
+		new Thread(actor, &quot;CoordinatorActor&quot;).start();
+		return actor;
+	}
+
+	/**
+	 * An actor who handles the result (in string format) of a rock paper
+	 * scissors game
+	 */
+	private final Actor&lt;String&gt; outputActor;
+
+	/**
+	 * The players in the game
+	 */
+	private final PlayerActor[] players;
+
+	/**
+	 * A concurrent queue, used for storing messages sent to this actor
+	 */
+	private final BlockingQueue&lt;String&gt; queue;
+
+	public CoordinatorActor(Actor&lt;String&gt; outputActor, int playerCount)
+	{
+		this(outputActor, playerCount, new LinkedBlockingQueue&lt;String&gt;());
+	}
+
+	public CoordinatorActor(Actor&lt;String&gt; outputActor, int playerCount,
+			BlockingQueue&lt;String&gt; queue)
+	{
+		this.outputActor = outputActor;
+		this.players = new PlayerActor[playerCount];
+		this.queue = queue;
+		for (int i = 0; i &lt; playerCount; ++i)
+		{
+			players[i] = PlayerActor.spawn();
+		}
+	}
+
+	@Override
+	public void run()
+	{
+		while (true)
+		{
+			try
+			{
+				// poll the next message, waiting if
+				// one isn&#39;t available
+				String msg = queue.take();
+
+				switch (msg.toLowerCase())
+				{
+					case &quot;start&quot;:
+						for (int i = 0; i &lt; players.length; ++i)
+						{
+							Future&lt;GameAnswer&gt; future = players[i].request(&quot;play&quot;);
+							outputActor.send(&quot;Player &quot; + (i + 1) + &quot; played: &quot; + future.get());
+						}
+						break;
+					case &quot;stop&quot;:
+						// requested to stop processing tasks
+						for (PlayerActor actor : players)
+							actor.request(&quot;stop&quot;);
+						return;
+				}
+			}
+			catch (Exception e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}
+
+	@Override
+	public void send(String msg) throws InterruptedException
+	{
+		queue.put(msg);
+	}
+}[/code]
+[code=java]package com.hikilaka.actor.test.rps;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadLocalRandom;
+
+import com.hikilaka.actor.FutureActor;
+import com.hikilaka.actor.future.ActorFuture;
+
+/**
+ * @author Zack
+ */
+public final class PlayerActor implements FutureActor&lt;String, GameAnswer&gt;
+{
+	public static int PLAYER_COUNT = 0;
+
+	public static PlayerActor spawn()
+	{
+		PlayerActor actor = new PlayerActor();
+		new Thread(actor, &quot;PlayerActor&quot; + ++PLAYER_COUNT).start();
+		return actor;
+	}
+
+	/**
+	 * A concurrent queue, used for storing messages sent to this actor
+	 */
+	private final BlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt; queue;
+
+	public PlayerActor()
+	{
+		this(new LinkedBlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt;());
+	}
+
+	public PlayerActor(BlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt; queue)
+	{
+		this.queue = queue;
+	}
+
+	@Override
+	public void run()
+	{
+		while (true)
+		{
+			try
+			{
+				// poll the next message, waiting if
+				// one isn&#39;t available
+				ActorFuture&lt;String, GameAnswer&gt; future = queue.take();
+
+				switch (future.getMessage().toLowerCase())
+				{
+					case &quot;play&quot;:
+						// run the future&#39;s task which in
+						// this case is to pick a random answer
+						
+						// optionally in a separate thread
+						// this task is so small, using a new thread
+						// doesn&#39;t really matter, just an example of
+						// how concurrent actors may be
+						new Thread(future, Thread.currentThread().getName() + &quot;-&gt;ActorFuture&quot;).start();
+						break;
+					case &quot;stop&quot;:
+						// requested to stop processing tasks
+						return;
+				}
+			}
+			catch (InterruptedException e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}
+
+	@Override
+	public Future&lt;GameAnswer&gt; request(String msg) throws InterruptedException
+	{
+		ActorFuture&lt;String, GameAnswer&gt; future = null;
+
+		// determine what sort of logic we need to allocate
+		// for this future, dependant on the message recieved
+		switch (msg.toLowerCase())
+		{
+			case &quot;play&quot;:
+				future = new ActorFuture&lt;&gt;(msg, new Callable&lt;GameAnswer&gt;()
+				{
+					@Override
+					public GameAnswer call() throws Exception
+					{
+						ThreadLocalRandom random = ThreadLocalRandom.current();
+						return GameAnswer.values()[random.nextInt(GameAnswer.values().length)];
+					}
+				});
+				break;
+			default:
+				// no default logic
+				future = new ActorFuture&lt;&gt;(msg, null);
+				break;
+		}
+		queue.put(future);
+		return future;
+	}
+}[/code]
+
+My work is not excessively documented like it probably should be, but I&#39;m sure you may get the gist of what&#39;s going on.</description>
+    
+    <lastBuildDate>Thu, 01 Aug 2013 18:00:41 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/the-actor-model/521759.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="521759">
+<div class="title">
+<div class="quote-controls"></div>
+ Jmood:</div>
+<blockquote>
+<p>If you want to learn more about the power of the actor model look into Erlang and Akka. You could also message the bot S1gma about the actor model I know he loves it.</p>
+</blockquote>
+</aside>
+<p>what</p>
+<aside class="quote quote-modified" data-post="5" data-topic="521759">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/imthenull/40/1273_1.png" class="avatar"> imthenull:</div>
+<blockquote>
+<p>Thanks for the advice, but i’d rather not learn another language at this point in time, and by using a library i’m really not learning anything &gt;.&gt;</p>
+</blockquote>
+</aside>
+<p>srsly go look at Akka &amp; Erlang</p>
+<aside class="quote" data-post="6" data-topic="521759">
+<div class="title">
+<div class="quote-controls"></div>
+ Fire capez:</div>
+<blockquote>
+<p>Maxi wrote an interesting implementation of the actor model: <a href="http://maximemeire.github.io/Phantom/" rel="nofollow noopener">http://maximemeire.github.io/Phantom/</a></p>
+</blockquote>
+</aside>
+<p>thank god he hasnt committed to that in 6 months</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/10</link>
+        <pubDate>Thu, 01 Aug 2013 18:00:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-10</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“veer, post:8, topic:521759”]talk about terrible ugly code[/quote]explain yourself.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/9</link>
+        <pubDate>Tue, 30 Jul 2013 14:26:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-9</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@slavemaster veer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/slavemaster">@slavemaster</a> wrote:</p>
+          <blockquote>
+              <p>talk about terrible ugly code</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/8</link>
+        <pubDate>Tue, 30 Jul 2013 10:05:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-8</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for the post.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/7</link>
+        <pubDate>Sat, 22 Jun 2013 01:34:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-7</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@Fire_capez Fire capez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fire_capez">@Fire_capez</a> wrote:</p>
+          <blockquote>
+              <p>Maxi wrote an interesting implementation of the actor model: <a href="http://maximemeire.github.io/Phantom/" rel="nofollow noopener">http://maximemeire.github.io/Phantom/</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/6</link>
+        <pubDate>Fri, 21 Jun 2013 23:10:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-6</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for the advice, but i’d rather not learn another language at this point in time, and by using a library i’m really not learning anything &gt;.&gt;</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/5</link>
+        <pubDate>Sun, 16 Jun 2013 06:30:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-5</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@doom_j doom_j]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/doom_j">@doom_j</a> wrote:</p>
+          <blockquote>
+              <p>If you want to learn more about the power of the actor model look into Erlang and Akka. You could also message the bot S1gma about the actor model I know he loves it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/4</link>
+        <pubDate>Sun, 16 Jun 2013 05:56:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-4</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>They are called generics, it’s how lists and maps are able to return specific objects without having to rewrite the class several times. You can read more on them here. <a href="http://docs.oracle.com/javase/tutorial/java/generics/" rel="nofollow noopener">http://docs.oracle.com/javase/tutorial/java/generics/</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/3</link>
+        <pubDate>Sun, 16 Jun 2013 03:08:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-3</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>I know this has nothing to do with criticizing your work, but could someone tell me what these are or give me a link to a document over these.</p>
+<pre><code class="lang-auto">&lt;T, R&gt;
+&lt;T&gt;
+&lt;? extends Object&gt;</code></pre>
+<p>I’ve seen things like these quite a bit but I never understood them. I looked through google a while and couldn’t find anything over them.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/2</link>
+        <pubDate>Sun, 16 Jun 2013 02:43:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-2</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+      <item>
+        <title>The Actor Model</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>Hi all, I have recently begun studying <a href="http://en.wikipedia.org/wiki/Actor_model" data-bbcode="true" rel="nofollow noopener">the actor model</a>. After a few days, I decided to write my own implementation in Java, rather than my newly found love for C++ (sorry Enforcer). Anyway, I was hoping that someone with experience/knowledge in the subject to give me some criticism on my work so far. I know very few people here actually know about the subject, but it’s still worth a shot.</p>
+<p>Here are the associated classes within my small ‘library’.</p>
+<p>[code=java]package com.hikilaka.actor;</p>
+<p>public interface Actor extends Runnable<br>
+{<br>
+/**<br>
+* Sends a message to this actor<br>
+*<br>
+* <a class="mention" href="/u/param">@param</a> msg<br>
+* 		The message to be sent<br>
+* <span class="mention">@throws</span> InterruptedException<br>
+*/<br>
+public abstract void send(T msg) throws InterruptedException;<br>
+}[/code]</p>
+<p>[code=java]package com.hikilaka.actor;</p>
+<p>import java.util.concurrent.Future;</p>
+<p>public interface FutureActor&lt;T, R&gt; extends Runnable<br>
+{<br>
+/**<br>
+* Sends a message to this actor and returns a future with the type of<br>
+* result<br>
+*<br>
+* <a class="mention" href="/u/param">@param</a> msg<br>
+*            The message to be sent<br>
+* <a class="mention" href="/u/return">@return</a> A calculated result<br>
+* <span class="mention">@throws</span> InterruptedException<br>
+*/<br>
+public abstract Future request(T msg) throws InterruptedException;<br>
+}[/code]</p>
+<p>[code=java]package com.hikilaka.actor.future;</p>
+<p>import java.util.concurrent.Callable;<br>
+import java.util.concurrent.ExecutionException;<br>
+import java.util.concurrent.Future;<br>
+import java.util.concurrent.TimeUnit;<br>
+import java.util.concurrent.TimeoutException;<br>
+import java.util.concurrent.atomic.AtomicBoolean;<br>
+import java.util.concurrent.atomic.AtomicReference;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<span class="mention">@author</span> Zack</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> </li>
+<li>
+<pre><code>       The message type the actor recieves
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> </li>
+<li>
+<pre><code>       The type of result the actor will calculate
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public final class ActorFuture&lt;M, T&gt; implements Future, Runnable<br>
+{<br>
+private final M msg;</p>
+<pre><code>private final Callable&lt;T&gt; callable;
+
+private final AtomicBoolean completed = new AtomicBoolean(false);
+
+private final AtomicReference&lt;T&gt; object = new AtomicReference&lt;T&gt;();
+
+private final Object lock = new Object();
+
+public ActorFuture(M msg, Callable&lt;T&gt; callable)
+{
+	this.msg = msg;
+	this.callable = callable;
+}
+
+// cannot cancel ActorFutures..
+@Override
+public boolean cancel(boolean mayInterruptIfRunning)
+{
+	return false;
+}
+
+@Override
+public boolean isCancelled()
+{
+	return false;
+}
+
+@Override
+public boolean isDone()
+{
+	return completed.get();
+}
+
+@Override
+public T get() throws InterruptedException, ExecutionException
+{
+	synchronized (lock)
+	{
+		while (!completed.get())
+			lock.wait();
+	}
+	return object.get();
+}
+
+@Override
+public T get(long timeout, TimeUnit unit) throws InterruptedException,
+		ExecutionException, TimeoutException
+{
+	synchronized (lock)
+	{
+		while (!completed.get())
+			lock.wait(unit.toMillis(timeout));
+	}
+	return object.get();
+}
+
+@Override
+public void run()
+{
+	try
+	{
+		object.getAndSet(callable.call());
+	}
+	catch (Exception e)
+	{
+		e.printStackTrace();
+	}
+	synchronized (lock)
+	{
+		completed.getAndSet(true);
+		lock.notifyAll();
+	}
+}
+
+public M getMessage()
+{
+	return msg;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Now, with these few classes, I have written a small rock paper scissor simulator to demonstrate the capabilities of actors. There is an unnecessarily large amount of threads used within the demo, but like I said, it’s for demonstration purposes.</p>
+<p>[code=java]package com.hikilaka.actor.test.rps;</p>
+<p>import java.util.concurrent.BlockingQueue;<br>
+import java.util.concurrent.Future;<br>
+import java.util.concurrent.LinkedBlockingQueue;</p>
+<p>import com.hikilaka.actor.Actor;</p>
+<p>public final class CoordinatorActor implements Actor<br>
+{<br>
+public static void main(String[] args) throws InterruptedException<br>
+{<br>
+PrintActor printActor = PrintActor.spawn();<br>
+CoordinatorActor actor = spawn(printActor, 3);<br>
+actor.send(“start”);</p>
+<pre><code>	actor.send("stop");
+}
+
+public static CoordinatorActor spawn(Actor&lt;String&gt; outputActor, int playerCount)
+{
+	CoordinatorActor actor = new CoordinatorActor(outputActor, playerCount);
+	new Thread(actor, "CoordinatorActor").start();
+	return actor;
+}
+
+/**
+ * An actor who handles the result (in string format) of a rock paper
+ * scissors game
+ */
+private final Actor&lt;String&gt; outputActor;
+
+/**
+ * The players in the game
+ */
+private final PlayerActor[] players;
+
+/**
+ * A concurrent queue, used for storing messages sent to this actor
+ */
+private final BlockingQueue&lt;String&gt; queue;
+
+public CoordinatorActor(Actor&lt;String&gt; outputActor, int playerCount)
+{
+	this(outputActor, playerCount, new LinkedBlockingQueue&lt;String&gt;());
+}
+
+public CoordinatorActor(Actor&lt;String&gt; outputActor, int playerCount,
+		BlockingQueue&lt;String&gt; queue)
+{
+	this.outputActor = outputActor;
+	this.players = new PlayerActor[playerCount];
+	this.queue = queue;
+	for (int i = 0; i &lt; playerCount; ++i)
+	{
+		players[i] = PlayerActor.spawn();
+	}
+}
+
+@Override
+public void run()
+{
+	while (true)
+	{
+		try
+		{
+			// poll the next message, waiting if
+			// one isn't available
+			String msg = queue.take();
+
+			switch (msg.toLowerCase())
+			{
+				case "start":
+					for (int i = 0; i &lt; players.length; ++i)
+					{
+						Future&lt;GameAnswer&gt; future = players[i].request("play");
+						outputActor.send("Player " + (i + 1) + " played: " + future.get());
+					}
+					break;
+				case "stop":
+					// requested to stop processing tasks
+					for (PlayerActor actor : players)
+						actor.request("stop");
+					return;
+			}
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+		}
+	}
+}
+
+@Override
+public void send(String msg) throws InterruptedException
+{
+	queue.put(msg);
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[code=java]package com.hikilaka.actor.test.rps;</p>
+<p>import java.util.concurrent.BlockingQueue;<br>
+import java.util.concurrent.Callable;<br>
+import java.util.concurrent.Future;<br>
+import java.util.concurrent.LinkedBlockingQueue;<br>
+import java.util.concurrent.ThreadLocalRandom;</p>
+<p>import com.hikilaka.actor.FutureActor;<br>
+import com.hikilaka.actor.future.ActorFuture;</p>
+<p>/**</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Zack<br>
+*/<br>
+public final class PlayerActor implements FutureActor&lt;String, GameAnswer&gt;<br>
+{<br>
+public static int PLAYER_COUNT = 0;</p>
+<p>public static PlayerActor spawn()<br>
+{<br>
+PlayerActor actor = new PlayerActor();<br>
+new Thread(actor, “PlayerActor” + ++PLAYER_COUNT).start();<br>
+return actor;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>A concurrent queue, used for storing messages sent to this actor<br>
+*/<br>
+private final BlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt; queue;</li>
+</ul>
+<p>public PlayerActor()<br>
+{<br>
+this(new LinkedBlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt;());<br>
+}</p>
+<p>public PlayerActor(BlockingQueue&lt;ActorFuture&lt;String, GameAnswer&gt;&gt; queue)<br>
+{<br>
+this.queue = queue;<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void run()<br>
+{<br>
+while (true)<br>
+{<br>
+try<br>
+{<br>
+// poll the next message, waiting if<br>
+// one isn’t available<br>
+ActorFuture&lt;String, GameAnswer&gt; future = queue.take();</p>
+<pre><code> 		switch (future.getMessage().toLowerCase())
+ 		{
+ 			case "play":
+ 				// run the future's task which in
+ 				// this case is to pick a random answer
+ 				
+ 				// optionally in a separate thread
+ 				// this task is so small, using a new thread
+ 				// doesn't really matter, just an example of
+ 				// how concurrent actors may be
+ 				new Thread(future, Thread.currentThread().getName() + "-&gt;ActorFuture").start();
+ 				break;
+ 			case "stop":
+ 				// requested to stop processing tasks
+ 				return;
+ 		}
+ 	}
+ 	catch (InterruptedException e)
+ 	{
+ 		e.printStackTrace();
+ 	}
+ }
+</code></pre>
+<p>}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public Future request(String msg) throws InterruptedException<br>
+{<br>
+ActorFuture&lt;String, GameAnswer&gt; future = null;</p>
+<pre><code> // determine what sort of logic we need to allocate
+ // for this future, dependant on the message recieved
+ switch (msg.toLowerCase())
+ {
+ 	case "play":
+ 		future = new ActorFuture&lt;&gt;(msg, new Callable&lt;GameAnswer&gt;()
+ 		{
+ 			@Override
+ 			public GameAnswer call() throws Exception
+ 			{
+ 				ThreadLocalRandom random = ThreadLocalRandom.current();
+ 				return GameAnswer.values()[random.nextInt(GameAnswer.values().length)];
+ 			}
+ 		});
+ 		break;
+ 	default:
+ 		// no default logic
+ 		future = new ActorFuture&lt;&gt;(msg, null);
+ 		break;
+ }
+ queue.put(future);
+ return future;
+</code></pre>
+<p>}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>My work is not excessively documented like it probably should be, but I’m sure you may get the gist of what’s going on.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-actor-model/521759/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-actor-model/521759/1</link>
+        <pubDate>Sat, 15 Jun 2013 05:49:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-521759-1</guid>
+        <source url="https://forum.moparisthebest.com/t/the-actor-model/521759.rss">The Actor Model</source>
+      </item>
+  </channel>
+</rss>

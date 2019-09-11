@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PHP &amp; The Zend Engine - PHP Types</title>
+    <link>https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393</link>
+    <description>There isn&#39;t alot of practical use to this topic&#39;s subject, but I figure it is cool to know what happens under the hood in PHP. :)
+
+You can find PHP and the Zend Engine&#39;s source code here: http://lxr.php.net/xref/
+
+[b]zend value/zval[/b] - A struct ([i]_zval_struct[/i]) containing information about a variable. A zval is essentially a variable in PHP.
+
+[b]zval value[/b] - A union ([i]zvalue_value[/i]) which holds the value of a zval (according to its value&#39;s type). These values include: a double, long, zend object, HashTable, and string. This proves types such as resources, integers, nulls, and booleans are all represented as longs. A union holds the data of one value at a time.
+
+Types in PHP are defined in the Zend Engine in the [b]Zend/zend.h[/b] header file. The header file contains the zval struct, which within that contains the [i]zvalue_value[/i] union which holds the actual [i]variable data[/i] and a [i]type identifier[/i].
+
+[code=c]typedef union _zvalue_value {
+    long lval;                  /* long value */
+    double dval;                /* double value */
+    struct {
+        char *val;
+        int len;
+    } str;
+    HashTable *ht;              /* hash table value */
+    zend_object_value obj;
+} zvalue_value;
+
+struct _zval_struct {
+    /* Variable information */
+    zvalue_value value;     /* value */
+    zend_uint refcount__gc;
+    zend_uchar type;    /* active type */
+    zend_uchar is_ref__gc;
+};[/code]
+
+The [i]zvalue_value[/i] union defines PHP&#39;s [b]internal[/b] variable data types. Although integers and floats exist as types in PHP, they aren&#39;t actually stored as these types in variables. Instead, values are stored as:
+
+[ul][li]Booleans, bytes, shorts, and integers are stored as longs.[/li]
+[li]Floats are stored as doubles.[/li]
+[li]Chars (including a single char) are stored as Strings.[/li]
+[li]Resources have a long identifier which is used to identify the resource type.[/li]
+[li]Arrays are actually HashTables.[/li]
+[li]A null is well... a null.[/li][/ul]
+
+
+The [i]zend_object_value[/i] is a special struct specifically for objects which will (hopefully) be covered in later posts.
+
+The [i]type[/i] field stores a numeric representation of the type of the data which is stored. These types are defined in the same file:
+
+[code=c]/* data types */
+/* All data types &lt;= IS_BOOL have their constructor/destructors skipped */
+#define IS_NULL     0
+#define IS_LONG     1
+#define IS_DOUBLE   2
+#define IS_BOOL     3
+#define IS_ARRAY    4
+#define IS_OBJECT   5
+#define IS_STRING   6
+#define IS_RESOURCE 7
+#define IS_CONSTANT 8
+#define IS_CONSTANT_ARRAY   9
+#define IS_CALLABLE 10[/code]
+
+Now let&#39;s look into types a bit more; consider PHP&#39;s [url=http://&quot;http://php.net/settype&quot;]settype()[/url] function. Consider the following [url=http://&quot;http://lxr.php.net/xref/PHP_5_4/ext/standard/type.c#94&quot;]code in PHP&#39;s source code[/url],
+[code=c]/* {{{ proto bool settype(mixed var, string type)
+   Set the type of the variable */
+PHP_FUNCTION(settype)
+{
+    zval **var;
+    char *type;
+    int type_len = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, &quot;Zs&quot;, &amp;var, &amp;type, &amp;type_len) == FAILURE) {
+        return;
+    }
+
+    if (!strcasecmp(type, &quot;integer&quot;)) {
+        convert_to_long(*var);
+    } else if (!strcasecmp(type, &quot;int&quot;)) {
+        convert_to_long(*var);
+    } else if (!strcasecmp(type, &quot;float&quot;)) {
+        convert_to_double(*var);
+    } else if (!strcasecmp(type, &quot;double&quot;)) { /* deprecated */
+        convert_to_double(*var);
+    } else if (!strcasecmp(type, &quot;string&quot;)) {
+        convert_to_string(*var);
+    } else if (!strcasecmp(type, &quot;array&quot;)) {
+        convert_to_array(*var);
+    } else if (!strcasecmp(type, &quot;object&quot;)) {
+        convert_to_object(*var);
+    } else if (!strcasecmp(type, &quot;bool&quot;)) {
+        convert_to_boolean(*var);
+    } else if (!strcasecmp(type, &quot;boolean&quot;)) {
+        convert_to_boolean(*var);
+    } else if (!strcasecmp(type, &quot;null&quot;)) {
+        convert_to_null(*var);
+    } else if (!strcasecmp(type, &quot;resource&quot;)) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, &quot;Cannot convert to resource type&quot;);
+        RETURN_FALSE;
+    } else {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, &quot;Invalid type&quot;);
+        RETURN_FALSE;
+    }
+    RETVAL_TRUE;
+}
+/* }}} */[/code]
+This is a simple function which takes a PHP variable (a [i]zval[/i], which is defined as a pointer to a pointer in the function) and a type value. The zval points to a PHP variable&#39;s pointer (its zval). The function calls another function to do the actual conversion and takes the dereferenced variable (which is now just a pointer). Subsequent conversions are handled by the Zend Engine.
+
+The simplest of the conversions is probably to the Boolean type, so that is the conversion which will be investigated. The function which does the conversion is [url=http://&quot;http://lxr.php.net/xref/PHP_5_4/Zend/zend_operators.c#474&quot;]convert_to_boolean()[/url],
+[code=c]ZEND_API void convert_to_boolean(zval *op) /* {{{ */
+{
+    int tmp;
+
+    switch (Z_TYPE_P(op)) {
+        case IS_BOOL:
+            break;
+        case IS_NULL:
+            Z_LVAL_P(op) = 0;
+            break;
+        case IS_RESOURCE: {
+                TSRMLS_FETCH();
+
+                zend_list_delete(Z_LVAL_P(op));
+            }
+            /* break missing intentionally */
+        case IS_LONG:
+            Z_LVAL_P(op) = (Z_LVAL_P(op) ? 1 : 0);
+            break;
+        case IS_DOUBLE:
+            Z_LVAL_P(op) = (Z_DVAL_P(op) ? 1 : 0);
+            break;
+        case IS_STRING:
+            {
+                char *strval = Z_STRVAL_P(op);
+
+                if (Z_STRLEN_P(op) == 0
+                    || (Z_STRLEN_P(op)==1 &amp;&amp; Z_STRVAL_P(op)[0]==&#39;0&#39;)) {
+                    Z_LVAL_P(op) = 0;
+                } else {
+                    Z_LVAL_P(op) = 1;
+                }
+                STR_FREE(strval);
+            }
+            break;
+        case IS_ARRAY:
+            tmp = (zend_hash_num_elements(Z_ARRVAL_P(op))?1:0);
+            zval_dtor(op);
+            Z_LVAL_P(op) = tmp;
+            break;
+        case IS_OBJECT:
+            {
+                zend_bool retval = 1;
+                TSRMLS_FETCH();
+
+                convert_object_to_type(op, IS_BOOL, convert_to_boolean);
+
+                if (Z_TYPE_P(op) == IS_BOOL) {
+                    return;
+                }
+
+                zval_dtor(op);
+                ZVAL_BOOL(op, retval);
+                break;
+            }
+        default:
+            zval_dtor(op);
+            Z_LVAL_P(op) = 0;
+            break;
+    }
+    Z_TYPE_P(op) = IS_BOOL;
+}
+/* }}} */[/code]
+The switch statement accesses the zval&#39;s type. This allows the function to determine exactly which type it has in order to make the proper conversion. [i]Z_TYPE_P[/i] can be simplified to,
+[code=c]#define Z_TYPE(zval)        (zval).type
+#define Z_TYPE_P(zval_p)    Z_TYPE(*zval_p)[/code]
+This essentially dereferences the passed variable, passes the variable to [i]Z_TYPE[/i], then references the zval union&#39;s [i]type[/i] record.
+
+Let&#39;s take a look at how each conversion is done in the switch statement. [i]Z_LVAL_P[/i] accesses the zval union&#39;s [i]lval[/i] record (which holds a long), and simply sets its value of either true or false. Because Booleans are stored as longs, these long values become the variable&#39;s new value.
+
+[ul][li][b]Booleans[/b] - Are left alone because... That&#39;s the type that is being converted to.[/li]
+[li][b]Nulls[/b] - Are always converted to 0.[/li]
+[li][b]Resources[/b] - Are destroyed and then converted to a long.[/li]
+[li][b]Longs[/b] &amp; [b]Doubles[/b] - Checks whether the numeric value results to true or false (ternary operation).[/li]
+[li][b]Strings[/b] - If the length of the first is 0 or the length is 1 and the character is a NUL, result to false. A regular string returns a 1. The original string is then freed/destroyed.[/li]
+[li][b]Arrays[/b] - If the length of the array is &gt; 1, true, otherwise it is false. The array is then destroyed.[/li]
+[li][b]Objects[/b] - This is a more complicated conversion. If the object isn&#39;t able to cast itself, an error is thrown indicated it couldn&#39;t convert the object. If it can, a series of functions are called and the object is then converted to a Boolean true. The object is then destroyed.[/li]
+[li][b]Miscellanious[/b] - Any other type that gets converted to a Boolean will return a 0.[/li][/ul]
+
+Once the conversions are complete, the function sets its type record to [i]IS_BOOL[/i], which is a numeric constant for 3 (as seen above).
+
+The [i]refcount__gc[/i] and [i]is_ref__gc[/i] are used for garbage collection, and they are just used to store a count of references to this variable.
+
+I&#39;m still exploring the Zend Engine, but I&#39;ll try to answer any questions! :)</description>
+    
+    <lastBuildDate>Mon, 28 Jan 2013 21:35:43 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PHP &amp; The Zend Engine - PHP Types</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="2" data-topic="477393">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ruby/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ruby:</div>
+<blockquote>
+<p>I literally just read an article on the Zend engine the other day, I’ll eventually look into it. Busy IRL right now so I don’t really have a lot of time to be going through it all, thanks for alerting the community though!</p>
+</blockquote>
+</aside>
+<p>Thanks for reading!</p>
+<p>Updated the OP to include an example of how types are set in PHP.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/3</link>
+        <pubDate>Mon, 28 Jan 2013 21:35:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477393-3</guid>
+        <source url="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393.rss">PHP &amp; The Zend Engine - PHP Types</source>
+      </item>
+      <item>
+        <title>PHP &amp; The Zend Engine - PHP Types</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>I literally just read an article on the Zend engine the other day, I’ll eventually look into it. Busy IRL right now so I don’t really have a lot of time to be going through it all, thanks for alerting the community though!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/2</link>
+        <pubDate>Fri, 04 Jan 2013 02:11:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477393-2</guid>
+        <source url="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393.rss">PHP &amp; The Zend Engine - PHP Types</source>
+      </item>
+      <item>
+        <title>PHP &amp; The Zend Engine - PHP Types</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>There isn’t alot of practical use to this topic’s subject, but I figure it is cool to know what happens under the hood in PHP. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>You can find PHP and the Zend Engine’s source code here: <a href="http://lxr.php.net/xref/" rel="nofollow noopener">http://lxr.php.net/xref/</a></p>
+<p><span class="bbcode-b">zend value/zval</span> - A struct (<span class="bbcode-i">_zval_struct</span>) containing information about a variable. A zval is essentially a variable in PHP.</p>
+<p><span class="bbcode-b">zval value</span> - A union (<span class="bbcode-i">zvalue_value</span>) which holds the value of a zval (according to its value’s type). These values include: a double, long, zend object, HashTable, and string. This proves types such as resources, integers, nulls, and booleans are all represented as longs. A union holds the data of one value at a time.</p>
+<p>Types in PHP are defined in the Zend Engine in the <span class="bbcode-b">Zend/zend.h</span> header file. The header file contains the zval struct, which within that contains the <span class="bbcode-i">zvalue_value</span> union which holds the actual <span class="bbcode-i">variable data</span> and a <span class="bbcode-i">type identifier</span>.</p>
+<p>[code=c]typedef union _zvalue_value {<br>
+long lval;                  /* long value <em>/<br>
+double dval;                /</em> double value */<br>
+struct {<br>
+char *val;<br>
+int len;<br>
+} str;<br>
+HashTable <em>ht;              /</em> hash table value */<br>
+zend_object_value obj;<br>
+} zvalue_value;</p>
+<p>struct _zval_struct {<br>
+/* Variable information <em>/<br>
+zvalue_value value;     /</em> value <em>/<br>
+zend_uint refcount__gc;<br>
+zend_uchar type;    /</em> active type */<br>
+zend_uchar is_ref__gc;<br>
+};[/code]</p>
+<p>The <span class="bbcode-i">zvalue_value</span> union defines PHP’s <span class="bbcode-b">internal</span> variable data types. Although integers and floats exist as types in PHP, they aren’t actually stored as these types in variables. Instead, values are stored as:</p>
+<p>[ul][li]Booleans, bytes, shorts, and integers are stored as longs.[/li]<br>
+[li]Floats are stored as doubles.[/li]<br>
+[li]Chars (including a single char) are stored as Strings.[/li]<br>
+[li]Resources have a long identifier which is used to identify the resource type.[/li]<br>
+[li]Arrays are actually HashTables.[/li]<br>
+[li]A null is well… a null.[/li][/ul]</p>
+<p>The <span class="bbcode-i">zend_object_value</span> is a special struct specifically for objects which will (hopefully) be covered in later posts.</p>
+<p>The <span class="bbcode-i">type</span> field stores a numeric representation of the type of the data which is stored. These types are defined in the same file:</p>
+<p><code>/* data types */
+/* All data types &lt;= IS_BOOL have their constructor/destructors skipped */
+#define IS_NULL     0
+#define IS_LONG     1
+#define IS_DOUBLE   2
+#define IS_BOOL     3
+#define IS_ARRAY    4
+#define IS_OBJECT   5
+#define IS_STRING   6
+#define IS_RESOURCE 7
+#define IS_CONSTANT 8
+#define IS_CONSTANT_ARRAY   9
+#define IS_CALLABLE 10</code></p>
+<p>Now let’s look into types a bit more; consider PHP’s <a data-bbcode="true">settype()</a> function. Consider the following <a data-bbcode="true">code in PHP’s source code</a>,</p>
+<p>[code=c]/* {{{ proto bool settype(mixed var, string type)<br>
+Set the type of the variable */<br>
+PHP_FUNCTION(settype)<br>
+{<br>
+zval **var;<br>
+char *type;<br>
+int type_len = 0;</p>
+<pre><code>if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "Zs", &amp;var, &amp;type, &amp;type_len) == FAILURE) {
+    return;
+}
+
+if (!strcasecmp(type, "integer")) {
+    convert_to_long(*var);
+} else if (!strcasecmp(type, "int")) {
+    convert_to_long(*var);
+} else if (!strcasecmp(type, "float")) {
+    convert_to_double(*var);
+} else if (!strcasecmp(type, "double")) { /* deprecated */
+    convert_to_double(*var);
+} else if (!strcasecmp(type, "string")) {
+    convert_to_string(*var);
+} else if (!strcasecmp(type, "array")) {
+    convert_to_array(*var);
+} else if (!strcasecmp(type, "object")) {
+    convert_to_object(*var);
+} else if (!strcasecmp(type, "bool")) {
+    convert_to_boolean(*var);
+} else if (!strcasecmp(type, "boolean")) {
+    convert_to_boolean(*var);
+} else if (!strcasecmp(type, "null")) {
+    convert_to_null(*var);
+} else if (!strcasecmp(type, "resource")) {
+    php_error_docref(NULL TSRMLS_CC, E_WARNING, "Cannot convert to resource type");
+    RETURN_FALSE;
+} else {
+    php_error_docref(NULL TSRMLS_CC, E_WARNING, "Invalid type");
+    RETURN_FALSE;
+}
+RETVAL_TRUE;
+</code></pre>
+<p>}<br>
+/* }}} */[/code]<br>
+This is a simple function which takes a PHP variable (a <span class="bbcode-i">zval</span>, which is defined as a pointer to a pointer in the function) and a type value. The zval points to a PHP variable’s pointer (its zval). The function calls another function to do the actual conversion and takes the dereferenced variable (which is now just a pointer). Subsequent conversions are handled by the Zend Engine.</p>
+<p>The simplest of the conversions is probably to the Boolean type, so that is the conversion which will be investigated. The function which does the conversion is <a data-bbcode="true">convert_to_boolean()</a>,</p>
+<p>[code=c]ZEND_API void convert_to_boolean(zval <em>op) /</em> {{{ */<br>
+{<br>
+int tmp;</p>
+<pre><code>switch (Z_TYPE_P(op)) {
+    case IS_BOOL:
+        break;
+    case IS_NULL:
+        Z_LVAL_P(op) = 0;
+        break;
+    case IS_RESOURCE: {
+            TSRMLS_FETCH();
+
+            zend_list_delete(Z_LVAL_P(op));
+        }
+        /* break missing intentionally */
+    case IS_LONG:
+        Z_LVAL_P(op) = (Z_LVAL_P(op) ? 1 : 0);
+        break;
+    case IS_DOUBLE:
+        Z_LVAL_P(op) = (Z_DVAL_P(op) ? 1 : 0);
+        break;
+    case IS_STRING:
+        {
+            char *strval = Z_STRVAL_P(op);
+
+            if (Z_STRLEN_P(op) == 0
+                || (Z_STRLEN_P(op)==1 &amp;&amp; Z_STRVAL_P(op)[0]=='0')) {
+                Z_LVAL_P(op) = 0;
+            } else {
+                Z_LVAL_P(op) = 1;
+            }
+            STR_FREE(strval);
+        }
+        break;
+    case IS_ARRAY:
+        tmp = (zend_hash_num_elements(Z_ARRVAL_P(op))?1:0);
+        zval_dtor(op);
+        Z_LVAL_P(op) = tmp;
+        break;
+    case IS_OBJECT:
+        {
+            zend_bool retval = 1;
+            TSRMLS_FETCH();
+
+            convert_object_to_type(op, IS_BOOL, convert_to_boolean);
+
+            if (Z_TYPE_P(op) == IS_BOOL) {
+                return;
+            }
+
+            zval_dtor(op);
+            ZVAL_BOOL(op, retval);
+            break;
+        }
+    default:
+        zval_dtor(op);
+        Z_LVAL_P(op) = 0;
+        break;
+}
+Z_TYPE_P(op) = IS_BOOL;
+</code></pre>
+<p>}<br>
+/* }}} */[/code]<br>
+The switch statement accesses the zval’s type. This allows the function to determine exactly which type it has in order to make the proper conversion. <span class="bbcode-i">Z_TYPE_P</span> can be simplified to,</p>
+<p><code>#define Z_TYPE(zval)        (zval).type
+#define Z_TYPE_P(zval_p)    Z_TYPE(*zval_p)</code><br>
+This essentially dereferences the passed variable, passes the variable to <span class="bbcode-i">Z_TYPE</span>, then references the zval union’s <span class="bbcode-i">type</span> record.</p>
+<p>Let’s take a look at how each conversion is done in the switch statement. <span class="bbcode-i">Z_LVAL_P</span> accesses the zval union’s <span class="bbcode-i">lval</span> record (which holds a long), and simply sets its value of either true or false. Because Booleans are stored as longs, these long values become the variable’s new value.</p>
+<p>[ul][li]<span class="bbcode-b">Booleans</span> - Are left alone because… That’s the type that is being converted to.[/li]<br>
+[li]<span class="bbcode-b">Nulls</span> - Are always converted to 0.[/li]<br>
+[li]<span class="bbcode-b">Resources</span> - Are destroyed and then converted to a long.[/li]<br>
+[li]<span class="bbcode-b">Longs</span> &amp; <span class="bbcode-b">Doubles</span> - Checks whether the numeric value results to true or false (ternary operation).[/li]<br>
+[li]<span class="bbcode-b">Strings</span> - If the length of the first is 0 or the length is 1 and the character is a NUL, result to false. A regular string returns a 1. The original string is then freed/destroyed.[/li]<br>
+[li]<span class="bbcode-b">Arrays</span> - If the length of the array is &gt; 1, true, otherwise it is false. The array is then destroyed.[/li]<br>
+[li]<span class="bbcode-b">Objects</span> - This is a more complicated conversion. If the object isn’t able to cast itself, an error is thrown indicated it couldn’t convert the object. If it can, a series of functions are called and the object is then converted to a Boolean true. The object is then destroyed.[/li]<br>
+[li]<span class="bbcode-b">Miscellanious</span> - Any other type that gets converted to a Boolean will return a 0.[/li][/ul]</p>
+<p>Once the conversions are complete, the function sets its type record to <span class="bbcode-i">IS_BOOL</span>, which is a numeric constant for 3 (as seen above).</p>
+<p>The <span class="bbcode-i">refcount__gc</span> and <span class="bbcode-i">is_ref__gc</span> are used for garbage collection, and they are just used to store a count of references to this variable.</p>
+<p>I’m still exploring the Zend Engine, but I’ll try to answer any questions! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393/1</link>
+        <pubDate>Wed, 02 Jan 2013 22:01:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477393-1</guid>
+        <source url="https://forum.moparisthebest.com/t/php-the-zend-engine-php-types/477393.rss">PHP &amp; The Zend Engine - PHP Types</source>
+      </item>
+  </channel>
+</rss>

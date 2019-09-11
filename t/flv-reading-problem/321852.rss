@@ -1,0 +1,521 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>FLV Reading Problem</title>
+    <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852</link>
+    <description>I have decided to create my own FLV parser/decoder/reader/player/insert-word-here. For those of you who don&#39;t know, FLV stands for Flash Video.
+
+My problem is that whenever I begin to read and/or parse the &quot;tag&quot; blocks within a flash video file, it seems that I&#39;m reading incorrect data. I&#39;ve looked over it numerous times - this is my second time just rewriting it out of desperation - but I can&#39;t seem to figure out what&#39;s wrong. 
+
+FLV format/documentation:
+http://osflash.org/flv#flv_format
+
+Code:
+[code]
+	private FLV parseFLV(FLVStream in) throws IOException
+	{
+		String signature = new String(in.readBytes(3));
+		System.out.println(&quot;Signature: &quot;+signature);
+		if(!signature.equals(&quot;FLV&quot;))
+			throw new FLVFormatException(&quot;Wrong signature! (&#39;&quot;+
+					signature+&quot;&#39; when expected &#39;FLV&#39;)&quot;);
+		
+		int version = in.readByte();
+		System.out.println(&quot;Version: &quot;+version);
+		if(version != 1)
+			throw new FLVFormatException(&quot;Unsupported version! (&#39;&quot;+
+					version+&quot;&#39; when expected &#39;1&#39;)&quot;);
+		
+		int typeFlags = in.readByte() &amp; 0xff;
+		
+		//1 = VIDEO ONLY
+		//4 = AUDIO ONLY
+		//5 = AUDIO &amp; VIDEO
+		System.out.println(&quot;Type: &quot;+typeFlags+&quot; (&quot;
+				+((typeFlags == 1) ? &quot;VIDEO ONLY&quot; : 
+					((typeFlags == 4) ? &quot;AUDIO ONLY&quot; : &quot;AUDIO &amp; VIDEO&quot;))+&quot;)&quot;);
+		
+		/*** BEGIN OLD FLAG PARSING - REPLACED BY ABOVE ***
+		//01234567 &gt;&gt;&gt; 3 = 56701234
+		//56701234 &amp; 5 = 00001234
+		int flagReservedA = ((typeFlags &gt;&gt;&gt; 3) &amp; 5);
+		System.out.println(&quot;Reserved Flag A: &quot;+flagReservedA);
+		
+		//01234567 &gt;&gt;&gt; 2 = 67012345
+		//67012345 &amp; 1 = 00000005
+		int flagAudio = ((typeFlags &gt;&gt;&gt; 2) &amp; 1);
+		System.out.println(&quot;Audo Flag: &quot;+flagAudio);
+		
+		//01234567 &gt;&gt;&gt; 1 = 70123456
+		//70123456 &amp; 1 = 00000006
+		int flagReservedB = ((typeFlags &gt;&gt;&gt; 1) &amp; 1);
+		System.out.println(&quot;Reserved Flag B: &quot;+flagReservedB);
+		
+		//01234567 &gt;&gt;&gt; 0 = 01234567
+		//01234567 &amp; 1 = 00000007
+		int flagVideo = ((typeFlags &gt;&gt;&gt; 0) &amp; 1);
+		System.out.println(&quot;Video Flag: &quot;+flagVideo);
+		*** END OLD FLAG PARSING ***/
+		
+		int dataOffset = in.readInt();
+		System.out.println(&quot;Data Offset: &quot;+dataOffset+&quot; bytes&quot;);
+		if(dataOffset != in.getOffset())
+			throw new FLVFormatException(&quot;Data offset field does not match stream offset!&quot;);
+					
+		int tagIdx = 0;
+		while(true)
+		{
+			System.out.println(&quot;Reading tag-block index: &quot;+tagIdx++);
+			
+			int prevTagSize = in.readInt();
+			System.out.println(&quot;\tPrevious: &quot;+prevTagSize+&quot; bytes&quot;);
+			
+			int tagType = in.readByte();
+			System.out.println(&quot;\tType: &quot;+tagType+&quot; (&quot;
+					+((tagType == 8) ? &quot;AUDIO&quot; : 
+						((tagType == 9) ? &quot;VIDEO&quot; : &quot;META&quot;))+&quot;)&quot;);
+			
+			int bodyLen = in.read3Bytes();
+			System.out.println(&quot;\tBody Length: &quot;+bodyLen+&quot; bytes&quot;);
+			
+			int timeStamp = in.readInt();
+			System.out.println(&quot;\tTimestamp: &quot;+timeStamp);
+			
+			int streamId = in.read3Bytes();
+			System.out.println(&quot;\tStream ID: &quot;+streamId);
+			
+			byte[] body = in.readBytes(bodyLen);
+			System.out.println(&quot;\tBody: &quot;+body+&quot;[&quot;+body.length+&quot;]&quot;);
+			
+			if(tagIdx &gt; 3) //For debugging purposes
+				break;
+		}
+		return null; //Temporarily
+	}
+[/code]
+
+Example output:
+&lt;blockquote&gt;Signature: FLV
+Version: 1
+Type: 5 (AUDIO &amp; VIDEO)
+Data Offset: 9 bytes
+Reading tag-block index: 0
+	Previous: 0 bytes
+	Type: 18 (META)
+	Body Length: 56 bytes
+	Timestamp: 0
+	Stream ID: 0
+	Body: [B@9304b1[56]
+Reading tag-block index: 1
+	Previous: 116 bytes
+	Type: 111 (META)
+	Body Length: 108 bytes
+	Timestamp: 97
+	Stream ID: 111
+	Body: [B@190d11[108]
+Reading tag-block index: 2
+	Previous: 147 bytes
+	Type: -120 (META)
+	Body Length: 0 bytes
+	Timestamp: 97
+	Stream ID: 114
+	Body: [B@a90653[0]
+Reading tag-block index: 3
+	Previous: 0 bytes
+	Type: 64 (META)
+	Body Length: 0 bytes
+	Timestamp: 0
+	Stream ID: 98
+	Body: [B@de6ced[0]&lt;/blockquote&gt;
+
+If you don&#39;t see where the problem exists, it&#39;s basically everything to do with the tag-block reading. Body length and previous sizes dont match up, the type (should be 8, 9, or 12) is not what it should be, and the stream id should be 0 not whatever is outputted. I know I&#39;m probably going to /facepalm when somebody realizes what&#39;s wrong; however, I can&#39;t seem to figure it out myself so anything&#39;s fine.</description>
+    
+    <lastBuildDate>Sun, 27 Dec 2009 18:00:26 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:8, topic:321852”]is it safe to assume that you are reading multi-byte integral values in big-endian order?[/quote]Is it safe to not read the entire topic (including the FLV format doc.) before making the assumption that I am assuming every multi-byte integral value is in big-endian order?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/9</link>
+        <pubDate>Sun, 27 Dec 2009 18:00:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-9</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>is it safe to assume that you are reading multi-byte integral values in big-endian order?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/8</link>
+        <pubDate>Sun, 27 Dec 2009 03:01:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-8</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>Anyway can we ignore the idiot above and at least attempt to help me solve my problem?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/7</link>
+        <pubDate>Sat, 26 Dec 2009 19:07:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-7</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <blockquote>www.MoparIsTheBest.com - A Mopar, without idiots.</blockquote>
+<p>newfag.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/6</link>
+        <pubDate>Sat, 26 Dec 2009 17:37:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-6</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Goodbye RS, Hello RSPS, post:4, topic:321852”]Clean code is good code.</p>
+<p>[code]private FLV parseFLV(FLVStream in) throws IOException {</p>
+<pre><code>String signature = new String(in.readBytes(3));
+System.out.println("Signature: "+signature);
+if (!signature.equals("FLV"))
+	throw new FLVFormatException("Wrong signature! ('"+signature+"' when expected 'FLV')");
+
+int version = in.readByte();
+System.out.println("Version: "+version);
+if (version != 1)
+	throw new FLVFormatException("Unsupported version! ('"+version+"' when expected '1')");
+
+int typeFlags = in.readByte() &amp; 0xff;
+System.out.println("Type: "+typeFlags+" ("+((typeFlags == 1) ? "VIDEO ONLY" : ((typeFlags == 4) ? "AUDIO ONLY" : "AUDIO &amp; VIDEO"))+")");
+
+int flagReservedA = ((typeFlags &gt;&gt;&gt; 3) &amp; 5);
+System.out.println("Reserved Flag A: "+flagReservedA);
+
+int flagAudio = ((typeFlags &gt;&gt;&gt; 2) &amp; 1);
+System.out.println("Audo Flag: "+flagAudio);
+
+int flagReservedB = ((typeFlags &gt;&gt;&gt; 1) &amp; 1);
+System.out.println("Reserved Flag B: "+flagReservedB);
+
+int flagVideo = ((typeFlags &gt;&gt;&gt; 0) &amp; 1);
+System.out.println("Video Flag: "+flagVideo);
+
+int dataOffset = in.readInt();
+System.out.println("Data Offset: "+dataOffset+" bytes");
+if (dataOffset != in.getOffset())
+	throw new FLVFormatException("Data offset field does not match stream offset!");
+
+int tagIdx = 0;
+
+while(true) {
+	System.out.println("Reading tag-block index: "+tagIdx++);
+
+int prevTagSize = in.readInt();
+System.out.println("\tPrevious: "+prevTagSize+" bytes");
+
+int tagType = in.readByte();
+System.out.println("\tType: "+tagType+" ("+((tagType == 8) ? "AUDIO" : ((tagType == 9) ? "VIDEO" : "META"))+")");
+
+int bodyLen = in.read3Bytes();
+System.out.println("\tBody Length: "+bodyLen+" bytes");
+
+int timeStamp = in.readInt();
+System.out.println("\tTimestamp: "+timeStamp);
+
+int streamId = in.read3Bytes();
+System.out.println("\tStream ID: "+streamId);
+
+byte[] body = in.readBytes(bodyLen);
+System.out.println("\tBody: "+body+"["+body.length+"]");
+
+if(tagIdx &gt; 3)
+	break;
+}
+
+return null;
+</code></pre>
+<p>}[/code][/quote]</p>
+<p>rofl… ?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/5</link>
+        <pubDate>Sat, 26 Dec 2009 17:36:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-5</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@Goodbye_RS_Hello_RSP Goodbye RS, Hello RSPS]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/goodbye_rs_hello_rsp">@Goodbye_RS_Hello_RSP</a> wrote:</p>
+          <blockquote>
+              <p>Clean code is good code.</p>
+<p>[code]private FLV parseFLV(FLVStream in) throws IOException {</p>
+<pre><code>String signature = new String(in.readBytes(3));
+System.out.println("Signature: "+signature);
+if (!signature.equals("FLV"))
+	throw new FLVFormatException("Wrong signature! ('"+signature+"' when expected 'FLV')");
+
+int version = in.readByte();
+System.out.println("Version: "+version);
+if (version != 1)
+	throw new FLVFormatException("Unsupported version! ('"+version+"' when expected '1')");
+
+int typeFlags = in.readByte() &amp; 0xff;
+System.out.println("Type: "+typeFlags+" ("+((typeFlags == 1) ? "VIDEO ONLY" : ((typeFlags == 4) ? "AUDIO ONLY" : "AUDIO &amp; VIDEO"))+")");
+
+int flagReservedA = ((typeFlags &gt;&gt;&gt; 3) &amp; 5);
+System.out.println("Reserved Flag A: "+flagReservedA);
+
+int flagAudio = ((typeFlags &gt;&gt;&gt; 2) &amp; 1);
+System.out.println("Audo Flag: "+flagAudio);
+
+int flagReservedB = ((typeFlags &gt;&gt;&gt; 1) &amp; 1);
+System.out.println("Reserved Flag B: "+flagReservedB);
+
+int flagVideo = ((typeFlags &gt;&gt;&gt; 0) &amp; 1);
+System.out.println("Video Flag: "+flagVideo);
+
+int dataOffset = in.readInt();
+System.out.println("Data Offset: "+dataOffset+" bytes");
+if (dataOffset != in.getOffset())
+	throw new FLVFormatException("Data offset field does not match stream offset!");
+
+int tagIdx = 0;
+
+while(true) {
+	System.out.println("Reading tag-block index: "+tagIdx++);
+
+int prevTagSize = in.readInt();
+System.out.println("	Previous: "+prevTagSize+" bytes");
+
+int tagType = in.readByte();
+System.out.println("	Type: "+tagType+" ("+((tagType == 8) ? "AUDIO" : ((tagType == 9) ? "VIDEO" : "META"))+")");
+
+int bodyLen = in.read3Bytes();
+System.out.println("	Body Length: "+bodyLen+" bytes");
+
+int timeStamp = in.readInt();
+System.out.println("	Timestamp: "+timeStamp);
+
+int streamId = in.read3Bytes();
+System.out.println("	Stream ID: "+streamId);
+
+byte[] body = in.readBytes(bodyLen);
+System.out.println("	Body: "+body+"["+body.length+"]");
+
+if(tagIdx &gt; 3)
+	break;
+}
+
+return null;
+</code></pre>
+<p>}[/code]<br>
+[center]<img src="http://www.moparisthebest.com/smf/Themes/default/images/warnpmod.gif" alt width="" height=""> How about we don’t care.[/center]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/4</link>
+        <pubDate>Sat, 26 Dec 2009 09:03:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-4</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>Mind sharing (over MSN) later? They’d come in useful for me (as long as they’re in Java).</p>
+<p>The commentary might be wrong but the actual code is fine, or for that matter, at least works fine.</p>
+<p>I don’t know how the hell I missed the fact it was hexidecimal; however, that still does not explain the rest of the tags (i.e. type -120?).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/3</link>
+        <pubDate>Fri, 25 Dec 2009 06:47:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-3</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>it’s kinda pointless… i’ve written swf and flv manipulation apis as well. only good for ripping shit out of youtube videos or little mods of flash games like stick arena[br][br][size=1]Posted on: December 25, 2009, 03:44:37 am[/size][hr]btw:</p>
+<p><code>
+		//01234567 &gt;&gt;&gt; 0 = 01234567
+		//01234567 &amp; 1 = 00000007</code><br>
+uhmmmmmmmmmmmmmmmm wrong[br][br][size=1]Posted on: December 25, 2009, 03:47:36 am[/size][hr]there is a difference between 12 and 0x12.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/2</link>
+        <pubDate>Fri, 25 Dec 2009 03:41:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-2</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+      <item>
+        <title>FLV Reading Problem</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>I have decided to create my own FLV parser/decoder/reader/player/insert-word-here. For those of you who don’t know, FLV stands for Flash Video.</p>
+<p>My problem is that whenever I begin to read and/or parse the “tag” blocks within a flash video file, it seems that I’m reading incorrect data. I’ve looked over it numerous times - this is my second time just rewriting it out of desperation - but I can’t seem to figure out what’s wrong.</p>
+<p>FLV format/documentation:<br>
+<a href="http://osflash.org/flv#flv_format" class="onebox" target="_blank" rel="nofollow noopener">http://osflash.org/flv#flv_format</a></p>
+<p>Code:</p>
+<pre><code class="lang-auto">	private FLV parseFLV(FLVStream in) throws IOException
+	{
+		String signature = new String(in.readBytes(3));
+		System.out.println("Signature: "+signature);
+		if(!signature.equals("FLV"))
+			throw new FLVFormatException("Wrong signature! ('"+
+					signature+"' when expected 'FLV')");
+		
+		int version = in.readByte();
+		System.out.println("Version: "+version);
+		if(version != 1)
+			throw new FLVFormatException("Unsupported version! ('"+
+					version+"' when expected '1')");
+		
+		int typeFlags = in.readByte() &amp; 0xff;
+		
+		//1 = VIDEO ONLY
+		//4 = AUDIO ONLY
+		//5 = AUDIO &amp; VIDEO
+		System.out.println("Type: "+typeFlags+" ("
+				+((typeFlags == 1) ? "VIDEO ONLY" : 
+					((typeFlags == 4) ? "AUDIO ONLY" : "AUDIO &amp; VIDEO"))+")");
+		
+		/*** BEGIN OLD FLAG PARSING - REPLACED BY ABOVE ***
+		//01234567 &gt;&gt;&gt; 3 = 56701234
+		//56701234 &amp; 5 = 00001234
+		int flagReservedA = ((typeFlags &gt;&gt;&gt; 3) &amp; 5);
+		System.out.println("Reserved Flag A: "+flagReservedA);
+		
+		//01234567 &gt;&gt;&gt; 2 = 67012345
+		//67012345 &amp; 1 = 00000005
+		int flagAudio = ((typeFlags &gt;&gt;&gt; 2) &amp; 1);
+		System.out.println("Audo Flag: "+flagAudio);
+		
+		//01234567 &gt;&gt;&gt; 1 = 70123456
+		//70123456 &amp; 1 = 00000006
+		int flagReservedB = ((typeFlags &gt;&gt;&gt; 1) &amp; 1);
+		System.out.println("Reserved Flag B: "+flagReservedB);
+		
+		//01234567 &gt;&gt;&gt; 0 = 01234567
+		//01234567 &amp; 1 = 00000007
+		int flagVideo = ((typeFlags &gt;&gt;&gt; 0) &amp; 1);
+		System.out.println("Video Flag: "+flagVideo);
+		*** END OLD FLAG PARSING ***/
+		
+		int dataOffset = in.readInt();
+		System.out.println("Data Offset: "+dataOffset+" bytes");
+		if(dataOffset != in.getOffset())
+			throw new FLVFormatException("Data offset field does not match stream offset!");
+					
+		int tagIdx = 0;
+		while(true)
+		{
+			System.out.println("Reading tag-block index: "+tagIdx++);
+			
+			int prevTagSize = in.readInt();
+			System.out.println("\tPrevious: "+prevTagSize+" bytes");
+			
+			int tagType = in.readByte();
+			System.out.println("\tType: "+tagType+" ("
+					+((tagType == 8) ? "AUDIO" : 
+						((tagType == 9) ? "VIDEO" : "META"))+")");
+			
+			int bodyLen = in.read3Bytes();
+			System.out.println("\tBody Length: "+bodyLen+" bytes");
+			
+			int timeStamp = in.readInt();
+			System.out.println("\tTimestamp: "+timeStamp);
+			
+			int streamId = in.read3Bytes();
+			System.out.println("\tStream ID: "+streamId);
+			
+			byte[] body = in.readBytes(bodyLen);
+			System.out.println("\tBody: "+body+"["+body.length+"]");
+			
+			if(tagIdx &gt; 3) //For debugging purposes
+				break;
+		}
+		return null; //Temporarily
+	}</code></pre>
+<p>Example output:</p>
+<blockquote>Signature: FLV
+Version: 1
+Type: 5 (AUDIO &amp; VIDEO)
+Data Offset: 9 bytes
+Reading tag-block index: 0
+	Previous: 0 bytes
+	Type: 18 (META)
+	Body Length: 56 bytes
+	Timestamp: 0
+	Stream ID: 0
+	Body: [B@9304b1[56]
+Reading tag-block index: 1
+	Previous: 116 bytes
+	Type: 111 (META)
+	Body Length: 108 bytes
+	Timestamp: 97
+	Stream ID: 111
+	Body: [B@190d11[108]
+Reading tag-block index: 2
+	Previous: 147 bytes
+	Type: -120 (META)
+	Body Length: 0 bytes
+	Timestamp: 97
+	Stream ID: 114
+	Body: [B@a90653[0]
+Reading tag-block index: 3
+	Previous: 0 bytes
+	Type: 64 (META)
+	Body Length: 0 bytes
+	Timestamp: 0
+	Stream ID: 98
+	Body: [B@de6ced[0]</blockquote>
+<p>If you don’t see where the problem exists, it’s basically everything to do with the tag-block reading. Body length and previous sizes dont match up, the type (should be 8, 9, or 12) is not what it should be, and the stream id should be 0 not whatever is outputted. I know I’m probably going to /facepalm when somebody realizes what’s wrong; however, I can’t seem to figure it out myself so anything’s fine.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/flv-reading-problem/321852/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/flv-reading-problem/321852/1</link>
+        <pubDate>Fri, 25 Dec 2009 02:23:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321852-1</guid>
+        <source url="https://forum.moparisthebest.com/t/flv-reading-problem/321852.rss">FLV Reading Problem</source>
+      </item>
+  </channel>
+</rss>

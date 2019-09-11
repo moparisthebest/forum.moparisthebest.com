@@ -1,0 +1,730 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+    <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545</link>
+    <description>Well I&#39;m posting this now because I never worked with combat before and I need some criticism if i&#39;m going off direction and not doing it properly or whatever.
+
+The Combat class
+
+[spoiler][code=java]/**
+ * Combat
+ * 
+ * February 23, 2014
+ * 
+ * Dan0194
+ */
+package org.hyperion.rs2.content.combat;
+
+import org.hyperion.rs2.content.combat.impl.Melee;
+import org.hyperion.rs2.model.Entity;
+import org.hyperion.rs2.model.Player;
+
+public class Combat {
+	
+	/**
+	 * The singleton
+	 */
+	private static final Combat singleton = new Combat();
+	
+	/**
+	 * Types of combats
+	 */
+	private static final CombatHandler[] COMBAT_HANDLER = {
+															new Melee(),
+														  };
+	
+	/**
+	 * Sends the combat 
+	 */
+	public Combat sendCombat(Entity attacker, Entity opponent) {
+		attacker.setCurrentTarget(opponent);
+		attacker.face(opponent.getLocation());
+		opponent.setCurrentTarget(attacker);
+		opponent.face(attacker.getLocation());
+		COMBAT_HANDLER[opponent.determineNextCombatAttack(attacker)].executeCombat(attacker, opponent);
+		return this;
+	}
+	
+	/**
+	 * Sets their current targets to null
+	 */
+	public Combat sendCombatDestruction(Entity attacker, Entity opponent) {
+		attacker.setCurrentTarget(null);
+		opponent.setCurrentTarget(null);
+		return this;
+	}
+	
+	/**
+	 * Checks if the combat is able to continue or be started
+	 */
+	public Combat sendCombatApproval(Entity attacker, Entity opponent) {
+		/**
+		 * Checks if the attacker or opponent are null
+		 */
+		if(attacker == null || opponent == null) {
+			return sendCombatDestruction(attacker, opponent);
+		/**
+		 * Checks if the attacker is an instance of player and if his opponent 
+		 * already has a target sends him a message that he is
+		 */
+		} else if(attacker instanceof Player &amp;&amp; opponent.getCurrentTarget() != null &amp;&amp; opponent.getCurrentTarget() != attacker) {
+			((Player) attacker).getActionSender().sendMessage(&quot;Your opponent is already in combat.&quot;);
+			return sendCombatDestruction(attacker, opponent);
+		/**
+	     * Checks if the opponent is dead
+	     */
+		} else if(opponent.getHealth() &lt;= 0) {
+			EntityDeath.getSingleton().sendEntityDeath(opponent);
+			return sendCombatDestruction(attacker, opponent);
+			/**
+			 * If all the checks are fine then this sends the combat
+			 */
+		} else {
+			
+		return sendCombat(opponent, attacker);
+		}
+	}
+	
+	/**
+	 * @return singleton
+	 */
+	public static Combat getSingleton() {
+		return singleton;
+	}
+}[/code][/spoiler]
+
+CombatHandler 
+
+[spoiler][code=java]**
+ * CombatHandler
+ * 
+ * February 23, 2014
+ * 
+ * Dan0194
+ */
+package org.hyperion.rs2.content.combat;
+
+import java.util.Random;
+
+import org.hyperion.rs2.model.Animation;
+import org.hyperion.rs2.model.Entity;
+import org.hyperion.rs2.model.World;
+import org.hyperion.rs2.model.Damage.Hit;
+import org.hyperion.rs2.model.Damage.HitType;
+import org.hyperion.rs2.tick.Tick;
+
+public abstract class CombatHandler {
+
+	/**
+	 * The combat extras for the type of combat
+	 */
+	public abstract void getCombat(Entity attacker, Entity opponent);
+	
+	/**
+	 * The bonus the attacker has
+	 */
+	public abstract int getBonus(Entity attacker, Entity opponent);
+	
+	/**
+	 * The damage to the opponent
+	 */
+	public abstract int getDamage(Entity attacker, Entity opponent);
+	
+	/**
+	 * The weapon bonus of the attacker
+	 */
+	public abstract int getWeaponBonus(Entity attacker);
+	
+	/**
+	 * The defence the opponent has
+	 */
+	public abstract int getDefence(Entity opponent);
+	
+	/**
+	 * Makes an instance of the random class
+	 */
+	private final Random random = new Random();
+	
+	/**
+	 * This handles the timer the damge needed to be given
+	 * The animation and then starts the cycle again
+	 */
+	public void executeCombat(final Entity attacker, final Entity opponent) {
+		final int damage = getDamage(attacker, opponent);
+		final Hit hit = new Hit(damage, damage == 0 ? HitType.NO_DAMAGE : HitType.NORMAL_DAMAGE);
+		World.getWorld().getTickManager().submit(new Tick(2, false) {
+
+			@Override
+			protected void execute() {
+				attacker.playAnimation(Animation.create(attacker.getCombatDefinition().getAttackAnim()));
+				opponent.playAnimation(Animation.create(opponent.getCombatDefinition().getDefenceAnim()));
+				opponent.inflictDamage(hit, attacker);
+				Combat.getSingleton().sendCombatApproval(attacker, opponent);
+				stop();
+			}
+		});
+	}
+	
+	
+	/**
+	 * @return random
+	 */
+	public Random getRandom() {
+		return random;
+	}
+}
+[/code][/spoiler]
+
+Basic Melee Class(The formula&#39;s make no sense I know)
+
+[spoiler][code=java]/**
+ * Melee
+ * 
+ * February 23, 2014
+ * 
+ * Dan0194
+ */
+package org.hyperion.rs2.content.combat.impl;
+
+
+import java.util.Random;
+
+import org.hyperion.rs2.content.combat.CombatHandler;
+import org.hyperion.rs2.model.Entity;
+
+
+public class Melee extends CombatHandler {
+
+	/**
+	 * (non-Javadoc)
+	 * @see org.hyperion.rs2.content.combat.CombatHandler#getCombat(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+	 */
+	@Override
+	public void getCombat(Entity attacker, Entity opponent) {
+		this.executeCombat(attacker, opponent);
+	}
+
+	/**
+	 * (non-Javadoc)
+	 * @see org.hyperion.rs2.content.combat.CombatHandler#getBonus(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+	 */
+	@Override
+	public int getBonus(Entity attacker, Entity opponent) {
+		return (int) (getWeaponBonus(attacker) - getDefence(opponent) + (getWeaponBonus(attacker) * 0.35));
+	}
+
+	/**
+	 * (non-Javadoc)
+	 * @see org.hyperion.rs2.content.combat.CombatHandler#getDamage(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+	 */
+	@Override
+	public int getDamage(Entity attacker, Entity opponent) {
+		final int bonus = getBonus(attacker, opponent);
+		return this.getRandom().nextInt(bonus &lt;= 0 ? 1 : bonus) +  this.getRandom().nextInt(2);
+	}
+	
+	/**
+	 * (non-Javadoc)
+	 * @see org.hyperion.rs2.content.combat.CombatHandler#getWeaponBonus(org.hyperion.rs2.model.Entity)
+	 */
+	@Override
+	public int getWeaponBonus(Entity attacker) {
+		return this.getRandom().nextInt(attacker.getCombatDefinition().getAttackBonus());
+	}
+
+	/**
+	 * (non-Javadoc)
+	 * @see org.hyperion.rs2.content.combat.CombatHandler#getDefence(org.hyperion.rs2.model.Entity)
+	 */
+	@Override
+	public int getDefence(Entity opponent) {
+		return this.getRandom().nextInt(opponent.getCombatDefinition().getMeleeDefence());
+	}
+}
+[/code][/spoiler]</description>
+    
+    <lastBuildDate>Thu, 27 Feb 2014 12:06:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:9, topic:540545”][quote author=arham 4 link=topic=659408.msg4410534#msg4410534 date=1393472035]<br>
+I love the design.<br>
+[/quote]<br>
+You clearly have no concept of ‘good’ design.[/quote]<br>
+I posted this clearly for constructive criticism, please tell me what I can do to make the design better.</p>
+<p>EDIT: Little update (Thanks to Hcojustin for pointing it out) now instead of making a new random class each time there is only one instance of it being used.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/11</link>
+        <pubDate>Thu, 27 Feb 2014 12:06:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-11</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Ambokile Ambokile]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ambokile">@Ambokile</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:9, topic:540545”][quote author=arham 4 link=topic=659408.msg4410534#msg4410534 date=1393472035]<br>
+I love the design.<br>
+[/quote]<br>
+You clearly have no concept of ‘good’ design.[/quote]</p>
+<p>But he used a singleton! And multiple classes! That’s a perfect design! /s</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/10</link>
+        <pubDate>Thu, 27 Feb 2014 08:04:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-10</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="7" data-topic="540545">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>I love the design.</p>
+</blockquote>
+</aside>
+<p>You clearly have no concept of ‘good’ design.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/9</link>
+        <pubDate>Thu, 27 Feb 2014 06:53:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-9</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">That's gonna start to hurt</code></pre>
+<p>That’s gonna start to hurt</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/8</link>
+        <pubDate>Thu, 27 Feb 2014 05:55:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-8</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>I love the design.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/7</link>
+        <pubDate>Thu, 27 Feb 2014 03:33:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-7</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">
+my server had this thing built in where it detects combat 
+
+0 - 2
+
+0 = Melee
+1 = Ranged
+2 = Magic
+
+So I thought to make use of it and just put them in order in an array.</code></pre>
+<p>my server had this thing built in where it detects combat</p>
+<p>0 - 2</p>
+<p>0 = Melee<br>
+1 = Ranged<br>
+2 = Magic</p>
+<p>So I thought to make use of it and just put them in order in an array.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/6</link>
+        <pubDate>Tue, 25 Feb 2014 23:34:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-6</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:4, topic:540545”][quote author=DAn0194 link=topic=659408.msg4410052#msg4410052 date=1393291455]</p>
+<aside class="quote">
+<blockquote>
+<p>[code=java]/**</p>
+<ul>
+<li>Types of combats<br>
+*/<br>
+private static final CombatHandler[] COMBAT_HANDLER = {<br>
+new Melee(),<br>
+};[/code]</li>
+</ul>
+<p>wat</p>
+</blockquote>
+</aside>
+<p>?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"><br>
+[/quote]<br>
+just curious <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> why’d you use an array?[/quote]<br>
+He’s going to have more combat handlers but yeah I don’t understand the use of an array here either</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/5</link>
+        <pubDate>Tue, 25 Feb 2014 03:45:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-5</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“DAn0194, post:3, topic:540545”][quote author=Clawz fury link=topic=659408.msg4409927#msg4409927 date=1393238249]</p>
+<p>[code=java]/**</p>
+<ul>
+<li>Types of combats<br>
+*/<br>
+private static final CombatHandler[] COMBAT_HANDLER = {<br>
+new Melee(),<br>
+};[/code]</li>
+</ul>
+<p>wat<br>
+[/quote]<br>
+?  :|[/quote]<br>
+just curious <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> why’d you use an array?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/4</link>
+        <pubDate>Tue, 25 Feb 2014 03:00:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-4</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:2, topic:540545”][code=java]/**</p>
+<ul>
+<li>Types of combats<br>
+*/<br>
+private static final CombatHandler[] COMBAT_HANDLER = {<br>
+new Melee(),<br>
+};[/code]</li>
+</ul>
+<p>wat[/quote]<br>
+?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/3</link>
+        <pubDate>Tue, 25 Feb 2014 01:24:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-3</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[code=java]/**</p>
+<ul>
+<li>Types of combats<br>
+*/<br>
+private static final CombatHandler[] COMBAT_HANDLER = {<br>
+new Melee(),<br>
+};[/code]</li>
+</ul>
+<p>wat</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/2</link>
+        <pubDate>Mon, 24 Feb 2014 10:37:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-2</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+      <item>
+        <title>[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <p>Well I’m posting this now because I never worked with combat before and I need some criticism if i’m going off direction and not doing it properly or whatever.</p>
+<p>The Combat class</p>
+<p>[spoiler][code=java]/**</p>
+<ul>
+<li>Combat</li>
+<li>
+</li>
+<li>February 23, 2014</li>
+<li>
+</li>
+<li>Dan0194<br>
+*/<br>
+package org.hyperion.rs2.content.combat;</li>
+</ul>
+<p>import org.hyperion.rs2.content.combat.impl.Melee;<br>
+import org.hyperion.rs2.model.Entity;<br>
+import org.hyperion.rs2.model.Player;</p>
+<p>public class Combat {</p>
+<pre><code>/**
+ * The singleton
+ */
+private static final Combat singleton = new Combat();
+
+/**
+ * Types of combats
+ */
+private static final CombatHandler[] COMBAT_HANDLER = {
+														new Melee(),
+													  };
+
+/**
+ * Sends the combat 
+ */
+public Combat sendCombat(Entity attacker, Entity opponent) {
+	attacker.setCurrentTarget(opponent);
+	attacker.face(opponent.getLocation());
+	opponent.setCurrentTarget(attacker);
+	opponent.face(attacker.getLocation());
+	COMBAT_HANDLER[opponent.determineNextCombatAttack(attacker)].executeCombat(attacker, opponent);
+	return this;
+}
+
+/**
+ * Sets their current targets to null
+ */
+public Combat sendCombatDestruction(Entity attacker, Entity opponent) {
+	attacker.setCurrentTarget(null);
+	opponent.setCurrentTarget(null);
+	return this;
+}
+
+/**
+ * Checks if the combat is able to continue or be started
+ */
+public Combat sendCombatApproval(Entity attacker, Entity opponent) {
+	/**
+	 * Checks if the attacker or opponent are null
+	 */
+	if(attacker == null || opponent == null) {
+		return sendCombatDestruction(attacker, opponent);
+	/**
+	 * Checks if the attacker is an instance of player and if his opponent 
+	 * already has a target sends him a message that he is
+	 */
+	} else if(attacker instanceof Player &amp;&amp; opponent.getCurrentTarget() != null &amp;&amp; opponent.getCurrentTarget() != attacker) {
+		((Player) attacker).getActionSender().sendMessage("Your opponent is already in combat.");
+		return sendCombatDestruction(attacker, opponent);
+	/**
+     * Checks if the opponent is dead
+     */
+	} else if(opponent.getHealth() &lt;= 0) {
+		EntityDeath.getSingleton().sendEntityDeath(opponent);
+		return sendCombatDestruction(attacker, opponent);
+		/**
+		 * If all the checks are fine then this sends the combat
+		 */
+	} else {
+		
+	return sendCombat(opponent, attacker);
+	}
+}
+
+/**
+ * @return singleton
+ */
+public static Combat getSingleton() {
+	return singleton;
+}
+</code></pre>
+<p>}[/code][/spoiler]</p>
+<p>CombatHandler</p>
+<p>[spoiler][code=java]**</p>
+<ul>
+<li>CombatHandler</li>
+<li>
+</li>
+<li>February 23, 2014</li>
+<li>
+</li>
+<li>Dan0194<br>
+*/<br>
+package org.hyperion.rs2.content.combat;</li>
+</ul>
+<p>import java.util.Random;</p>
+<p>import org.hyperion.rs2.model.Animation;<br>
+import org.hyperion.rs2.model.Entity;<br>
+import org.hyperion.rs2.model.World;<br>
+import org.hyperion.rs2.model.Damage.Hit;<br>
+import org.hyperion.rs2.model.Damage.HitType;<br>
+import org.hyperion.rs2.tick.Tick;</p>
+<p>public abstract class CombatHandler {</p>
+<pre><code>/**
+ * The combat extras for the type of combat
+ */
+public abstract void getCombat(Entity attacker, Entity opponent);
+
+/**
+ * The bonus the attacker has
+ */
+public abstract int getBonus(Entity attacker, Entity opponent);
+
+/**
+ * The damage to the opponent
+ */
+public abstract int getDamage(Entity attacker, Entity opponent);
+
+/**
+ * The weapon bonus of the attacker
+ */
+public abstract int getWeaponBonus(Entity attacker);
+
+/**
+ * The defence the opponent has
+ */
+public abstract int getDefence(Entity opponent);
+
+/**
+ * Makes an instance of the random class
+ */
+private final Random random = new Random();
+
+/**
+ * This handles the timer the damge needed to be given
+ * The animation and then starts the cycle again
+ */
+public void executeCombat(final Entity attacker, final Entity opponent) {
+	final int damage = getDamage(attacker, opponent);
+	final Hit hit = new Hit(damage, damage == 0 ? HitType.NO_DAMAGE : HitType.NORMAL_DAMAGE);
+	World.getWorld().getTickManager().submit(new Tick(2, false) {
+
+		@Override
+		protected void execute() {
+			attacker.playAnimation(Animation.create(attacker.getCombatDefinition().getAttackAnim()));
+			opponent.playAnimation(Animation.create(opponent.getCombatDefinition().getDefenceAnim()));
+			opponent.inflictDamage(hit, attacker);
+			Combat.getSingleton().sendCombatApproval(attacker, opponent);
+			stop();
+		}
+	});
+}
+
+
+/**
+ * @return random
+ */
+public Random getRandom() {
+	return random;
+}
+</code></pre>
+<p>}<br>
+[/code][/spoiler]</p>
+<p>Basic Melee Class(The formula’s make no sense I know)</p>
+<p>[spoiler][code=java]/**</p>
+<ul>
+<li>Melee</li>
+<li>
+</li>
+<li>February 23, 2014</li>
+<li>
+</li>
+<li>Dan0194<br>
+*/<br>
+package org.hyperion.rs2.content.combat.impl;</li>
+</ul>
+<p>import java.util.Random;</p>
+<p>import org.hyperion.rs2.content.combat.CombatHandler;<br>
+import org.hyperion.rs2.model.Entity;</p>
+<p>public class Melee extends CombatHandler {</p>
+<pre><code>/**
+ * (non-Javadoc)
+ * @see org.hyperion.rs2.content.combat.CombatHandler#getCombat(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+ */
+@Override
+public void getCombat(Entity attacker, Entity opponent) {
+	this.executeCombat(attacker, opponent);
+}
+
+/**
+ * (non-Javadoc)
+ * @see org.hyperion.rs2.content.combat.CombatHandler#getBonus(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+ */
+@Override
+public int getBonus(Entity attacker, Entity opponent) {
+	return (int) (getWeaponBonus(attacker) - getDefence(opponent) + (getWeaponBonus(attacker) * 0.35));
+}
+
+/**
+ * (non-Javadoc)
+ * @see org.hyperion.rs2.content.combat.CombatHandler#getDamage(org.hyperion.rs2.model.Entity, org.hyperion.rs2.model.Entity)
+ */
+@Override
+public int getDamage(Entity attacker, Entity opponent) {
+	final int bonus = getBonus(attacker, opponent);
+	return this.getRandom().nextInt(bonus &lt;= 0 ? 1 : bonus) +  this.getRandom().nextInt(2);
+}
+
+/**
+ * (non-Javadoc)
+ * @see org.hyperion.rs2.content.combat.CombatHandler#getWeaponBonus(org.hyperion.rs2.model.Entity)
+ */
+@Override
+public int getWeaponBonus(Entity attacker) {
+	return this.getRandom().nextInt(attacker.getCombatDefinition().getAttackBonus());
+}
+
+/**
+ * (non-Javadoc)
+ * @see org.hyperion.rs2.content.combat.CombatHandler#getDefence(org.hyperion.rs2.model.Entity)
+ */
+@Override
+public int getDefence(Entity opponent) {
+	return this.getRandom().nextInt(opponent.getCombatDefinition().getMeleeDefence());
+}
+</code></pre>
+<p>}<br>
+[/code][/spoiler]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545/1</link>
+        <pubDate>Sun, 23 Feb 2014 20:09:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540545-1</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-combat-base-still-needs-alot-of-work-hyperion/540545.rss">[Hyperion] Combat Base (Still needs alot of work) [Hyperion]</source>
+      </item>
+  </channel>
+</rss>

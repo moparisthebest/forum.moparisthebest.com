@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Connections per IP</title>
+    <link>https://forum.moparisthebest.com/t/connections-per-ip/549969</link>
+    <description>How would I go about changing the limit on connections per IP?
+It&#39;s at 2 right now, and I want it at 3.
+639 revision
+[code]package org.dementhium.io;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+import org.dementhium.content.misc.PunishHandler;
+import org.dementhium.model.World;
+import org.dementhium.model.definition.PlayerDefinition;
+import org.dementhium.model.player.Player;
+import org.dementhium.mysql.ForumIntegration;
+import org.dementhium.net.GameSession;
+import org.dementhium.util.BufferUtils;
+import org.dementhium.util.Constants;
+import org.dementhium.util.Misc;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
+
+
+/**
+ * Class that handles player loading
+ * @author &#39;Mystic Flow
+ */
+public final class PlayerLoader {
+	
+	//Zach, DO NOT EDIT THIS
+	public static final String DIRECTORY = Misc.isVPS() ? &quot;C:/Users/root/ecogames/&quot; : &quot;./data/games/&quot;;
+	public static final String EXTENSION = &quot;.bin&quot;;
+
+	public class PlayerLoadResult {
+
+		private final Player player;
+		private final int returnCode;
+
+		private PlayerLoadResult(Player player, int returnCode) {
+			this.returnCode = returnCode;
+			this.player = player;
+		}
+
+		public Player getPlayer() {
+			return player;
+		}
+
+		public int getReturnCode() {
+			return returnCode;
+		}
+
+	}
+
+	private static final Object fileLock = new Object();
+
+	public PlayerLoadResult load(GameSession connection, PlayerDefinition def) {
+		Player player = null;
+		int code = 2;
+		if(def.getName() == null || def.getPassword() == null) {
+			code = Constants.INVALID_PASSWORD;
+		}
+		if (def.getPassword().length() &lt; 2 || def.getName().length() &gt; 12 || def.getName().startsWith(&quot; &quot;) || def.getName().endsWith(&quot; &quot;)) {
+			code = 11; //Too weak password.
+		}
+		Player lobbyPlayer = World.getWorld().getPlayerOutOfLobby(def.getName());
+		if (World.getWorld().isOnList(def.getName()) &amp;&amp; lobbyPlayer == null) {
+			code = Constants.ALREADY_ONLINE;
+		}
+		if(lobbyPlayer == null) {
+			if(!Constants.CONNECTING_TO_FORUMS){
+				boolean first = ForumIntegration.verify(def.getName(), def.getPassword());
+				boolean second = ForumIntegration.verify(def.getName(), def.getPassword());
+				if(code == 2 &amp;&amp; !first &amp;&amp; !second) {
+					code = Constants.INVALID_PASSWORD;
+				}
+			} else {
+				if(FileUtilities.exists(DIRECTORY + def.getName() + EXTENSION) &amp;&amp; !loadPassword(def.getName(), def.getPassword())) {
+					code = Constants.INVALID_PASSWORD;
+				}
+			}
+		}
+		/*if (code == Constants.ALREADY_ONLINE) {
+			Player online = World.getWorld().getPlayerInServer(def.getName());
+			if (online != null) {
+				online.setConnection(connection);
+				online.removeAttribute(&quot;xlogged&quot;);
+				System.out.println(&quot;Re-connected after x-log.&quot;);
+				return new PlayerLoadResult(online, code);
+			}
+		}*/
+		if(code == 2) {
+			player = new Player(connection, def);
+		}
+		if (player != null) {
+			int count = 2;
+			String ip = PunishHandler.formatIp(player.getConnection().getChannel().getRemoteAddress().toString());
+			for (Player pl : World.getWorld().getPlayers()) {
+				if (pl != null &amp;&amp; pl.getLastConnectIp().equals(ip)) {
+					if (--count == 0) {
+						return new PlayerLoadResult(null, 9);
+					}
+				}
+			}
+			if (World.getWorld().getPunishHandler().isBanned(player)) {
+				code = Constants.BANNED;
+				return new PlayerLoadResult(null, code);
+			}
+			if(!FileUtilities.exists(DIRECTORY + def.getName() + EXTENSION)) {
+				save(player);
+			}
+		}
+		return new PlayerLoadResult(player, code);
+	}
+
+	private boolean loadPassword(String name, String password) {
+		try {
+			ByteBuffer data;
+			synchronized(fileLock) {
+				data = FileUtilities.fileBuffer(DIRECTORY + name + EXTENSION);
+			}
+			if(data != null) {
+				//System.out.println(BufferUtils.readRS2String(data));
+				return password.equalsIgnoreCase(BufferUtils.readRS2String(data));
+			}
+		} catch(Throwable e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	public boolean load(Player player) {
+		try {
+			ByteBuffer data;
+			synchronized(fileLock) {
+				data = FileUtilities.fileBuffer(DIRECTORY + player.getUsername() + EXTENSION);
+			}
+			if(data != null) {
+				player.load(data);
+				return true;
+			}
+		} catch(Throwable e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+
+	public boolean save(Player player) {
+		try {
+			ChannelBuffer saveBuffer = ChannelBuffers.dynamicBuffer();
+			player.save(saveBuffer);
+			synchronized(fileLock) {
+				FileUtilities.writeBufferToFile(DIRECTORY + player.getUsername() + EXTENSION, saveBuffer.toByteBuffer());
+			}
+			return true;
+		} catch(Throwable e) {
+			e.printStackTrace();
+			String name = e.getCause() == null ? &quot;NullCause&quot; : e.getCause().toString();
+			File file = new File(&quot;./data/saving errors/&quot; + name + &quot;.txt&quot;);
+			try {
+				BufferedWriter bw = new BufferedWriter(new FileWriter(file));
+				for (StackTraceElement s : e.getStackTrace()) {
+					bw.append(s.toString() + &quot;\n&quot;);
+				}
+				bw.append(&quot;\n Player &quot; + player.getUsername());
+				bw.flush();
+				bw.close();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+			return false;
+		}
+	}
+}
+[/code]
+is any part of this any help?
+3rd edit. nvm i fixed it.
+was this part
+[code]if (player != null) {
+			int count = 4;
+			String ip = PunishHandler.formatIp(player.getConnection().getChannel().getRemoteAddress().toString());
+			for (Player pl : World.getWorld().getPlayers()) {
+				if (pl != null &amp;&amp; pl.getLastConnectIp().equals(ip)) {
+					if (--count == 0) {
+						return new PlayerLoadResult(null, 9);
+					}
+				}
+			}[/code]
+Close pls</description>
+    
+    <lastBuildDate>Tue, 17 Feb 2015 03:43:21 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/connections-per-ip/549969.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Connections per IP</title>
+        <dc:creator><![CDATA[@Pest Pest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pest">@Pest</a> wrote:</p>
+          <blockquote>
+              <p>How would I go about changing the limit on connections per IP?<br>
+It’s at 2 right now, and I want it at 3.<br>
+639 revision</p>
+<p>[code]package <a href="http://org.dementhium.io" rel="nofollow noopener">org.dementhium.io</a>;</p>
+<p>import java.io.BufferedWriter;<br>
+import java.io.File;<br>
+import java.io.FileWriter;<br>
+import java.io.IOException;<br>
+import java.nio.ByteBuffer;</p>
+<p>import org.dementhium.content.misc.PunishHandler;<br>
+import org.dementhium.model.World;<br>
+import org.dementhium.model.definition.PlayerDefinition;<br>
+import org.dementhium.model.player.Player;<br>
+import org.dementhium.mysql.ForumIntegration;<br>
+import org.dementhium.net.GameSession;<br>
+import org.dementhium.util.BufferUtils;<br>
+import org.dementhium.util.Constants;<br>
+import org.dementhium.util.Misc;<br>
+import org.jboss.netty.buffer.ChannelBuffer;<br>
+import org.jboss.netty.buffer.ChannelBuffers;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Class that handles player loading</p>
+</li>
+<li>
+<p><span class="mention">@author</span> 'Mystic Flow<br>
+*/<br>
+public final class PlayerLoader {</p>
+<p>//Zach, DO NOT EDIT THIS<br>
+public static final String DIRECTORY = Misc.isVPS() ? “C:/Users/root/ecogames/” : “./data/games/”;<br>
+public static final String EXTENSION = “.bin”;</p>
+<p>public class PlayerLoadResult {</p>
+<pre><code> private final Player player;
+ private final int returnCode;
+
+ private PlayerLoadResult(Player player, int returnCode) {
+ 	this.returnCode = returnCode;
+ 	this.player = player;
+ }
+
+ public Player getPlayer() {
+ 	return player;
+ }
+
+ public int getReturnCode() {
+ 	return returnCode;
+ }
+</code></pre>
+<p>}</p>
+<p>private static final Object fileLock = new Object();</p>
+<p>public PlayerLoadResult load(GameSession connection, PlayerDefinition def) {<br>
+Player player = null;<br>
+int code = 2;<br>
+if(def.getName() == null || def.getPassword() == null) {<br>
+code = Constants.INVALID_PASSWORD;<br>
+}<br>
+if (def.getPassword().length() &lt; 2 || def.getName().length() &gt; 12 || def.getName().startsWith(" “) || def.getName().endsWith(” ")) {<br>
+code = 11; //Too weak password.<br>
+}<br>
+Player lobbyPlayer = World.getWorld().getPlayerOutOfLobby(def.getName());<br>
+if (World.getWorld().isOnList(def.getName()) &amp;&amp; lobbyPlayer == null) {<br>
+code = Constants.ALREADY_ONLINE;<br>
+}<br>
+if(lobbyPlayer == null) {<br>
+if(!Constants.CONNECTING_TO_FORUMS){<br>
+boolean first = ForumIntegration.verify(def.getName(), def.getPassword());<br>
+boolean second = ForumIntegration.verify(def.getName(), def.getPassword());<br>
+if(code == 2 &amp;&amp; !first &amp;&amp; !second) {<br>
+code = Constants.INVALID_PASSWORD;<br>
+}<br>
+} else {<br>
+if(FileUtilities.exists(DIRECTORY + def.getName() + EXTENSION) &amp;&amp; !loadPassword(def.getName(), def.getPassword())) {<br>
+code = Constants.INVALID_PASSWORD;<br>
+}<br>
+}<br>
+}<br>
+/<em>if (code == Constants.ALREADY_ONLINE) {<br>
+Player online = World.getWorld().getPlayerInServer(def.getName());<br>
+if (online != null) {<br>
+online.setConnection(connection);<br>
+online.removeAttribute(“xlogged”);<br>
+System.out.println(“Re-connected after x-log.”);<br>
+return new PlayerLoadResult(online, code);<br>
+}<br>
+}</em>/<br>
+if(code == 2) {<br>
+player = new Player(connection, def);<br>
+}<br>
+if (player != null) {<br>
+int count = 2;<br>
+String ip = PunishHandler.formatIp(player.getConnection().getChannel().getRemoteAddress().toString());<br>
+for (Player pl : World.getWorld().getPlayers()) {<br>
+if (pl != null &amp;&amp; pl.getLastConnectIp().equals(ip)) {<br>
+if (–count == 0) {<br>
+return new PlayerLoadResult(null, 9);<br>
+}<br>
+}<br>
+}<br>
+if (World.getWorld().getPunishHandler().isBanned(player)) {<br>
+code = Constants.BANNED;<br>
+return new PlayerLoadResult(null, code);<br>
+}<br>
+if(!FileUtilities.exists(DIRECTORY + def.getName() + EXTENSION)) {<br>
+save(player);<br>
+}<br>
+}<br>
+return new PlayerLoadResult(player, code);<br>
+}</p>
+<p>private boolean loadPassword(String name, String password) {<br>
+try {<br>
+ByteBuffer data;<br>
+synchronized(fileLock) {<br>
+data = FileUtilities.fileBuffer(DIRECTORY + name + EXTENSION);<br>
+}<br>
+if(data != null) {<br>
+<a href="//System.out.println" rel="nofollow noopener">//System.out.println</a>(BufferUtils.readRS2String(data));<br>
+return password.equalsIgnoreCase(BufferUtils.readRS2String(data));<br>
+}<br>
+} catch(Throwable e) {<br>
+e.printStackTrace();<br>
+}<br>
+return false;<br>
+}</p>
+<p>public boolean load(Player player) {<br>
+try {<br>
+ByteBuffer data;<br>
+synchronized(fileLock) {<br>
+data = FileUtilities.fileBuffer(DIRECTORY + player.getUsername() + EXTENSION);<br>
+}<br>
+if(data != null) {<br>
+player.load(data);<br>
+return true;<br>
+}<br>
+} catch(Throwable e) {<br>
+e.printStackTrace();<br>
+}<br>
+return false;<br>
+}</p>
+<p>public boolean save(Player player) {<br>
+try {<br>
+ChannelBuffer saveBuffer = ChannelBuffers.dynamicBuffer();<br>
+player.save(saveBuffer);<br>
+synchronized(fileLock) {<br>
+FileUtilities.writeBufferToFile(DIRECTORY + player.getUsername() + EXTENSION, saveBuffer.toByteBuffer());<br>
+}<br>
+return true;<br>
+} catch(Throwable e) {<br>
+e.printStackTrace();<br>
+String name = e.getCause() == null ? “NullCause” : e.getCause().toString();<br>
+File file = new File("./data/saving errors/" + name + “.txt”);<br>
+try {<br>
+BufferedWriter bw = new BufferedWriter(new FileWriter(file));<br>
+for (StackTraceElement s : e.getStackTrace()) {<br>
+bw.append(s.toString() + “\n”);<br>
+}<br>
+bw.append("\n Player " + player.getUsername());<br>
+bw.flush();<br>
+bw.close();<br>
+} catch (IOException e1) {<br>
+e1.printStackTrace();<br>
+}<br>
+return false;<br>
+}<br>
+}<br>
+}<br>
+[/code]<br>
+is any part of this any help?<br>
+3rd edit. nvm i fixed it.<br>
+was this part</p>
+</li>
+</ul>
+<p><code>if (player != null) {
+			int count = 4;
+			String ip = PunishHandler.formatIp(player.getConnection().getChannel().getRemoteAddress().toString());
+			for (Player pl : World.getWorld().getPlayers()) {
+				if (pl != null &amp;&amp; pl.getLastConnectIp().equals(ip)) {
+					if (--count == 0) {
+						return new PlayerLoadResult(null, 9);
+					}
+				}
+			}</code><br>
+Close pls</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connections-per-ip/549969/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connections-per-ip/549969/1</link>
+        <pubDate>Tue, 17 Feb 2015 03:43:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549969-1</guid>
+        <source url="https://forum.moparisthebest.com/t/connections-per-ip/549969.rss">Connections per IP</source>
+      </item>
+  </channel>
+</rss>

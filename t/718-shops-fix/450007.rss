@@ -1,0 +1,1439 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>718 shops fix</title>
+    <link>https://forum.moparisthebest.com/t/718-shops-fix/450007</link>
+    <description>This is a Tutorial from R-S by Raghav i take no credit for this just posting for mopas to share
+
+[b]Shops.java[/b]
+
+[code=java]
+package com.rs.game.player.content;
+
+import java.util.HashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import com.rs.cache.loaders.ItemDefinitions;
+import com.rs.game.item.Item;
+import com.rs.game.player.CombatDefinitions;
+import com.rs.game.player.Player;
+import com.rs.game.player.Skills;
+import com.rs.utils.ItemBonuses;
+import com.rs.utils.ItemExamines;
+import com.rs.utils.ItemSetsKeyGenerator;
+
+public class Shop {
+
+	private static final int MAIN_STOCK_ITEMS_KEY = ItemSetsKeyGenerator
+			.generateKey();
+
+	private static final int MAX_SHOP_ITEMS = 40;
+	public static final int COINS = 995;
+
+	private String name;
+	private Item[] mainStock;
+	private int[] defaultQuantity;
+	private Item[] generalStock;
+	private int money;
+	private CopyOnWriteArrayList&lt;Player&gt; viewingPlayers;
+
+	public Shop(String name, int money, Item[] mainStock, boolean isGeneralStore) {
+		viewingPlayers = new CopyOnWriteArrayList&lt;Player&gt;();
+		this.name = name;
+		this.money = money;
+		this.mainStock = mainStock;
+		defaultQuantity = new int[mainStock.length];
+		for (int i = 0; i &lt; defaultQuantity.length; i++) 
+			defaultQuantity[i] = mainStock[i].getAmount();
+		if (isGeneralStore &amp;&amp; mainStock.length &lt; MAX_SHOP_ITEMS)
+			generalStock = new Item[MAX_SHOP_ITEMS - mainStock.length];
+	}
+
+	public boolean isGeneralStore() {
+		return generalStock != null;
+	}
+
+	public void addPlayer(final Player player) {
+		viewingPlayers.add(player);
+		player.getTemporaryAttributtes().put(&quot;Shop&quot;, this);
+		player.setCloseInterfacesEvent(new Runnable() {
+			@Override
+			public void run() {
+				viewingPlayers.remove(player);
+				player.getTemporaryAttributtes().remove(&quot;Shop&quot;);
+			}
+		});
+		player.getPackets().sendConfig(118, MAIN_STOCK_ITEMS_KEY);
+		player.getPackets().sendConfig(1496, -1);
+		player.getPackets().sendConfig(532, money);
+		sendStore(player);
+		player.getPackets().sendGlobalConfig(199, -1);
+		player.getInterfaceManager().sendInterface(1265);
+		for (int i = 0; i &lt; MAX_SHOP_ITEMS; i++)
+			player.getPackets().sendGlobalConfig(946 + i, i &lt; defaultQuantity.length ? defaultQuantity[i]: generalStock != null ? 0 : -1);// prices
+		player.getPackets().sendGlobalConfig(1241, 16750848);
+		player.getPackets().sendGlobalConfig(1242, 15439903);
+		player.getPackets().sendGlobalConfig(741, -1);
+		player.getPackets().sendGlobalConfig(743, -1);
+		player.getPackets().sendGlobalConfig(744, 0);
+		if (generalStock != null)
+			player.getPackets().sendHideIComponent(1265, 19, false);
+		player.getPackets().sendIComponentSettings(1265, 20, 0, getStoreSize() * 6, 1150);
+		player.getPackets().sendIComponentSettings(1265, 26, 0, getStoreSize() * 6, 82903066);
+		sendInventory(player);
+		player.getPackets().sendIComponentText(1265, 85, name);
+		player.getTemporaryAttributtes().put(&quot;shop_buying&quot;, true);
+		player.getTemporaryAttributtes().put(&quot;amount_shop&quot;, 1);
+	}
+
+	public void sendInventory(Player player) {
+		player.getInterfaceManager().sendInventoryInterface(1266);
+		player.getPackets().sendItems(93, player.getInventory().getItems());
+		player.getPackets().sendUnlockIComponentOptionSlots(1266, 0, 0, 27, 0,
+				1, 2, 3, 4, 5);
+		player.getPackets().sendInterSetItemsOptionsScript(1266, 0, 93, 4, 7,
+				&quot;Value&quot;, &quot;Sell 1&quot;, &quot;Sell 5&quot;, &quot;Sell 10&quot;, &quot;Sell 50&quot;, &quot;Examine&quot;);
+	}
+	//cid 67
+	public void buy(Player player, int slotId, int quantity) {
+		if (slotId &gt;= getStoreSize())
+			return;
+		Item item = slotId &gt;= mainStock.length ? generalStock[slotId - mainStock.length] : mainStock[slotId];
+		if (item == null)
+			return;
+		if (item.getAmount() == 0) {
+			player.getPackets().sendGameMessage(&quot;There is no stock of that item at the moment.&quot;);
+			return;
+		}
+		int dq = slotId &gt;= mainStock.length ? 0 : defaultQuantity[slotId];
+		int price = getBuyPrice(item, dq);
+		int amountCoins = player.getInventory().getItems().getNumberOf(money);
+		int maxQuantity = amountCoins / price;
+		int buyQ = item.getAmount() &gt; quantity ? quantity : item.getAmount();
+		boolean enoughCoins = maxQuantity &gt;= buyQ;
+		if (!enoughCoins) {
+			player.getPackets().sendGameMessage(&quot;You don&#39;t have enough coins.&quot;);
+			buyQ = maxQuantity;
+		} else if (quantity &gt; buyQ)
+			player.getPackets().sendGameMessage(
+					&quot;The shop has run out of stock.&quot;);
+		if (item.getDefinitions().isStackable()) {
+			if (player.getInventory().getFreeSlots() &lt; 1) {
+				player.getPackets().sendGameMessage(
+						&quot;Not enough space in your inventory.&quot;);
+				return;
+			}
+		} else {
+			int freeSlots = player.getInventory().getFreeSlots();
+			if (buyQ &gt; freeSlots) {
+				buyQ = freeSlots;
+				player.getPackets().sendGameMessage(
+						&quot;Not enough space in your inventory.&quot;);
+			}
+		}
+		if (buyQ != 0) {
+			int totalPrice = price * buyQ;
+			player.getInventory().deleteItem(money, totalPrice);
+			player.getInventory().addItem(item.getId(), buyQ);
+			item.setAmount(item.getAmount() - buyQ);
+			if (item.getAmount() &lt;= 0 &amp;&amp; slotId &gt;= mainStock.length)
+				generalStock[slotId - mainStock.length] = null;
+			refreshShop();
+			sendInventory(player);
+		}
+	}
+
+	public void restoreItems() {
+		boolean needRefresh = false;
+		for (int i = 0; i &lt; mainStock.length; i++) {
+			if (mainStock[i].getAmount() &lt; defaultQuantity[i]) {
+				mainStock[i].setAmount(mainStock[i].getAmount() + 1);
+				needRefresh = true;
+			} else if (mainStock[i].getAmount() &gt; defaultQuantity[i]) {
+				mainStock[i].setAmount(mainStock[i].getAmount() + -1);
+				needRefresh = true;
+			}
+		}
+		if (generalStock != null) {
+			for (int i = 0; i &lt; generalStock.length; i++) {
+				Item item = generalStock[i];
+				if (item == null)
+					continue;
+				item.setAmount(item.getAmount() - 1);
+				if (item.getAmount() &lt;= 0)
+					generalStock[i] = null;
+				needRefresh = true;
+			}
+		}
+		if (needRefresh)
+			refreshShop();
+	}
+
+	private boolean addItem(int itemId, int quantity) {
+		for (Item item : mainStock) {
+			if (item.getId() == itemId) {
+				item.setAmount(item.getAmount() + quantity);
+				refreshShop();
+				return true;
+			}
+		}
+		if (generalStock != null) {
+			for (Item item : generalStock) {
+				if (item == null)
+					continue;
+				if (item.getId() == itemId) {
+					item.setAmount(item.getAmount() + quantity);
+					refreshShop();
+					return true;
+				}
+			}
+			for (int i = 0; i &lt; generalStock.length; i++) {
+				if (generalStock[i] == null) {
+					generalStock[i] = new Item(itemId, quantity);
+					refreshShop();
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	public void sell(Player player, int slotId, int quantity) {
+		if (player.getInventory().getItemsContainerSize() &lt; slotId)
+			return;
+		Item item = player.getInventory().getItem(slotId);
+		if (item == null)
+			return;
+		int originalId = item.getId();
+		if (item.getDefinitions().isNoted())
+			item = new Item(item.getDefinitions().getCertId(), item.getAmount());
+		if (item.getDefinitions().isDestroyItem()
+				|| ItemConstants.getItemDefaultCharges(item.getId()) != -1
+				|| !ItemConstants.isTradeable(item) || item.getId() == money) {
+			player.getPackets().sendGameMessage(&quot;You can&#39;t sell this item.&quot;);
+			return;
+		}
+		int dq = getDefaultQuantity(item.getId());
+		if (dq == -1 &amp;&amp; generalStock == null) {
+			player.getPackets().sendGameMessage(
+					&quot;You can&#39;t sell this item to this shop.&quot;);
+			return;
+		}
+		int price = getSellPrice(item, dq);
+		int numberOff = player.getInventory().getItems()
+				.getNumberOf(originalId);
+		if (quantity &gt; numberOff)
+			quantity = numberOff;
+		if (!addItem(item.getId(), quantity)) {
+			player.getPackets().sendGameMessage(&quot;Shop is currently full.&quot;);
+			return;
+		}
+		player.getInventory().deleteItem(originalId, quantity);
+		player.getInventory().addItem(money, price * quantity);
+	}
+
+	public void sendValue(Player player, int slotId) {
+		if (player.getInventory().getItemsContainerSize() &lt; slotId)
+			return;
+		Item item = player.getInventory().getItem(slotId);
+		if (item == null)
+			return;
+		if (item.getDefinitions().isNoted())
+			item = new Item(item.getDefinitions().getCertId(), item.getAmount());
+		if (item.getDefinitions().isNoted() || !ItemConstants.isTradeable(item)
+				|| item.getId() == money) {
+			player.getPackets().sendGameMessage(&quot;You can&#39;t sell this item.&quot;);
+			return;
+		}
+		int dq = getDefaultQuantity(item.getId());
+		if (dq == -1 &amp;&amp; generalStock == null) {
+			player.getPackets().sendGameMessage(
+					&quot;You can&#39;t sell this item to this shop.&quot;);
+			return;
+		}
+		int price = getSellPrice(item, dq);
+		player.getPackets().sendGameMessage(
+				item.getDefinitions().getName()
+						+ &quot;: shop will buy for: &quot;
+						+ price
+						+ &quot; &quot;
+						+ ItemDefinitions.getItemDefinitions(money).getName()
+								.toLowerCase()
+						+ &quot;. Right-click the item to sell.&quot;);
+	}
+
+	public int getDefaultQuantity(int itemId) {
+		for (int i = 0; i &lt; mainStock.length; i++)
+			if (mainStock[i].getId() == itemId)
+				return defaultQuantity[i];
+		return -1;
+	}
+
+	public void sendInfo(Player player, int clickSlot, Item[] stock) {
+		int slotId = clickSlot;//getSlotId(clickSlot);
+		if (slotId &gt;= getStoreSize())
+			return;
+		Item item = slotId &gt;= stock.length ? generalStock[slotId - stock.length] : stock[slotId];
+		if (item == null)
+			return;
+		player.getTemporaryAttributtes().put(&quot;ShopSelectedSlot&quot;, clickSlot);
+		int dq = slotId &gt;= stock.length ? 0 : defaultQuantity[slotId];
+		int price = getBuyPrice(item, dq);
+		player.getPackets().sendGameMessage(item.getDefinitions().getName() + &quot;: current costs &quot; + price + &quot; &quot; + ItemDefinitions.getItemDefinitions(money).getName().toLowerCase() + &quot;.&quot;);
+		player.getInterfaceManager().sendInventoryInterface(449);
+		player.getPackets().sendGlobalConfig(741, item.getId());
+		player.getPackets().sendGlobalConfig(743, money);
+		player.getPackets().sendUnlockIComponentOptionSlots(449, 15, -1, 0, 0, 1, 2, 3, 4); // unlocks buy
+		player.getPackets().sendGlobalConfig(744, price);
+		player.getPackets().sendGlobalConfig(745, 0);
+		player.getPackets().sendGlobalConfig(746, -1);
+		player.getPackets().sendGlobalConfig(168, 98);
+		player.getPackets().sendGlobalString(25, ItemExamines.getExamine(item));
+		player.getPackets().sendGlobalString(34, &quot;&quot;); // quest id for some items
+		int[] bonuses = ItemBonuses.getItemBonuses(item.getId());
+		if (bonuses != null) {
+			HashMap&lt;Integer, Integer&gt; requiriments = item.getDefinitions().getWearingSkillRequiriments();
+			if (requiriments != null &amp;&amp; !requiriments.isEmpty()) {
+				String reqsText = &quot;&quot;;
+				for (int skillId : requiriments.keySet()) {
+					if (skillId &gt; 24 || skillId &lt; 0)
+						continue;
+					int level = requiriments.get(skillId);
+					if (level &lt; 0 || level &gt; 120)
+						continue;
+					boolean hasReq = player.getSkills().getLevelForXp(skillId) &gt;= level;
+					reqsText += &quot;&lt;br&gt;&quot; + (hasReq ? &quot;&lt;col=00ff00&gt;&quot; : &quot;&lt;col=ff0000&gt;&quot;) + &quot;Level &quot; + level + &quot; &quot; + Skills.SKILL_NAME[skillId];
+				}
+				player.getPackets().sendGlobalString(26, &quot;&lt;br&gt;Worn on yourself, requiring: &quot; + reqsText);
+			} else
+				player.getPackets().sendGlobalString(26, &quot;&lt;br&gt;Worn on yourself&quot;);
+			player.getPackets().sendGlobalString(
+					35,
+					&quot;&lt;br&gt;Attack&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.STAB_ATTACK]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.SLASH_ATTACK]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.CRUSH_ATTACK]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.MAGIC_ATTACK]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.RANGE_ATTACK]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;---&quot; + &quot;&lt;br&gt;Strength&quot;
+							+ &quot;&lt;br&gt;Ranged Strength&quot; + &quot;&lt;br&gt;Magic Damage&quot;
+							+ &quot;&lt;br&gt;Absorve Melee&quot; + &quot;&lt;br&gt;Absorve Magic&quot;
+							+ &quot;&lt;br&gt;Absorve Ranged&quot; + &quot;&lt;br&gt;Prayer Bonus&quot;);
+			player.getPackets().sendGlobalString(36, &quot;&lt;br&gt;&lt;br&gt;Stab&lt;br&gt;Slash&lt;br&gt;Crush&lt;br&gt;Magic&lt;br&gt;Ranged&lt;br&gt;Summoning&quot;);
+			player.getPackets().sendGlobalString(
+					52,
+					&quot;&lt;&lt;br&gt;Defence&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.STAB_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.SLASH_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.CRUSH_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.MAGIC_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.RANGE_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.SUMMONING_DEF]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;+&quot;
+							+ bonuses[CombatDefinitions.STRENGTH_BONUS]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.RANGED_STR_BONUS]
+							+ &quot;&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.MAGIC_DAMAGE]
+							+ &quot;%&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.ABSORVE_MELEE_BONUS]
+							+ &quot;%&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.ABSORVE_MAGE_BONUS]
+							+ &quot;%&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.ABSORVE_RANGE_BONUS]
+							+ &quot;%&lt;br&gt;&lt;col=ffff00&gt;&quot;
+							+ bonuses[CombatDefinitions.PRAYER_BONUS]);
+		} else
+			player.getPackets().sendGlobalString(26, &quot;&quot;);
+
+	}
+
+	public int getBuyPrice(Item item, int dq) {
+
+		int price = item.getDefinitions().getValue();
+		if (price == 0)
+			price = 1;
+		return price; // TODO formula
+	}
+
+	public int getSellPrice(Item item, int dq) {
+		return item.getDefinitions().getValue() / 2; // TODO formula
+	}
+
+	public void sendExamine(Player player, int slotId) {
+		if (slotId &gt;= getStoreSize())
+			return;
+		Item item = slotId &gt;= mainStock.length ? generalStock[slotId
+				- mainStock.length] : mainStock[slotId];
+		if (item == null)
+			return;
+		player.getPackets().sendGameMessage(ItemExamines.getExamine(item));
+	}
+
+	public void refreshShop() {
+		for (Player player : viewingPlayers) {
+			sendStore(player);
+			player.getPackets().sendIComponentSettings(620, 25, 0,
+					getStoreSize() * 6, 1150);
+		}
+	}
+
+	public int getStoreSize() {
+		return mainStock.length
+				+ (generalStock != null ? generalStock.length : 0);
+	}
+
+	public void sendStore(Player player) {
+		Item[] stock = new Item[mainStock.length
+				+ (generalStock != null ? generalStock.length : 0)];
+		System.arraycopy(mainStock, 0, stock, 0, mainStock.length);
+		if (generalStock != null)
+			System.arraycopy(generalStock, 0, stock, mainStock.length,
+					generalStock.length);
+		player.getPackets().sendItems(MAIN_STOCK_ITEMS_KEY, stock);
+	}
+	
+	public void sendSellStore(Player player, Item[] inventory) {
+		Item[] stock = new Item[inventory.length + (generalStock != null ? generalStock.length : 0)];
+		System.arraycopy(inventory, 0, stock, 0, inventory.length);
+		if (generalStock != null)
+			System.arraycopy(generalStock, 0, stock, inventory.length, generalStock.length);
+		player.getPackets().sendItems(MAIN_STOCK_ITEMS_KEY, stock);
+	}
+
+	/**
+	 * Checks if the player is buying an item or selling it.
+	 * @param player The player
+	 * @param slotId The slot id
+	 * @param amount The amount
+	 */
+	public void handleShop(Player player, int slotId, int amount) {
+		boolean isBuying = player.getTemporaryAttributtes().get(&quot;shop_buying&quot;) != null;
+		if (isBuying)
+			buy(player, slotId, amount);
+		else
+			sell(player, slotId, amount);
+	}
+
+	public Item[] getMainStock() {
+		return this.mainStock;
+	}
+
+}[/code]
+
+[b]ButtonHandler.java[/b]
+
+[code=java]
+else if (interfaceId == 1265) {
+			Shop shop = (Shop) player.getTemporaryAttributtes().get(&quot;Shop&quot;);
+			if (shop == null)
+				return;
+			boolean isBuying = player.getTemporaryAttributtes().get(&quot;shop_buying&quot;) != null;
+			int amount = (int) player.getTemporaryAttributtes().get(&quot;amount_shop&quot;);
+			if (componentId == 20) {
+				if (packetId == WorldPacketsDecoder.ACTION_BUTTON1_PACKET)
+					shop.sendInfo(player, slotId, isBuying ? shop.getMainStock() : player.getInventory().getItems().getItems());
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON2_PACKET)
+					shop.handleShop(player, slotId, 1);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON3_PACKET)
+					shop.handleShop(player, slotId, 5);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON4_PACKET)
+					shop.handleShop(player, slotId, 10);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON5_PACKET)
+					shop.handleShop(player, slotId, 50);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON9_PACKET)
+					shop.handleShop(player, slotId, 500);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON8_PACKET)
+					shop.sendExamine(player, slotId);
+			} else if (componentId == 201) {
+				Integer slot = (Integer) player.getTemporaryAttributtes().get(&quot;ShopSelectedSlot&quot;);
+				if (slot == null)
+					return;
+				if (isBuying)
+					shop.buy(player, slot, amount);
+				else
+					shop.sell(player, slotId, amount);
+			} else if (componentId == 208) { //+5
+				player.getTemporaryAttributtes().put(&quot;amount_shop&quot;, amount + 5);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 15) {
+				player.getTemporaryAttributtes().put(&quot;amount_shop&quot;, amount + 1);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 214) {
+				player.getTemporaryAttributtes().put(&quot;amount_shop&quot;, amount - 1);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 15) {
+				player.getTemporaryAttributtes().put(&quot;amount_shop&quot;, amount + 5);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 29) {
+				player.getTemporaryAttributtes().remove(&quot;shop_buying&quot;);
+			} else if (componentId == 28) {
+				player.getTemporaryAttributtes().put(&quot;shop_buying&quot;, true);
+			}
+		} else if (interfaceId == 1266) {
+			if (componentId == 0) {
+				if (packetId == WorldPacketsDecoder.ACTION_BUTTON9_PACKET)
+					player.getInventory().sendExamine(slotId);
+				else {
+					Shop shop = (Shop) player.getTemporaryAttributtes().get(&quot;Shop&quot;);
+					if (shop == null)
+						return;
+					if (packetId == WorldPacketsDecoder.ACTION_BUTTON1_PACKET)
+						shop.sendValue(player, slotId);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON2_PACKET)
+						shop.sell(player, slotId, 1);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON3_PACKET)
+						shop.sell(player, slotId, 5);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON4_PACKET)
+						shop.sell(player, slotId, 10);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON5_PACKET)
+						shop.sell(player, slotId, 50);
+				}
+			}
+		}
+[/code]
+
+[b]WorldsPacketDecoder.java[/b] Switch item packet
+
+[code=java]
+				if (fromInterfaceId == 1265 &amp;&amp; toInterfaceId == 1266 &amp;&amp; player.getTemporaryAttributtes().get(&quot;shop_buying&quot;) != null) {
+					Shop shop = (Shop) player.getTemporaryAttributtes().get(&quot;Shop&quot;);
+					if (shop == null)
+						return;
+					shop.buy(player, fromSlot, 1);
+				}
+[/code]
+
+[img]http://screensnapr.com/e/eobhDq.png[/img]</description>
+    
+    <lastBuildDate>Fri, 06 Nov 2015 13:47:03 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="22" data-topic="450007">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/757ghost/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> 757ghost:</div>
+<blockquote>
+<p>this code dsnt work for matrix 718 i get 91 errors</p>
+</blockquote>
+</aside>
+<p>post your error’s you get and ill help you fix it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/23</link>
+        <pubDate>Fri, 06 Nov 2015 13:47:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-23</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@757ghost 757ghost]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/757ghost">@757ghost</a> wrote:</p>
+          <blockquote>
+              <p>this code dsnt work for matrix 718 i get 91 errors</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/22</link>
+        <pubDate>Thu, 05 Nov 2015 16:58:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-22</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@PkingAddict PkingAddict]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pkingaddict">@PkingAddict</a> wrote:</p>
+          <blockquote>
+              <p>What do you mean by shopfix and does it work for disturbed 704 because i cant make shops on it:(</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/21</link>
+        <pubDate>Thu, 09 Aug 2012 11:45:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-21</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@wrrion15 wrrion15]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wrrion15">@wrrion15</a> wrote:</p>
+          <blockquote>
+              <p>Thanks but i get 1 error… [code]src\com\rs\net\decoders\handlers\ButtonHandler.java:911: error: method sendInfo<br>
+in class Shop cannot be applied to given types;<br>
+shop.sendInfo(player, slotId, isBuying);</p>
+<pre><code>                                        ^
+</code></pre>
+<p>required: Player,int,Item[]<br>
+found: Player,int,boolean<br>
+reason: actual argument boolean cannot be converted to Item[] by method invoca<br>
+tion conversion<br>
+1 error[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/20</link>
+        <pubDate>Wed, 08 Aug 2012 17:12:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-20</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Clawz_Own_U Clawz Own U]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_own_u">@Clawz_Own_U</a> wrote:</p>
+          <blockquote>
+              <p>Thanks!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/19</link>
+        <pubDate>Sun, 29 Jul 2012 01:09:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-19</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@narutas narutas]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/narutas">@narutas</a> wrote:</p>
+          <blockquote>
+              <p>If you have trouble adding this, just replace your server files with these.<br>
+<a href="http://pastebin.com/LKXQnyUV" data-bbcode="true" rel="nofollow noopener">Shop.java</a><br>
+<a href="http://pastebin.com/jEXpPaMc" data-bbcode="true" rel="nofollow noopener">WorldPacketDecoders.java</a><br>
+<a href="http://privatepaste.com/58ce5b7162" data-bbcode="true" rel="nofollow noopener">ButtonHandler.java :: Paste ID 58ce5b7162</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/18</link>
+        <pubDate>Fri, 20 Jul 2012 08:38:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-18</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="15" data-topic="450007">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/vulcanic/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Vulcanic:</div>
+<blockquote>
+<p>Doesn’t work guys, the real shops are so easy… just saiyan… if anyone wants to buy, pm me</p>
+</blockquote>
+</aside>
+<p>it does work u drag items into ur invo to buy them use it before posting silly comments</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/17</link>
+        <pubDate>Thu, 19 Jul 2012 19:35:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-17</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@lovakatt2 lovakatt2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lovakatt2">@lovakatt2</a> wrote:</p>
+          <blockquote>
+              <p>thx</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/16</link>
+        <pubDate>Thu, 19 Jul 2012 19:09:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-16</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Vulcanic Vulcanic]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vulcanic">@Vulcanic</a> wrote:</p>
+          <blockquote>
+              <p>Doesn’t work guys, the real shops are so easy… just saiyan… if anyone wants to buy, pm me</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/15</link>
+        <pubDate>Thu, 19 Jul 2012 14:55:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-15</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Arcik, post:13, topic:450007”][quote author=shabba 56 link=topic=552903.msg4052309#msg4052309 date=1342639902]</p>
+<aside class="quote">
+<blockquote>
+<p>This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+</blockquote>
+</aside>
+<p>lmfao i wouldn’t give you full shops even if you payed for it be lucky he eve uploaded this or go learn more about java<br>
+[/quote]</p>
+<p>I have full shops -.-"</p>
+<p>I was trying to say that this isnt the correct way to do it.[/quote]</p>
+<p>lol im sure u do</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/14</link>
+        <pubDate>Thu, 19 Jul 2012 08:06:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-14</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“shabba 56, post:9, topic:450007”][quote author=Arcik link=topic=552903.msg4052090#msg4052090 date=1342617511]<br>
+This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+[/quote]</p>
+<p>lmfao i wouldn’t give you full shops even if you payed for it be lucky he eve uploaded this or go learn more about java[/quote]</p>
+<p>I have full shops -.-"</p>
+<p>I was trying to say that this isnt the correct way to do it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/13</link>
+        <pubDate>Thu, 19 Jul 2012 07:14:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-13</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@izaazk izaazk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/izaazk">@izaazk</a> wrote:</p>
+          <blockquote>
+              <p>dont forget the price formula in WORLDSPACKETENCODER : P</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/12</link>
+        <pubDate>Thu, 19 Jul 2012 06:04:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-12</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“kingcobra805, post:10, topic:450007”][quote author=shabba 56 link=topic=552903.msg4052309#msg4052309 date=1342639902]</p>
+<aside class="quote">
+<blockquote>
+<p>This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+</blockquote>
+</aside>
+<p>lmfao i wouldn’t give you full shops even if you payed for it be lucky he eve uploaded this or go learn more about java<br>
+[/quote]</p>
+<p>lol, full shops are not going to be just handed out any time soon i had to pay 20M Rsgp for just a fix with my shops lol.</p>
+<p>Fully Working now (:[/quote]</p>
+<p>its not hard to fix urself you just need to add the new shop id’s and make a new buy and sell method</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/11</link>
+        <pubDate>Thu, 19 Jul 2012 05:08:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-11</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@kingcobra805 kingcobra805]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kingcobra805">@kingcobra805</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“shabba 56, post:9, topic:450007”][quote author=Arcik link=topic=552903.msg4052090#msg4052090 date=1342617511]<br>
+This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+[/quote]</p>
+<p>lmfao i wouldn’t give you full shops even if you payed for it be lucky he eve uploaded this or go learn more about java[/quote]</p>
+<p>lol, full shops are not going to be just handed out any time soon i had to pay 20M Rsgp for just a fix with my shops lol.</p>
+<p>Fully Working now (:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/10</link>
+        <pubDate>Thu, 19 Jul 2012 03:03:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-10</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Arcik, post:7, topic:450007”]This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! :([/quote]</p>
+<p>lmfao i wouldn’t give you full shops even if you payed for it be lucky he eve uploaded this or go learn more about java</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/9</link>
+        <pubDate>Wed, 18 Jul 2012 19:31:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-9</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@narutas narutas]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/narutas">@narutas</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="450007">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mephobia/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mephobia:</div>
+<blockquote>
+<p>Its fine leechers wont be able to use this unless they know how to utilize their imports.</p>
+</blockquote>
+</aside>
+<p>Look man, i just need a little bit of help, please? I mean i added the whole code and there were no errors, i just don’t understand the switch item packet part, what exactly do i have to do? I tried google, but didn’t find anything…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/8</link>
+        <pubDate>Wed, 18 Jul 2012 14:12:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-8</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>This is wrong! <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+<p>works yeah… but it not the proper way! <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/7</link>
+        <pubDate>Wed, 18 Jul 2012 13:18:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-7</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Mephobia Mephobia]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mephobia">@Mephobia</a> wrote:</p>
+          <blockquote>
+              <p>Its fine leechers wont be able to use this unless they know how to utilize their imports.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/6</link>
+        <pubDate>Wed, 18 Jul 2012 13:01:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-6</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@narutas narutas]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/narutas">@narutas</a> wrote:</p>
+          <blockquote>
+              <p>Im sorry, but what do you mean by switch item packet ? Which one is it ?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/5</link>
+        <pubDate>Wed, 18 Jul 2012 11:09:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-5</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@Team_Rocket Team_Rocket]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/team_rocket">@Team_Rocket</a> wrote:</p>
+          <blockquote>
+              <p>This is a Snippet. The newbies who are using that Matrix base will probably be the only ones using this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/4</link>
+        <pubDate>Wed, 18 Jul 2012 05:52:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-4</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <p>haha its not mine anyway <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> raghav posted it so blame him xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/3</link>
+        <pubDate>Wed, 18 Jul 2012 04:07:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-3</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@izaazk izaazk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/izaazk">@izaazk</a> wrote:</p>
+          <blockquote>
+              <p>SHABBA!!! WHY!!! btw its me izaazkothawala from RuneServer…</p>
+<p>U just helped destroy the RSPS world by giving leechers the sole thing keeping them from directly hosting <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>u shuda put an anti leech in there  ; )</p>
+<p>EDIT:</p>
+<p>This post just got 20+ Views no comments… DOES THAT TELL YA SUMTIN o.O <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/2</link>
+        <pubDate>Tue, 17 Jul 2012 20:54:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-2</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+      <item>
+        <title>718 shops fix</title>
+        <dc:creator><![CDATA[@shabba_56 shabba 56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shabba_56">@shabba_56</a> wrote:</p>
+          <blockquote>
+              <p>This is a Tutorial from R-S by Raghav i take no credit for this just posting for mopas to share</p>
+<p><span class="bbcode-b">Shops.java</span></p>
+<p>[code=java]<br>
+package com.rs.game.player.content;</p>
+<p>import java.util.HashMap;<br>
+import java.util.concurrent.CopyOnWriteArrayList;</p>
+<p>import com.rs.cache.loaders.ItemDefinitions;<br>
+import com.rs.game.item.Item;<br>
+import com.rs.game.player.CombatDefinitions;<br>
+import com.rs.game.player.Player;<br>
+import com.rs.game.player.Skills;<br>
+import com.rs.utils.ItemBonuses;<br>
+import com.rs.utils.ItemExamines;<br>
+import com.rs.utils.ItemSetsKeyGenerator;</p>
+<p>public class Shop {</p>
+<pre><code>private static final int MAIN_STOCK_ITEMS_KEY = ItemSetsKeyGenerator
+		.generateKey();
+
+private static final int MAX_SHOP_ITEMS = 40;
+public static final int COINS = 995;
+
+private String name;
+private Item[] mainStock;
+private int[] defaultQuantity;
+private Item[] generalStock;
+private int money;
+private CopyOnWriteArrayList&lt;Player&gt; viewingPlayers;
+
+public Shop(String name, int money, Item[] mainStock, boolean isGeneralStore) {
+	viewingPlayers = new CopyOnWriteArrayList&lt;Player&gt;();
+	this.name = name;
+	this.money = money;
+	this.mainStock = mainStock;
+	defaultQuantity = new int[mainStock.length];
+	for (int i = 0; i &lt; defaultQuantity.length; i++) 
+		defaultQuantity[i] = mainStock[i].getAmount();
+	if (isGeneralStore &amp;&amp; mainStock.length &lt; MAX_SHOP_ITEMS)
+		generalStock = new Item[MAX_SHOP_ITEMS - mainStock.length];
+}
+
+public boolean isGeneralStore() {
+	return generalStock != null;
+}
+
+public void addPlayer(final Player player) {
+	viewingPlayers.add(player);
+	player.getTemporaryAttributtes().put("Shop", this);
+	player.setCloseInterfacesEvent(new Runnable() {
+		@Override
+		public void run() {
+			viewingPlayers.remove(player);
+			player.getTemporaryAttributtes().remove("Shop");
+		}
+	});
+	player.getPackets().sendConfig(118, MAIN_STOCK_ITEMS_KEY);
+	player.getPackets().sendConfig(1496, -1);
+	player.getPackets().sendConfig(532, money);
+	sendStore(player);
+	player.getPackets().sendGlobalConfig(199, -1);
+	player.getInterfaceManager().sendInterface(1265);
+	for (int i = 0; i &lt; MAX_SHOP_ITEMS; i++)
+		player.getPackets().sendGlobalConfig(946 + i, i &lt; defaultQuantity.length ? defaultQuantity[i]: generalStock != null ? 0 : -1);// prices
+	player.getPackets().sendGlobalConfig(1241, 16750848);
+	player.getPackets().sendGlobalConfig(1242, 15439903);
+	player.getPackets().sendGlobalConfig(741, -1);
+	player.getPackets().sendGlobalConfig(743, -1);
+	player.getPackets().sendGlobalConfig(744, 0);
+	if (generalStock != null)
+		player.getPackets().sendHideIComponent(1265, 19, false);
+	player.getPackets().sendIComponentSettings(1265, 20, 0, getStoreSize() * 6, 1150);
+	player.getPackets().sendIComponentSettings(1265, 26, 0, getStoreSize() * 6, 82903066);
+	sendInventory(player);
+	player.getPackets().sendIComponentText(1265, 85, name);
+	player.getTemporaryAttributtes().put("shop_buying", true);
+	player.getTemporaryAttributtes().put("amount_shop", 1);
+}
+
+public void sendInventory(Player player) {
+	player.getInterfaceManager().sendInventoryInterface(1266);
+	player.getPackets().sendItems(93, player.getInventory().getItems());
+	player.getPackets().sendUnlockIComponentOptionSlots(1266, 0, 0, 27, 0,
+			1, 2, 3, 4, 5);
+	player.getPackets().sendInterSetItemsOptionsScript(1266, 0, 93, 4, 7,
+			"Value", "Sell 1", "Sell 5", "Sell 10", "Sell 50", "Examine");
+}
+//cid 67
+public void buy(Player player, int slotId, int quantity) {
+	if (slotId &gt;= getStoreSize())
+		return;
+	Item item = slotId &gt;= mainStock.length ? generalStock[slotId - mainStock.length] : mainStock[slotId];
+	if (item == null)
+		return;
+	if (item.getAmount() == 0) {
+		player.getPackets().sendGameMessage("There is no stock of that item at the moment.");
+		return;
+	}
+	int dq = slotId &gt;= mainStock.length ? 0 : defaultQuantity[slotId];
+	int price = getBuyPrice(item, dq);
+	int amountCoins = player.getInventory().getItems().getNumberOf(money);
+	int maxQuantity = amountCoins / price;
+	int buyQ = item.getAmount() &gt; quantity ? quantity : item.getAmount();
+	boolean enoughCoins = maxQuantity &gt;= buyQ;
+	if (!enoughCoins) {
+		player.getPackets().sendGameMessage("You don't have enough coins.");
+		buyQ = maxQuantity;
+	} else if (quantity &gt; buyQ)
+		player.getPackets().sendGameMessage(
+				"The shop has run out of stock.");
+	if (item.getDefinitions().isStackable()) {
+		if (player.getInventory().getFreeSlots() &lt; 1) {
+			player.getPackets().sendGameMessage(
+					"Not enough space in your inventory.");
+			return;
+		}
+	} else {
+		int freeSlots = player.getInventory().getFreeSlots();
+		if (buyQ &gt; freeSlots) {
+			buyQ = freeSlots;
+			player.getPackets().sendGameMessage(
+					"Not enough space in your inventory.");
+		}
+	}
+	if (buyQ != 0) {
+		int totalPrice = price * buyQ;
+		player.getInventory().deleteItem(money, totalPrice);
+		player.getInventory().addItem(item.getId(), buyQ);
+		item.setAmount(item.getAmount() - buyQ);
+		if (item.getAmount() &lt;= 0 &amp;&amp; slotId &gt;= mainStock.length)
+			generalStock[slotId - mainStock.length] = null;
+		refreshShop();
+		sendInventory(player);
+	}
+}
+
+public void restoreItems() {
+	boolean needRefresh = false;
+	for (int i = 0; i &lt; mainStock.length; i++) {
+		if (mainStock[i].getAmount() &lt; defaultQuantity[i]) {
+			mainStock[i].setAmount(mainStock[i].getAmount() + 1);
+			needRefresh = true;
+		} else if (mainStock[i].getAmount() &gt; defaultQuantity[i]) {
+			mainStock[i].setAmount(mainStock[i].getAmount() + -1);
+			needRefresh = true;
+		}
+	}
+	if (generalStock != null) {
+		for (int i = 0; i &lt; generalStock.length; i++) {
+			Item item = generalStock[i];
+			if (item == null)
+				continue;
+			item.setAmount(item.getAmount() - 1);
+			if (item.getAmount() &lt;= 0)
+				generalStock[i] = null;
+			needRefresh = true;
+		}
+	}
+	if (needRefresh)
+		refreshShop();
+}
+
+private boolean addItem(int itemId, int quantity) {
+	for (Item item : mainStock) {
+		if (item.getId() == itemId) {
+			item.setAmount(item.getAmount() + quantity);
+			refreshShop();
+			return true;
+		}
+	}
+	if (generalStock != null) {
+		for (Item item : generalStock) {
+			if (item == null)
+				continue;
+			if (item.getId() == itemId) {
+				item.setAmount(item.getAmount() + quantity);
+				refreshShop();
+				return true;
+			}
+		}
+		for (int i = 0; i &lt; generalStock.length; i++) {
+			if (generalStock[i] == null) {
+				generalStock[i] = new Item(itemId, quantity);
+				refreshShop();
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+public void sell(Player player, int slotId, int quantity) {
+	if (player.getInventory().getItemsContainerSize() &lt; slotId)
+		return;
+	Item item = player.getInventory().getItem(slotId);
+	if (item == null)
+		return;
+	int originalId = item.getId();
+	if (item.getDefinitions().isNoted())
+		item = new Item(item.getDefinitions().getCertId(), item.getAmount());
+	if (item.getDefinitions().isDestroyItem()
+			|| ItemConstants.getItemDefaultCharges(item.getId()) != -1
+			|| !ItemConstants.isTradeable(item) || item.getId() == money) {
+		player.getPackets().sendGameMessage("You can't sell this item.");
+		return;
+	}
+	int dq = getDefaultQuantity(item.getId());
+	if (dq == -1 &amp;&amp; generalStock == null) {
+		player.getPackets().sendGameMessage(
+				"You can't sell this item to this shop.");
+		return;
+	}
+	int price = getSellPrice(item, dq);
+	int numberOff = player.getInventory().getItems()
+			.getNumberOf(originalId);
+	if (quantity &gt; numberOff)
+		quantity = numberOff;
+	if (!addItem(item.getId(), quantity)) {
+		player.getPackets().sendGameMessage("Shop is currently full.");
+		return;
+	}
+	player.getInventory().deleteItem(originalId, quantity);
+	player.getInventory().addItem(money, price * quantity);
+}
+
+public void sendValue(Player player, int slotId) {
+	if (player.getInventory().getItemsContainerSize() &lt; slotId)
+		return;
+	Item item = player.getInventory().getItem(slotId);
+	if (item == null)
+		return;
+	if (item.getDefinitions().isNoted())
+		item = new Item(item.getDefinitions().getCertId(), item.getAmount());
+	if (item.getDefinitions().isNoted() || !ItemConstants.isTradeable(item)
+			|| item.getId() == money) {
+		player.getPackets().sendGameMessage("You can't sell this item.");
+		return;
+	}
+	int dq = getDefaultQuantity(item.getId());
+	if (dq == -1 &amp;&amp; generalStock == null) {
+		player.getPackets().sendGameMessage(
+				"You can't sell this item to this shop.");
+		return;
+	}
+	int price = getSellPrice(item, dq);
+	player.getPackets().sendGameMessage(
+			item.getDefinitions().getName()
+					+ ": shop will buy for: "
+					+ price
+					+ " "
+					+ ItemDefinitions.getItemDefinitions(money).getName()
+							.toLowerCase()
+					+ ". Right-click the item to sell.");
+}
+
+public int getDefaultQuantity(int itemId) {
+	for (int i = 0; i &lt; mainStock.length; i++)
+		if (mainStock[i].getId() == itemId)
+			return defaultQuantity[i];
+	return -1;
+}
+
+public void sendInfo(Player player, int clickSlot, Item[] stock) {
+	int slotId = clickSlot;//getSlotId(clickSlot);
+	if (slotId &gt;= getStoreSize())
+		return;
+	Item item = slotId &gt;= stock.length ? generalStock[slotId - stock.length] : stock[slotId];
+	if (item == null)
+		return;
+	player.getTemporaryAttributtes().put("ShopSelectedSlot", clickSlot);
+	int dq = slotId &gt;= stock.length ? 0 : defaultQuantity[slotId];
+	int price = getBuyPrice(item, dq);
+	player.getPackets().sendGameMessage(item.getDefinitions().getName() + ": current costs " + price + " " + ItemDefinitions.getItemDefinitions(money).getName().toLowerCase() + ".");
+	player.getInterfaceManager().sendInventoryInterface(449);
+	player.getPackets().sendGlobalConfig(741, item.getId());
+	player.getPackets().sendGlobalConfig(743, money);
+	player.getPackets().sendUnlockIComponentOptionSlots(449, 15, -1, 0, 0, 1, 2, 3, 4); // unlocks buy
+	player.getPackets().sendGlobalConfig(744, price);
+	player.getPackets().sendGlobalConfig(745, 0);
+	player.getPackets().sendGlobalConfig(746, -1);
+	player.getPackets().sendGlobalConfig(168, 98);
+	player.getPackets().sendGlobalString(25, ItemExamines.getExamine(item));
+	player.getPackets().sendGlobalString(34, ""); // quest id for some items
+	int[] bonuses = ItemBonuses.getItemBonuses(item.getId());
+	if (bonuses != null) {
+		HashMap&lt;Integer, Integer&gt; requiriments = item.getDefinitions().getWearingSkillRequiriments();
+		if (requiriments != null &amp;&amp; !requiriments.isEmpty()) {
+			String reqsText = "";
+			for (int skillId : requiriments.keySet()) {
+				if (skillId &gt; 24 || skillId &lt; 0)
+					continue;
+				int level = requiriments.get(skillId);
+				if (level &lt; 0 || level &gt; 120)
+					continue;
+				boolean hasReq = player.getSkills().getLevelForXp(skillId) &gt;= level;
+				reqsText += "&lt;br&gt;" + (hasReq ? "&lt;col=00ff00&gt;" : "&lt;col=ff0000&gt;") + "Level " + level + " " + Skills.SKILL_NAME[skillId];
+			}
+			player.getPackets().sendGlobalString(26, "&lt;br&gt;Worn on yourself, requiring: " + reqsText);
+		} else
+			player.getPackets().sendGlobalString(26, "&lt;br&gt;Worn on yourself");
+		player.getPackets().sendGlobalString(
+				35,
+				"&lt;br&gt;Attack&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.STAB_ATTACK]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.SLASH_ATTACK]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.CRUSH_ATTACK]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.MAGIC_ATTACK]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.RANGE_ATTACK]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;---" + "&lt;br&gt;Strength"
+						+ "&lt;br&gt;Ranged Strength" + "&lt;br&gt;Magic Damage"
+						+ "&lt;br&gt;Absorve Melee" + "&lt;br&gt;Absorve Magic"
+						+ "&lt;br&gt;Absorve Ranged" + "&lt;br&gt;Prayer Bonus");
+		player.getPackets().sendGlobalString(36, "&lt;br&gt;&lt;br&gt;Stab&lt;br&gt;Slash&lt;br&gt;Crush&lt;br&gt;Magic&lt;br&gt;Ranged&lt;br&gt;Summoning");
+		player.getPackets().sendGlobalString(
+				52,
+				"&lt;&lt;br&gt;Defence&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.STAB_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.SLASH_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.CRUSH_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.MAGIC_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.RANGE_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.SUMMONING_DEF]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;+"
+						+ bonuses[CombatDefinitions.STRENGTH_BONUS]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.RANGED_STR_BONUS]
+						+ "&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.MAGIC_DAMAGE]
+						+ "%&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.ABSORVE_MELEE_BONUS]
+						+ "%&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.ABSORVE_MAGE_BONUS]
+						+ "%&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.ABSORVE_RANGE_BONUS]
+						+ "%&lt;br&gt;&lt;col=ffff00&gt;"
+						+ bonuses[CombatDefinitions.PRAYER_BONUS]);
+	} else
+		player.getPackets().sendGlobalString(26, "");
+
+}
+
+public int getBuyPrice(Item item, int dq) {
+
+	int price = item.getDefinitions().getValue();
+	if (price == 0)
+		price = 1;
+	return price; // TODO formula
+}
+
+public int getSellPrice(Item item, int dq) {
+	return item.getDefinitions().getValue() / 2; // TODO formula
+}
+
+public void sendExamine(Player player, int slotId) {
+	if (slotId &gt;= getStoreSize())
+		return;
+	Item item = slotId &gt;= mainStock.length ? generalStock[slotId
+			- mainStock.length] : mainStock[slotId];
+	if (item == null)
+		return;
+	player.getPackets().sendGameMessage(ItemExamines.getExamine(item));
+}
+
+public void refreshShop() {
+	for (Player player : viewingPlayers) {
+		sendStore(player);
+		player.getPackets().sendIComponentSettings(620, 25, 0,
+				getStoreSize() * 6, 1150);
+	}
+}
+
+public int getStoreSize() {
+	return mainStock.length
+			+ (generalStock != null ? generalStock.length : 0);
+}
+
+public void sendStore(Player player) {
+	Item[] stock = new Item[mainStock.length
+			+ (generalStock != null ? generalStock.length : 0)];
+	System.arraycopy(mainStock, 0, stock, 0, mainStock.length);
+	if (generalStock != null)
+		System.arraycopy(generalStock, 0, stock, mainStock.length,
+				generalStock.length);
+	player.getPackets().sendItems(MAIN_STOCK_ITEMS_KEY, stock);
+}
+
+public void sendSellStore(Player player, Item[] inventory) {
+	Item[] stock = new Item[inventory.length + (generalStock != null ? generalStock.length : 0)];
+	System.arraycopy(inventory, 0, stock, 0, inventory.length);
+	if (generalStock != null)
+		System.arraycopy(generalStock, 0, stock, inventory.length, generalStock.length);
+	player.getPackets().sendItems(MAIN_STOCK_ITEMS_KEY, stock);
+}
+
+/**
+ * Checks if the player is buying an item or selling it.
+ * @param player The player
+ * @param slotId The slot id
+ * @param amount The amount
+ */
+public void handleShop(Player player, int slotId, int amount) {
+	boolean isBuying = player.getTemporaryAttributtes().get("shop_buying") != null;
+	if (isBuying)
+		buy(player, slotId, amount);
+	else
+		sell(player, slotId, amount);
+}
+
+public Item[] getMainStock() {
+	return this.mainStock;
+}
+</code></pre>
+<p>}[/code]</p>
+<p><span class="bbcode-b">ButtonHandler.java</span></p>
+<pre><code class="lang-auto">else if (interfaceId == 1265) {
+			Shop shop = (Shop) player.getTemporaryAttributtes().get("Shop");
+			if (shop == null)
+				return;
+			boolean isBuying = player.getTemporaryAttributtes().get("shop_buying") != null;
+			int amount = (int) player.getTemporaryAttributtes().get("amount_shop");
+			if (componentId == 20) {
+				if (packetId == WorldPacketsDecoder.ACTION_BUTTON1_PACKET)
+					shop.sendInfo(player, slotId, isBuying ? shop.getMainStock() : player.getInventory().getItems().getItems());
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON2_PACKET)
+					shop.handleShop(player, slotId, 1);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON3_PACKET)
+					shop.handleShop(player, slotId, 5);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON4_PACKET)
+					shop.handleShop(player, slotId, 10);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON5_PACKET)
+					shop.handleShop(player, slotId, 50);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON9_PACKET)
+					shop.handleShop(player, slotId, 500);
+				else if (packetId == WorldPacketsDecoder.ACTION_BUTTON8_PACKET)
+					shop.sendExamine(player, slotId);
+			} else if (componentId == 201) {
+				Integer slot = (Integer) player.getTemporaryAttributtes().get("ShopSelectedSlot");
+				if (slot == null)
+					return;
+				if (isBuying)
+					shop.buy(player, slot, amount);
+				else
+					shop.sell(player, slotId, amount);
+			} else if (componentId == 208) { //+5
+				player.getTemporaryAttributtes().put("amount_shop", amount + 5);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 15) {
+				player.getTemporaryAttributtes().put("amount_shop", amount + 1);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 214) {
+				player.getTemporaryAttributtes().put("amount_shop", amount - 1);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 15) {
+				player.getTemporaryAttributtes().put("amount_shop", amount + 5);
+				player.getPackets().sendIComponentText(interfaceId, 67, String.valueOf(amount));
+			} else if (componentId == 29) {
+				player.getTemporaryAttributtes().remove("shop_buying");
+			} else if (componentId == 28) {
+				player.getTemporaryAttributtes().put("shop_buying", true);
+			}
+		} else if (interfaceId == 1266) {
+			if (componentId == 0) {
+				if (packetId == WorldPacketsDecoder.ACTION_BUTTON9_PACKET)
+					player.getInventory().sendExamine(slotId);
+				else {
+					Shop shop = (Shop) player.getTemporaryAttributtes().get("Shop");
+					if (shop == null)
+						return;
+					if (packetId == WorldPacketsDecoder.ACTION_BUTTON1_PACKET)
+						shop.sendValue(player, slotId);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON2_PACKET)
+						shop.sell(player, slotId, 1);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON3_PACKET)
+						shop.sell(player, slotId, 5);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON4_PACKET)
+						shop.sell(player, slotId, 10);
+					else if (packetId == WorldPacketsDecoder.ACTION_BUTTON5_PACKET)
+						shop.sell(player, slotId, 50);
+				}
+			}
+		}</code></pre>
+<p><span class="bbcode-b">WorldsPacketDecoder.java</span> Switch item packet</p>
+<pre><code class="lang-auto">				if (fromInterfaceId == 1265 &amp;&amp; toInterfaceId == 1266 &amp;&amp; player.getTemporaryAttributtes().get("shop_buying") != null) {
+					Shop shop = (Shop) player.getTemporaryAttributtes().get("Shop");
+					if (shop == null)
+						return;
+					shop.buy(player, fromSlot, 1);
+				}</code></pre>
+<p><img src="http://screensnapr.com/e/eobhDq.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/718-shops-fix/450007/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/718-shops-fix/450007/1</link>
+        <pubDate>Tue, 17 Jul 2012 20:00:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450007-1</guid>
+        <source url="https://forum.moparisthebest.com/t/718-shops-fix/450007.rss">718 shops fix</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,731 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Loading payload sizes externally</title>
+    <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386</link>
+    <description>[size=14pt]Loading payload sizes externally[/size]
+
+It most server sources I see either in a constants or misc class, an integer array of all the packet payload sizes. They don&#39;t need to be changed as they remain constant unless changing from each revision. It would clear up the source code if these could be loaded externally as they are an eyesore. The following tutorial also makes it beneficial if your server supports multiple revisions.
+
+Here is an example of what the integer array looks like in either a constants or misc class (for those unsure of what I&#39;m talking about):
+
+[code=java]
+public static final int packetLengths[] = {
+	0, 0, 0, 1, -1, 0, 0, 0, 0, 0, // 0
+	0, 0, 0, 0, 8, 0, 6, 2, 2, 0, // 10
+	0, 2, 0, 6, 0, 12, 0, 0, 0, 0, // 20
+	0, 0, 0, 0, 0, 8, 4, 0, 0, 2, // 30
+	2, 6, 0, 6, 0, -1, 0, 0, 0, 0, // 40
+	0, 0, 0, 12, 0, 0, 0, 0, 8, 0, // 50
+	0, 8, 0, 0, 0, 0, 0, 0, 0, 0, // 60
+	6, 0, 2, 2, 8, 6, 0, -1, 0, 6, // 70
+	0, 0, 0, 0, 0, 1, 4, 6, 0, 0, // 80
+	0, 0, 0, 0, 0, 3, 0, 0, -1, 0, // 90
+	0, 13, 0, -1, 0, 0, 0, 0, 0, 0, // 100
+	0, 0, 0, 0, 0, 0, 0, 6, 0, 0, // 110
+	1, 0, 6, 0, 0, 0, -1, 0, 2, 6, // 120
+	0, 4, 6, 8, 0, 6, 0, 0, 0, 2, // 130
+	0, 0, 0, 0, 0, 6, 0, 0, 0, 0, // 140
+	0, 0, 1, 2, 0, 2, 6, 0, 0, 0, // 150
+	0, 0, 0, 0, -1, -1, 0, 0, 0, 0, // 160
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 170
+	0, 8, 0, 3, 0, 2, 0, 0, 8, 1, // 180
+	0, 0, 12, 0, 0, 0, 0, 0, 0, 0, // 190
+	2, 0, 0, 0, 0, 0, 0, 0, 4, 0, // 200
+	4, 0, 0, 0, 7, 8, 0, 0, 10, 0, // 210
+	0, 0, 0, 0, 0, 0, -1, 0, 6, 0, // 220
+	1, 0, 0, 0, 6, 0, 6, 8, 1, 0, // 230
+	0, 4, 0, 0, 0, 0, -1, 0, -1, 4, // 240
+	0, 0, 6, 6, 0, 0, 0 // 250
+};
+[/code]
+
+
+First a static class to hold the data will be needed:
+
+[code=java]
+package com.didactic.net;
+
+import com.didactic.util.Configuration;
+import com.didactic.util.exceptions.EmulatorException;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class ProtocolConstants {
+
+    private static final Map&lt;Integer, int[]&gt; payloadSizes = new HashMap&lt;Integer, int[]&gt;();
+
+    public static int getPayloadSize(int opcode) {
+        if (payloadSizes.containsKey(Configuration.getRevision())) {
+            return payloadSizes.get(Configuration.getRevision())[opcode];
+        } else {
+            throw new EmulatorException(&quot;No payload size data for revision &quot; + Configuration.getRevision() + &quot;.&quot;);
+        }
+    }
+
+    public static int getStringDelimeter(int revision) {
+        switch (revision) {
+            case 317:
+                return 10;
+            default:
+                return 0;
+        }
+    }
+
+    public static Map&lt;Integer, int[]&gt; getPayloadSizes() {
+        return payloadSizes;
+    }
+
+}
+[/code]
+
+Firstly a HashMap is used to bind the payload sizes to their respective revision number to support multiple revisions.
+
+The getPayloadSize method grabs the size from the Map using a stored revision. This example I&#39;ve given used Configuration.getRevision() to decide the revision needed as my server is multi-revision capable. If your server only supports one revision, change Configuration.getRevision() to 317 for example. The method first checks if the revision is loaded, before returning the integer representing the packet payload size. It will throw an exception if the revision isn&#39;t loaded.
+
+Also I will mention, you should change the EmulatorException (specific to my server) to an IndexOutOfBoundsException or whatever you feel is an appropriate signifier.
+
+I&#39;ve copied my entire class, so it still contains a getStringDelimeter method. This is because there are different RSString break bytes depending on the revision.
+
+The getPayloadSizes method is used by our IO loaded to put data into the Map.
+
+
+Next the actual class that will read from our external flat files:
+
+[code=java]
+package com.didactic.io;
+
+import com.didactic.io.buffer.StreamBuffer;
+import com.didactic.net.ProtocolConstants;
+
+import java.io.*;
+
+public class ProtocolDataReader {
+
+    public static void load() throws IOException {
+        File directory = new File(&quot;./data/protocol/&quot;);
+
+        FilenameFilter payloadSizesFilter = new FilenameFilter() {
+            public boolean accept(File file, String name) {
+                return (name.startsWith(&quot;payload_sizes_&quot;) &amp;&amp; name.endsWith(&quot;.dat&quot;));
+            }
+        };
+
+        String[] payloadSizesFiles = directory.list(payloadSizesFilter);
+        StringBuilder revisionsList = new StringBuilder();
+
+        for (int fileIndex = 0; fileIndex &lt; payloadSizesFiles.length; fileIndex++) {
+            File file = new File(directory + &quot;/&quot; + payloadSizesFiles[fileIndex]);
+            StreamBuffer buffer = new StreamBuffer((int) file.length());
+
+            FileInputStream inStream = new FileInputStream(file);
+            inStream.read(buffer.getBuffer());
+            inStream.close();
+
+            int revision = Integer.parseInt(file.getName().substring(14, file.getName().length() - 4)));
+
+            revisionsList.append(revision);
+
+            if (fileIndex &lt; payloadSizesFiles.length - 1) {
+                revisionsList.append(&quot;, &quot;);
+            }
+
+            int[] payloadSizes = new int[(int) file.length()];
+
+            for (int i = 0; i &lt; file.length(); i++) {
+                payloadSizes[i] = buffer.readByte();
+            }
+
+            ProtocolConstants.getPayloadSizes().put(revision, payloadSizes);
+        }
+
+        System.out.println(&quot;Loaded payload sizes for revisions: &quot; + revisionsList.toString() + &quot;.&quot;);
+    }
+
+}
+[/code]
+
+Now I will explain the above code:
+
+The directory variable holds the path to the flat files holding the data. This can be changed according to your desired file structure.
+
+The files I&#39;m using have the convention of &quot;payload_sizes_{REVISION}.dat&quot;, so the payloadSizesFilter is called upon by the File.list() method to filter out all files except these.
+
+These are then saved into a String array named payloadSizesFiles.
+
+The next variable &#39;revisionsList&#39; is a StringBuilder that generates a String for all the revisions loaded. This acts as a logging utility only.
+
+A loop then iterates through all the filenames filtered and reading them through the use of a FileInputStream which copies the contents to a byte array. I&#39;ve used my own StreamBuffer class but this can be replaced with:
+
+[code=java]
+byte[] buffer = new byte[(int) file.length()];
+[/code]
+
+Then instead of using buffer.getBuffer() simple just replace it with buffer. Another change that needs to be made is in:
+
+[code=java]
+for (int i = 0; i &lt; file.length(); i++) {
+     payloadSizes[i] = buffer.readByte();
+}
+[/code]
+
+buffer.readByte() needs to be changed to buffer[ i ].
+
+The revision number is parsed from the filename so the naming convention is crucial for this to work.
+
+It converts the byte array into an integer array and places both variables into our Map in the first class as shown in the chunk:
+
+[code=java]
+int[] payloadSizes = new int[(int) file.length()];
+
+for (int i = 0; i &lt; file.length(); i++) {
+    payloadSizes[i] = buffer.readByte();
+}
+
+ProtocolConstants.getPayloadSizes().put(revision, payloadSizes);
+[/code]
+
+
+Lastly here is a link to the flat file which holds the payload sizes for packets in the revision 317 client: [url=http://uppit.com/x85mkgzwug81/payload_sizes_317.dat]http://uppit.com/x85mkgzwug81/payload_sizes_317.dat[/url]</description>
+    
+    <lastBuildDate>Wed, 19 Oct 2011 15:54:58 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@pot_up_pls pot up pls]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pot_up_pls">@pot_up_pls</a> wrote:</p>
+          <blockquote>
+              <p>Very nice man, goodjob on this tut.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/23</link>
+        <pubDate>Wed, 19 Oct 2011 15:54:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-23</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>trolololol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/22</link>
+        <pubDate>Wed, 19 Oct 2011 15:43:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-22</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:20, topic:418386”]So, 2.5 people don’t even know what this is?</p>
+<p>I know what it is, I’m not going to be implementing it though.[/quote]</p>
+<p>Yes… 2.5 people -.-.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/21</link>
+        <pubDate>Tue, 18 Oct 2011 18:54:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-21</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>So, 2.5 people don’t even know what this is?</p>
+<p>I know what it is, I’m not going to be implementing it though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/20</link>
+        <pubDate>Tue, 18 Oct 2011 18:21:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-20</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>Half of you are saying “yeh great, good job yeh… i’ll be adding this now”, I bet the half that are saying this, don’t have a fucking clue about this tutorial.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/19</link>
+        <pubDate>Tue, 18 Oct 2011 15:31:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-19</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@demps2k9 demps2k9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/demps2k9">@demps2k9</a> wrote:</p>
+          <blockquote>
+              <p>Very nice. Good job on the release WinterCanon.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/18</link>
+        <pubDate>Tue, 18 Oct 2011 10:53:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-18</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Wintercanon, post:16, topic:418386”][quote author=zyle1992 link=topic=520929.msg3785570#msg3785570 date=1318822684]<br>
+Why would you load all the payloads for all the revisions, if only one protocol can be (properly) implemented.<br>
+[/quote]That’s a very good point. Quite a logic flaw on my part. I guess it would be beneficial to only load the revision data for the revision being emulated for that instance. Thanks.</p>
+<p>[quote author=HcoJustin link=topic=520929.msg3785438#msg3785438 date=1318815248]<br>
+I don’t see why it needs to be loaded externally. It’s a waste of resources on start up. Since it is constant, that is a PERFECT time to leave it in the source, and let the compiler handle optimizations.<br>
+[/quote]Perhaps, but couldn’t the same be argued for the items.dat, tradable.dat and stackable.dat constants parsed in other sources. From experience of learning to read through current source code it would be less overwhelming for people who don’t understand why an array of packet payload sizes need to be used at all.[/quote]</p>
+<p>Those are done because we can’t have over 6000 stats for the items. Do you realize how large that is? Take the measley little payload sizes, multiply it by 6000+ depending on the item count, and crash your text editor when it tries to open. Payload sizes are still small enough to let us keep it in code. If you dont want it in your “misc” class, but it in the protocol decoder. No one should ever look there now that we’ve pretty much got that portion of it figured out</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/17</link>
+        <pubDate>Mon, 17 Oct 2011 12:09:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-17</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Wintercanon Wintercanon]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wintercanon">@Wintercanon</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“zyle1992, post:15, topic:418386”]Why would you load all the payloads for all the revisions, if only one protocol can be (properly) implemented.[/quote]That’s a very good point. Quite a logic flaw on my part. I guess it would be beneficial to only load the revision data for the revision being emulated for that instance. Thanks.</p>
+<p>[quote=“HcoJustin, post:14, topic:418386”]I don’t see why it needs to be loaded externally. It’s a waste of resources on start up. Since it is constant, that is a PERFECT time to leave it in the source, and let the compiler handle optimizations.[/quote]Perhaps, but couldn’t the same be argued for the items.dat, tradable.dat and stackable.dat constants parsed in other sources. From experience of learning to read through current source code it would be less overwhelming for people who don’t understand why an array of packet payload sizes need to be used at all.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/16</link>
+        <pubDate>Mon, 17 Oct 2011 08:22:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-16</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Why would you load all the payloads for all the revisions, if only one protocol can be (properly) implemented.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/15</link>
+        <pubDate>Mon, 17 Oct 2011 03:38:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-15</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>I don’t see why it needs to be loaded externally. It’s a waste of resources on start up. Since it is constant, that is a PERFECT time to leave it in the source, and let the compiler handle optimizations.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/14</link>
+        <pubDate>Mon, 17 Oct 2011 01:34:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-14</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Wintercanon Wintercanon]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wintercanon">@Wintercanon</a> wrote:</p>
+          <blockquote>
+              <p>Try not to derail guys. Rep is irrelevant. Thanks for the positive comments.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/13</link>
+        <pubDate>Mon, 17 Oct 2011 01:16:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-13</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@xmonster xmonster]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xmonster">@xmonster</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="10" data-topic="418386">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>That’s right, his rep is locked. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+</blockquote>
+</aside>
+<p>well im sorry … im actually a pretty decent coder… and atomic lol <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> your the reason im rep locked hehe</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/12</link>
+        <pubDate>Mon, 17 Oct 2011 01:05:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-12</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@iz3_legend iz3 legend]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/iz3_legend">@iz3_legend</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="9" data-topic="418386">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/xmonster/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> xmonster:</div>
+<blockquote>
+<p>omg you fucking troll… just because i dont have 200 rep doesnt mean i cant code… rep means nothing you troll. now gtfo my dick.</p>
+</blockquote>
+</aside>
+<p>Rep means nothing. Im getting this from your posts and releases.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/11</link>
+        <pubDate>Mon, 17 Oct 2011 01:04:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-11</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>That’s right, his rep is locked. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/10</link>
+        <pubDate>Mon, 17 Oct 2011 00:58:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-10</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@xmonster xmonster]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xmonster">@xmonster</a> wrote:</p>
+          <blockquote>
+              <p>omg you fucking troll… just because i dont have 200 rep doesnt mean i cant code… rep means nothing you troll. now gtfo my dick.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/9</link>
+        <pubDate>Mon, 17 Oct 2011 00:57:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-9</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@iz3_legend iz3 legend]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/iz3_legend">@iz3_legend</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="7" data-topic="418386">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/xmonster/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> xmonster:</div>
+<blockquote>
+<p>omg i have been looking for this!! YOUR A FREAKING MONSTAAA :3</p>
+</blockquote>
+</aside>
+<p>I doubt that…</p>
+<p>Gj bro, always nice to see you release something now and again.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/8</link>
+        <pubDate>Mon, 17 Oct 2011 00:50:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-8</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@xmonster xmonster]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xmonster">@xmonster</a> wrote:</p>
+          <blockquote>
+              <p>omg i have been looking for this!! YOUR A FREAKING MONSTAAA :3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/7</link>
+        <pubDate>Mon, 17 Oct 2011 00:41:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-7</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@youridudock youridudock]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/youridudock">@youridudock</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="418386">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Nice Wintercanon <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/6</link>
+        <pubDate>Mon, 17 Oct 2011 00:35:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-6</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Nice Wintercanon <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/5</link>
+        <pubDate>Mon, 17 Oct 2011 00:02:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-5</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Wintercanon Wintercanon]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wintercanon">@Wintercanon</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“whackatre, post:2, topic:418386”]Nice job! :)[/quote]Thank you.</p>
+<p>[quote=“x1 att ftw x, post:3, topic:418386”]AHAH!<br>
+i’ve Been Waiting For Somthing Like This!</p>
+<p>Will BE Implementing Soon:-)[/quote]No problem. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/4</link>
+        <pubDate>Mon, 17 Oct 2011 00:01:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-4</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@x1_att_ftw_x x1 att ftw x]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x1_att_ftw_x">@x1_att_ftw_x</a> wrote:</p>
+          <blockquote>
+              <p>AHAH!<br>
+i’ve Been Waiting For Somthing Like This!</p>
+<p>Will BE Implementing Soon:-)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/3</link>
+        <pubDate>Sun, 16 Oct 2011 17:03:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-3</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <p>Nice job! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/2</link>
+        <pubDate>Sun, 16 Oct 2011 12:37:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-2</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+      <item>
+        <title>Loading payload sizes externally</title>
+        <dc:creator><![CDATA[@Wintercanon Wintercanon]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wintercanon">@Wintercanon</a> wrote:</p>
+          <blockquote>
+              <p>[size=14pt]Loading payload sizes externally[/size]</p>
+<p>It most server sources I see either in a constants or misc class, an integer array of all the packet payload sizes. They don’t need to be changed as they remain constant unless changing from each revision. It would clear up the source code if these could be loaded externally as they are an eyesore. The following tutorial also makes it beneficial if your server supports multiple revisions.</p>
+<p>Here is an example of what the integer array looks like in either a constants or misc class (for those unsure of what I’m talking about):</p>
+<pre><code class="lang-auto">public static final int packetLengths[] = {
+	0, 0, 0, 1, -1, 0, 0, 0, 0, 0, // 0
+	0, 0, 0, 0, 8, 0, 6, 2, 2, 0, // 10
+	0, 2, 0, 6, 0, 12, 0, 0, 0, 0, // 20
+	0, 0, 0, 0, 0, 8, 4, 0, 0, 2, // 30
+	2, 6, 0, 6, 0, -1, 0, 0, 0, 0, // 40
+	0, 0, 0, 12, 0, 0, 0, 0, 8, 0, // 50
+	0, 8, 0, 0, 0, 0, 0, 0, 0, 0, // 60
+	6, 0, 2, 2, 8, 6, 0, -1, 0, 6, // 70
+	0, 0, 0, 0, 0, 1, 4, 6, 0, 0, // 80
+	0, 0, 0, 0, 0, 3, 0, 0, -1, 0, // 90
+	0, 13, 0, -1, 0, 0, 0, 0, 0, 0, // 100
+	0, 0, 0, 0, 0, 0, 0, 6, 0, 0, // 110
+	1, 0, 6, 0, 0, 0, -1, 0, 2, 6, // 120
+	0, 4, 6, 8, 0, 6, 0, 0, 0, 2, // 130
+	0, 0, 0, 0, 0, 6, 0, 0, 0, 0, // 140
+	0, 0, 1, 2, 0, 2, 6, 0, 0, 0, // 150
+	0, 0, 0, 0, -1, -1, 0, 0, 0, 0, // 160
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 170
+	0, 8, 0, 3, 0, 2, 0, 0, 8, 1, // 180
+	0, 0, 12, 0, 0, 0, 0, 0, 0, 0, // 190
+	2, 0, 0, 0, 0, 0, 0, 0, 4, 0, // 200
+	4, 0, 0, 0, 7, 8, 0, 0, 10, 0, // 210
+	0, 0, 0, 0, 0, 0, -1, 0, 6, 0, // 220
+	1, 0, 0, 0, 6, 0, 6, 8, 1, 0, // 230
+	0, 4, 0, 0, 0, 0, -1, 0, -1, 4, // 240
+	0, 0, 6, 6, 0, 0, 0 // 250
+};</code></pre>
+<p>First a static class to hold the data will be needed:</p>
+<pre><code class="lang-auto">package com.didactic.net;
+
+import com.didactic.util.Configuration;
+import com.didactic.util.exceptions.EmulatorException;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class ProtocolConstants {
+
+    private static final Map&lt;Integer, int[]&gt; payloadSizes = new HashMap&lt;Integer, int[]&gt;();
+
+    public static int getPayloadSize(int opcode) {
+        if (payloadSizes.containsKey(Configuration.getRevision())) {
+            return payloadSizes.get(Configuration.getRevision())[opcode];
+        } else {
+            throw new EmulatorException("No payload size data for revision " + Configuration.getRevision() + ".");
+        }
+    }
+
+    public static int getStringDelimeter(int revision) {
+        switch (revision) {
+            case 317:
+                return 10;
+            default:
+                return 0;
+        }
+    }
+
+    public static Map&lt;Integer, int[]&gt; getPayloadSizes() {
+        return payloadSizes;
+    }
+
+}</code></pre>
+<p>Firstly a HashMap is used to bind the payload sizes to their respective revision number to support multiple revisions.</p>
+<p>The getPayloadSize method grabs the size from the Map using a stored revision. This example I’ve given used Configuration.getRevision() to decide the revision needed as my server is multi-revision capable. If your server only supports one revision, change Configuration.getRevision() to 317 for example. The method first checks if the revision is loaded, before returning the integer representing the packet payload size. It will throw an exception if the revision isn’t loaded.</p>
+<p>Also I will mention, you should change the EmulatorException (specific to my server) to an IndexOutOfBoundsException or whatever you feel is an appropriate signifier.</p>
+<p>I’ve copied my entire class, so it still contains a getStringDelimeter method. This is because there are different RSString break bytes depending on the revision.</p>
+<p>The getPayloadSizes method is used by our IO loaded to put data into the Map.</p>
+<p>Next the actual class that will read from our external flat files:</p>
+<pre><code class="lang-auto">package com.didactic.io;
+
+import com.didactic.io.buffer.StreamBuffer;
+import com.didactic.net.ProtocolConstants;
+
+import java.io.*;
+
+public class ProtocolDataReader {
+
+    public static void load() throws IOException {
+        File directory = new File("./data/protocol/");
+
+        FilenameFilter payloadSizesFilter = new FilenameFilter() {
+            public boolean accept(File file, String name) {
+                return (name.startsWith("payload_sizes_") &amp;&amp; name.endsWith(".dat"));
+            }
+        };
+
+        String[] payloadSizesFiles = directory.list(payloadSizesFilter);
+        StringBuilder revisionsList = new StringBuilder();
+
+        for (int fileIndex = 0; fileIndex &lt; payloadSizesFiles.length; fileIndex++) {
+            File file = new File(directory + "/" + payloadSizesFiles[fileIndex]);
+            StreamBuffer buffer = new StreamBuffer((int) file.length());
+
+            FileInputStream inStream = new FileInputStream(file);
+            inStream.read(buffer.getBuffer());
+            inStream.close();
+
+            int revision = Integer.parseInt(file.getName().substring(14, file.getName().length() - 4)));
+
+            revisionsList.append(revision);
+
+            if (fileIndex &lt; payloadSizesFiles.length - 1) {
+                revisionsList.append(", ");
+            }
+
+            int[] payloadSizes = new int[(int) file.length()];
+
+            for (int i = 0; i &lt; file.length(); i++) {
+                payloadSizes[i] = buffer.readByte();
+            }
+
+            ProtocolConstants.getPayloadSizes().put(revision, payloadSizes);
+        }
+
+        System.out.println("Loaded payload sizes for revisions: " + revisionsList.toString() + ".");
+    }
+
+}</code></pre>
+<p>Now I will explain the above code:</p>
+<p>The directory variable holds the path to the flat files holding the data. This can be changed according to your desired file structure.</p>
+<p>The files I’m using have the convention of “payload_sizes_{REVISION}.dat”, so the payloadSizesFilter is called upon by the File.list() method to filter out all files except these.</p>
+<p>These are then saved into a String array named payloadSizesFiles.</p>
+<p>The next variable ‘revisionsList’ is a StringBuilder that generates a String for all the revisions loaded. This acts as a logging utility only.</p>
+<p>A loop then iterates through all the filenames filtered and reading them through the use of a FileInputStream which copies the contents to a byte array. I’ve used my own StreamBuffer class but this can be replaced with:</p>
+<pre><code class="lang-auto">byte[] buffer = new byte[(int) file.length()];</code></pre>
+<p>Then instead of using buffer.getBuffer() simple just replace it with buffer. Another change that needs to be made is in:</p>
+<pre><code class="lang-auto">for (int i = 0; i &lt; file.length(); i++) {
+     payloadSizes[i] = buffer.readByte();
+}</code></pre>
+<p>buffer.readByte() needs to be changed to buffer[ i ].</p>
+<p>The revision number is parsed from the filename so the naming convention is crucial for this to work.</p>
+<p>It converts the byte array into an integer array and places both variables into our Map in the first class as shown in the chunk:</p>
+<pre><code class="lang-auto">int[] payloadSizes = new int[(int) file.length()];
+
+for (int i = 0; i &lt; file.length(); i++) {
+    payloadSizes[i] = buffer.readByte();
+}
+
+ProtocolConstants.getPayloadSizes().put(revision, payloadSizes);</code></pre>
+<p>Lastly here is a link to the flat file which holds the payload sizes for packets in the revision 317 client: <a href="http://uppit.com/x85mkgzwug81/payload_sizes_317.dat" data-bbcode="true" rel="nofollow noopener">http://uppit.com/x85mkgzwug81/payload_sizes_317.dat</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386/1</link>
+        <pubDate>Sun, 16 Oct 2011 08:45:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418386-1</guid>
+        <source url="https://forum.moparisthebest.com/t/loading-payload-sizes-externally/418386.rss">Loading payload sizes externally</source>
+      </item>
+  </channel>
+</rss>

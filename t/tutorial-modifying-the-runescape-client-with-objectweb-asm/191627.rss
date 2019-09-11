@@ -1,0 +1,561 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+    <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627</link>
+    <description>[center][i]Modifying the Runescape Client with ObjectWeb ASM.[/i][/center]
+
+
+    This document/tutorial describes how the Runescape Client can be modified using ObjectWeb ASM, and hopefully by the end of it you&#39;ll be comfortable with instrumenting bytecode into the Runescape client. This document is NOT completely finished and amendments to the document where appropriate are strongly encouraged...if you catch a mistake let me know! Citations for specific books listed in the document are unavailable right now, but will be added once I get to that.
+
+[b]Preface[/b]
+    When I first started asking questions about the Runescape client (a couple of months before this document was written), I was full of questions about how to change the client itself. How were people able to modify Strings? How did you modify classes to implement an interface of your choosing and why would you do that? The questions never ended and, in a sense, I have far more questions now than I have ever had before. Through research, I was able to answer those old questions. One thing that I encountered repeatedly throughout that research was that people tended to gravitate toward using an API called BCEL for bytecode instrumentation (inserting bytecode into a class). When I first encountered it and starting using it, I was sooo happy and I couldn&#39;t believe that such a library could exist! But overtime, I became curious and learned that there were actually a variety of libraries for bytecode modification out there...
+
+    Today I&#39;m here to advocate as well as teach using ObjectWeb ASM not as an expert, but as a fellow scholar. I was brought up to use BCEL from various old timers and most of them will probably shun the use of ASM until the day they die *cough* quit mitb *cough* But that&#39;s fine as I have no intention of forcing anyone to convert to anything...just keep an open mind.
+
+[u][b]Section 1:[/b][/u] [b]Why Objectweb ASM?[/b]
+    ObjectWeb ASM (from now on referred to as ASM) incorporates heavy use of the Visitor design pattern, and its use of this design pattern is arguably the biggest hurdle to cross before being able to utilize the API effectively. Make no mistake, there are many very good coders out there that are terrified of design patterns, so it&#39;s natural for them to steer clear of using ASM.
+
+    The difference between BCEL and ASM is the difference between a rock and a soft pillow, respectively. Once you have mastered the Visitor design pattern, you are presented with a library that has large user support, is not a dead project, contains far fewer bugs than its counterpart, has support for Java 6, is far faster, smaller, and more efficient (there&#39;s even an Eclipse plugin available for assisting you with the API). The list goes on and on...
+
+[u][b]Section 2:[/b][/u] [b]Prerequisites (Highly encouraged, but not required).[/b]
+    This document was written for people who already know Java and are either new to modifying the Runescape client, or are interested in learning how to modify the Runescape client with ASM.
+
+    Using ASM won&#39;t turn you into a design pattern freak, but it will encourage knowledge of them. So before you begin, it is in your interest to read up on the Visitor Design pattern. You don&#39;t have to understand the full implications of it from the beginning, but it&#39;s good to have an idea of what it is. Personally, I read James W. Cooper&#39;s book &quot;The Design Patterns Java Companion&quot; which is available freely to read. The last section in the book entitled &quot;The Visitor Pattern&quot; is the one you should read. This is a great book, and I advise you to read it all the way through and not just for the Visitor Pattern, but this is not required.
+
+    Next up, I recommend you read &quot;The Java Virtual Machine Specification&quot; which is available at the official Sun site. This book is a veritable treasure trove of information, and I HIGHLY advise you read it all the way through. But, if you are strapped for time then Chapter 4 The Class File Format will suffice.
+
+    If you would like to learn ASM by yourself there are many documents available for it over the web. I suggest you pick up a free copy of Eric Bruneton&#39;s &quot;ASM 3.0 a Java bytecode engineering library.&quot; It&#39;s available freely at the official Objectweb ASM site.
+
+[u][b]Section 3:[/b][/u] [b]Let&#39;s get this party started![/b]
+    If you made it this far then the worst part is over. Modifying the Runescape client is a breeze. But for those of you (probably the majority of you) that have skipped down to this part without meeting the prerequisites, I commend you for your curiosity...hmm, did curiosity kill the cat? I guess we&#39;ll see...
+
+    I&#39;m not going to delve into the deepest nooks and crannies of ASM because in all honesty you probably will never have to know they exist, but I am going to give a little overview. ASM actually has 2 API&#39;s: An event API (The core API which we will  be using) and an object API (we won&#39;t be using it in this tutorial). Most (if not all) of the classes we will be using in this tutorial are located in the package org.objectweb.asm. This package contains all of the classes you need to get started right away.
+
+    We won&#39;t be needing the class generating capabilities of ASM, but it&#39;s useful to know them anyway for the sake of completeness. In the future, this document may include how to utilize these capabilities because in all honesty it&#39;s quite fun and extremely easy. But for now we&#39;ll concentrate on the bytecode modification aspects.
+
+[u][b]Section 3.1:[/b][/u] [b]import org.objectweb.ClassReader[/b]
+    An instance of the class ClassReader will parse a class and generate (produce) events that are modeled after the Class File Format (you know, chapter 4 of the Java Virtual Machine Specifications...riiiight) Each and every event generated is captured (consumed) through the use of, in our case, a ClassVisitor object. So let&#39;s take a look at some code to get a better feel for this.
+
+[code]import org.objectweb.ClassReader;
+
+public class ReadClass {
+    public static void main(String[] args) {
+        ClassReader cr = new ClassReader(&quot;ReadClass&quot;);
+    }
+}[/code]
+
+    A ClassReader can accept either a String that contains the location to the class file, an InputStream instance, or an array of bytes representing the bytecode of a class file. The code above didn&#39;t do much at all. All it did was open up a connection to the very class that instantiated it. No bytecode was parsed and no events were generated. In the next sub-section we&#39;ll learn how to do something useful...use the Reflective capabilities of ASM. This will allow us to analyze things about the class itself.
+
+[u][b]Section 3.2:[/b][/u] [b]import org.objectweb.ClassVisitor;[/b]
+    A ClassVisitor has the capability to consume events generated by a ClassReader. In effect, it captures all of the information about a class file that we need right from the start. Having this information available allows us to act upon it in a productive way...how about we print some information about ReadClass itself? In order to do this, we have to implement the ClassVisitor interface...define all the methods that are presented in that class. Among them are methods like visit, visitField, and visitMethod.
+
+[code]import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.FieldVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Attribute;
+
+import java.io.IOException;
+
+public class ReadClass implements ClassVisitor {
+	public static void main(String[] args) {
+		ClassVisitor visitor = new ReadClass();
+		try {
+			//Create a new ClassReader to generate events
+			ClassReader cr = new ClassReader(&quot;ReadClass&quot;);
+			//Call the accept method of the ClassReader in order to send those events to our ClassVisitor object.
+			cr.accept(visitor, 0);
+		} catch(IOException ioe) {
+			ioe.printStackTrace();
+		}
+	}
+	
+	public void visit(int version, int access, String name, String signature, String supername, String[] interfaces) {
+		System.out.println(name + &quot;extends &quot; + supername + &quot;{&quot;);
+	}
+	
+	public void visitSource(String source, String debug) {
+	}
+	
+	public void visitOuterClass(String owner, String name, String desc) {
+	}
+	
+	public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+		return null;
+	}
+	
+	public void visitAttribute(Attribute attr) {
+	}
+	
+	public void visitInnerClass(String name, String outerName, String innerName, int access) {
+	}
+	
+	public FieldVisitor visitField(int access, String name, String desc, String signature, Object value) {
+		System.out.println(&quot;	&quot; + desc + &quot; &quot; + name);
+		return null;
+	}
+	
+	public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+		System.out.println(&quot;	&quot; + name + &quot; &quot; + desc);
+		return null;
+	}
+	
+	public void visitEnd() {
+		System.out.println(&quot;}&quot;);
+	}
+}[/code]
+    The code above didn&#39;t do much at all just like the last one, but this time at least it did something (it&#39;s a start hehe). Basically, we have defined a class that captures all the events generated by our ClassReader reading ReadClass (The very same class that instantiates ClassReader). We were then able to print the information to the standard output. It&#39;s very similar to using Java&#39;s Reflection API in java.lang.reflect (but it&#39;s much easier). There&#39;s a very important concept here; we are able to view all the information about the class we need by defining &quot;visit&quot; methods. Each visit method recieves information pertaining to the element of the class it is visited by with the ClassReader. In the next section we will take a hands on approach to evaluating information by examining the Runescape Client.
+.
+[u][b]Section 3.3:[/b][/u] [b]Examining the Runescape Client[/b]
+    Before we begin, we must grab a copy of &quot;runescape.jar&quot; When I first started, I turned on an http proxy and went through the steps a normal user would take to load up the client, and then I examined my output. To my surprise, I found that I couldn&#39;t fine the actual &quot;runescape.jar&quot; anywhere. Instead, all I found was a loader.jar with random numbers appended/prepended to it. Later on, I found that the key to finding runescape.jar is to load an UNSIGNED CLIENT. This allows users that don&#39;t have the capability of loading with the loader.jar to load the client. One possible location is: http://sl3.runescape.com/runescape.jar
+
+    Now that we have our jar, let&#39;s create a folder to organize our files in. I called mine &quot;practice,&quot; but it doesn&#39;t really matter what you call it. Put runescape.jar in the folder, create a new file, and save the file as &quot;RunescapeAnalysis.java&quot; (You can come up with a better name if you like). Normally we would use a deobfuscator for searching for fields to hook and/or edit in the client, but it&#39;s also fun to see the raw bytecode of a client...
+
+    Change to the directory of your &quot;practice&quot; folder from a command prompt or terminal and extract runescape.jar. Next, cd into the folder you&#39;ve just extracted and run &quot;javap -c -private client &gt; client.txt&quot;. This will create a new file called client.txt and inside that file you will find the bytecode representation of client.class. So open up client.txt and start browsing for some things you would like to examine while the client is running.
+
+    Browsing through client.txt you can see that there are tons of static integers that you might want to trace, but let&#39;s settle for one of them.
+/**
+ * Link them to a loader with source and show them how to incorporate ASM into the loader to examine fields.
+ */
+
+[u][b]Section 4:[/b][/u] [b]So how do I modify the Runescape Client?[/b]
+/**
+ * Talk about ClassAdapter and ClassWriter lorem ipsum blah blah blah
+ *
+ * Also, talk about Javaagents and how we&#39;ll use them to modify the client at runtime...maybe
+ */
+To Be Continued When I have a Bit More Time...probably tomorrow.</description>
+    
+    <lastBuildDate>Mon, 31 Mar 2008 17:34:08 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@BAsh_CntLgn BAsh(CntLgn)]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash_cntlgn">@BAsh_CntLgn</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Unhandled, post:15, topic:191627”][quote author=BAsh(CntLgn) link=topic=255275.msg2149451#msg2149451 date=1206972992]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Wow, thank you for teaching me this. Clearly a tutorial with a section devoted to a single import statement <span class="bbcode-i">must</span> be filled with useful information! Sarcasm aside, why the hell would you use javap for this…? Memorize Java’s opcodes and open the classes in a hex editor, pussy!</p>
+</blockquote>
+</aside>
+<p>I can update in 26ms and run 2 bots concurrently with nothing more than hexedit to read the class files and a spiral bound notepad. I can respond in real time with regards to client - server communication however it causes tunnel syndrome. Things get hard though when it comes to network connections and I have had to wire up an old fashioned button the sort usually used for transmitting and receiving morse code.<br>
+[/quote]<br>
+Rofl, wouldn’t just playing RuneScape w/o a bot be more efficient?[/quote]<br>
+Nah. By using a bot I can shut down my emotion centers and parallel neural network. Sure because its parallel it takes a millisecond to compute but every millisecond counts and I’m trying to shave off as many instructions as possible. It also saves a few milliwatts of power so i don’t have to eat as much. I estimate that if I run continuously for a year I won’t need to eat a sandwich!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/17</link>
+        <pubDate>Mon, 31 Mar 2008 17:34:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-17</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="13" data-topic="191627">
+<div class="title">
+<div class="quote-controls"></div>
+ Silver Lining:</div>
+<blockquote>
+<p>Wow, thank you for teaching me this. Clearly a tutorial with a section devoted to a single import statement <span class="bbcode-i">must</span> be filled with useful information! Sarcasm aside, why the hell would you use javap for this…? Memorize Java’s opcodes and open the classes in a hex editor, pussy!</p>
+</blockquote>
+</aside>
+<pre><code>Do I have to bump up your attempt to make a tutorial? (Wait, what's he talking about???...oh yeah that thing.)
+
+Anyway, the tutorial writing style involves visiting one library class at a time building upon information developed in previous portions. javap was the only tool that I could think of that would come standard with most installations of the JDK, but if you have a better idea then I wouldn't mind hearing it.
+
+Progress has definitely slowed down on this thing anyway because the urge to invest alot of time into this thing has dissipated. If I do continue it then it'll probably be in small chunks.</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/16</link>
+        <pubDate>Mon, 31 Mar 2008 17:31:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-16</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BAsh(CntLgn), post:14, topic:191627”][quote author=Silver Lining link=topic=255275.msg2148943#msg2148943 date=1206947778]<br>
+Wow, thank you for teaching me this. Clearly a tutorial with a section devoted to a single import statement <span class="bbcode-i">must</span> be filled with useful information! Sarcasm aside, why the hell would you use javap for this…? Memorize Java’s opcodes and open the classes in a hex editor, pussy!<br>
+[/quote]<br>
+I can update in 26ms and run 2 bots concurrently with nothing more than hexedit to read the class files and a spiral bound notepad. I can respond in real time with regards to client - server communication however it causes tunnel syndrome. Things get hard though when it comes to network connections and I have had to wire up an old fashioned button the sort usually used for transmitting and receiving morse code.[/quote]<br>
+Rofl, wouldn’t just playing RuneScape w/o a bot be more efficient?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/15</link>
+        <pubDate>Mon, 31 Mar 2008 16:47:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-15</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@BAsh_CntLgn BAsh(CntLgn)]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash_cntlgn">@BAsh_CntLgn</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="13" data-topic="191627">
+<div class="title">
+<div class="quote-controls"></div>
+ Silver Lining:</div>
+<blockquote>
+<p>Wow, thank you for teaching me this. Clearly a tutorial with a section devoted to a single import statement <span class="bbcode-i">must</span> be filled with useful information! Sarcasm aside, why the hell would you use javap for this…? Memorize Java’s opcodes and open the classes in a hex editor, pussy!</p>
+</blockquote>
+</aside>
+<p>I can update in 26ms and run 2 bots concurrently with nothing more than hexedit to read the class files and a spiral bound notepad. I can respond in real time with regards to client - server communication however it causes tunnel syndrome. Things get hard though when it comes to network connections and I have had to wire up an old fashioned button the sort usually used for transmitting and receiving morse code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/14</link>
+        <pubDate>Mon, 31 Mar 2008 14:16:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-14</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@Silver_Lining Silver Lining]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silver_lining">@Silver_Lining</a> wrote:</p>
+          <blockquote>
+              <p>Wow, thank you for teaching me this. Clearly a tutorial with a section devoted to a single import statement <span class="bbcode-i">must</span> be filled with useful information! Sarcasm aside, why the hell would you use javap for this…? Memorize Java’s opcodes and open the classes in a hex editor, pussy!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/13</link>
+        <pubDate>Mon, 31 Mar 2008 07:16:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-13</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@joey0101 joey0101]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joey0101">@joey0101</a> wrote:</p>
+          <blockquote>
+              <p>Nooo, I was going to write a tutorial like this. However, your tutorial was good (much better than I would be bothered to write)</p>
+<aside class="quote no-group" data-post="10" data-topic="191627">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/fasga/40/5_6bca9977b612b7aeef77ba1ec1cd67b3.png" class="avatar"> Fasga:</div>
+<blockquote>
+<p>IMO, the tree package is easier to use for this kind of work.</p>
+</blockquote>
+</aside>
+<p>Indeffinitely, add a section for using ClassNodes and shite.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/12</link>
+        <pubDate>Sun, 30 Mar 2008 23:51:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-12</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@super_OLDACCOUNT super_OLDACCOUNT]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/super_oldaccount">@super_OLDACCOUNT</a> wrote:</p>
+          <blockquote>
+              <p>ASM never really appealed to me since I never really understood it’s API and tutorials, although this gave me a good general aspect of using it. P.S. seeing as this is directly linked to ‘hacking’ the rs2 client, i suggest getting a mod to move</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/11</link>
+        <pubDate>Sun, 30 Mar 2008 18:32:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-11</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@Fasga Fasga]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fasga">@Fasga</a> wrote:</p>
+          <blockquote>
+              <p>IMO, the tree package is easier to use for this kind of work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/10</link>
+        <pubDate>Mon, 24 Mar 2008 08:18:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-10</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>Updated - March 23</p>
+<ul>
+<li>Didn’t have much time, but I extended section 3.3</li>
+</ul>
+<p>It’s getting kind of boring and tedious to talk about everything from the ground up, so I’m going to skip a few sections the next few days and talk about modifying the client at runtime. Don’t worry, I’ll come back and work on the previous sections <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=6" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/9</link>
+        <pubDate>Mon, 24 Mar 2008 04:23:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-9</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>hehe, Good luck!<br>
+[size=1pt]Hopefully I’ve angered him and and he is more likely to finish this as a way to prove me wrong[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/8</link>
+        <pubDate>Mon, 24 Mar 2008 03:24:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-8</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@lilmatt56 lilmatt56]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lilmatt56">@lilmatt56</a> wrote:</p>
+          <blockquote>
+              <p>Looking forward to seeing some more of this tut.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/7</link>
+        <pubDate>Mon, 24 Mar 2008 03:12:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-7</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@ruler ruler]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruler">@ruler</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="191627">
+<div class="title">
+<div class="quote-controls"></div>
+ frank_:</div>
+<blockquote>
+<p>sry, but why post it unless it is finished? or at least post when it contains nontrivial information?</p>
+</blockquote>
+</aside>
+<p>Why does your post contain nontrivial information?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/6</link>
+        <pubDate>Sun, 23 Mar 2008 09:14:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-6</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@RLN RLN]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rln">@RLN</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:2, topic:191627”]sry, but why post it unless it is finished? or at least post when it contains nontrivial information?[/quote]this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/5</link>
+        <pubDate>Sat, 22 Mar 2008 21:08:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-5</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@BAsh_CntLgn BAsh(CntLgn)]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash_cntlgn">@BAsh_CntLgn</a> wrote:</p>
+          <blockquote>
+              <p>“The Design Patterns Java Companion” was quite helpful to read.</p>
+<p>Ignore most of these guys.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/4</link>
+        <pubDate>Sat, 22 Mar 2008 14:58:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-4</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>It’s a form of motivation. Every time I start writing I think of ways I could have elaborated my previous statements, and this leads to writer’s block. By posting it as a public rough draft, I have a reason to continue for the sake of completeness.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/3</link>
+        <pubDate>Sat, 22 Mar 2008 12:17:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-3</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>sry, but why post it unless it is finished? or at least post when it contains nontrivial information?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/2</link>
+        <pubDate>Sat, 22 Mar 2008 12:12:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-2</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+      <item>
+        <title>[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[center]<span class="bbcode-i">Modifying the Runescape Client with ObjectWeb ASM.</span>[/center]</p>
+<pre><code>This document/tutorial describes how the Runescape Client can be modified using ObjectWeb ASM, and hopefully by the end of it you'll be comfortable with instrumenting bytecode into the Runescape client. This document is NOT completely finished and amendments to the document where appropriate are strongly encouraged...if you catch a mistake let me know! Citations for specific books listed in the document are unavailable right now, but will be added once I get to that.
+</code></pre>
+<p><span class="bbcode-b">Preface</span><br>
+When I first started asking questions about the Runescape client (a couple of months before this document was written), I was full of questions about how to change the client itself. How were people able to modify Strings? How did you modify classes to implement an interface of your choosing and why would you do that? The questions never ended and, in a sense, I have far more questions now than I have ever had before. Through research, I was able to answer those old questions. One thing that I encountered repeatedly throughout that research was that people tended to gravitate toward using an API called BCEL for bytecode instrumentation (inserting bytecode into a class). When I first encountered it and starting using it, I was sooo happy and I couldn’t believe that such a library could exist! But overtime, I became curious and learned that there were actually a variety of libraries for bytecode modification out there…</p>
+<pre><code>Today I'm here to advocate as well as teach using ObjectWeb ASM not as an expert, but as a fellow scholar. I was brought up to use BCEL from various old timers and most of them will probably shun the use of ASM until the day they die *cough* quit mitb *cough* But that's fine as I have no intention of forcing anyone to convert to anything...just keep an open mind.
+</code></pre>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 1:</span></span> <span class="bbcode-b">Why Objectweb ASM?</span><br>
+ObjectWeb ASM (from now on referred to as ASM) incorporates heavy use of the Visitor design pattern, and its use of this design pattern is arguably the biggest hurdle to cross before being able to utilize the API effectively. Make no mistake, there are many very good coders out there that are terrified of design patterns, so it’s natural for them to steer clear of using ASM.</p>
+<pre><code>The difference between BCEL and ASM is the difference between a rock and a soft pillow, respectively. Once you have mastered the Visitor design pattern, you are presented with a library that has large user support, is not a dead project, contains far fewer bugs than its counterpart, has support for Java 6, is far faster, smaller, and more efficient (there's even an Eclipse plugin available for assisting you with the API). The list goes on and on...
+</code></pre>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 2:</span></span> <span class="bbcode-b">Prerequisites (Highly encouraged, but not required).</span><br>
+This document was written for people who already know Java and are either new to modifying the Runescape client, or are interested in learning how to modify the Runescape client with ASM.</p>
+<pre><code>Using ASM won't turn you into a design pattern freak, but it will encourage knowledge of them. So before you begin, it is in your interest to read up on the Visitor Design pattern. You don't have to understand the full implications of it from the beginning, but it's good to have an idea of what it is. Personally, I read James W. Cooper's book "The Design Patterns Java Companion" which is available freely to read. The last section in the book entitled "The Visitor Pattern" is the one you should read. This is a great book, and I advise you to read it all the way through and not just for the Visitor Pattern, but this is not required.
+
+Next up, I recommend you read "The Java Virtual Machine Specification" which is available at the official Sun site. This book is a veritable treasure trove of information, and I HIGHLY advise you read it all the way through. But, if you are strapped for time then Chapter 4 The Class File Format will suffice.
+
+If you would like to learn ASM by yourself there are many documents available for it over the web. I suggest you pick up a free copy of Eric Bruneton's "ASM 3.0 a Java bytecode engineering library." It's available freely at the official Objectweb ASM site.
+</code></pre>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 3:</span></span> <span class="bbcode-b">Let’s get this party started!</span><br>
+If you made it this far then the worst part is over. Modifying the Runescape client is a breeze. But for those of you (probably the majority of you) that have skipped down to this part without meeting the prerequisites, I commend you for your curiosity…hmm, did curiosity kill the cat? I guess we’ll see…</p>
+<pre><code>I'm not going to delve into the deepest nooks and crannies of ASM because in all honesty you probably will never have to know they exist, but I am going to give a little overview. ASM actually has 2 API's: An event API (The core API which we will  be using) and an object API (we won't be using it in this tutorial). Most (if not all) of the classes we will be using in this tutorial are located in the package org.objectweb.asm. This package contains all of the classes you need to get started right away.
+
+We won't be needing the class generating capabilities of ASM, but it's useful to know them anyway for the sake of completeness. In the future, this document may include how to utilize these capabilities because in all honesty it's quite fun and extremely easy. But for now we'll concentrate on the bytecode modification aspects.
+</code></pre>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 3.1:</span></span> <span class="bbcode-b">import org.objectweb.ClassReader</span><br>
+An instance of the class ClassReader will parse a class and generate (produce) events that are modeled after the Class File Format (you know, chapter 4 of the Java Virtual Machine Specifications…riiiight) Each and every event generated is captured (consumed) through the use of, in our case, a ClassVisitor object. So let’s take a look at some code to get a better feel for this.</p>
+<p>[code]import org.objectweb.ClassReader;</p>
+<p>public class ReadClass {<br>
+public static void main(String[] args) {<br>
+ClassReader cr = new ClassReader(“ReadClass”);<br>
+}<br>
+}[/code]</p>
+<pre><code>A ClassReader can accept either a String that contains the location to the class file, an InputStream instance, or an array of bytes representing the bytecode of a class file. The code above didn't do much at all. All it did was open up a connection to the very class that instantiated it. No bytecode was parsed and no events were generated. In the next sub-section we'll learn how to do something useful...use the Reflective capabilities of ASM. This will allow us to analyze things about the class itself.
+</code></pre>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 3.2:</span></span> <span class="bbcode-b">import org.objectweb.ClassVisitor;</span><br>
+A ClassVisitor has the capability to consume events generated by a ClassReader. In effect, it captures all of the information about a class file that we need right from the start. Having this information available allows us to act upon it in a productive way…how about we print some information about ReadClass itself? In order to do this, we have to implement the ClassVisitor interface…define all the methods that are presented in that class. Among them are methods like visit, visitField, and visitMethod.</p>
+<p>[code]import org.objectweb.asm.ClassVisitor;<br>
+import org.objectweb.asm.ClassReader;<br>
+import org.objectweb.asm.AnnotationVisitor;<br>
+import org.objectweb.asm.FieldVisitor;<br>
+import org.objectweb.asm.MethodVisitor;<br>
+import org.objectweb.asm.Attribute;</p>
+<p>import java.io.IOException;</p>
+<p>public class ReadClass implements ClassVisitor {<br>
+public static void main(String[] args) {<br>
+ClassVisitor visitor = new ReadClass();<br>
+try {<br>
+//Create a new ClassReader to generate events<br>
+ClassReader cr = new ClassReader(“ReadClass”);<br>
+//Call the accept method of the ClassReader in order to send those events to our ClassVisitor object.<br>
+cr.accept(visitor, 0);<br>
+} catch(IOException ioe) {<br>
+ioe.printStackTrace();<br>
+}<br>
+}</p>
+<pre><code>public void visit(int version, int access, String name, String signature, String supername, String[] interfaces) {
+	System.out.println(name + "extends " + supername + "{");
+}
+
+public void visitSource(String source, String debug) {
+}
+
+public void visitOuterClass(String owner, String name, String desc) {
+}
+
+public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+	return null;
+}
+
+public void visitAttribute(Attribute attr) {
+}
+
+public void visitInnerClass(String name, String outerName, String innerName, int access) {
+}
+
+public FieldVisitor visitField(int access, String name, String desc, String signature, Object value) {
+	System.out.println("	" + desc + " " + name);
+	return null;
+}
+
+public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+	System.out.println("	" + name + " " + desc);
+	return null;
+}
+
+public void visitEnd() {
+	System.out.println("}");
+}
+</code></pre>
+<p>}[/code]<br>
+The code above didn’t do much at all just like the last one, but this time at least it did something (it’s a start hehe). Basically, we have defined a class that captures all the events generated by our ClassReader reading ReadClass (The very same class that instantiates ClassReader). We were then able to print the information to the standard output. It’s very similar to using Java’s Reflection API in java.lang.reflect (but it’s much easier). There’s a very important concept here; we are able to view all the information about the class we need by defining “visit” methods. Each visit method recieves information pertaining to the element of the class it is visited by with the ClassReader. In the next section we will take a hands on approach to evaluating information by examining the Runescape Client.<br>
+.<br>
+<span class="bbcode-u"><span class="bbcode-b">Section 3.3:</span></span> <span class="bbcode-b">Examining the Runescape Client</span><br>
+Before we begin, we must grab a copy of “runescape.jar” When I first started, I turned on an http proxy and went through the steps a normal user would take to load up the client, and then I examined my output. To my surprise, I found that I couldn’t fine the actual “runescape.jar” anywhere. Instead, all I found was a loader.jar with random numbers appended/prepended to it. Later on, I found that the key to finding runescape.jar is to load an UNSIGNED CLIENT. This allows users that don’t have the capability of loading with the loader.jar to load the client. One possible location is: <a href="http://sl3.runescape.com/runescape.jar" rel="nofollow noopener">http://sl3.runescape.com/runescape.jar</a></p>
+<pre><code>Now that we have our jar, let's create a folder to organize our files in. I called mine "practice," but it doesn't really matter what you call it. Put runescape.jar in the folder, create a new file, and save the file as "RunescapeAnalysis.java" (You can come up with a better name if you like). Normally we would use a deobfuscator for searching for fields to hook and/or edit in the client, but it's also fun to see the raw bytecode of a client...
+
+Change to the directory of your "practice" folder from a command prompt or terminal and extract runescape.jar. Next, cd into the folder you've just extracted and run "javap -c -private client &gt; client.txt". This will create a new file called client.txt and inside that file you will find the bytecode representation of client.class. So open up client.txt and start browsing for some things you would like to examine while the client is running.
+
+Browsing through client.txt you can see that there are tons of static integers that you might want to trace, but let's settle for one of them.
+</code></pre>
+<p>/**</p>
+<ul>
+<li>Link them to a loader with source and show them how to incorporate ASM into the loader to examine fields.<br>
+*/</li>
+</ul>
+<p><span class="bbcode-u"><span class="bbcode-b">Section 4:</span></span> <span class="bbcode-b">So how do I modify the Runescape Client?</span><br>
+/**</p>
+<ul>
+<li>Talk about ClassAdapter and ClassWriter lorem ipsum blah blah blah</li>
+<li>
+</li>
+<li>Also, talk about Javaagents and how we’ll use them to modify the client at runtime…maybe<br>
+*/<br>
+To Be Continued When I have a Bit More Time…probably tomorrow.</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627/1</link>
+        <pubDate>Sat, 22 Mar 2008 09:19:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-191627-1</guid>
+        <source url="https://forum.moparisthebest.com/t/tutorial-modifying-the-runescape-client-with-objectweb-asm/191627.rss">[Tutorial] Modifying the Runescape Client with ObjectWeb ASM</source>
+      </item>
+  </channel>
+</rss>

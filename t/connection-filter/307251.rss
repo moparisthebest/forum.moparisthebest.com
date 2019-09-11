@@ -1,0 +1,692 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Connection Filter</title>
+    <link>https://forum.moparisthebest.com/t/connection-filter/307251</link>
+    <description>Hello,
+
+so i have been recently checking the stabilty of the rscd server, and i decied to do a socket flood on it, and it only accepted
+47 connections what killed the server, what is just a no no hah :p so i was searching the Apache MINA svn and came across this
+
+Before the connection throttle filter
+[code]Connections accpted: 0
+Connections accpted: 1
+Connections accpted: 2
+Connections accpted: 3
+Connections accpted: 4
+Connections accpted: 5
+Connections accpted: 6
+Connections accpted: 7
+Connections accpted: 8
+Connections accpted: 9
+Connections accpted: 10
+Connections accpted: 11
+Connections accpted: 12
+Connections accpted: 13
+Connections accpted: 14
+Connections accpted: 15
+Connections accpted: 16
+Connections accpted: 17
+Connections accpted: 18
+Connections accpted: 19
+Connections accpted: 20
+Connections accpted: 21
+Connections accpted: 22
+Connections accpted: 23
+Connections accpted: 24
+Connections accpted: 25
+Connections accpted: 26
+Connections accpted: 27
+Connections accpted: 28
+Connections accpted: 29
+Connections accpted: 30
+Connections accpted: 31
+Connections accpted: 32
+Connections accpted: 33
+Connections accpted: 34
+Connections accpted: 35
+Connections accpted: 36
+Connections accpted: 37
+Connections accpted: 38
+Connections accpted: 39
+Connections accpted: 40
+Connections accpted: 41
+Connections accpted: 42
+Connections accpted: 43
+Connections accpted: 44
+Connections accpted: 45
+Connections accpted: 46
+Connections accpted: 47
+Flooding finished because server is offline![/code]
+
+
+After (removed the rest of the connections just the end of it because there was to much text to fit on a thread)
+[code]Connections accpted: 22312
+Connections accpted: 22313
+Connections accpted: 22314
+Connections accpted: 22315
+Connections accpted: 22316
+Flooding finished because server is offline!
+[/code]
+
+Goto,
+[code]org.rscdaemon.server.net[/code]
+add this class
+[code]package org.rscdaemon.server.net;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.mina.common.IoFilter;
+import org.apache.mina.common.IoFilterAdapter;
+import org.apache.mina.common.IoSession;
+
+/**
+* A {@link IoFilter} which blocks connections from connecting
+* at a rate faster than the specified interval.
+*
+* @author The Apache MINA Project (dev@mina.apache.org)
+* @version $Rev$, $Date$
+*/
+public class ConnectionThrottleFilter extends IoFilterAdapter {
+	private long allowedInterval;
+	private Map&lt;InetAddress, Long&gt; clients;
+	public Map&lt;InetAddress, Integer&gt; counts;
+	public Set&lt;InetAddress&gt; connectedAddresses;
+	
+	/**
+	* Constructor that takes in a specified wait time.
+	*
+	* @param allowedInterval
+	* 	The number of milliseconds a client is allowed to wait
+	* 	before making another successful connection
+	*
+	*/
+	public ConnectionThrottleFilter(long allowedInterval) {
+		this.allowedInterval = allowedInterval;
+		clients = Collections.synchronizedMap(new HashMap&lt;InetAddress, Long&gt;());
+		counts = Collections.synchronizedMap(new HashMap&lt;InetAddress, Integer&gt;());
+		connectedAddresses = new HashSet&lt;InetAddress&gt;();
+	}
+	
+	/**
+	* Sets the interval between connections from a client.
+	* This value is measured in milliseconds.
+	*
+	* @param allowedInterval
+	* 	The number of milliseconds a client is allowed to wait
+	* 	before making another successful connection
+	*/
+	public void setAllowedInterval(long allowedInterval) {
+		this.allowedInterval = allowedInterval;
+	}
+	
+	public void delayClient(IoSession session, int delay) {
+		long d = System.currentTimeMillis() - delay;
+		clients.put(getAddress(session), d);
+	}
+	
+	private InetAddress getAddress(IoSession io) {
+		return ((InetSocketAddress)io.getRemoteAddress()).getAddress();
+	}
+	
+	/**
+	* Method responsible for deciding if a connection is OK
+	* to continue
+	*
+	* @param session
+	* 	The new session that will be verified
+	* @return
+	* 	True if the session meets the criteria, otherwise false
+	*/
+	public boolean isConnectionOk(IoSession session) {
+		InetAddress addr = getAddress(session);
+		long now = System.currentTimeMillis();
+		if (clients.containsKey(addr)) {
+			long lastConnTime = clients.get(addr);
+			
+			if (now - lastConnTime &lt; allowedInterval) {
+				int c = 0;
+				if(!counts.containsKey(addr))
+					counts.put(addr, 0);
+				else c = counts.get(addr) + 1;
+				counts.put(addr, c);
+				return false;
+			} else {
+				clients.put(addr, now);
+				return true;
+			}
+		} else {
+			clients.put(addr, now);
+			return true;
+		}
+	}
+	
+	public void closedSession(IoSession io) {
+		connectedAddresses.remove(getAddress(io));
+	}
+	
+	public void acceptedLogin(IoSession io) {
+		connectedAddresses.add(getAddress(io));
+	}
+	
+	public boolean isConnected(IoSession io) {
+		return connectedAddresses.contains(getAddress(io));
+	}
+	
+	public int[] getSizes() { 
+		return new int[] { clients.size(), counts.size(), connectedAddresses.size() }; 
+	}
+	
+	public void connectionOk(IoSession io) {
+		counts.remove(getAddress(io));
+	}
+	
+	@Override
+	public void sessionCreated(NextFilter nextFilter, IoSession session) throws Exception {
+		if (!isConnectionOk(session)) {
+			session.close();
+			return;
+		}
+		nextFilter.sessionCreated(session);
+	}
+}[/code]
+
+Goto
+[code]org.rscdaemon.server.Server[/code]
+
+Add
+
+[code]import org.rscdaemon.server.net.ConnectionThrottleFilter;[/code]
+[code]	public ConnectionThrottleFilter throttleFilter;[/code]
+[code]	public ConnectionThrottleFilter getThrottleFilter() {
+		return throttleFilter;
+	}[/code]
+
+And now find 
+[code]((SocketSessionConfig)config.getSessionConfig()).setReuseAddress(true);[/code]
+
+under that add
+
+[code]			throttleFilter = new ConnectionThrottleFilter(2000);
+			acceptor.getFilterChain().addFirst(&quot;throttleFilter&quot;, throttleFilter);[/code]</description>
+    
+    <lastBuildDate>Sat, 10 Oct 2009 19:16:36 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/connection-filter/307251.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@Peter Peeter]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peter">@Peter</a> wrote:</p>
+          <blockquote>
+              <p>What I’m reffering to is</p>
+<pre><code class="lang-auto">		if (!isConnectionOk(session)) {
+			session.close();
+			return;
+		}</code></pre>
+<p>And everything linked to that.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/11</link>
+        <pubDate>Sat, 10 Oct 2009 19:16:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-11</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>org.apache.mina.filter.firewall.ConnectionThrottleFilter<br>
+GF.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/10</link>
+        <pubDate>Sat, 10 Oct 2009 14:41:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-10</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@snoopy89 snoopy89]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/snoopy89">@snoopy89</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“undead666, post:8, topic:307251”][quote author=Peeter link=topic=403413.msg2988528#msg2988528 date=1255170616]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Ooo, nice post. I belive it has been released somewhere. I can be wrong but i have seen that somewhere <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Gj anyway! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>It’s T_x trying to claim credit for Storks work.<br>
+[/quote]</p>
+<p>[code]/**</p>
+<ul>
+<li>A {<a class="mention" href="/u/link">@link</a> IoFilter} which blocks connections from connecting</li>
+<li>at a rate faster than the specified interval.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> The Apache MINA Project (<a href="mailto:dev@mina.apache.org">dev@mina.apache.org</a>)</li>
+<li>
+<a class="mention" href="/u/version">@version</a> $Rev$, $Date$<br>
+*/[/code]</li>
+</ul>
+<p>That sir is not storks work, if you wasnt a retard you would actualy of read the code, retard<br>
+[center]<img src="http://www.moparisthebest.com/smf/Themes/default/images/warnmute.gif" alt width="" height=""> You’ve been banned. Stop creating new accounts.[/center][/quote]</p>
+<p>Everybody deservs a second chance.<br>
+Not taking hes side since i know hes a **, but atleast hes doing some Develoop unlike some folks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/9</link>
+        <pubDate>Sat, 10 Oct 2009 12:24:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-9</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@undead666 undead666]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/undead666">@undead666</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Peeter, post:7, topic:307251”][quote author=kakur007 link=topic=403413.msg2987395#msg2987395 date=1255090364]<br>
+Ooo, nice post. I belive it has been released somewhere. I can be wrong but i have seen that somewhere <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Gj anyway! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+[/quote]</p>
+<p>It’s T_x trying to claim credit for Storks work.[/quote]</p>
+<p>[code]/**</p>
+<ul>
+<li>A {<a class="mention" href="/u/link">@link</a> IoFilter} which blocks connections from connecting</li>
+<li>at a rate faster than the specified interval.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> The Apache MINA Project (<a href="mailto:dev@mina.apache.org">dev@mina.apache.org</a>)</li>
+<li>
+<a class="mention" href="/u/version">@version</a> $Rev$, $Date$<br>
+*/[/code]</li>
+</ul>
+<p>That sir is not storks work, if you wasnt a retard you would actualy of read the code, retard<br>
+[center]<img src="http://www.moparisthebest.com/smf/Themes/default/images/warnmute.gif" alt width="" height=""> You’ve been banned. Stop creating new accounts.[/center]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/8</link>
+        <pubDate>Sat, 10 Oct 2009 10:58:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-8</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@Peter Peeter]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peter">@Peter</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="3" data-topic="307251">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/kakur007/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> kakur007:</div>
+<blockquote>
+<p>Ooo, nice post. I belive it has been released somewhere. I can be wrong but i have seen that somewhere <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Gj anyway! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>It’s T_x trying to claim credit for Storks work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/7</link>
+        <pubDate>Sat, 10 Oct 2009 10:30:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-7</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@kakur007 kakur007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kakur007">@kakur007</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="4" data-topic="307251">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/undead666/40/5_6259e4fa9dfe0dec282fb0955bb1974c.png" class="avatar"> undead666:</div>
+<blockquote>
+<p>Nope, ive just wrote this thread up so you are incorrect</p>
+</blockquote>
+</aside>
+<p>Something similar has been done before:<br>
+<aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://forum.moparisthebest.com/uploads/default/original/2X/1/1f0dc167bcf798bdbd70b03bf0fd1bc836e54e1a.png" class="site-icon" width="32" height="32">
+      <a href="https://forum.moparisthebest.com/" target="_blank">moparisthebest.com</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://forum.moparisthebest.com/uploads/default/original/2X/4/41fecb6185fddc2758aeba68c3f8c9c78e26e4ff.png" class="thumbnail onebox-avatar" width="500" height="500">
+
+<h3><a href="https://forum.moparisthebest.com/" target="_blank">moparisthebest.com</a></h3>
+
+<p>programming, irc, cars</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/6</link>
+        <pubDate>Fri, 09 Oct 2009 13:29:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-6</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@yong_min yong min]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yong_min">@yong_min</a> wrote:</p>
+          <blockquote>
+              <p>Good job. Another nice post ^^</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/5</link>
+        <pubDate>Fri, 09 Oct 2009 12:18:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-5</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@undead666 undead666]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/undead666">@undead666</a> wrote:</p>
+          <blockquote>
+              <p>Nope, ive just wrote this thread up so you are incorrect</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/4</link>
+        <pubDate>Fri, 09 Oct 2009 12:17:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-4</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@kakur007 kakur007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kakur007">@kakur007</a> wrote:</p>
+          <blockquote>
+              <p>Ooo, nice post. I belive it has been released somewhere. I can be wrong but i have seen that somewhere <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Gj anyway! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/3</link>
+        <pubDate>Fri, 09 Oct 2009 12:12:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-3</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@freaky5000 freaky5000]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/freaky5000">@freaky5000</a> wrote:</p>
+          <blockquote>
+              <p>Very nice, another good post.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/2</link>
+        <pubDate>Fri, 09 Oct 2009 12:02:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-2</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+      <item>
+        <title>Connection Filter</title>
+        <dc:creator><![CDATA[@undead666 undead666]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/undead666">@undead666</a> wrote:</p>
+          <blockquote>
+              <p>Hello,</p>
+<p>so i have been recently checking the stabilty of the rscd server, and i decied to do a socket flood on it, and it only accepted<br>
+47 connections what killed the server, what is just a no no hah <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> so i was searching the Apache MINA svn and came across this</p>
+<p>Before the connection throttle filter</p>
+<p><code>Connections accpted: 0
+Connections accpted: 1
+Connections accpted: 2
+Connections accpted: 3
+Connections accpted: 4
+Connections accpted: 5
+Connections accpted: 6
+Connections accpted: 7
+Connections accpted: 8
+Connections accpted: 9
+Connections accpted: 10
+Connections accpted: 11
+Connections accpted: 12
+Connections accpted: 13
+Connections accpted: 14
+Connections accpted: 15
+Connections accpted: 16
+Connections accpted: 17
+Connections accpted: 18
+Connections accpted: 19
+Connections accpted: 20
+Connections accpted: 21
+Connections accpted: 22
+Connections accpted: 23
+Connections accpted: 24
+Connections accpted: 25
+Connections accpted: 26
+Connections accpted: 27
+Connections accpted: 28
+Connections accpted: 29
+Connections accpted: 30
+Connections accpted: 31
+Connections accpted: 32
+Connections accpted: 33
+Connections accpted: 34
+Connections accpted: 35
+Connections accpted: 36
+Connections accpted: 37
+Connections accpted: 38
+Connections accpted: 39
+Connections accpted: 40
+Connections accpted: 41
+Connections accpted: 42
+Connections accpted: 43
+Connections accpted: 44
+Connections accpted: 45
+Connections accpted: 46
+Connections accpted: 47
+Flooding finished because server is offline!</code></p>
+<p>After (removed the rest of the connections just the end of it because there was to much text to fit on a thread)</p>
+<p><code>Connections accpted: 22312
+Connections accpted: 22313
+Connections accpted: 22314
+Connections accpted: 22315
+Connections accpted: 22316
+Flooding finished because server is offline!
+</code></p>
+<p>Goto,</p>
+<pre><code class="lang-auto">org.rscdaemon.server.net</code></pre>
+<p>add this class</p>
+<p>[code]package <a href="http://org.rscdaemon.server.net" rel="nofollow noopener">org.rscdaemon.server.net</a>;</p>
+<p>import java.net.InetAddress;<br>
+import java.net.InetSocketAddress;<br>
+import java.util.Collections;<br>
+import java.util.HashMap;<br>
+import java.util.HashSet;<br>
+import java.util.Map;<br>
+import java.util.Set;</p>
+<p>import org.apache.mina.common.IoFilter;<br>
+import org.apache.mina.common.IoFilterAdapter;<br>
+import org.apache.mina.common.IoSession;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>A {<a class="mention" href="/u/link">@link</a> IoFilter} which blocks connections from connecting</p>
+</li>
+<li>
+<p>at a rate faster than the specified interval.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> The Apache MINA Project (<a href="mailto:dev@mina.apache.org">dev@mina.apache.org</a>)</p>
+</li>
+<li>
+<p><a class="mention" href="/u/version">@version</a> $Rev$, $Date$<br>
+*/<br>
+public class ConnectionThrottleFilter extends IoFilterAdapter {<br>
+private long allowedInterval;<br>
+private Map&lt;InetAddress, Long&gt; clients;<br>
+public Map&lt;InetAddress, Integer&gt; counts;<br>
+public Set connectedAddresses;</p>
+<p>/**</p>
+<ul>
+<li>Constructor that takes in a specified wait time.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> allowedInterval</li>
+<li>The number of milliseconds a client is allowed to wait</li>
+<li>before making another successful connection</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public ConnectionThrottleFilter(long allowedInterval) {<br>
+this.allowedInterval = allowedInterval;<br>
+clients = Collections.synchronizedMap(new HashMap&lt;InetAddress, Long&gt;());<br>
+counts = Collections.synchronizedMap(new HashMap&lt;InetAddress, Integer&gt;());<br>
+connectedAddresses = new HashSet();<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Sets the interval between connections from a client.</li>
+<li>This value is measured in milliseconds.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> allowedInterval</li>
+<li>The number of milliseconds a client is allowed to wait</li>
+<li>before making another successful connection<br>
+*/<br>
+public void setAllowedInterval(long allowedInterval) {<br>
+this.allowedInterval = allowedInterval;<br>
+}</li>
+</ul>
+<p>public void delayClient(IoSession session, int delay) {<br>
+long d = System.currentTimeMillis() - delay;<br>
+clients.put(getAddress(session), d);<br>
+}</p>
+<p>private InetAddress getAddress(IoSession io) {<br>
+return ((InetSocketAddress)io.getRemoteAddress()).getAddress();<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Method responsible for deciding if a connection is OK</p>
+</li>
+<li>
+<p>to continue</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> session</p>
+</li>
+<li>
+<p>The new session that will be verified</p>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a></p>
+</li>
+<li>
+<p>True if the session meets the criteria, otherwise false<br>
+*/<br>
+public boolean isConnectionOk(IoSession session) {<br>
+InetAddress addr = getAddress(session);<br>
+long now = System.currentTimeMillis();<br>
+if (clients.containsKey(addr)) {<br>
+long lastConnTime = clients.get(addr);</p>
+<pre><code>if (now - lastConnTime &lt; allowedInterval) {
+	int c = 0;
+	if(!counts.containsKey(addr))
+		counts.put(addr, 0);
+	else c = counts.get(addr) + 1;
+	counts.put(addr, c);
+	return false;
+} else {
+	clients.put(addr, now);
+	return true;
+}
+</code></pre>
+<p>} else {<br>
+clients.put(addr, now);<br>
+return true;<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>public void closedSession(IoSession io) {<br>
+connectedAddresses.remove(getAddress(io));<br>
+}</p>
+<p>public void acceptedLogin(IoSession io) {<br>
+connectedAddresses.add(getAddress(io));<br>
+}</p>
+<p>public boolean isConnected(IoSession io) {<br>
+return connectedAddresses.contains(getAddress(io));<br>
+}</p>
+<p>public int[] getSizes() {<br>
+return new int[] { clients.size(), counts.size(), connectedAddresses.size() };<br>
+}</p>
+<p>public void connectionOk(IoSession io) {<br>
+counts.remove(getAddress(io));<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void sessionCreated(NextFilter nextFilter, IoSession session) throws Exception {<br>
+if (!isConnectionOk(session)) {<br>
+session.close();<br>
+return;<br>
+}<br>
+nextFilter.sessionCreated(session);<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>Goto</p>
+<pre><code class="lang-auto">org.rscdaemon.server.Server</code></pre>
+<p>Add</p>
+<pre><code class="lang-auto">import org.rscdaemon.server.net.ConnectionThrottleFilter;</code></pre>
+<pre><code class="lang-auto">	public ConnectionThrottleFilter throttleFilter;</code></pre>
+<p><code>	public ConnectionThrottleFilter getThrottleFilter() {
+		return throttleFilter;
+	}</code></p>
+<p>And now find</p>
+<pre><code class="lang-auto">((SocketSessionConfig)config.getSessionConfig()).setReuseAddress(true);</code></pre>
+<p>under that add</p>
+<p><code>			throttleFilter = new ConnectionThrottleFilter(2000);
+			acceptor.getFilterChain().addFirst("throttleFilter", throttleFilter);</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/connection-filter/307251/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/connection-filter/307251/1</link>
+        <pubDate>Fri, 09 Oct 2009 11:11:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307251-1</guid>
+        <source url="https://forum.moparisthebest.com/t/connection-filter/307251.rss">Connection Filter</source>
+      </item>
+  </channel>
+</rss>

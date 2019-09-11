@@ -1,0 +1,637 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Increasing your productivity by hot swapping classes</title>
+    <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286</link>
+    <description>This is something most scripting environments provide, but it&#39;s not as common in the Java world. The idea is: let&#39;s be able to change a Java class file, recompile it, and then reload it while the application is running. This is doable via the [url=http://docs.oracle.com/javase/7/docs/api/java/lang/instrument/Instrumentation.html]Instrumentation interface[/url], but the Java VM is not very good at redefining classes. It only supports changing the method bodies and not any sort of class structure during runtime. This is why a project called [url=http://dcevm.github.io/]DCEVM[/url] was created. However, actually using DCEVM to hotswap classes is where the complications start to begin. There are existing Java agents which are built into existing environments (such as Tomcat) which support the reloading, but it&#39;s hard to find the code to make this work in general. So, this is my first iteration of a Java agent class which uses DCEVM to hot swap classes during runtime:
+
+[code=Java]
+package com.github.dcevm.agent;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.lang.instrument.ClassDefinition;
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.IllegalClassFormatException;
+import java.lang.instrument.Instrumentation;
+import java.lang.instrument.UnmodifiableClassException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Agent to watch loaded classes in the VM and reload them upon change. To be
+ * used with DCEVM to support reloading classes which have drastically changed.
+ *
+ * @author Ben Henning
+ */
+public class InstrumentationAgent implements ClassFileTransformer, Runnable {
+
+  private static Instrumentation instrumentation;
+  private static List&lt;String&gt; watchedDirectories;
+  private static Map&lt;WatchKey, File&gt; watchedDirectoriesMap;
+  private static Map&lt;String, String&gt; watchedClassFilesMap;
+  private static WatchService watchService;
+
+  static {
+    watchedDirectories = new ArrayList&lt;&gt;();
+    watchedDirectoriesMap = new HashMap&lt;&gt;();
+    watchedClassFilesMap = new HashMap&lt;&gt;();
+  }
+
+  public static void agentmain(String args, Instrumentation instr)
+      throws Throwable {
+    instrumentation = instr;
+    initialize();
+  }
+
+  public static void premain(String args, Instrumentation instr)
+      throws Throwable {
+    instrumentation = instr;
+    initialize();
+  }
+
+  private static void initialize() throws IOException {
+    InstrumentationAgent agent = new InstrumentationAgent();
+    watchService = FileSystems.getDefault().newWatchService();
+    instrumentation.addTransformer(agent);
+    for (Class&lt;?&gt; clazz : instrumentation.getAllLoadedClasses()) {
+      if (!watchClassFile(clazz)) {
+        // System.err.println(&quot;Cannot watch class: &quot; + clazz.getName());
+      } else {
+        // System.out.println(&quot;Initially watching class: &quot; + clazz.getName());
+      }
+    }
+    new Thread(agent).start();
+  }
+
+  private static boolean watchClassFile(Class&lt;?&gt; clazz) {
+    // http://stackoverflow.com/questions/227486
+    ProtectionDomain protectionDomain = clazz.getProtectionDomain();
+    if (protectionDomain != null) {
+      CodeSource codeSource = protectionDomain.getCodeSource();
+      if (codeSource != null) {
+        watchClassFile(clazz.getName(), codeSource.getLocation());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void watchClassFile(String className, URL location) {
+    File file;
+    try {
+      file = new File(location.toURI());
+    } catch (URISyntaxException e) {
+      e.printStackTrace();
+      return;
+    }
+    file = new File(file, className + &quot;.class&quot;);
+    String classFilePathString = file.toPath().toString();
+
+    file = file.getParentFile();
+
+    Path filePath = file.toPath();
+    String filePathString = filePath.toString();
+    if (filePathString.toLowerCase().contains(&quot;.jar&quot;)) {
+      return; // TODO(ben): Add support for watching Jar files.
+    }
+
+    watchedClassFilesMap.put(classFilePathString, className.replace(&#39;/&#39;, &#39;.&#39;));
+    if (watchedDirectories.contains(filePathString)) {
+      return; // Nothing to do; class is already being watched.
+    }
+
+    try {
+      WatchKey key = filePath.register(watchService,
+        StandardWatchEventKinds.ENTRY_MODIFY);
+      watchedDirectoriesMap.put(key, file);
+    } catch (IOException ioe) {
+      ioe.printStackTrace();
+      return;
+    }
+    watchedDirectories.add(filePathString);
+  }
+
+  private static boolean redefineClass(File classFile, String className) {
+    Class&lt;?&gt; currentClass;
+    try {
+      currentClass = Class.forName(className);
+    } catch (ClassNotFoundException cnfe) {
+      cnfe.printStackTrace();
+      return false;
+    }
+
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try {
+      FileInputStream fis = new FileInputStream(classFile);
+      byte[] buffer = new byte[4096];
+      int read;
+      while ((read = fis.read(buffer)) &gt; 0)
+        baos.write(buffer, 0, read);
+      fis.close();
+    } catch (IOException ioe) {
+      ioe.printStackTrace();
+      return false;
+    }
+
+    ClassDefinition definition = new ClassDefinition(
+      currentClass, baos.toByteArray());
+    try {
+      instrumentation.redefineClasses(definition);
+    } catch (ClassNotFoundException | UnmodifiableClassException e) {
+      e.printStackTrace();
+      return false;
+    }
+
+    return true;
+  }
+
+  @Override
+  public byte[] transform(ClassLoader loader, String className,
+      Class&lt;?&gt; classBeingRedefined, ProtectionDomain protectionDomain,
+      byte[] classfileBuffer) throws IllegalClassFormatException {
+    // System.out.println(&quot;Watching class file: &quot; + className);
+    watchClassFile(className, protectionDomain.getCodeSource().getLocation());
+    return classfileBuffer;
+  }
+
+  @Override
+  @SuppressWarnings(&quot;unchecked&quot;)
+  public void run() {
+    // https://docs.oracle.com/javase/tutorial/essential/io/notification.html
+    while (true) {
+      WatchKey key;
+      try {
+        key = watchService.take();
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+        break;
+      }
+
+      File parentDir = watchedDirectoriesMap.get(key);
+      if (parentDir == null) {
+        continue; // Something has gone seriously wrong...
+      }
+
+      for (WatchEvent&lt;?&gt; event : key.pollEvents()) {
+        WatchEvent.Kind&lt;?&gt; kind = event.kind();
+
+        if (kind == StandardWatchEventKinds.OVERFLOW) {
+          continue;
+        }
+
+        WatchEvent&lt;Path&gt; pathEvent = (WatchEvent&lt;Path&gt;) event;
+        Path context = pathEvent.context();
+        File fileContext = context.toFile();
+        if (fileContext.isDirectory()) {
+          continue; // No interest in directories, only class files.
+        }
+        String name = fileContext.getName();
+        if (!name.toLowerCase().endsWith(&quot;.class&quot;)) {
+          continue; // Only class files should be watched.
+        }
+        File classFile = new File(parentDir, name);
+        String className = watchedClassFilesMap.get(
+          classFile.toPath().toString());
+        if (className == null) {
+          continue;
+        }
+
+        if (redefineClass(classFile, className)) {
+          System.out.println(&quot;Reloading class: &quot; + className);
+        } else {
+          System.err.println(&quot;Error reloading class: &quot; + className);
+        }
+      }
+
+      key.reset();
+    }
+  }
+}
+[/code]
+
+It does not support reloading from Jar files currently and it doesn&#39;t add file watchers to any of the initial class files loaded before the agent, but it does a pretty decent job. To use it, install DCEVM (I recommend installing it as an extra VM rather than replacing your existing one), then compile the above Java file and add it to an agent.jar file, along with the manifest:
+
+[code]
+Manifest-Version: 1.0
+Can-Redefine-Classes: true
+Agent-Class: com.github.dcevm.agent.InstrumentationAgent
+Premain-Class: com.github.dcevm.agent.InstrumentationAgent
+[/code]
+
+Then, you may run your Java application as so:
+
+[code]java -XXaltjvm=dcevm -javaagent:agent.jar -additional-arguments main.class.file[/code]
+
+Try running your application and start changing your Java files while it&#39;s running. You should see text outputted to the console saying your classes are being reloaded.</description>
+    
+    <lastBuildDate>Wed, 22 Jul 2015 05:48:21 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="552286">
+<div class="title">
+<div class="quote-controls"></div>
+ t4:</div>
+<blockquote>
+<p>Avail told me it was better, not sure why. JRevel AFAIK is not free.</p>
+</blockquote>
+</aside>
+<p>There was JRebel social some time ago. I still have a copy of it and still use it. I got it for 100% free.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/9</link>
+        <pubDate>Wed, 22 Jul 2015 05:48:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-9</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“my-swagger, post:7, topic:552286”][quote author=t4 link=topic=671203.msg4488759#msg4488759 date=1436030198]<br>
+Avail told me it was better, not sure why. JRevel AFAIK is not free.<br>
+[/quote]<br>
+Which is the only problem <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>As Taharok mentioned, DCEVM.  It is faster and uses less memory.<br>
+A really good thing to check out is <a href="https://github.com/HotswapProjects/HotswapAgent%5B/quote%5D" rel="nofollow noopener">https://github.com/HotswapProjects/HotswapAgent[/quote]</a></p>
+<p>This. Though writing a custom agent to do the class reloading was a fun exercise. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> It works really well for request-based protocols, but for anything that’s session-based or requires initialization, it has some downsides. Your code might need architectural workarounds to deal with that.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/8</link>
+        <pubDate>Sat, 04 Jul 2015 18:36:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-8</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@my-swagger my-swagger]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/my-swagger">@my-swagger</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="552286">
+<div class="title">
+<div class="quote-controls"></div>
+ t4:</div>
+<blockquote>
+<p>Avail told me it was better, not sure why. JRevel AFAIK is not free.</p>
+</blockquote>
+</aside>
+<p>Which is the only problem <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>As Taharok mentioned, DCEVM.  It is faster and uses less memory.<br>
+A really good thing to check out is <a href="https://github.com/HotswapProjects/HotswapAgent" rel="nofollow noopener">https://github.com/HotswapProjects/HotswapAgent</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/7</link>
+        <pubDate>Sat, 04 Jul 2015 17:26:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-7</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>Avail told me it was better, not sure why. JRevel AFAIK is not free.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/6</link>
+        <pubDate>Sat, 04 Jul 2015 17:16:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-6</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="552286">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/my-swagger/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> my-swagger:</div>
+<blockquote>
+<p>why not jrebel?</p>
+</blockquote>
+</aside>
+<p>JRebel is the same idea.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/5</link>
+        <pubDate>Sat, 04 Jul 2015 17:03:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-5</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@my-swagger my-swagger]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/my-swagger">@my-swagger</a> wrote:</p>
+          <blockquote>
+              <p>why not jrebel?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/4</link>
+        <pubDate>Sat, 04 Jul 2015 15:05:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-4</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>its pretty cool for testing on the fly. Just for shits and giggles you could probably use something like this to access bot hooks and then put the original class back when not in use of a particular hook to avoid the runescape bot detection</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/3</link>
+        <pubDate>Sat, 04 Jul 2015 13:11:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-3</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>very useful</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/2</link>
+        <pubDate>Sat, 04 Jul 2015 00:53:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-2</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+      <item>
+        <title>Increasing your productivity by hot swapping classes</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>This is something most scripting environments provide, but it’s not as common in the Java world. The idea is: let’s be able to change a Java class file, recompile it, and then reload it while the application is running. This is doable via the <a href="http://docs.oracle.com/javase/7/docs/api/java/lang/instrument/Instrumentation.html" data-bbcode="true" rel="nofollow noopener">Instrumentation interface</a>, but the Java VM is not very good at redefining classes. It only supports changing the method bodies and not any sort of class structure during runtime. This is why a project called <a href="http://dcevm.github.io/" data-bbcode="true" rel="nofollow noopener">DCEVM</a> was created. However, actually using DCEVM to hotswap classes is where the complications start to begin. There are existing Java agents which are built into existing environments (such as Tomcat) which support the reloading, but it’s hard to find the code to make this work in general. So, this is my first iteration of a Java agent class which uses DCEVM to hot swap classes during runtime:</p>
+<pre><code class="lang-auto">package com.github.dcevm.agent;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.lang.instrument.ClassDefinition;
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.IllegalClassFormatException;
+import java.lang.instrument.Instrumentation;
+import java.lang.instrument.UnmodifiableClassException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Agent to watch loaded classes in the VM and reload them upon change. To be
+ * used with DCEVM to support reloading classes which have drastically changed.
+ *
+ * @author Ben Henning
+ */
+public class InstrumentationAgent implements ClassFileTransformer, Runnable {
+
+  private static Instrumentation instrumentation;
+  private static List&lt;String&gt; watchedDirectories;
+  private static Map&lt;WatchKey, File&gt; watchedDirectoriesMap;
+  private static Map&lt;String, String&gt; watchedClassFilesMap;
+  private static WatchService watchService;
+
+  static {
+    watchedDirectories = new ArrayList&lt;&gt;();
+    watchedDirectoriesMap = new HashMap&lt;&gt;();
+    watchedClassFilesMap = new HashMap&lt;&gt;();
+  }
+
+  public static void agentmain(String args, Instrumentation instr)
+      throws Throwable {
+    instrumentation = instr;
+    initialize();
+  }
+
+  public static void premain(String args, Instrumentation instr)
+      throws Throwable {
+    instrumentation = instr;
+    initialize();
+  }
+
+  private static void initialize() throws IOException {
+    InstrumentationAgent agent = new InstrumentationAgent();
+    watchService = FileSystems.getDefault().newWatchService();
+    instrumentation.addTransformer(agent);
+    for (Class&lt;?&gt; clazz : instrumentation.getAllLoadedClasses()) {
+      if (!watchClassFile(clazz)) {
+        // System.err.println("Cannot watch class: " + clazz.getName());
+      } else {
+        // System.out.println("Initially watching class: " + clazz.getName());
+      }
+    }
+    new Thread(agent).start();
+  }
+
+  private static boolean watchClassFile(Class&lt;?&gt; clazz) {
+    // http://stackoverflow.com/questions/227486
+    ProtectionDomain protectionDomain = clazz.getProtectionDomain();
+    if (protectionDomain != null) {
+      CodeSource codeSource = protectionDomain.getCodeSource();
+      if (codeSource != null) {
+        watchClassFile(clazz.getName(), codeSource.getLocation());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void watchClassFile(String className, URL location) {
+    File file;
+    try {
+      file = new File(location.toURI());
+    } catch (URISyntaxException e) {
+      e.printStackTrace();
+      return;
+    }
+    file = new File(file, className + ".class");
+    String classFilePathString = file.toPath().toString();
+
+    file = file.getParentFile();
+
+    Path filePath = file.toPath();
+    String filePathString = filePath.toString();
+    if (filePathString.toLowerCase().contains(".jar")) {
+      return; // TODO(ben): Add support for watching Jar files.
+    }
+
+    watchedClassFilesMap.put(classFilePathString, className.replace('/', '.'));
+    if (watchedDirectories.contains(filePathString)) {
+      return; // Nothing to do; class is already being watched.
+    }
+
+    try {
+      WatchKey key = filePath.register(watchService,
+        StandardWatchEventKinds.ENTRY_MODIFY);
+      watchedDirectoriesMap.put(key, file);
+    } catch (IOException ioe) {
+      ioe.printStackTrace();
+      return;
+    }
+    watchedDirectories.add(filePathString);
+  }
+
+  private static boolean redefineClass(File classFile, String className) {
+    Class&lt;?&gt; currentClass;
+    try {
+      currentClass = Class.forName(className);
+    } catch (ClassNotFoundException cnfe) {
+      cnfe.printStackTrace();
+      return false;
+    }
+
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try {
+      FileInputStream fis = new FileInputStream(classFile);
+      byte[] buffer = new byte[4096];
+      int read;
+      while ((read = fis.read(buffer)) &gt; 0)
+        baos.write(buffer, 0, read);
+      fis.close();
+    } catch (IOException ioe) {
+      ioe.printStackTrace();
+      return false;
+    }
+
+    ClassDefinition definition = new ClassDefinition(
+      currentClass, baos.toByteArray());
+    try {
+      instrumentation.redefineClasses(definition);
+    } catch (ClassNotFoundException | UnmodifiableClassException e) {
+      e.printStackTrace();
+      return false;
+    }
+
+    return true;
+  }
+
+  @Override
+  public byte[] transform(ClassLoader loader, String className,
+      Class&lt;?&gt; classBeingRedefined, ProtectionDomain protectionDomain,
+      byte[] classfileBuffer) throws IllegalClassFormatException {
+    // System.out.println("Watching class file: " + className);
+    watchClassFile(className, protectionDomain.getCodeSource().getLocation());
+    return classfileBuffer;
+  }
+
+  @Override
+  @SuppressWarnings("unchecked")
+  public void run() {
+    // https://docs.oracle.com/javase/tutorial/essential/io/notification.html
+    while (true) {
+      WatchKey key;
+      try {
+        key = watchService.take();
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+        break;
+      }
+
+      File parentDir = watchedDirectoriesMap.get(key);
+      if (parentDir == null) {
+        continue; // Something has gone seriously wrong...
+      }
+
+      for (WatchEvent&lt;?&gt; event : key.pollEvents()) {
+        WatchEvent.Kind&lt;?&gt; kind = event.kind();
+
+        if (kind == StandardWatchEventKinds.OVERFLOW) {
+          continue;
+        }
+
+        WatchEvent&lt;Path&gt; pathEvent = (WatchEvent&lt;Path&gt;) event;
+        Path context = pathEvent.context();
+        File fileContext = context.toFile();
+        if (fileContext.isDirectory()) {
+          continue; // No interest in directories, only class files.
+        }
+        String name = fileContext.getName();
+        if (!name.toLowerCase().endsWith(".class")) {
+          continue; // Only class files should be watched.
+        }
+        File classFile = new File(parentDir, name);
+        String className = watchedClassFilesMap.get(
+          classFile.toPath().toString());
+        if (className == null) {
+          continue;
+        }
+
+        if (redefineClass(classFile, className)) {
+          System.out.println("Reloading class: " + className);
+        } else {
+          System.err.println("Error reloading class: " + className);
+        }
+      }
+
+      key.reset();
+    }
+  }
+}</code></pre>
+<p>It does not support reloading from Jar files currently and it doesn’t add file watchers to any of the initial class files loaded before the agent, but it does a pretty decent job. To use it, install DCEVM (I recommend installing it as an extra VM rather than replacing your existing one), then compile the above Java file and add it to an agent.jar file, along with the manifest:</p>
+<pre><code class="lang-auto">Manifest-Version: 1.0
+Can-Redefine-Classes: true
+Agent-Class: com.github.dcevm.agent.InstrumentationAgent
+Premain-Class: com.github.dcevm.agent.InstrumentationAgent</code></pre>
+<p>Then, you may run your Java application as so:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>Try running your application and start changing your Java files while it’s running. You should see text outputted to the console saying your classes are being reloaded.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286/1</link>
+        <pubDate>Fri, 03 Jul 2015 22:35:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552286-1</guid>
+        <source url="https://forum.moparisthebest.com/t/increasing-your-productivity-by-hot-swapping-classes/552286.rss">Increasing your productivity by hot swapping classes</source>
+      </item>
+  </channel>
+</rss>

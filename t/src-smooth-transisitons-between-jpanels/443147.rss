@@ -1,0 +1,513 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[SRC] Smooth transisitons between JPanels</title>
+    <link>https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147</link>
+    <description>I&#39;m working on a project atm, and I wanted a nice way to be able to switch the content currently being shown (it&#39;s paginated content).  Initially I tried adding and removing the components and altering the values directly - needless to say this did not work.  When I finally did come up with a solution that did work I had all sorts of problems due to swing being an asshole.
+
+The solution I eventually came up with was to use a JLayeredPane as the content area so that the transition could be shown ABOVE the component, this removes flicker when adding/removing components and it also means we can have the new component in place while the transition is showing... cool, huh?
+To do the transisitons I simply paint the components to a BufferedImage, then use a Transition (a class defined near the bottom of the source) to tween between them.
+
+Without further ado:
+[code=java5]import javax.swing.*;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+
+public class SmoothPageTransitioner extends JPanel implements Runnable {
+    private JLayeredPane target;
+    private JComponent old;
+    private JComponent newP;
+    private Thread thread;
+    private boolean run = true;
+    private long time;
+    private int type;
+    private BufferedImage back;
+
+    private SmoothPageTransitioner(JLayeredPane target, JComponent old, JComponent newP, long time, int type) {
+        setOpaque(false);
+        int width = old == null ? target.getWidth() : old.getWidth();
+        int height = old == null ? target.getHeight() : old.getHeight();
+        setPreferredSize(new Dimension(width, height));
+        setSize(width, height);
+        this.target = target;
+        this.old = old;
+        this.newP = newP;
+        this.time = time;
+        this.type = type;
+    }
+
+    @Override
+    public void run() {
+        try {
+            int width = old == null ? target == null? getWidth(): target.getWidth() : old.getWidth();
+            int height = old == null ? target == null? getHeight(): target.getHeight() : old.getHeight();
+
+            if (old != null)
+                prepare(old);
+            prepare(target);
+            prepare(newP);
+
+            back = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+            BufferedImage oi = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+            if (old != null)
+                old.paint(oi.getGraphics());
+            Graphics2D t = back.createGraphics();
+            t.drawImage(oi, 0, 0, null);
+            target.add(this, JLayeredPane.PALETTE_LAYER);
+            if(old != null)
+                target.remove(old);
+            newP.setSize(width, height);
+            newP.setPreferredSize(new Dimension(width, height));
+            target.add(newP);
+            target.revalidate();
+
+            BufferedImage ni = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+            newP.paint(ni.getGraphics());
+
+
+            long curTime = System.currentTimeMillis();
+            long start = curTime;
+            while ((curTime = System.currentTimeMillis()) - start &lt; time &amp;&amp; run) {
+                t.setPaintMode();
+
+                // transition
+                transitions[type].transition((int) (time / 20), (int) ((curTime - start) / 20), t, oi, ni, width, height);
+                repaint();
+
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException ignore) {
+                    ignore.printStackTrace();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        target.remove(this);
+        target.revalidate();
+        target.repaint();
+    }
+
+    private static void prepare(JComponent jc) {
+        // swing sucks, if the component is double buffered then you get all sorts of shitty artifacts..
+        for (Component c : jc.getComponents())
+            if (c instanceof JComponent)
+                prepare((JComponent) c);
+        jc.setDoubleBuffered(false);
+    }
+
+    public void stop() {
+        // stop this transition (just skips the rest of the animation...)
+        run = false;
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+
+        }
+    }
+
+    public void paint(Graphics g) {
+        g.drawImage(back, 0, 0, null);
+    }
+
+    public void update(Graphics g) {
+        paint(g);
+    }
+
+    public static void stopTransition(Container t) {
+        // Check for transition in progress
+        SmoothPageTransitioner oldTran = null;
+        for (Component c : t.getComponents()) {
+            if (c instanceof SmoothPageTransitioner) {
+                oldTran = (SmoothPageTransitioner) c;
+                break;
+            }
+        }
+        if (oldTran != null)
+            oldTran.stop(); // stop last transition
+    }
+
+    public static void transition(JLayeredPane target, JPanel old, JPanel newP, int time, int type) {
+        if (type == -1)
+            type = (int) (Math.random() * transitions.length);
+        if (time == -1)
+            time = transitions[type].defaultTime;
+
+        SmoothPageTransitioner r = new SmoothPageTransitioner(target, old, newP, time, type);
+        Thread t = new Thread(r);
+        t.setPriority(1);
+        t.setDaemon(true);
+        t.start();
+        r.thread = t;
+    }
+
+    private static BufferedImage clear(BufferedImage bi, Color c) {
+        Graphics g = bi.getGraphics();
+        g.setColor(c);
+        g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+        return bi;
+    }
+
+    private static float getFadeAlpha(int elapsed, int time) {
+        return (float) elapsed * (1.0f / (float) time);
+    }
+
+    static abstract class Transition {
+        protected int defaultTime = 500;
+
+        public abstract void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height);
+    }
+
+    public static Transition fadeOut = new Transition() {
+        @Override
+        public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+            float alpha = getFadeAlpha(elapsed, time);
+            g.drawImage(ni, 0, 0, null);
+            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_ATOP, 1f - alpha));
+            g.drawImage(oi, 0, 0, null);
+        }
+    };
+    public static Transition fadeOutIn = new Transition() {
+        {
+            defaultTime = 1000;
+        }
+
+        @Override
+        public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+            // fade to 0 within half the time...
+            int pic = elapsed &lt; time / 2 ? 0 : 1;
+            float alpha = getFadeAlpha(elapsed, time) * 2;
+            if (pic == 1)
+                alpha = 1f - (alpha - 1f);
+            if(alpha &gt; 1)
+                alpha = 1f;
+            if(alpha &lt; 0)
+                alpha = 0f;
+
+            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_ATOP, 1f - alpha));
+            if (pic == 0)
+                g.drawImage(oi, 0, 0, width, height, null);
+            else
+                g.drawImage(ni, 0, 0, width, height, null);
+        }
+    };
+
+    public static Transition slideRight = new Transition() {
+        @Override
+        public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+            float off = width / (float) time * elapsed;
+            int x = (int) off;
+            g.drawImage(oi, x, 0, null);
+            g.drawImage(ni, -width + x, 0, null);
+        }
+    };
+
+    public static Transition slideLeft = new Transition() {
+        @Override
+        public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+            float off = width / (float) time * elapsed;
+            int x = (int) off;
+            g.drawImage(oi, -x, 0, null);
+            g.drawImage(ni, width - x, 0, null);
+        }
+    };
+
+    public static Transition slideUp = new Transition() {
+        @Override
+        public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+            float off = height / (float) time * elapsed;
+            int y = (int) off;
+            g.drawImage(oi, 0, -y, null);
+            g.drawImage(ni, 0, height - y, null);
+        }
+    };
+
+    static Transition[] transitions = {fadeOut, fadeOutIn, slideRight, slideLeft, slideUp};
+}[/code]
+
+To re-iterate: to use this source you MUST have your content area as a JLayeredPane (the SmoothPageTransitioner sits on the JLayeredPane.PALETTE_LAYER to remove flicker), and the 2 pages must be subcomponents of JPanel.
+
+Simply call 
+[code=java5]SmoothPageTransitioner.transition(contentArea, oldContent, newContent, durationMs, transitionType);[/code]
+
+EDIT: As requested, I took a video of the current transitions in action (don&#39;t forget you can write your own, e.g. shrink, grow, spin, whatever!):
+[youtube]http://www.youtube.com/watch?v=7BPHmD6EVT4[/youtube]</description>
+    
+    <lastBuildDate>Fri, 11 Jan 2013 17:02:16 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[SRC] Smooth transisitons between JPanels</title>
+        <dc:creator><![CDATA[@newbiehacker newbiehacker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/newbiehacker">@newbiehacker</a> wrote:</p>
+          <blockquote>
+              <p>that would be one of the 4 transitions.  I’d like to see you do the others without doing bitmap manipulation xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/3</link>
+        <pubDate>Fri, 11 Jan 2013 17:02:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-443147-3</guid>
+        <source url="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147.rss">[SRC] Smooth transisitons between JPanels</source>
+      </item>
+      <item>
+        <title>[SRC] Smooth transisitons between JPanels</title>
+        <dc:creator><![CDATA[@Smokey2 Smokey_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/smokey2">@Smokey2</a> wrote:</p>
+          <blockquote>
+              <p>It could have been as easy as applying a fade-in, and at the utmost density call these:</p>
+<pre><code class="lang-auto">            contentPane.remove(firstPanel);
+            contentPane.add(secondPane);
+            contentPane.validate();</code></pre>
+<p>Then fade back out. Or you could just let them see the switch, it’s faster then the naked eye can see anyway.<br>
+That is pretty awesome though. If you were purposely going for slideshow transition effects to begin with when “swing was being an asshole” then this seems more ethical. I don’t fully understand your intentions though, so don’t think I’m casting judgement…</p>
+<p>The topic is 120 days old but has no posts and is still on the first page… That doesn’t count as grave digging does it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/2</link>
+        <pubDate>Sat, 22 Dec 2012 17:57:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-443147-2</guid>
+        <source url="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147.rss">[SRC] Smooth transisitons between JPanels</source>
+      </item>
+      <item>
+        <title>[SRC] Smooth transisitons between JPanels</title>
+        <dc:creator><![CDATA[@newbiehacker newbiehacker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/newbiehacker">@newbiehacker</a> wrote:</p>
+          <blockquote>
+              <p>I’m working on a project atm, and I wanted a nice way to be able to switch the content currently being shown (it’s paginated content).  Initially I tried adding and removing the components and altering the values directly - needless to say this did not work.  When I finally did come up with a solution that did work I had all sorts of problems due to swing being an asshole.</p>
+<p>The solution I eventually came up with was to use a JLayeredPane as the content area so that the transition could be shown ABOVE the component, this removes flicker when adding/removing components and it also means we can have the new component in place while the transition is showing… cool, huh?<br>
+To do the transisitons I simply paint the components to a BufferedImage, then use a Transition (a class defined near the bottom of the source) to tween between them.</p>
+<p>Without further ado:</p>
+<p>[code=java5]import javax.swing.<em>;<br>
+import java.awt.</em>;<br>
+import java.awt.image.BufferedImage;</p>
+<p>public class SmoothPageTransitioner extends JPanel implements Runnable {<br>
+private JLayeredPane target;<br>
+private JComponent old;<br>
+private JComponent newP;<br>
+private Thread thread;<br>
+private boolean run = true;<br>
+private long time;<br>
+private int type;<br>
+private BufferedImage back;</p>
+<pre><code>private SmoothPageTransitioner(JLayeredPane target, JComponent old, JComponent newP, long time, int type) {
+    setOpaque(false);
+    int width = old == null ? target.getWidth() : old.getWidth();
+    int height = old == null ? target.getHeight() : old.getHeight();
+    setPreferredSize(new Dimension(width, height));
+    setSize(width, height);
+    this.target = target;
+    this.old = old;
+    this.newP = newP;
+    this.time = time;
+    this.type = type;
+}
+
+@Override
+public void run() {
+    try {
+        int width = old == null ? target == null? getWidth(): target.getWidth() : old.getWidth();
+        int height = old == null ? target == null? getHeight(): target.getHeight() : old.getHeight();
+
+        if (old != null)
+            prepare(old);
+        prepare(target);
+        prepare(newP);
+
+        back = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+        BufferedImage oi = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+        if (old != null)
+            old.paint(oi.getGraphics());
+        Graphics2D t = back.createGraphics();
+        t.drawImage(oi, 0, 0, null);
+        target.add(this, JLayeredPane.PALETTE_LAYER);
+        if(old != null)
+            target.remove(old);
+        newP.setSize(width, height);
+        newP.setPreferredSize(new Dimension(width, height));
+        target.add(newP);
+        target.revalidate();
+
+        BufferedImage ni = clear(new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), target.getBackground());
+        newP.paint(ni.getGraphics());
+
+
+        long curTime = System.currentTimeMillis();
+        long start = curTime;
+        while ((curTime = System.currentTimeMillis()) - start &lt; time &amp;&amp; run) {
+            t.setPaintMode();
+
+            // transition
+            transitions[type].transition((int) (time / 20), (int) ((curTime - start) / 20), t, oi, ni, width, height);
+            repaint();
+
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ignore) {
+                ignore.printStackTrace();
+            }
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    target.remove(this);
+    target.revalidate();
+    target.repaint();
+}
+
+private static void prepare(JComponent jc) {
+    // swing sucks, if the component is double buffered then you get all sorts of shitty artifacts..
+    for (Component c : jc.getComponents())
+        if (c instanceof JComponent)
+            prepare((JComponent) c);
+    jc.setDoubleBuffered(false);
+}
+
+public void stop() {
+    // stop this transition (just skips the rest of the animation...)
+    run = false;
+    try {
+        thread.join();
+    } catch (InterruptedException e) {
+
+    }
+}
+
+public void paint(Graphics g) {
+    g.drawImage(back, 0, 0, null);
+}
+
+public void update(Graphics g) {
+    paint(g);
+}
+
+public static void stopTransition(Container t) {
+    // Check for transition in progress
+    SmoothPageTransitioner oldTran = null;
+    for (Component c : t.getComponents()) {
+        if (c instanceof SmoothPageTransitioner) {
+            oldTran = (SmoothPageTransitioner) c;
+            break;
+        }
+    }
+    if (oldTran != null)
+        oldTran.stop(); // stop last transition
+}
+
+public static void transition(JLayeredPane target, JPanel old, JPanel newP, int time, int type) {
+    if (type == -1)
+        type = (int) (Math.random() * transitions.length);
+    if (time == -1)
+        time = transitions[type].defaultTime;
+
+    SmoothPageTransitioner r = new SmoothPageTransitioner(target, old, newP, time, type);
+    Thread t = new Thread(r);
+    t.setPriority(1);
+    t.setDaemon(true);
+    t.start();
+    r.thread = t;
+}
+
+private static BufferedImage clear(BufferedImage bi, Color c) {
+    Graphics g = bi.getGraphics();
+    g.setColor(c);
+    g.fillRect(0, 0, bi.getWidth(), bi.getHeight());
+    return bi;
+}
+
+private static float getFadeAlpha(int elapsed, int time) {
+    return (float) elapsed * (1.0f / (float) time);
+}
+
+static abstract class Transition {
+    protected int defaultTime = 500;
+
+    public abstract void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height);
+}
+
+public static Transition fadeOut = new Transition() {
+    @Override
+    public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+        float alpha = getFadeAlpha(elapsed, time);
+        g.drawImage(ni, 0, 0, null);
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_ATOP, 1f - alpha));
+        g.drawImage(oi, 0, 0, null);
+    }
+};
+public static Transition fadeOutIn = new Transition() {
+    {
+        defaultTime = 1000;
+    }
+
+    @Override
+    public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+        // fade to 0 within half the time...
+        int pic = elapsed &lt; time / 2 ? 0 : 1;
+        float alpha = getFadeAlpha(elapsed, time) * 2;
+        if (pic == 1)
+            alpha = 1f - (alpha - 1f);
+        if(alpha &gt; 1)
+            alpha = 1f;
+        if(alpha &lt; 0)
+            alpha = 0f;
+
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_ATOP, 1f - alpha));
+        if (pic == 0)
+            g.drawImage(oi, 0, 0, width, height, null);
+        else
+            g.drawImage(ni, 0, 0, width, height, null);
+    }
+};
+
+public static Transition slideRight = new Transition() {
+    @Override
+    public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+        float off = width / (float) time * elapsed;
+        int x = (int) off;
+        g.drawImage(oi, x, 0, null);
+        g.drawImage(ni, -width + x, 0, null);
+    }
+};
+
+public static Transition slideLeft = new Transition() {
+    @Override
+    public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+        float off = width / (float) time * elapsed;
+        int x = (int) off;
+        g.drawImage(oi, -x, 0, null);
+        g.drawImage(ni, width - x, 0, null);
+    }
+};
+
+public static Transition slideUp = new Transition() {
+    @Override
+    public void transition(int time, int elapsed, Graphics2D g, BufferedImage oi, BufferedImage ni, int width, int height) {
+        float off = height / (float) time * elapsed;
+        int y = (int) off;
+        g.drawImage(oi, 0, -y, null);
+        g.drawImage(ni, 0, height - y, null);
+    }
+};
+
+static Transition[] transitions = {fadeOut, fadeOutIn, slideRight, slideLeft, slideUp};
+</code></pre>
+<p>}[/code]</p>
+<p>To re-iterate: to use this source you MUST have your content area as a JLayeredPane (the SmoothPageTransitioner sits on the JLayeredPane.PALETTE_LAYER to remove flicker), and the 2 pages must be subcomponents of JPanel.</p>
+<p>Simply call</p>
+<pre><code class="lang-auto"></code></pre>
+<p>EDIT: As requested, I took a video of the current transitions in action (don’t forget you can write your own, e.g. shrink, grow, spin, whatever!):<br>
+[youtube]<a href="http://www.youtube.com/watch?v=7BPHmD6EVT4%5B/youtube%5D" rel="nofollow noopener">http://www.youtube.com/watch?v=7BPHmD6EVT4[/youtube]</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147/1</link>
+        <pubDate>Sat, 26 May 2012 09:40:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-443147-1</guid>
+        <source url="https://forum.moparisthebest.com/t/src-smooth-transisitons-between-jpanels/443147.rss">[SRC] Smooth transisitons between JPanels</source>
+      </item>
+  </channel>
+</rss>

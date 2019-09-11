@@ -1,0 +1,555 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>HashMap Using Cuckoo Hashing in C++11</title>
+    <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870</link>
+    <description>Cuckoo Hashing is nice because it has worst-case constant time lookups. It was invented in 2001 by Pagh and Rodler. You can read more about it here: https://en.wikipedia.org/wiki/Cuckoo_hashing.
+
+This implementation is resizable, so the two tables expand if needed. It&#39;s recommended you use a power of 2 for the size if you specify one in the constructor. Currently it uses a simple hashing policy by default, and your typical standard allocator for memory allocations. The Hash policy is very simple if you&#39;d like to swap it out for your own custom policy: a `hash` function used to hash keys for the first table, and a `hash2` function for the second table.
+
+hashmap.hh
+[code=cpp]#ifndef HASHMAP_HH
+#define HASHMAP_HH 1
+
+#include &lt;memory&gt;
+#include &lt;utility&gt;
+#include &lt;functional&gt;
+#include &lt;vector&gt;
+#include &quot;hash_policy.hh&quot;
+
+template &lt;
+  typename KeyType,
+  typename ValueType,
+  typename Predicate = std::equal_to&lt;KeyType&gt;,
+  template &lt;typename&gt; class Hash = SimpleHashPolicy,
+  typename Allocator = std::allocator&lt;std::pair&lt;KeyType, ValueType&gt;&gt;
+&gt; class HashMap : public Hash&lt;KeyType&gt; {
+  Allocator allocator;
+  std::size_t tableSize, tableSize2, size;
+  std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt; entries, entries2;
+  Predicate pred;
+
+  const unsigned int getNextPowerOfTwo() const noexcept {
+    unsigned int pow = 2;
+    while (pow * 2 &lt; tableSize) pow *= 2;
+    return pow;
+  }
+
+public:
+  HashMap(const std::size_t size = 64) {
+    if (size &lt;= 1) {
+      throw std::range_error(&quot;Table size must be greater than one.&quot;);
+    }
+
+    this-&gt;size = size;
+    tableSize = size / 2;
+    tableSize2 = size / 2;
+    allocator = Allocator();
+    entries = std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt;(tableSize);
+    entries2 = std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt;(tableSize2);
+    pred = Predicate();
+  }
+
+  ~HashMap() {
+    for (auto&amp; entry : entries) {
+      if (entry != nullptr) {
+        allocator.destroy(entry);
+        allocator.deallocate(entry, 1);
+      }
+    }
+
+    for (auto&amp; entry : entries2) {
+      if (entry != nullptr) {
+        allocator.destroy(entry);
+        allocator.deallocate(entry, 1);
+      }
+    }
+  }
+
+  std::pair&lt;KeyType, ValueType&gt;* get(const KeyType k) const noexcept {
+    const unsigned int entryIndex = Hash&lt;KeyType&gt;::hash(k, tableSize);
+    const unsigned int entryIndex2 = Hash&lt;KeyType&gt;::hash2(k, tableSize2);
+    std::pair&lt;KeyType, ValueType&gt;* element = nullptr;
+    // The element can be in one of two places, get the correct KV-pair.
+    if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {
+      element = entries[entryIndex];
+    } else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {
+      element = entries2[entryIndex2];
+    }
+
+    return element;
+  }
+
+  bool set(const KeyType k, ValueType v) noexcept {
+    unsigned int entryIndex = 0;
+    unsigned int nextPowerOfTwo = getNextPowerOfTwo();
+    unsigned int tries = 0;
+    bool retried = false;
+    std::pair&lt;KeyType, ValueType&gt;* element = allocator.allocate(1);
+    allocator.construct(element, k, v);
+    while (true) {
+      while (tries &lt; nextPowerOfTwo) {
+        entryIndex = Hash&lt;KeyType&gt;::hash(element-&gt;first, tableSize);
+        if (entries[entryIndex] == nullptr) {
+          entries[entryIndex] = element;
+          return true;
+        } else {
+          // Kick-out any already occupying entry.
+          tries++;
+          std::pair&lt;KeyType, ValueType&gt;* tmp = entries[entryIndex];
+          entries[entryIndex] = element;
+          // Use the kicked-out key to hash.
+          entryIndex = Hash&lt;KeyType&gt;::hash2(tmp-&gt;first, tableSize2);
+          // Second table has an empty entry -- put it there.
+          if (entries2[entryIndex] == nullptr) {
+            entries2[entryIndex] = tmp;
+            return true;
+          } else {
+            // Otherwise, kick-out the element there and find a new place for it
+            // in the first table.
+            element = entries2[entryIndex];
+            entries2[entryIndex] = tmp;
+          }
+        }
+
+        tries++;
+      }
+
+      if (retried) {
+        break;
+      }
+
+      size *= 2;
+      tableSize = size / 2;
+      tableSize2 = size / 2;
+      entries.resize(tableSize, nullptr);
+      entries2.resize(tableSize2, nullptr);
+      retried = true;
+      tries = 0;
+      nextPowerOfTwo = getNextPowerOfTwo();
+    }
+
+    return false;
+  }
+
+  bool deleteElement(const KeyType k) noexcept {
+    const unsigned int entryIndex = Hash&lt;KeyType&gt;::hash(k, tableSize);
+    const unsigned int entryIndex2 = Hash&lt;KeyType&gt;::hash2(k, tableSize2);
+    // The element can be in one of two places, delete the correct KV-pair.
+    if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {
+      allocator.destroy(entries[entryIndex]);
+      allocator.deallocate(entries[entryIndex], 1);
+      entries[entryIndex] = nullptr;
+      return true;
+    } else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {
+      allocator.destroy(entries2[entryIndex2]);
+      allocator.deallocate(entries2[entryIndex2], 1);
+      entries2[entryIndex2] = nullptr;
+      return true;
+    }
+
+    return false;
+  }
+
+  bool exists(const KeyType k) const noexcept {
+    const unsigned int entryIndex = Hash&lt;KeyType&gt;::hash(k, tableSize);
+    const unsigned int entryIndex2 = Hash&lt;KeyType&gt;::hash2(k, tableSize2);
+    // The element can be in one of two places, delete the correct KV-pair.
+    if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {
+      return true;
+    } else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {
+      return true;
+    }
+
+    return false;
+  }
+};
+
+#endif
+[/code]
+
+hash_policy.hh
+[code=cpp]#ifndef HASH_POLICY_HH
+#define HASH_POLICY_HH 1
+
+#include &lt;string&gt;
+
+template &lt;typename KeyType&gt;
+struct SimpleHashPolicy {
+  static const unsigned int hash(const KeyType k, const unsigned int tableSize) {
+    return k % tableSize;
+  }
+
+  static const unsigned int hash2(const KeyType k, const unsigned int tableSize) {
+    return static_cast&lt;unsigned int&gt;(k / tableSize) % tableSize;
+  }
+};
+
+#endif
+[/code]
+
+test.cc
+[code=cpp]#include &lt;iostream&gt;
+#include &quot;hashmap.hh&quot;
+
+int main() {
+  try {
+    HashMap&lt;int, int&gt; map;
+    map.set(0, 123);
+    map.set(1, 234);
+    map.set(2, 345);
+    std::cout &lt;&lt; map.get(0)-&gt;second &lt;&lt; &quot; &quot; &lt;&lt; map.get(1)-&gt;second &lt;&lt; &quot; &quot; &lt;&lt; map.get(2)-&gt;second &lt;&lt; std::endl;
+  } catch (const std::range_error&amp; e) {
+    std::cerr &lt;&lt; e.what() &lt;&lt; std::endl;
+  }
+
+  return 0;
+}[/code]</description>
+    
+    <lastBuildDate>Mon, 16 May 2016 03:07:20 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>wtf</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/9</link>
+        <pubDate>Mon, 16 May 2016 03:07:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-9</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@Roar337 Roar337]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/roar337">@Roar337</a> wrote:</p>
+          <blockquote>
+              <p>Did anyone else come here because of a massive legend of zelda nostalgia blast from the word “Cuckoo” &lt;- Yea I know it’s not the same.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/8</link>
+        <pubDate>Sun, 15 May 2016 20:41:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-8</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="554870">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/lothy/40/51_1.png" class="avatar"> Lothy:</div>
+<blockquote>
+<p>I don’t know about ‘ugly’ so much as ‘different’. If you want C++ that’s <em>really</em> hard to understand then check out some parts of the boost library.</p>
+</blockquote>
+</aside>
+<p>Boost’s MPL is especially ugly in my opinion since it’s literally template meta-programming but due to support of older compilers you even need to abuse the hell out of macros to get some things done.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/7</link>
+        <pubDate>Sat, 05 Mar 2016 17:25:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-7</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>I don’t know about ‘ugly’ so much as ‘different’. If you want C++ that’s <em>really</em> hard to understand then check out some parts of the boost library.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/6</link>
+        <pubDate>Sat, 05 Mar 2016 08:10:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-6</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="554870">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/tree/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Tree:</div>
+<blockquote>
+<p>C++ templates are the ugliest thing ever.</p>
+</blockquote>
+</aside>
+<p>Everyone always comments to this effect when I post C++…  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"> ;D :o :rolleyes: :eek: :mad: <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/5</link>
+        <pubDate>Thu, 03 Mar 2016 02:36:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-5</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="554870">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/tree/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Tree:</div>
+<blockquote>
+<p>C++ templates are the ugliest thing ever.</p>
+</blockquote>
+</aside>
+<p>Seconded</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/4</link>
+        <pubDate>Mon, 29 Feb 2016 11:00:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-4</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@Death_Style Death Style]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/death_style">@Death_Style</a> wrote:</p>
+          <blockquote>
+              <p>I googled cuckoo hashing and that led me down a chain of videos and now I know about bloom filters, ty</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/3</link>
+        <pubDate>Mon, 29 Feb 2016 06:41:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-3</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@Tree Tree]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tree">@Tree</a> wrote:</p>
+          <blockquote>
+              <p>C++ templates are the ugliest thing ever.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/2</link>
+        <pubDate>Mon, 29 Feb 2016 05:05:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-2</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+      <item>
+        <title>HashMap Using Cuckoo Hashing in C++11</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>Cuckoo Hashing is nice because it has worst-case constant time lookups. It was invented in 2001 by Pagh and Rodler. You can read more about it here: <a href="https://en.wikipedia.org/wiki/Cuckoo_hashing" rel="nofollow noopener">https://en.wikipedia.org/wiki/Cuckoo_hashing</a>.</p>
+<p>This implementation is resizable, so the two tables expand if needed. It’s recommended you use a power of 2 for the size if you specify one in the constructor. Currently it uses a simple hashing policy by default, and your typical standard allocator for memory allocations. The Hash policy is very simple if you’d like to swap it out for your own custom policy: a <code>hash</code> function used to hash keys for the first table, and a <code>hash2</code> function for the second table.</p>
+<p>hashmap.hh</p>
+<p>[code=cpp]<span class="hashtag">#ifndef</span> HASHMAP_HH<br>
+<span class="hashtag">#define</span> HASHMAP_HH 1</p>
+<p><span class="hashtag">#include</span> <br>
+<span class="hashtag">#include</span> <br>
+<span class="hashtag">#include</span> <br>
+<span class="hashtag">#include</span> <br>
+<span class="hashtag">#include</span> “hash_policy.hh”</p>
+<p>template &lt;<br>
+typename KeyType,<br>
+typename ValueType,<br>
+typename Predicate = std::equal_to,<br>
+template  class Hash = SimpleHashPolicy,<br>
+typename Allocator = std::allocator&lt;std::pair&lt;KeyType, ValueType&gt;&gt;</p>
+<blockquote>
+<p>class HashMap : public Hash {<br>
+Allocator allocator;<br>
+std::size_t tableSize, tableSize2, size;<br>
+std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt; entries, entries2;<br>
+Predicate pred;</p>
+</blockquote>
+<p>const unsigned int getNextPowerOfTwo() const noexcept {<br>
+unsigned int pow = 2;<br>
+while (pow * 2 &lt; tableSize) pow *= 2;<br>
+return pow;<br>
+}</p>
+<p>public:<br>
+HashMap(const std::size_t size = 64) {<br>
+if (size &lt;= 1) {<br>
+throw std::range_error(“Table size must be greater than one.”);<br>
+}</p>
+<pre><code>this-&gt;size = size;
+tableSize = size / 2;
+tableSize2 = size / 2;
+allocator = Allocator();
+entries = std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt;(tableSize);
+entries2 = std::vector&lt;std::pair&lt;KeyType, ValueType&gt;*&gt;(tableSize2);
+pred = Predicate();
+</code></pre>
+<p>}</p>
+<p>~HashMap() {<br>
+for (auto&amp; entry : entries) {<br>
+if (entry != nullptr) {<br>
+allocator.destroy(entry);<br>
+allocator.deallocate(entry, 1);<br>
+}<br>
+}</p>
+<pre><code>for (auto&amp; entry : entries2) {
+  if (entry != nullptr) {
+    allocator.destroy(entry);
+    allocator.deallocate(entry, 1);
+  }
+}
+</code></pre>
+<p>}</p>
+<p>std::pair&lt;KeyType, ValueType&gt;* get(const KeyType k) const noexcept {<br>
+const unsigned int entryIndex = Hash::hash(k, tableSize);<br>
+const unsigned int entryIndex2 = Hash::hash2(k, tableSize2);<br>
+std::pair&lt;KeyType, ValueType&gt;* element = nullptr;<br>
+// The element can be in one of two places, get the correct KV-pair.<br>
+if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {<br>
+element = entries[entryIndex];<br>
+} else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {<br>
+element = entries2[entryIndex2];<br>
+}</p>
+<pre><code>return element;
+</code></pre>
+<p>}</p>
+<p>bool set(const KeyType k, ValueType v) noexcept {<br>
+unsigned int entryIndex = 0;<br>
+unsigned int nextPowerOfTwo = getNextPowerOfTwo();<br>
+unsigned int tries = 0;<br>
+bool retried = false;<br>
+std::pair&lt;KeyType, ValueType&gt;* element = allocator.allocate(1);<br>
+allocator.construct(element, k, v);<br>
+while (true) {<br>
+while (tries &lt; nextPowerOfTwo) {<br>
+entryIndex = Hash::hash(element-&gt;first, tableSize);<br>
+if (entries[entryIndex] == nullptr) {<br>
+entries[entryIndex] = element;<br>
+return true;<br>
+} else {<br>
+// Kick-out any already occupying entry.<br>
+tries++;<br>
+std::pair&lt;KeyType, ValueType&gt;* tmp = entries[entryIndex];<br>
+entries[entryIndex] = element;<br>
+// Use the kicked-out key to hash.<br>
+entryIndex = Hash::hash2(tmp-&gt;first, tableSize2);<br>
+// Second table has an empty entry – put it there.<br>
+if (entries2[entryIndex] == nullptr) {<br>
+entries2[entryIndex] = tmp;<br>
+return true;<br>
+} else {<br>
+// Otherwise, kick-out the element there and find a new place for it<br>
+// in the first table.<br>
+element = entries2[entryIndex];<br>
+entries2[entryIndex] = tmp;<br>
+}<br>
+}</p>
+<pre><code>    tries++;
+  }
+
+  if (retried) {
+    break;
+  }
+
+  size *= 2;
+  tableSize = size / 2;
+  tableSize2 = size / 2;
+  entries.resize(tableSize, nullptr);
+  entries2.resize(tableSize2, nullptr);
+  retried = true;
+  tries = 0;
+  nextPowerOfTwo = getNextPowerOfTwo();
+}
+
+return false;
+</code></pre>
+<p>}</p>
+<p>bool deleteElement(const KeyType k) noexcept {<br>
+const unsigned int entryIndex = Hash::hash(k, tableSize);<br>
+const unsigned int entryIndex2 = Hash::hash2(k, tableSize2);<br>
+// The element can be in one of two places, delete the correct KV-pair.<br>
+if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {<br>
+allocator.destroy(entries[entryIndex]);<br>
+allocator.deallocate(entries[entryIndex], 1);<br>
+entries[entryIndex] = nullptr;<br>
+return true;<br>
+} else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {<br>
+allocator.destroy(entries2[entryIndex2]);<br>
+allocator.deallocate(entries2[entryIndex2], 1);<br>
+entries2[entryIndex2] = nullptr;<br>
+return true;<br>
+}</p>
+<pre><code>return false;
+</code></pre>
+<p>}</p>
+<p>bool exists(const KeyType k) const noexcept {<br>
+const unsigned int entryIndex = Hash::hash(k, tableSize);<br>
+const unsigned int entryIndex2 = Hash::hash2(k, tableSize2);<br>
+// The element can be in one of two places, delete the correct KV-pair.<br>
+if (entries[entryIndex] != nullptr &amp;&amp; pred(entries[entryIndex]-&gt;first, k)) {<br>
+return true;<br>
+} else if (entries2[entryIndex2] != nullptr &amp;&amp; pred(entries2[entryIndex2]-&gt;first, k)) {<br>
+return true;<br>
+}</p>
+<pre><code>return false;
+</code></pre>
+<p>}<br>
+};</p>
+<p><span class="hashtag">#endif</span><br>
+[/code]</p>
+<p>hash_policy.hh</p>
+<p>[code=cpp]<span class="hashtag">#ifndef</span> HASH_POLICY_HH<br>
+<span class="hashtag">#define</span> HASH_POLICY_HH 1</p>
+<p><span class="hashtag">#include</span> </p>
+<p>template <br>
+struct SimpleHashPolicy {<br>
+static const unsigned int hash(const KeyType k, const unsigned int tableSize) {<br>
+return k % tableSize;<br>
+}</p>
+<p>static const unsigned int hash2(const KeyType k, const unsigned int tableSize) {<br>
+return static_cast(k / tableSize) % tableSize;<br>
+}<br>
+};</p>
+<p><span class="hashtag">#endif</span><br>
+[/code]</p>
+<p>test.cc</p>
+<p>[code=cpp]<span class="hashtag">#include</span> <br>
+<span class="hashtag">#include</span> “hashmap.hh”</p>
+<p>int main() {<br>
+try {<br>
+HashMap&lt;int, int&gt; map;<br>
+map.set(0, 123);<br>
+map.set(1, 234);<br>
+map.set(2, 345);<br>
+std::cout &lt;&lt; map.get(0)-&gt;second &lt;&lt; " " &lt;&lt; map.get(1)-&gt;second &lt;&lt; " " &lt;&lt; map.get(2)-&gt;second &lt;&lt; std::endl;<br>
+} catch (const std::range_error&amp; e) {<br>
+std::cerr &lt;&lt; e.what() &lt;&lt; std::endl;<br>
+}</p>
+<p>return 0;<br>
+}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870/1</link>
+        <pubDate>Mon, 29 Feb 2016 00:39:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554870-1</guid>
+        <source url="https://forum.moparisthebest.com/t/hashmap-using-cuckoo-hashing-in-c-11/554870.rss">HashMap Using Cuckoo Hashing in C++11</source>
+      </item>
+  </channel>
+</rss>

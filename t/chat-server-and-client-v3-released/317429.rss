@@ -1,0 +1,1131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Chat Server and Client! V3 Released!</title>
+    <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429</link>
+    <description>[center][size=20pt]Chat Server 
+By Davidi2 (Daddy1 on R-L)[/size][/center]
+[u][b]Current Features:[/b][/u]
+
+[ul][li]Connect[/li]
+[li]Chat, all can see[/li]
+[li]Simple GUI[/li]
+[li]Username Editing[/li]
+[li]Color Coding[/li]
+[li]User List + Updating[/li]
+[li]Ban[/li][/ul]
+
+[u][b]Features to Come:[/b][/u]
+
+[ul][li]Other Commands[/li]
+[li]Private Messaging[/li][/ul]
+
+
+This works on the same principles as a RSPS, as it hosts a server at your IP (and a port of your choosing), and allows my client to connect to it from anywhere with internet access. 
+[img]http://img6.imageshack.us/img6/5772/clienthj.png[/img]
+NOTE: I do not show all code classes, only the important ones.
+
+[u][b]ChatServer.java[/b][/u]
+[code]import java.io.*;
+import java.net.*;
+import java.util.*;
+
+public class ChatServer extends ConnectionManager {
+	public boolean serverRunning = true;
+	ServerSocket serverSocket = null;
+	public static User[] users = new User[500];
+	public String splitter = &quot;\\|\\|\\|\\|&quot;;
+	public ChatServer(int port) throws Exception {
+		try {
+			serverSocket = new ServerSocket(port);
+			System.out.println(&quot;ChatServer started on port: &quot;+port);
+		}
+		catch (IOException e) {
+			System.out.println(&quot;Could not start server on port: &quot; +port);
+			System.exit(-1);
+		}
+	}
+
+	public void run() {
+		Socket socket = null;
+		while (serverRunning) {
+			try {
+				socket = serverSocket.accept();
+				socket.setTcpNoDelay(true);
+				System.out.println(&quot;Connection Accepted from: &quot; + getAddress(socket));
+				int id = getFreeId();
+				if (id != -1) {
+					users[id] = new User(socket, id, this);
+					sockets[id] = socket;
+				}
+				else {
+					socket.close();
+				}
+				String filename = (&quot;./BannedHosts/&quot; + getAddress(socket) + &quot;.dat&quot;);
+				File banned = new File(filename);
+				if (banned.exists()) {
+					try {
+						users[id].rwSocket.write(&quot;09You have been banned from this server.\nPlease refer to the hoster for more details.&quot;);
+					}
+					catch (Exception e) {
+					}
+					try {
+						socket.close();
+						users[id].destruct();
+					}
+					catch (IOException e) {
+						e.printStackTrace();
+					}
+					sockets[id] = null;
+					users[id] = null;
+				}
+				else {
+					outputAll(&quot;14&quot; + users[id].username + splitter + &quot;11&quot; + users[id].username + &quot; has joined the channel!&quot;);
+					setUserList();
+				}
+			}
+			catch (IOException e) {
+				System.out.println(&quot;Client accept failed.&quot;);
+				System.exit(-1);
+			}
+		}
+	}
+
+	public int getFreeId() {
+		for (int i = 0; i &lt; sockets.length; i++) {
+			if (sockets[i] != null) {
+				continue;
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	public void setUserList() {
+		String userList = (splitter+&quot;16&quot;);
+		for(User u : users) {
+			if(u != null &amp;&amp; u.username.length() &gt; 0) {
+				userList += (u.username + &quot;\&quot;&quot;);
+			} 
+		}
+		for(User u : users) {
+			try {
+				u.rwSocket.write(userList);
+			}
+			catch(Exception e) {
+			}
+		}
+	}
+	
+	public void outputAll(String message) {
+		for(User u : users) {
+			if(u != null &amp;&amp; getAddress(u.socket) != &quot;0.0.0.0&quot;) {
+				try {
+					u.rwSocket.write(message);
+				}
+				catch(Exception e) {
+				}
+			}
+		}
+	}
+		
+}[/code]
+
+[u][b]UserSocket.java[/b][/u] (this is where the magic happens IMO)
+[code]import java.net.*;
+import java.io.*;
+import java.lang.*;
+
+public class UserSocket {
+
+    public User user;
+    public Socket socket;
+    public InputStream input;
+    public OutputStream output;
+    public ObjectOutputStream oos;
+    public String splitter = &quot;\\|\\|\\|\\|&quot;;
+
+    
+    public UserSocket(User p, Socket s) {
+	user = p;
+        socket = s;
+        try {
+            input = socket.getInputStream();
+            output = socket.getOutputStream();
+	} catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public int read() throws Exception {
+	if (input == null || input.available() &lt; 1) {
+            return -1;
+        }
+	byte[] userInputB = new byte[input.available()];
+	input.read(userInputB);
+	String userInput = new String(userInputB);
+	String packetId = userInput.substring(0, 2);
+	handleInput(userInput.substring(2), packetId);
+	return 0;
+   }
+
+    public void write(byte[] b) throws Exception {
+        if (socket == null) {
+            return;
+        }
+        output.write(b);
+    }
+
+    public void write(String s) throws Exception {
+        if (socket == null) {
+            return;
+        }
+	byte[] b = s.getBytes();
+        output.write(b);
+    }
+	
+    public void writeUsers(Object users) {
+	try {	
+		oos.writeObject(users);
+	}
+	catch (IOException e) {
+		e.printStackTrace();
+	}
+    }
+
+	public void handleInput(String input, String packetId) {
+		int packet = Integer.parseInt(packetId);
+		switch (packet) {
+			case 10: //Normal Text
+				if(input != &quot;&quot;) {
+					user.cs.outputAll(&quot;10[&quot; + user.username + &quot;]: &quot;+input);
+				}
+			break;
+
+			case 11: //Username Change
+				boolean taken = false;
+				for (User u : user.cs.users) {
+					if(u != null) {
+						if(input.equalsIgnoreCase(u.username)) {
+							taken = true;
+							try {
+								write(&quot;09That username is in-use!&quot;);
+							}
+							catch (Exception e) {
+								e.printStackTrace();
+							}
+							return;
+						}
+					}
+				}
+				if(taken == false &amp;&amp; input.length() &lt; 13 &amp;&amp; !input.equalsIgnoreCase(&quot;server&quot;) &amp;&amp; !input.contains(&quot;;&quot;) &amp;&amp; !input.contains(&quot;\&quot;&quot;) &amp;&amp; !input.contains(&quot;\\&quot;) &amp;&amp; !input.contains(&quot;}&quot;) 
+                                     &amp;&amp; !input.contains(&quot;{&quot;) &amp;&amp; !input.contains(&quot;[&quot;) &amp;&amp; !input.contains(&quot;]&quot;) &amp;&amp; !input.contains(&quot;)&quot;) &amp;&amp; !input.contains(&quot;(&quot;)) {
+					user.cs.outputAll(&quot;11&quot; + user.username + &quot; is now known as &quot; + input + splitter + &quot;15&quot; +user.username + &quot;\&quot;&quot; +input);
+					user.username = input;
+				}
+				else {
+					try {
+						write(&quot;09That username contains invalid characters or is too long! (Max 12)&quot;);
+					}	
+					catch (Exception e) {
+						e.printStackTrace();
+					}
+				}
+			break;
+
+			case 12: //Command (starts with /)
+				if(input.startsWith(&quot;ban&quot;)) {
+					boolean ban = false;
+					for (User u : user.cs.users) {
+						if(u != null) {
+							if(u.username.equalsIgnoreCase(input.substring(4))) {
+								try {
+									ban = new File(&quot;./BannedHosts/&quot; + u.cs.getAddress(socket) + &quot;.dat&quot;).createNewFile();
+								}
+								catch (IOException e) {
+									e.printStackTrace();
+								}
+								if(ban) {
+									user.cs.outputAll(&quot;11&quot; + input.substring(4) + &quot; has been ip-banned!&quot;);
+									try {
+										u.socket.close();
+									}
+									catch (IOException e) {
+									}
+									u.cs.sockets[u.userID] = null;
+									u.cs.users[u.userID] = null;
+									user.destruct();
+								}
+								return;
+							 }	
+						}
+					}
+				}	
+			break;
+			
+			case 14: //Quit
+				System.out.println(&quot;14&quot;);
+				user.cs.outputAll(&quot;11&quot; + user.username + &quot; has quit.&quot;);
+				user.cs.setUserList();
+				user.destruct();
+			break;
+		}
+	}
+
+}
+[/code]
+That&#39;s it! You can also download the files below which has them in the correct folders ect, if you can&#39;t quite figure it out. 
+Now for the Client.
+
+[u][b]ChatClient.java[/b][/u]
+[code] import java.awt.*; 
+ import java.awt.event.*; 
+ import javax.swing.*;
+ import javax.swing.text.StyleConstants; 
+ import javax.swing.event.*; 
+ import java.net.*;
+ import java.io.*;
+ import java.util.*;
+ import javax.swing.text.SimpleAttributeSet;
+ public class ChatClient extends JFrame 
+ { 
+ 	private JToggleButton UsernameButton; 
+ 	private JTextField MsgTextBox; 
+ 	private JTextField Username; 
+ 	private JTextPane ChatArea; 
+ 	private JScrollPane jScrollPane2; 
+ 	private JButton SendButton; 
+ 	private JButton ExitButton; 
+	private JScrollPane jScrollPane1;
+ 	private JPanel contentPane; 
+	private OutputStream out = null;
+	private Socket socket;
+	private ClientThread CT;
+	private JList userList;
+	private ArrayList users = new ArrayList();
+	private ArrayList blank = new ArrayList();
+   	public ChatClient(String address, String port) 
+ 	{ 
+  		initializeComponent(address); 
+ 		this.setVisible(true);
+        	Socket echoSocket = null;
+		boolean connected = true;
+		BufferedReader input = null;
+        	try {
+            		echoSocket = new Socket(address, Integer.parseInt(port));
+			socket = echoSocket;
+            		out = echoSocket.getOutputStream();
+        	} catch (UnknownHostException e) {
+           		System.err.println(&quot;Don&#39;t know about host: &quot;+address+&quot;.&quot;);
+            		System.exit(1);
+       		} catch (IOException e) {
+            		System.err.println(&quot;Couldn&#39;t get I/O for the connection to: &quot; +address+&quot;.&quot;);
+            		System.exit(1);
+        	}
+		CT = new ClientThread(echoSocket, this);
+		CT.start();
+ 	} 
+  
+ 	private void initializeComponent(String address) 
+ 	{ 
+ 		UsernameButton = new JToggleButton(); 
+ 		MsgTextBox = new JTextField(); 
+ 		Username = new JTextField();
+		userList = new JList();
+		MouseListener mouseListener = new MouseAdapter() {
+    			public void mouseClicked(MouseEvent e) {
+        		if (e.getClickCount() == 2) {
+            				int index = userList.locationToIndex(e.getPoint());
+            				System.out.println(&quot;Double clicked on Item &quot; + index);
+         			}
+    			}
+		};
+		userList.addMouseListener(mouseListener);
+ 		ChatArea = new JTextPane();
+		jScrollPane1 = new JScrollPane();
+		jScrollPane2 = new JScrollPane();
+		jScrollPane2.setViewportView(userList);
+		jScrollPane2.setComponentOrientation(ComponentOrientation.RIGHT_TO_LEFT);
+ 		SendButton = new JButton(); 
+		userList.setComponentOrientation(ComponentOrientation.RIGHT_TO_LEFT);
+ 		ExitButton = new JButton(); 
+ 		contentPane = (JPanel)this.getContentPane(); 
+ 		UsernameButton.setText(&quot;Change Username&quot;); 
+ 		UsernameButton.addMouseListener(new MouseAdapter() { 
+ 			public void mouseClicked(MouseEvent e) 
+ 			{ 
+ 				UsernameButton_mouseClicked(e); 
+ 			} 
+  
+ 		}); 
+  		userList.setListData(users.toArray());
+		userList.setSelectionBackground(Color.white);
+		userList.setSelectionForeground(Color.red.darker());
+ 		MsgTextBox.setText(&quot;Message&quot;); 
+  		MsgTextBox.addKeyListener(new KeyAdapter() { 
+ 			public void keyPressed(KeyEvent e) 
+ 			{ 
+ 				MsgTextBox_keyPressed(e); 
+ 			} 
+  
+ 		}); 
+
+ 		Username.addKeyListener(new KeyAdapter() { 
+ 			public void keyPressed(KeyEvent e) 
+ 			{ 
+ 				Username_keyPressed(e); 
+ 			} 
+  
+ 		}); 
+ 
+ 		ChatArea.setDisabledTextColor(new Color(0, 0, 0)); 
+ 		thisOnly(&quot;Welcome to the chat server on: &quot; + address); 
+ 		ChatArea.setToolTipText(&quot;Displays messages&quot;); 
+		ChatArea.setFont(new Font(&quot;Times New Roman&quot;, Font.PLAIN, 14));
+ 		ChatArea.setEditable(false); 
+ 		jScrollPane1.setViewportView(ChatArea); 
+ 		SendButton.setText(&quot;Send Message&quot;); 
+ 		SendButton.addMouseListener(new MouseAdapter() { 
+ 			public void mouseClicked(MouseEvent e) 
+ 			{ 
+ 				SendButton_mouseClicked(e); 
+ 			} 
+  
+ 		});  
+ 		ExitButton.setText(&quot;Quit&quot;); 
+ 		ExitButton.addMouseListener(new MouseAdapter() { 
+ 			public void mouseClicked(MouseEvent e) 
+ 			{ 
+ 				ExitButton_mouseClicked(e); 
+ 			} 
+  
+ 		}); 
+ 		contentPane.setLayout(null); 
+ 		addComponent(contentPane, UsernameButton, 485,319,124,25); 
+ 		addComponent(contentPane, MsgTextBox, 7,292,475,22); 
+ 		addComponent(contentPane, Username, 353,321,128,22); 
+ 		addComponent(contentPane, jScrollPane1, 6,6,475,280); 
+ 		addComponent(contentPane, SendButton, 485,290,124,25); 
+ 		addComponent(contentPane, ExitButton, 6,319,83,28); 
+ 		addComponent(contentPane, jScrollPane2, 485,6,122,280); 
+ 		this.setTitle(&quot;ChatClient&quot;); 
+ 		this.setLocation(new Point(100, 100)); 
+ 		this.setSize(new Dimension(635, 385)); 
+ 		this.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE); 
+ 		this.setResizable(false); 
+		this.addWindowListener(new WindowAdapter(){
+      			public void windowClosing(WindowEvent we){ 
+				write(&quot;&quot;, &quot;14&quot;);
+				try { 
+					out.close();
+				}
+				catch (Exception i) {
+				}
+				CT.reading = false;
+     			 }
+   		 });
+ 	} 
+  
+ 	private void addComponent(Container container,Component c,int x,int y,int width,int height) 
+ 	{ 
+ 		c.setBounds(x,y,width,height); 
+ 		container.add(c); 
+ 	} 
+  
+ 	private void UsernameButton_mouseClicked(MouseEvent e) 
+ 	{ 
+		if(Username.getText().contains(&quot; &quot;) || Username.getText().length() &lt; 1) {
+			error(&quot;\nYour nick cannot contain spaces, use \&quot;_\&quot; instead.&quot;);
+		}
+		else {
+			write(Username.getText(), &quot;11&quot;);
+			Username.setText(&quot;&quot;);
+		}
+  	} 
+  
+ 	private void MsgTextBox_keyPressed(KeyEvent e) 
+ 	{ 
+		int i = e.getKeyChar();
+ 		if(i == 10) {
+			if(MsgTextBox.getText() != &quot;&quot;) {
+				if(MsgTextBox.getText().startsWith(&quot;/&quot;)) {
+					write(MsgTextBox.getText().substring(1), &quot;12&quot;);//Command
+					MsgTextBox.setText(&quot;&quot;);
+				}
+				else {
+					write(MsgTextBox.getText(), &quot;10&quot;);
+					MsgTextBox.setText(&quot;&quot;);
+				}
+			}
+		}
+			 
+   	} 
+  
+ 	private void Username_keyPressed(KeyEvent e) 
+ 	{ 
+		int i = e.getKeyChar();
+ 		if(i == 10) {
+			if(Username.getText().contains(&quot; &quot;) || Username.getText().length() &lt; 1) {
+				error(&quot;\nYour nick cannot contain spaces, use \&quot;_\&quot; instead.&quot;);
+			}
+			else {
+				write(Username.getText(), &quot;11&quot;);
+				Username.setText(&quot;&quot;);
+			}
+		}
+			 
+  
+ 	} 
+  
+ 	private void SendButton_mouseClicked(MouseEvent e) 
+ 	{ 
+		if(MsgTextBox.getText().length() &gt; 0) {
+			if(MsgTextBox.getText().startsWith(&quot;/&quot;)) {
+				write(MsgTextBox.getText().substring(1), &quot;12&quot;);//Command
+				MsgTextBox.setText(&quot;&quot;);
+			}
+			else {
+				write(MsgTextBox.getText(), &quot;10&quot;);
+				MsgTextBox.setText(&quot;&quot;);
+			}
+		}
+  
+ 	} 
+  
+ 	private void ExitButton_mouseClicked(MouseEvent e) 
+ 	{ 
+		write(&quot;Quit&quot;, &quot;14&quot;);
+		try {
+			socket.close();
+		} 
+		catch (Exception a) {
+		}
+		CT.reading = false;
+ 		System.exit(1);
+  
+ 	} 
+
+	public static void main(String[] args) 
+ 	{ 
+		JFrame.setDefaultLookAndFeelDecorated(true); 
+ 		JDialog.setDefaultLookAndFeelDecorated(true); 
+ 		try 
+ 		{ 
+ 			UIManager.setLookAndFeel(&quot;com.sun.java.swing.plaf.windows.WindowsLookAndFeel&quot;); 
+ 		} 
+ 		catch (Exception ex) 
+ 		{ 
+ 			System.out.println(ex); 
+ 		} 
+ 		new ChatClient(args[0], args[1]); 
+ 	}
+	
+	public void parseInput(String input) { //All = 10, ServerAll = 11, thisOnly = 12 newUser = 14
+		String finalInput = (input.substring(2));
+		if(input.startsWith(&quot;12&quot;)) {
+			thisOnly(&quot;\n&quot; + finalInput);
+		}
+		if(input.startsWith(&quot;09&quot;)) {
+			error(&quot;\n&quot; + finalInput);
+		}
+		else if(input.startsWith(&quot;11&quot;)) {
+			serverAll(&quot;\n&quot; + finalInput);
+		}
+		else if(input.startsWith(&quot;10&quot;)) {
+			all(&quot;\n&quot; + finalInput);
+		}
+		else if(input.startsWith(&quot;14&quot;)) {
+			addUser(finalInput);
+		}
+		else if(input.startsWith(&quot;15&quot;)) {
+			String newUser = finalInput.substring(finalInput.indexOf(&quot;\&quot;&quot;)+1);
+			String oldUser = finalInput.substring(0, finalInput.indexOf(&quot;\&quot;&quot;));
+			changeUser(oldUser, newUser);
+		}
+		else if(input.startsWith(&quot;16&quot;)) {
+			setUserList(finalInput);
+		}
+		ChatArea.selectAll();
+	}
+
+	public void write(String output, String packet) {
+		packet += output;  //Adds the packet ID with the data.
+	    	byte[] outputB = packet.getBytes();
+		try {		
+	    		out.write(outputB);
+		}
+		catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public void all(String msg) {
+        	SimpleAttributeSet sas = new SimpleAttributeSet();
+        	StyleConstants.setForeground(sas, Color.black);
+        	try {
+        		ChatArea.getStyledDocument().insertString(ChatArea.getStyledDocument().getLength(), msg, sas);
+        	} 
+		catch (Exception e) {
+            		e.printStackTrace();
+        	}
+	}
+
+	public void serverAll(String msg) {
+        	SimpleAttributeSet sas = new SimpleAttributeSet();
+        	StyleConstants.setForeground(sas, Color.blue.darker());
+        	try {
+        		ChatArea.getStyledDocument().insertString(ChatArea.getStyledDocument().getLength(), msg, sas);
+        	} 
+		catch (Exception e) {
+            		e.printStackTrace();
+        	}
+	}
+    
+	public void thisOnly(String msg) {
+        	SimpleAttributeSet sas = new SimpleAttributeSet();
+        	StyleConstants.setForeground(sas, Color.green.darker().darker());
+        	try {
+        		ChatArea.getStyledDocument().insertString(ChatArea.getStyledDocument().getLength(), msg, sas);
+        	} 
+		catch (Exception e) {
+            		e.printStackTrace();
+        	}
+    	}
+
+	public void error(String msg) {
+        	SimpleAttributeSet sas = new SimpleAttributeSet();
+        	StyleConstants.setForeground(sas, Color.red.darker());
+        	try {
+        		ChatArea.getStyledDocument().insertString(ChatArea.getStyledDocument().getLength(), msg, sas);
+        	} 
+		catch (Exception e) {
+            		e.printStackTrace();
+        	}
+    	}
+	
+	public void changeUser(String user, String newUser) {
+		for(int i = 0; i &lt; userList.getModel().getSize(); i++) {
+    			if(user.equals((String)userList.getModel().getElementAt(i))) {
+				users.remove(i);
+				users.add(i, newUser);
+				userList.setListData(users.toArray());
+				return;
+			}
+		}   
+    	}
+
+	public void addUser(String user) {
+		 	users.add(user);
+			userList.setListData(users.toArray());	
+	}
+
+	public void setUserList(String usersd) {
+		blank.add(&quot;&quot;);
+		userList.setListData(blank.toArray());
+		blank.remove(0);
+		String[] userListd = usersd.split(&quot;\&quot;&quot;); 
+		users.clear();
+		for(int i = 0; i &lt; userListd.length; i++) {
+			if(userListd[i] != null &amp;&amp; userListd[i].length() &gt; 0) {
+				users.add(userListd[i]);
+			}
+		}
+		userList.setListData(users.toArray());
+	}
+}
+[/code]
+[u][b]ClientThread.java[/b][/u]
+[code]import java.io.*;
+import java.net.*;
+import java.lang.*;
+import java.util.*;
+
+public class ClientThread extends Thread {
+    public InputStream input;
+    public Socket socket = null;
+    public boolean reading = true;
+    public ChatClient cs;
+
+    public ClientThread(Socket socket, ChatClient chs) {
+    	this.socket = socket;
+	this.cs = chs;
+    }
+
+	public void run() {
+		while (reading) {
+			readData();
+			try {
+				Thread.sleep(1);
+			}
+			catch (InterruptedException e) {
+      			e.printStackTrace();
+       			}
+		}
+	}
+	
+	public void readData() {
+		try { 
+			input = socket.getInputStream();
+			if (input == null || input.available() &lt; 1) {
+            			return;
+        		}
+			byte[] serverInputB = new byte[input.available()];
+			input.read(serverInputB);
+			String splitter = &quot;\\|\\|\\|&quot;;
+			String serverInput = new String(serverInputB);
+			if(serverInput.contains(splitter)) {
+				String[] finalInput = serverInput.split(&quot;\\|&quot;);
+				for(int i = 0; i &lt; finalInput.length; i++) {
+					if(finalInput[i].length() &gt; 2) {
+						cs.parseInput(finalInput[i].replace(&quot;\\&quot;, &quot;&quot;));
+					}
+				}
+			}
+			else {
+				cs.parseInput(serverInput);
+			}
+
+		}
+		catch (IOException e) {
+			//e.printStackTrace();
+		}
+	}
+}[/code]
+Now if you want to download them all without any of that C+P, here you go: (includes class files)
+[b][u]ChatClient:[/u][/b] http://uppit.com/v/RNMP8IAG
+[u][b]ChatServer:[/b][/u] http://uppit.com/v/6JN0VT04</description>
+    
+    <lastBuildDate>Sun, 14 Nov 2010 23:34:11 +0000</lastBuildDate>
+    <category>General Discussion</category>
+    <atom:link href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Guys the new chat server is released in the General Programming section. Check that one out instead.</p>
+<p>REQ LOCK</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/170">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/170</link>
+        <pubDate>Sun, 14 Nov 2010 23:34:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-170</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@Andrew_Ferguson The317Guy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/andrew_ferguson">@Andrew_Ferguson</a> wrote:</p>
+          <blockquote>
+              <p>Dude this is just awesome! I wish you had 199 rep so I could rep++ you <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/169">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/169</link>
+        <pubDate>Sun, 14 Nov 2010 23:06:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-169</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@skander1345 skander1345]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/skander1345">@skander1345</a> wrote:</p>
+          <blockquote>
+              <p>hm, sorry for gravedig, but…<br>
+how do i change the ip that the client auto logs in to…</p>
+<p>how do i ban someone?</p>
+<p>how do i become admin…</p>
+<p>-Thanks</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/168">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/168</link>
+        <pubDate>Sun, 14 Nov 2010 22:18:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-168</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“hmsp, post:165, topic:317429”]Horrible , mine is better .[/quote]Mhmm. I doubt you even made one.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/167">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/167</link>
+        <pubDate>Mon, 12 Apr 2010 18:13:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-167</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@00Parker00 00Parker00]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/00parker00">@00Parker00</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BigBean, post:20, topic:317429”]This is a bad idea i think i mean chat? this will soonly become a chat room…if this stuff doesnt stop this is trash.</p>
+<p>And i quote<br>
+my ip is 127.0.0.1 pls chat with me!!!<br>
+What’s your IP? I WANNA CHAT!</p>
+<p>this is a terrible terrible idea and shouldnt have been done[/quote]</p>
+<p>leave david alone he did amzing work!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/166">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/166</link>
+        <pubDate>Mon, 12 Apr 2010 04:30:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-166</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@hmsp hmsp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hmsp">@hmsp</a> wrote:</p>
+          <blockquote>
+              <p>Horrible , mine is better .</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/165">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/165</link>
+        <pubDate>Mon, 12 Apr 2010 02:46:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-165</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Flame pkz, post:163, topic:317429”]<code>public static User[] users = new User[500];</code></p>
+<p>The hell are you thinking?[/quote]What?</p>
+<p>It’s just an array of 500. RSPS’s do the same thing with sockets…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/164">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/164</link>
+        <pubDate>Wed, 07 Apr 2010 19:00:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-164</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@Flame_pkz Flame pkz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/flame_pkz">@Flame_pkz</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">public static User[] users = new User[500];</code></pre>
+<p>The hell are you thinking?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/163">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/163</link>
+        <pubDate>Wed, 07 Apr 2010 18:56:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-163</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“runedsoul1, post:161, topic:317429”][quote author=I Yaa I link=topic=413964.msg3048363#msg3048363 date=1259942326]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>What’s your IP? I WANNA CHAT!</p>
+</blockquote>
+</aside>
+<p>my ip is 127.0.0.1 pls chat with me!!!<br>
+[/quote]</p>
+<p>127.0.0.1 is local host… either he’s an idiot…<br>
+or it was a joke…and you bean are an idiot for not know it was local host and thinking it was an act ip.[/quote]It was a joke and we were all playing along.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/162">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/162</link>
+        <pubDate>Wed, 07 Apr 2010 13:52:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-162</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@runedsoul1 runedsoul1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/runedsoul1">@runedsoul1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“I Yaa I, post:17, topic:317429”][quote author=Davidi2 link=topic=413964.msg3047964#msg3047964 date=1259893509]<br>
+What’s your IP? I WANNA CHAT!<br>
+[/quote]</p>
+<p>my ip is 127.0.0.1 pls chat with me!!![/quote]</p>
+<p>127.0.0.1 is local host… either he’s an idiot…<br>
+or it was a joke…and you bean are an idiot for not know it was local host and thinking it was an act ip.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/161">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/161</link>
+        <pubDate>Wed, 07 Apr 2010 06:58:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-161</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Dell, post:159, topic:317429”][quote author=Newty link=topic=413964.msg3048117#msg3048117 date=1259903516]<br>
+I highly doubt that you wrote this yourself. Not that it is that amazing, I just don’t believe you are capable of something like this (based on your previous work)<br>
+[/quote]<br>
+i’ve seen this before aswell, he leeched it.[/quote]You are a liar my friend. Unless you mean on R-L, because I released it there to. (daddy1)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/160">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/160</link>
+        <pubDate>Wed, 07 Apr 2010 04:39:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-160</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@Dell Dell]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dell">@Dell</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="11" data-topic="317429">
+<div class="title">
+<div class="quote-controls"></div>
+ Newty:</div>
+<blockquote>
+<p>I highly doubt that you wrote this yourself. Not that it is that amazing, I just don’t believe you are capable of something like this (based on your previous work)</p>
+</blockquote>
+</aside>
+<p>i’ve seen this before aswell, he leeched it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/159">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/159</link>
+        <pubDate>Mon, 05 Apr 2010 22:58:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-159</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@pl0x15 pl0x15]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pl0x15">@pl0x15</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AMERIKA, post:7, topic:317429”]move this to general discussion. this isnt a rs2 server.[/quote]r0fl it doesn’t have to be a server, its a download you can chat about servers. OWNED</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/158">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/158</link>
+        <pubDate>Mon, 05 Apr 2010 21:47:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-158</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“CoonHunter, post:156, topic:317429”][quote author=Davidi2 link=topic=413964.msg3091655#msg3091655 date=1262930332]<br>
+I made it so that when you close it, it logs you out yes.</p>
+<p>However, I have not released that version (along with PM capabilities) because I do not feel an urge to release things I will get flamed for.<br>
+[/quote]</p>
+<p>Hmm, wanna talk on msn about it?</p>
+<p><a href="mailto:kenshin1388@hotmail.com">kenshin1388@hotmail.com</a>[/quote]<br>
+Not really. I don’t use MSN</p>
+<p>(sorry for late reply)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/157">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/157</link>
+        <pubDate>Mon, 18 Jan 2010 08:55:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-157</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@CoonHunter CoonHunter]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/coonhunter">@CoonHunter</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:148, topic:317429”]I made it so that when you close it, it logs you out yes.</p>
+<p>However, I have not released that version (along with PM capabilities) because I do not feel an urge to release things I will get flamed for.[/quote]</p>
+<p>Hmm, wanna talk on msn about it?</p>
+<p><a href="mailto:kenshin1388@hotmail.com">kenshin1388@hotmail.com</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/156">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/156</link>
+        <pubDate>Sun, 10 Jan 2010 04:01:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-156</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@CAPT_AMERIKA AMERIKA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/capt_amerika">@CAPT_AMERIKA</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:154, topic:317429”][quote author=AMERIKA link=topic=413964.msg3091846#msg3091846 date=1262958109]<br>
+omfg david u r gawd @ coding jaba!!! pls teech me<br>
+[/quote]Stop the Troll.[/quote]<br>
+Troll? Me no troll!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/155">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/155</link>
+        <pubDate>Fri, 08 Jan 2010 23:01:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-155</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AMERIKA, post:151, topic:317429”]omfg david u r gawd @ coding jaba!!! pls teech me[/quote]Stop the Troll.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/154">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/154</link>
+        <pubDate>Fri, 08 Jan 2010 20:13:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-154</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@marcbob marcbob]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/marcbob">@marcbob</a> wrote:</p>
+          <blockquote>
+              <p>i love it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/153">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/153</link>
+        <pubDate>Fri, 08 Jan 2010 16:13:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-153</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@G_D_s G  D  s]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/g_d_s">@G_D_s</a> wrote:</p>
+          <blockquote>
+              <p>plawks cann yuu takl nawmelly, nad he mite ave time to teech yuu</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/152">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/152</link>
+        <pubDate>Fri, 08 Jan 2010 13:46:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-152</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@CAPT_AMERIKA AMERIKA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/capt_amerika">@CAPT_AMERIKA</a> wrote:</p>
+          <blockquote>
+              <p>omfg david u r gawd @ coding jaba!!! pls teech me</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/151">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/151</link>
+        <pubDate>Fri, 08 Jan 2010 13:41:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-151</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@G_D_s G  D  s]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/g_d_s">@G_D_s</a> wrote:</p>
+          <blockquote>
+              <p>David, this is to be honest Pure Genius.<br>
+You should add the login screen, because people who will flame you for it are just jealous they can’t code aswell as you <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"><br>
+Keep it up, Good job <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/150">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/150</link>
+        <pubDate>Fri, 08 Jan 2010 13:32:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-150</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@joepkz2008 joepkz2008]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joepkz2008">@joepkz2008</a> wrote:</p>
+          <blockquote>
+              <p>look very nice david i would rep you if i had anof rep and if you didnt have 200 well done 10/10 mate keep up to good work !!!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/149">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/149</link>
+        <pubDate>Fri, 08 Jan 2010 10:14:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-149</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>I made it so that when you close it, it logs you out yes.</p>
+<p>However, I have not released that version (along with PM capabilities) because I do not feel an urge to release things I will get flamed for.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/148">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/148</link>
+        <pubDate>Fri, 08 Jan 2010 05:58:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-148</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@CoonHunter CoonHunter]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/coonhunter">@CoonHunter</a> wrote:</p>
+          <blockquote>
+              <p>Well, im not sure if its fixed now or not, but, I’ll ask anyways. Before, when you closed a client, it never really logged you out, Is that fiixed now? Also, would you be able to make a Login screen, where you make a User+Pass, and it saves with the server? (i know that peice is easy, but ALOT of people here it would agrivate)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/147">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/147</link>
+        <pubDate>Fri, 08 Jan 2010 02:40:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-147</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+      <item>
+        <title>Chat Server and Client! V3 Released!</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>No problem.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/146">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429/146</link>
+        <pubDate>Fri, 08 Jan 2010 02:32:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-317429-146</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-and-client-v3-released/317429.rss">Chat Server and Client! V3 Released!</source>
+      </item>
+  </channel>
+</rss>

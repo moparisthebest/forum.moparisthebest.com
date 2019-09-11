@@ -1,0 +1,842 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>HackMe Challenge (Beat my SecurityManager)</title>
+    <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385</link>
+    <description>I&#39;m going to post the classes in code tags and attach a zip file.  Create a jar with a class named &#39;MyEntry&#39; in it that implements my interface, then run my program with a URL to your jar as a parameter, and see if you can do anything naughty.  This includes accessing my classes, changing the security manager, basically seeing if you can do anything bad that you shouldn&#39;t be able to.  (this doesn&#39;t include things that securitymanager has no control over, like filling up the hard drive, using all the ram or starting threads until the machine stops)
+
+If you have any comments on the code, post them too.  But really I&#39;m looking for entries that beat this so it can be improved to perfection (or as near as possible).  I&#39;ll have a go at an entry myself probably tomorrow.  This could be fun! :)
+
+org.moparscape.HackMe:
+[code=java5]package org.moparscape;
+
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.security.Permissions;
+
+public class HackMe {
+
+    public String pub_var = &quot;not modified&quot;;
+    private String prv_var = &quot;not modified&quot;;
+
+    public static String pub_static_var = &quot;not modified&quot;;
+    private static String prv_static_var = &quot;not modified&quot;;
+
+    public static void main(String[] args) throws Exception{
+        if (args.length != 1) {
+            System.out.println(&quot;Usage: java -jar hackme.jar url_to_your_jar&quot;);
+            return;
+        }
+        new HackMe(args[0]);
+    }
+
+    public HackMe(String jar) throws Exception{
+        System.setSecurityManager(new org.moparscape.security.SecurityManager());
+
+        URLClassLoader loader = new URLClassLoader(new URL[]{new URL(jar)});
+
+        String allowedDir = &quot;./allowed/&quot;;
+        ((org.moparscape.security.SecurityManager)System.getSecurityManager()).addPermissions(loader, this.getPermissions(allowedDir));
+
+        Class c = loader.loadClass(&quot;MyEntry&quot;);
+
+        Object o = c.newInstance();
+
+        MyInterface mi = (MyInterface) o;
+
+        mi.doSomething(&quot;i send string&quot;);
+        mi.doSomethingElse(15);
+
+        System.out.println(&quot;HackMe is finished, did you hack it?&quot;);
+
+    }
+
+    public void doPublicStuff() {
+        System.out.println(&quot;doPublicStuff() pub_var: &quot; + pub_var);
+    }
+
+    private void doPrivateStuff() {
+        System.out.println(&quot;doPrivateStuff() prv_var: &quot; + prv_var);
+    }
+
+    public void doPublicStaticStuff() {
+        System.out.println(&quot;doPublicStaticStuff() pub_static_var: &quot; + pub_static_var);
+    }
+
+    private void doPrivateStaticStuff() {
+        System.out.println(&quot;doPrivateStaticStuff() prv_static_var: &quot; + prv_static_var);
+    }
+
+    private Permissions getPermissions(String allowedDir) {
+        //printSystemPropertiesExit();
+        // java.library.path=/opt/jdk1.6.0_18/jre/lib/i386/server:/opt/jdk1.6.0_18/jre/lib/i386:/opt/jdk1.6.0_18/jre/../lib/i386:.::/usr/java/packages/lib/i386:/lib:/usr/lib
+        // to allow recursively everything under allowedDir
+        allowedDir += &quot;-&quot;;
+        Permissions permissions = new Permissions();
+        //permissions.add(new java.security.AllPermission());
+        //questionable
+        permissions.add(new java.util.PropertyPermission(&quot;user.home&quot;, &quot;read&quot;));
+        permissions.add(new java.lang.RuntimePermission(&quot;accessDeclaredMembers&quot;));
+        permissions.add(new java.lang.RuntimePermission(&quot;setFactory&quot;));
+        permissions.add(new java.lang.RuntimePermission(&quot;loadLibrary.awt&quot;));
+        permissions.add(new java.io.FilePermission(&quot;./-&quot;, &quot;read&quot;));
+        permissions.add(new java.security.SecurityPermission(&quot;putProviderProperty.SUN&quot;));
+        // very questionable
+        permissions.add(new java.lang.reflect.ReflectPermission(&quot;suppressAccessChecks&quot;));
+        permissions.add(new java.net.NetPermission(&quot;getProxySelector&quot;));
+        //needed
+        //String javaHome = &quot;${java.home}/-&quot;;
+        String javaHome = System.getProperty(&quot;java.home&quot;) + &quot;/-&quot;;
+        //System.out.println(&quot;java.home: &quot;+javaHome);
+        permissions.add(new java.io.FilePermission(javaHome, &quot;read&quot;));
+        permissions.add(new java.io.FilePermission(allowedDir, &quot;read,write,delete&quot;));
+        permissions.add(new java.net.SocketPermission(&quot;localhost:1024-&quot;, &quot;accept,connect,listen&quot;));
+        // following needed for networking and file read/write
+        // this is OK because we restrict FilePermissions and SocketPermission
+        permissions.add(new java.lang.RuntimePermission(&quot;readFileDescriptor&quot;));
+        permissions.add(new java.lang.RuntimePermission(&quot;writeFileDescriptor&quot;));
+
+        /*       //platform specific? :( (all for fonts, whats a better way?)
+               permissions.add(new java.io.FilePermission(&quot;/usr/share/fonts/-&quot;, &quot;read&quot;));
+               permissions.add(new java.io.FilePermission(&quot;/usr/lib/jvm/-&quot;, &quot;read&quot;));
+               permissions.add(new java.io.FilePermission(&quot;/var/lib/defoma/-&quot;, &quot;read&quot;));
+               permissions.add(new java.io.FilePermission(System.getProperty(&quot;user.home&quot;)+&quot;/.fonts&quot;, &quot;read&quot;));
+               permissions.add(new java.io.FilePermission(&quot;/usr/X11R6/lib/X11/fonts/-&quot;, &quot;read&quot;));
+        */       //System.out.println(permissions.toString());
+        return permissions;
+    }
+}
+[/code]
+
+org.moparscape.security.SecurityManager:
+[code=java5]package org.moparscape.security;
+
+import java.security.Permission;
+import java.security.Permissions;
+import java.util.HashMap;
+import java.util.Map;
+
+public class SecurityManager extends java.lang.SecurityManager {
+
+    private Map&lt;ClassLoader, Permissions&gt; permissionMap = new HashMap&lt;ClassLoader, Permissions&gt;();
+
+    public void addPermissions(ClassLoader cl, Permissions perms) {
+        //if the key already exists, just return, we only support setting the permissions once
+        if (permissionMap.containsKey(cl))
+            return;
+        perms.setReadOnly();
+        permissionMap.put(cl, perms);
+    }
+
+    @Override
+    public void checkPermission(Permission perm) {
+        if (perm == null)
+            throw new NullPointerException(&quot;Permission cannot be null.&quot;);
+
+        // we are now going to go through the ClassLoaders of all Classes on the stack
+        // if any of them are in perms, then check the permissions, sticking to the most
+        // restrictive of the permissions of any class in the stack (ANDing them all together)
+
+        // so default value should be true or it would never be true ((false &amp; anything) == false)
+        boolean allow = true;
+        // get all classes on stack
+        Class c[] = getClassContext();
+
+        for (int i = 1; i &lt; c.length; i++) {
+            ClassLoader cl = c[i].getClassLoader();
+            // if the ClassLoader is null (can it be?) continue...
+            if (cl == null)
+                continue;
+            Permissions clPerms = permissionMap.get(cl);
+            // if the classloader isn&#39;t in our map, we don&#39;t have any say on it so continue
+            if (clPerms == null)
+                continue;
+            // it must be in our map, so update allow appropriatly
+            allow &amp;= clPerms.implies(perm);
+        }
+
+        // if allow is true, just return to allow the permission
+        if (allow)
+            return;
+
+        System.out.println(&quot;denying: &quot; + perm.toString());
+
+        // otherwise allow is false, through a SecurityException
+        throw new SecurityException(&quot;Permission denied: &quot; + perm.toString());
+
+        //throw new SecurityException(&quot;Permission denied: &quot;+perm);
+        //System.out.println(&quot;org.moparscape.security.SecurityManager.checkPermission(): &quot;+perm.toString());
+        //System.out.println(&quot;checkPermission&quot;);
+    }
+
+    @Override
+    public void checkPermission(Permission perm, Object context) {
+        // ignore context
+        this.checkPermission(perm);
+    }
+
+}
+[/code]
+
+org.moparscape.MyInterface:
+[code=java5]package org.moparscape;
+
+public interface MyInterface {
+    public static final long serialVersionUID = 42L;
+
+    public void doSomething(String s);
+
+    public void doSomethingElse(int i);
+}
+[/code]
+
+Goodluck!</description>
+    
+    <lastBuildDate>Thu, 04 Mar 2010 03:47:53 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>This seems generous, whats it for?<br>
+permissions.add(new java.security.SecurityPermission(“putProviderProperty.SUN”));</p>
+<blockquote>putProviderProperty.{provider name}: This target grants permission to set properties for the specified provider. The provider properties each specify the name and location of a particular service implemented by the provider. Granting this permission allows code to replace the service specification with another one with a different implementation and could be dangerous if the new implementation has malicaious code.</blockquote>
+<p>A little dodgy but these should be okay:<br>
+permissions.add(new java.lang.RuntimePermission(“setFactory”));<br>
+permissions.add(new java.lang.RuntimePermission(“readFileDescriptor”));<br>
+permissions.add(new java.lang.RuntimePermission(“writeFileDescriptor”));</p>
+<pre><code>    permissions.add(new java.lang.reflect.ReflectPermission("suppressAccessChecks"));
+</code></pre>
+<p>Don’t do this. They shouldn’t be screwing around with reflection. If its necessary to access RS then put a layer on top and treat that class in your SecurityManager effectively as a doPrivileged() call.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/19</link>
+        <pubDate>Thu, 04 Mar 2010 03:47:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-19</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:16, topic:331385”][quote author=Moparisthebest link=topic=427763.msg3142010#msg3142010 date=1267657170]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>I assume the person could use a Java agent to modify the initialisation of your Security Class and call their own which gives access all areas without a problem.</p>
+<p>I am going away this weekend but when I get back I will look at it properly for you.</p>
+</blockquote>
+</aside>
+<p>if a person has access to hack the java plugin’s deployment properties then why would he need to break the securitymanager? she already compromised the machine</p>
+</blockquote>
+</aside>
+<p>Exactly, I don’t care about those instances.  One example of what I’m going to use this for is MoparScape 4.  Running the main applet from only <a href="http://moparisthebest.com">moparisthebest.com</a> but allowing server owners to write their own client to load into moparscape, but of course I don’t want people loading malicious code into moparscape and running it from my site, hence the securitymanager.<br>
+[/quote]That is a pretty dumb idea. Why wouldn’t the server owners just have their own client hosted on their site?[/quote]</p>
+<p>I can guarantee the client is safe, I can’t guarantee code hosted at another site is.  Also they don’t have all the extra features my client provides.</p>
+<p>Does anyone see a way to break it yet?  (without using reflection like I did, for now)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/18</link>
+        <pubDate>Thu, 04 Mar 2010 03:01:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-18</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="16" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>That is a pretty dumb idea. Why wouldn’t the server owners just have their own client hosted on their site?</p>
+</blockquote>
+</aside>
+<p>Bandwidth / effort.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/17</link>
+        <pubDate>Thu, 04 Mar 2010 01:22:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-17</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:15, topic:331385”][quote author=oksuper_ link=topic=427763.msg3141919#msg3141919 date=1267651395]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I assume the person could use a Java agent to modify the initialisation of your Security Class and call their own which gives access all areas without a problem.</p>
+<p>I am going away this weekend but when I get back I will look at it properly for you.</p>
+</blockquote>
+</aside>
+<p>if a person has access to hack the java plugin’s deployment properties then why would he need to break the securitymanager? she already compromised the machine<br>
+[/quote]</p>
+<p>Exactly, I don’t care about those instances.  One example of what I’m going to use this for is MoparScape 4.  Running the main applet from only <a href="http://moparisthebest.com" rel="nofollow noopener">moparisthebest.com</a> but allowing server owners to write their own client to load into moparscape, but of course I don’t want people loading malicious code into moparscape and running it from my site, hence the securitymanager.[/quote]That is a pretty dumb idea. Why wouldn’t the server owners just have their own client hosted on their site?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/16</link>
+        <pubDate>Thu, 04 Mar 2010 00:50:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-16</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“oksuper_, post:14, topic:331385”][quote author=Ollie link=topic=427763.msg3141766#msg3141766 date=1267631834]<br>
+I assume the person could use a Java agent to modify the initialisation of your Security Class and call their own which gives access all areas without a problem.</p>
+<p>I am going away this weekend but when I get back I will look at it properly for you.<br>
+[/quote]</p>
+<p>if a person has access to hack the java plugin’s deployment properties then why would he need to break the securitymanager? she already compromised the machine[/quote]</p>
+<p>Exactly, I don’t care about those instances.  One example of what I’m going to use this for is MoparScape 4.  Running the main applet from only <a href="http://moparisthebest.com">moparisthebest.com</a> but allowing server owners to write their own client to load into moparscape, but of course I don’t want people loading malicious code into moparscape and running it from my site, hence the securitymanager.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/15</link>
+        <pubDate>Wed, 03 Mar 2010 22:59:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-15</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="12" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+ The Beatz:</div>
+<blockquote>
+<p>Why not just do the method calls at the molecular level and use a Hyper-Threaded Java GUI that implements the Isometric Supermassive Quantum Interface to hack it?</p>
+</blockquote>
+</aside>
+<p>plz stop being a bad ruler will get upset</p>
+<p>[quote=“Ollie, post:11, topic:331385”]I assume the person could use a Java agent to modify the initialisation of your Security Class and call their own which gives access all areas without a problem.</p>
+<p>I am going away this weekend but when I get back I will look at it properly for you.[/quote]</p>
+<p>if a person has access to hack the java plugin’s deployment properties then why would he need to break the securitymanager? she already compromised the machine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/14</link>
+        <pubDate>Wed, 03 Mar 2010 21:23:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-14</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@atrox atrox_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/atrox">@atrox</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="12" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+ The Beatz:</div>
+<blockquote>
+<p>Why not just do the method calls at the molecular level and use a Hyper-Threaded Java GUI that implements the Isometric Supermassive Quantum Interface to hack it?</p>
+</blockquote>
+</aside>
+<p>brb codin visual basic gui to trace ur ip</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/13</link>
+        <pubDate>Wed, 03 Mar 2010 21:07:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-13</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@The_Beatz The Beatz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_beatz">@The_Beatz</a> wrote:</p>
+          <blockquote>
+              <p>Why not just do the method calls at the molecular level and use a Hyper-Threaded Java GUI that implements the Isometric Supermassive Quantum Interface to hack it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/12</link>
+        <pubDate>Wed, 03 Mar 2010 20:04:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-12</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>I assume the person could use a Java agent to modify the initialisation of your Security Class and call their own which gives access all areas without a problem.</p>
+<p>I am going away this weekend but when I get back I will look at it properly for you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/11</link>
+        <pubDate>Wed, 03 Mar 2010 15:57:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-11</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="7" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ollie/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> Ollie:</div>
+<blockquote>
+<p>-Xbootclasspath will crack this shit, sorry mopar.</p>
+</blockquote>
+</aside>
+<p>I don’t need to worry about that, this is to load plugins others have written into my program(s).  I control how the program starts, what I can’t control is the code the plugins have in them, I can only try to write a SecurityManager that doesn’t allow them to do anything dangerous.  Hence the HackMe, can you find anything else wrong with it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/10</link>
+        <pubDate>Wed, 03 Mar 2010 06:09:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-10</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>// if the ClassLoader is null (can it be?) continue…</p>
+<p>Yes. System classes have a null classloader.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/9</link>
+        <pubDate>Wed, 03 Mar 2010 04:39:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-9</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@nueb35 Nueb35]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nueb35">@nueb35</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="7" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ollie/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> Ollie:</div>
+<blockquote>
+<p>-Xbootclasspath will crack this shit, sorry mopar.</p>
+</blockquote>
+</aside>
+<p>if tis for the jar loader for mscp then -Xbootclasspath wont be a problem</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/8</link>
+        <pubDate>Wed, 03 Mar 2010 03:31:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-8</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>-Xbootclasspath will crack this shit, sorry mopar.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/7</link>
+        <pubDate>Wed, 03 Mar 2010 03:04:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-7</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>The problem is the ReflectionPermission asked for doesn’t specify any other information. (like what class/package/codesource is being reflected on).  So this is something I just can’t allow, or at least until I figure something else.</p>
+<p>You can still make entries that don’t use reflection though, and try to break the rest of it.  I’m looking forward to them. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<aside class="quote no-group" data-post="5" data-topic="331385">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>could be that they are in da same package</p>
+</blockquote>
+</aside>
+<p>They aren’t in the same package.  MyEntry is in the default package.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/6</link>
+        <pubDate>Wed, 03 Mar 2010 02:09:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-6</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>could be that they are in da same package</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/5</link>
+        <pubDate>Wed, 03 Mar 2010 02:08:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-5</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>I remember trying to write a Robocode bot that used reflection to cheat, but it threw security exceptions as soon as you tried to reflect on anything other than your own jar. Maybe take a look at that? <a href="http://robocode.googlecode.com/svn/robocode/trunk/" rel="nofollow noopener">http://robocode.googlecode.com/svn/robocode/trunk/</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/4</link>
+        <pubDate>Tue, 02 Mar 2010 23:33:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-4</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Shit!  Just defeated my own protection scheme, due to the permission:</p>
+<pre><code class="lang-auto">permissions.add(new java.lang.reflect.ReflectPermission("suppressAccessChecks"));</code></pre>
+<p>Here is the code that did it (the last succeeded):</p>
+<pre><code class="lang-auto">import org.moparscape.MyInterface;
+
+import java.lang.reflect.Field;
+import java.security.Permissions;
+import java.util.Map;
+
+public class MyEntry implements MyInterface {
+
+    public MyEntry() {
+        System.out.println("in MyEntry\n");
+        doTheNaughty();
+    }
+
+    public void doSomething(String s) {
+
+    }
+
+    public void doSomethingElse(int i) {
+
+    }
+
+    private void doTheNaughty() {
+        try {
+            System.out.println("a quick test to make sure illegalMethod() will actually fail");
+            illegalMethod();
+        } catch (Exception e) {
+            System.out.println("failed, trying something else\n");
+        }
+
+        try {
+            System.out.println("trying to set SecurityManager to null");
+            System.setSecurityManager(null);
+            illegalMethod();
+        } catch (Exception e) {
+            System.out.println("failed, trying something else\n");
+        }
+
+        try {
+            System.out.println("trying to add java.security.AllPermission()");
+            org.moparscape.security.SecurityManager sm = (org.moparscape.security.SecurityManager) System.getSecurityManager();
+
+            Field permMap = org.moparscape.security.SecurityManager.class.getDeclaredField("permissionMap");
+
+            permMap.setAccessible(true);
+
+            Map&lt;ClassLoader, Permissions&gt; permissionMap = (Map&lt;ClassLoader, Permissions&gt;) permMap.get(sm);
+
+            Permissions myPerms = permissionMap.get(this.getClass().getClassLoader());
+
+            //System.out.println("My permissions: "+myPerms.toString());
+
+            // we need to set it to be not readOnly to modify it.
+            myPerms.add(new java.security.AllPermission());
+
+            illegalMethod();
+        } catch (Exception e) {
+            System.out.println("failed, trying something else\n");
+        }
+
+        try {
+            System.out.println("trying to remove all permissions for this classloader");
+            org.moparscape.security.SecurityManager sm = (org.moparscape.security.SecurityManager) System.getSecurityManager();
+
+            Field permMap = org.moparscape.security.SecurityManager.class.getDeclaredField("permissionMap");
+
+            permMap.setAccessible(true);
+
+            Map&lt;ClassLoader, Permissions&gt; permissionMap = (Map&lt;ClassLoader, Permissions&gt;) permMap.get(sm);
+
+            permissionMap.remove(this.getClass().getClassLoader());
+
+            illegalMethod();
+        } catch (Exception e) {
+            System.out.println("failed, trying something else\n");
+        }
+
+
+    }
+
+    private void illegalMethod(){
+        System.getProperty("java.library.path");
+        System.out.println("illegalMethod() successful!");
+        System.out.println("Sucess! I defeated the hackme!\n");
+    }
+
+}</code></pre>
+<p>Is anyone aware of a way to only allow reflection on it’s own classes, (perhaps if classes aren’t in package org.moparscape or something?)  Until a solution for that arises, comment out the above permission and try other ways to hack it.  (or come up with a fix for the above, and leave reflectPermission and find a way to hack it)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/3</link>
+        <pubDate>Tue, 02 Mar 2010 23:15:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-3</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moerin moerin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moerin">@moerin</a> wrote:</p>
+          <blockquote>
+              <p>Downloaded, going to try something, haha!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/2</link>
+        <pubDate>Tue, 02 Mar 2010 18:45:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-2</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+      <item>
+        <title>HackMe Challenge (Beat my SecurityManager)</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I’m going to post the classes in code tags and attach a zip file.  Create a jar with a class named ‘MyEntry’ in it that implements my interface, then run my program with a URL to your jar as a parameter, and see if you can do anything naughty.  This includes accessing my classes, changing the security manager, basically seeing if you can do anything bad that you shouldn’t be able to.  (this doesn’t include things that securitymanager has no control over, like filling up the hard drive, using all the ram or starting threads until the machine stops)</p>
+<p>If you have any comments on the code, post them too.  But really I’m looking for entries that beat this so it can be improved to perfection (or as near as possible).  I’ll have a go at an entry myself probably tomorrow.  This could be fun! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>org.moparscape.HackMe:</p>
+<p>[code=java5]package org.moparscape;</p>
+<p>import java.net.URL;<br>
+import java.net.URLClassLoader;<br>
+import java.security.Permissions;</p>
+<p>public class HackMe {</p>
+<pre><code>public String pub_var = "not modified";
+private String prv_var = "not modified";
+
+public static String pub_static_var = "not modified";
+private static String prv_static_var = "not modified";
+
+public static void main(String[] args) throws Exception{
+    if (args.length != 1) {
+        System.out.println("Usage: java -jar hackme.jar url_to_your_jar");
+        return;
+    }
+    new HackMe(args[0]);
+}
+
+public HackMe(String jar) throws Exception{
+    System.setSecurityManager(new org.moparscape.security.SecurityManager());
+
+    URLClassLoader loader = new URLClassLoader(new URL[]{new URL(jar)});
+
+    String allowedDir = "./allowed/";
+    ((org.moparscape.security.SecurityManager)System.getSecurityManager()).addPermissions(loader, this.getPermissions(allowedDir));
+
+    Class c = loader.loadClass("MyEntry");
+
+    Object o = c.newInstance();
+
+    MyInterface mi = (MyInterface) o;
+
+    mi.doSomething("i send string");
+    mi.doSomethingElse(15);
+
+    System.out.println("HackMe is finished, did you hack it?");
+
+}
+
+public void doPublicStuff() {
+    System.out.println("doPublicStuff() pub_var: " + pub_var);
+}
+
+private void doPrivateStuff() {
+    System.out.println("doPrivateStuff() prv_var: " + prv_var);
+}
+
+public void doPublicStaticStuff() {
+    System.out.println("doPublicStaticStuff() pub_static_var: " + pub_static_var);
+}
+
+private void doPrivateStaticStuff() {
+    System.out.println("doPrivateStaticStuff() prv_static_var: " + prv_static_var);
+}
+
+private Permissions getPermissions(String allowedDir) {
+    //printSystemPropertiesExit();
+    // java.library.path=/opt/jdk1.6.0_18/jre/lib/i386/server:/opt/jdk1.6.0_18/jre/lib/i386:/opt/jdk1.6.0_18/jre/../lib/i386:.::/usr/java/packages/lib/i386:/lib:/usr/lib
+    // to allow recursively everything under allowedDir
+    allowedDir += "-";
+    Permissions permissions = new Permissions();
+    //permissions.add(new java.security.AllPermission());
+    //questionable
+    permissions.add(new java.util.PropertyPermission("user.home", "read"));
+    permissions.add(new java.lang.RuntimePermission("accessDeclaredMembers"));
+    permissions.add(new java.lang.RuntimePermission("setFactory"));
+    permissions.add(new java.lang.RuntimePermission("loadLibrary.awt"));
+    permissions.add(new java.io.FilePermission("./-", "read"));
+    permissions.add(new java.security.SecurityPermission("putProviderProperty.SUN"));
+    // very questionable
+    permissions.add(new java.lang.reflect.ReflectPermission("suppressAccessChecks"));
+    permissions.add(new java.net.NetPermission("getProxySelector"));
+    //needed
+    //String javaHome = "${java.home}/-";
+    String javaHome = System.getProperty("java.home") + "/-";
+    //System.out.println("java.home: "+javaHome);
+    permissions.add(new java.io.FilePermission(javaHome, "read"));
+    permissions.add(new java.io.FilePermission(allowedDir, "read,write,delete"));
+    permissions.add(new java.net.SocketPermission("localhost:1024-", "accept,connect,listen"));
+    // following needed for networking and file read/write
+    // this is OK because we restrict FilePermissions and SocketPermission
+    permissions.add(new java.lang.RuntimePermission("readFileDescriptor"));
+    permissions.add(new java.lang.RuntimePermission("writeFileDescriptor"));
+
+    /*       //platform specific? :( (all for fonts, whats a better way?)
+           permissions.add(new java.io.FilePermission("/usr/share/fonts/-", "read"));
+           permissions.add(new java.io.FilePermission("/usr/lib/jvm/-", "read"));
+           permissions.add(new java.io.FilePermission("/var/lib/defoma/-", "read"));
+           permissions.add(new java.io.FilePermission(System.getProperty("user.home")+"/.fonts", "read"));
+           permissions.add(new java.io.FilePermission("/usr/X11R6/lib/X11/fonts/-", "read"));
+    */       //System.out.println(permissions.toString());
+    return permissions;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>org.moparscape.security.SecurityManager:</p>
+<p>[code=java5]package org.moparscape.security;</p>
+<p>import java.security.Permission;<br>
+import java.security.Permissions;<br>
+import java.util.HashMap;<br>
+import java.util.Map;</p>
+<p>public class SecurityManager extends java.lang.SecurityManager {</p>
+<pre><code>private Map&lt;ClassLoader, Permissions&gt; permissionMap = new HashMap&lt;ClassLoader, Permissions&gt;();
+
+public void addPermissions(ClassLoader cl, Permissions perms) {
+    //if the key already exists, just return, we only support setting the permissions once
+    if (permissionMap.containsKey(cl))
+        return;
+    perms.setReadOnly();
+    permissionMap.put(cl, perms);
+}
+
+@Override
+public void checkPermission(Permission perm) {
+    if (perm == null)
+        throw new NullPointerException("Permission cannot be null.");
+
+    // we are now going to go through the ClassLoaders of all Classes on the stack
+    // if any of them are in perms, then check the permissions, sticking to the most
+    // restrictive of the permissions of any class in the stack (ANDing them all together)
+
+    // so default value should be true or it would never be true ((false &amp; anything) == false)
+    boolean allow = true;
+    // get all classes on stack
+    Class c[] = getClassContext();
+
+    for (int i = 1; i &lt; c.length; i++) {
+        ClassLoader cl = c[i].getClassLoader();
+        // if the ClassLoader is null (can it be?) continue...
+        if (cl == null)
+            continue;
+        Permissions clPerms = permissionMap.get(cl);
+        // if the classloader isn't in our map, we don't have any say on it so continue
+        if (clPerms == null)
+            continue;
+        // it must be in our map, so update allow appropriatly
+        allow &amp;= clPerms.implies(perm);
+    }
+
+    // if allow is true, just return to allow the permission
+    if (allow)
+        return;
+
+    System.out.println("denying: " + perm.toString());
+
+    // otherwise allow is false, through a SecurityException
+    throw new SecurityException("Permission denied: " + perm.toString());
+
+    //throw new SecurityException("Permission denied: "+perm);
+    //System.out.println("org.moparscape.security.SecurityManager.checkPermission(): "+perm.toString());
+    //System.out.println("checkPermission");
+}
+
+@Override
+public void checkPermission(Permission perm, Object context) {
+    // ignore context
+    this.checkPermission(perm);
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>org.moparscape.MyInterface:</p>
+<p>[code=java5]package org.moparscape;</p>
+<p>public interface MyInterface {<br>
+public static final long serialVersionUID = 42L;</p>
+<pre><code>public void doSomething(String s);
+
+public void doSomethingElse(int i);
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Goodluck!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385/1</link>
+        <pubDate>Tue, 02 Mar 2010 10:58:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-331385-1</guid>
+        <source url="https://forum.moparisthebest.com/t/hackme-challenge-beat-my-securitymanager/331385.rss">HackMe Challenge (Beat my SecurityManager)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,691 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>C and lua console game creator</title>
+    <link>https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932</link>
+    <description>hi i was bored and decided to do some experimental things with lua and C.  so the reason i posted this was maybe because somebody wants to review my code or use it?  i don&#39;t know, but  it&#39;s very simple, and very cool (talking about lua not the program itself)
+
+so basically you just write a script (game) while C handles all of the &quot;low-level&quot; stuff for you but you can choose what you want to do with the supplied functions i&#39;ve made public to the script.  then you edit the config file and define what script you are going to use and that&#39;s it.
+
+i wrote some scripts and put them in there just for you to see
+i don&#39;t really know what your limitations are...lua has a nice library
+
+here is all of the source code:
+
+compressed:
+http://uppit.com/l29pqslccv26/lua.tar.gz
+
+main.c
+[code=c]
+#include &quot;Global.h&quot;
+
+/*
+ * The main function
+ */
+int main(int argc, char *argv[])
+{
+  // Store for player input
+  char input[64];
+  
+  // Initialize
+  if(Init())
+  {
+    // Retrieve the lua function on game initialization
+    lua_getglobal(L, &quot;OnGameStart&quot;);
+    
+    // Check if the retrieved function is a function
+    if(lua_isfunction(L, lua_gettop(L))) // The function on the top of the stack
+    {
+      lua_call(L, 0, 0); // Call the function - 0 arguments, 0 returns
+    }
+    else
+    {
+      printf(&quot;Error: Function does not exist or is not a function\n&quot;);
+    }
+  }
+
+  // The game loop
+  while(Running)
+  {
+    printf(&quot;In: &quot;);
+    
+    // Record player input
+    fgets(input, 64, stdin);
+    String_StripChar(input);
+    
+    lua_getglobal(L, &quot;OnPlayerInput&quot;);
+    
+    if(lua_isfunction(L, lua_gettop(L)))
+    {
+      lua_pushstring(L, input);
+      lua_call(L, 1, 0);
+    }
+    else
+    {
+      printf(&quot;Error: Function does not exist or is not a function\n&quot;);
+      Running = 0;
+    }
+  }
+  
+  lua_getglobal(L, &quot;OnGameEnd&quot;);
+  
+  if(lua_isfunction(L, lua_gettop(L)))
+  {
+    lua_call(L, 0, 0);
+  }
+  else
+  {
+    printf(&quot;Error: Function does not exist or is not a function\n&quot;);
+  }
+  
+  return Clean();
+}
+[/code]
+
+global.h
+[code=c]
+#ifndef GLOBAL_H
+#define GLOBAL_H
+
+#define CONFIG_FILE_NAME &quot;Config.txt&quot;
+
+#ifdef _cplusplus
+extern &quot;C&quot; {
+#endif
+
+#include &quot;Utils.h&quot;
+
+// Lua
+#include &quot;lua5.1/lua.h&quot;
+#include &quot;lua5.1/lualib.h&quot;
+#include &quot;lua5.1/lauxlib.h&quot;
+
+extern lua_State *L;
+extern int Running;
+extern char *PlayerName;
+
+extern int Init();
+extern int Clean();
+extern int SetGameRunning(lua_State*);
+extern int IsGameRunning(lua_State*);
+extern int SetPlayerName(lua_State*);
+extern int GetPlayerName(lua_State*);
+
+#ifdef _cplusplus
+}
+#endif
+
+#endif
+[/code]
+
+global.c
+[code=c]
+#include &quot;Global.h&quot;
+
+/*
+ * The lua interpereter.
+ */
+lua_State *L = NULL;
+
+/*
+ * The game running flag
+ */
+int Running;
+
+/*
+ * The player&#39;s name
+ */
+char *PlayerName = NULL;
+
+/*
+ * Initialize
+ */
+int Init()
+{
+  // Running is true
+  Running = 1;
+  
+  // The config file
+  FILE *cfg = fopen(CONFIG_FILE_NAME, &quot;r&quot;);
+  char script[64];
+  
+  if(!cfg)
+  {
+    return 0;
+  }
+  
+  fscanf(cfg, &quot;CONFIG_FILE:%s&quot;, script);
+  fclose(cfg);
+  
+  // Open the lua api
+  L = lua_open();
+  
+  luaL_openlibs(L); // Open the lua library
+  luaL_dofile(L, script); // Execute the script
+  
+  // Register these functions
+  lua_register(L, &quot;SetGameRunning&quot;, SetGameRunning);
+  lua_register(L, &quot;IsGameRunning&quot;, IsGameRunning);
+  lua_register(L, &quot;SetPlayerName&quot;, SetPlayerName);
+  lua_register(L, &quot;GetPlayerName&quot;, GetPlayerName);
+  
+  return 1;
+}
+
+/*
+ * Clean up
+ */
+int Clean()
+{
+  // Close the lua interpereter
+  lua_close(L);
+  return 0;
+}
+
+/*
+ * Sets the running flag to the passed in argument (int)
+ */
+int SetGameRunning(lua_State *L)
+{
+  int args = lua_gettop(L); // The amount of arguments
+  
+  if(args &gt; 0) // If there were arguments passed in the function
+  {
+    if(lua_isnumber(L, -args)) // If the passed in argument is a number
+    {
+      Running = (int) lua_tonumber(L, -args); // Optimize the variable
+    }
+    else
+    {
+      printf(&quot;Error: Argument must be a number\n&quot;);
+    }
+  }
+  else
+  {
+    printf(&quot;Error: No arguments were passed in function\n&quot;);
+  }
+  
+  return 0; // Nothing was given to the lua interpereter
+}
+
+/*
+ * Returns the running flag
+ */
+int IsGameRunning(lua_State *L)
+{
+  lua_pushnumber(L, Running); // Push the number to the top of the stack
+  
+  return 1;
+}
+
+/*
+ * Sets the player&#39;s name
+ */
+int SetPlayerName(lua_State *L)
+{
+  int args = lua_gettop(L);
+  
+  if(args &gt; 0)
+  {
+    if(lua_isstring(L, -args))
+    {
+      PlayerName = (char*) lua_tostring(L, -args);
+    }
+    else
+    {
+      printf(&quot;Error: Argument must be a number\n&quot;);
+    }
+  }
+  else
+  {
+    printf(&quot;Error: No arguments were passed in function\n&quot;);
+  }
+  
+  return 0;
+}
+
+/*
+ * Returns the player&#39;s name
+ */
+int GetPlayerName(lua_State *L)
+{
+  lua_pushstring(L, PlayerName);
+  
+  return 1;
+}
+[/code]
+
+utils.h
+[code=c]
+#ifndef UTILS_H
+#define UTILS_H
+
+#ifdef _cplusplus
+extern &quot;C&quot; {
+#endif
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+extern int String_StartsWith(char*, char*);
+extern int String_StartsWith_IgnoreCase(char*, char*);
+extern int String_StripChar(char*);
+
+#ifdef _cplusplus
+}
+#endif
+
+#endif
+[/code]
+
+utils.c
+[code=c]
+#include &quot;Utils.h&quot;
+
+int String_StartsWith(char *s1, char *s2)
+{
+  if(strncmp(s1, s2, strlen(s2)) == 0)
+  {
+    return 1;
+  }
+  
+  return 0;
+}
+
+int String_StartsWith_IgnoreCase(char *s1, char *s2)
+{
+  if(strncasecmp(s1, s2, strlen(s2)) == 0)
+  {
+    return 1;
+  }
+  
+  return 0;
+}
+
+/*
+ * I never got this to work yet but it strips the null terminator
+ * from a string - useful for string you don&#39;t want the null terminator
+ * in after using fgets or gets
+ */
+int String_StripChar(char *s)
+{
+  int i;
+  
+  for(i = 0; i &lt; (int) strlen(s); i++)
+  {
+    if(s[i] == &#39;\n&#39;)
+    {
+      s[i] = &#39;\0&#39;;
+      break;
+    }
+  }
+  
+  return 1;
+}
+[/code]</description>
+    
+    <lastBuildDate>Sun, 03 Jul 2011 04:42:57 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>C and lua console game creator</title>
+        <dc:creator><![CDATA[@Tu1 Tu]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tu1">@Tu1</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:3, topic:401932"]lol global variables[/quote]i didn’t think encapsulation was necessary for something like this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/4</link>
+        <pubDate>Sun, 03 Jul 2011 04:42:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-401932-4</guid>
+        <source url="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932.rss">C and lua console game creator</source>
+      </item>
+      <item>
+        <title>C and lua console game creator</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>lol global variables</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/3</link>
+        <pubDate>Sat, 02 Jul 2011 14:21:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-401932-3</guid>
+        <source url="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932.rss">C and lua console game creator</source>
+      </item>
+      <item>
+        <title>C and lua console game creator</title>
+        <dc:creator><![CDATA[@Stupit Stu]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stupit">@Stupit</a> wrote:</p>
+          <blockquote>
+              <p>Interesting that you used lua to program something. It’s also interesting that you use lua with C.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/2</link>
+        <pubDate>Sat, 02 Jul 2011 09:24:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-401932-2</guid>
+        <source url="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932.rss">C and lua console game creator</source>
+      </item>
+      <item>
+        <title>C and lua console game creator</title>
+        <dc:creator><![CDATA[@Tu1 Tu]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tu1">@Tu1</a> wrote:</p>
+          <blockquote>
+              <p>hi i was bored and decided to do some experimental things with lua and C.  so the reason i posted this was maybe because somebody wants to review my code or use it?  i don’t know, but  it’s very simple, and very cool (talking about lua not the program itself)</p>
+<p>so basically you just write a script (game) while C handles all of the “low-level” stuff for you but you can choose what you want to do with the supplied functions i’ve made public to the script.  then you edit the config file and define what script you are going to use and that’s it.</p>
+<p>i wrote some scripts and put them in there just for you to see<br>
+i don’t really know what your limitations are…lua has a nice library</p>
+<p>here is all of the source code:</p>
+<p>compressed:<br>
+<a href="http://uppit.com/l29pqslccv26/lua.tar.gz" class="onebox" target="_blank" rel="nofollow noopener">http://uppit.com/l29pqslccv26/lua.tar.gz</a></p>
+<p>main.c</p>
+<pre><code class="lang-auto">#include "Global.h"
+
+/*
+ * The main function
+ */
+int main(int argc, char *argv[])
+{
+  // Store for player input
+  char input[64];
+  
+  // Initialize
+  if(Init())
+  {
+    // Retrieve the lua function on game initialization
+    lua_getglobal(L, "OnGameStart");
+    
+    // Check if the retrieved function is a function
+    if(lua_isfunction(L, lua_gettop(L))) // The function on the top of the stack
+    {
+      lua_call(L, 0, 0); // Call the function - 0 arguments, 0 returns
+    }
+    else
+    {
+      printf("Error: Function does not exist or is not a function\n");
+    }
+  }
+
+  // The game loop
+  while(Running)
+  {
+    printf("In: ");
+    
+    // Record player input
+    fgets(input, 64, stdin);
+    String_StripChar(input);
+    
+    lua_getglobal(L, "OnPlayerInput");
+    
+    if(lua_isfunction(L, lua_gettop(L)))
+    {
+      lua_pushstring(L, input);
+      lua_call(L, 1, 0);
+    }
+    else
+    {
+      printf("Error: Function does not exist or is not a function\n");
+      Running = 0;
+    }
+  }
+  
+  lua_getglobal(L, "OnGameEnd");
+  
+  if(lua_isfunction(L, lua_gettop(L)))
+  {
+    lua_call(L, 0, 0);
+  }
+  else
+  {
+    printf("Error: Function does not exist or is not a function\n");
+  }
+  
+  return Clean();
+}</code></pre>
+<p>global.h</p>
+<pre><code class="lang-auto">#ifndef GLOBAL_H
+#define GLOBAL_H
+
+#define CONFIG_FILE_NAME "Config.txt"
+
+#ifdef _cplusplus
+extern "C" {
+#endif
+
+#include "Utils.h"
+
+// Lua
+#include "lua5.1/lua.h"
+#include "lua5.1/lualib.h"
+#include "lua5.1/lauxlib.h"
+
+extern lua_State *L;
+extern int Running;
+extern char *PlayerName;
+
+extern int Init();
+extern int Clean();
+extern int SetGameRunning(lua_State*);
+extern int IsGameRunning(lua_State*);
+extern int SetPlayerName(lua_State*);
+extern int GetPlayerName(lua_State*);
+
+#ifdef _cplusplus
+}
+#endif
+
+#endif</code></pre>
+<p>global.c</p>
+<pre><code class="lang-auto">#include "Global.h"
+
+/*
+ * The lua interpereter.
+ */
+lua_State *L = NULL;
+
+/*
+ * The game running flag
+ */
+int Running;
+
+/*
+ * The player's name
+ */
+char *PlayerName = NULL;
+
+/*
+ * Initialize
+ */
+int Init()
+{
+  // Running is true
+  Running = 1;
+  
+  // The config file
+  FILE *cfg = fopen(CONFIG_FILE_NAME, "r");
+  char script[64];
+  
+  if(!cfg)
+  {
+    return 0;
+  }
+  
+  fscanf(cfg, "CONFIG_FILE:%s", script);
+  fclose(cfg);
+  
+  // Open the lua api
+  L = lua_open();
+  
+  luaL_openlibs(L); // Open the lua library
+  luaL_dofile(L, script); // Execute the script
+  
+  // Register these functions
+  lua_register(L, "SetGameRunning", SetGameRunning);
+  lua_register(L, "IsGameRunning", IsGameRunning);
+  lua_register(L, "SetPlayerName", SetPlayerName);
+  lua_register(L, "GetPlayerName", GetPlayerName);
+  
+  return 1;
+}
+
+/*
+ * Clean up
+ */
+int Clean()
+{
+  // Close the lua interpereter
+  lua_close(L);
+  return 0;
+}
+
+/*
+ * Sets the running flag to the passed in argument (int)
+ */
+int SetGameRunning(lua_State *L)
+{
+  int args = lua_gettop(L); // The amount of arguments
+  
+  if(args &gt; 0) // If there were arguments passed in the function
+  {
+    if(lua_isnumber(L, -args)) // If the passed in argument is a number
+    {
+      Running = (int) lua_tonumber(L, -args); // Optimize the variable
+    }
+    else
+    {
+      printf("Error: Argument must be a number\n");
+    }
+  }
+  else
+  {
+    printf("Error: No arguments were passed in function\n");
+  }
+  
+  return 0; // Nothing was given to the lua interpereter
+}
+
+/*
+ * Returns the running flag
+ */
+int IsGameRunning(lua_State *L)
+{
+  lua_pushnumber(L, Running); // Push the number to the top of the stack
+  
+  return 1;
+}
+
+/*
+ * Sets the player's name
+ */
+int SetPlayerName(lua_State *L)
+{
+  int args = lua_gettop(L);
+  
+  if(args &gt; 0)
+  {
+    if(lua_isstring(L, -args))
+    {
+      PlayerName = (char*) lua_tostring(L, -args);
+    }
+    else
+    {
+      printf("Error: Argument must be a number\n");
+    }
+  }
+  else
+  {
+    printf("Error: No arguments were passed in function\n");
+  }
+  
+  return 0;
+}
+
+/*
+ * Returns the player's name
+ */
+int GetPlayerName(lua_State *L)
+{
+  lua_pushstring(L, PlayerName);
+  
+  return 1;
+}</code></pre>
+<p>utils.h</p>
+<pre><code class="lang-auto">#ifndef UTILS_H
+#define UTILS_H
+
+#ifdef _cplusplus
+extern "C" {
+#endif
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+extern int String_StartsWith(char*, char*);
+extern int String_StartsWith_IgnoreCase(char*, char*);
+extern int String_StripChar(char*);
+
+#ifdef _cplusplus
+}
+#endif
+
+#endif</code></pre>
+<p>utils.c</p>
+<pre><code class="lang-auto">#include "Utils.h"
+
+int String_StartsWith(char *s1, char *s2)
+{
+  if(strncmp(s1, s2, strlen(s2)) == 0)
+  {
+    return 1;
+  }
+  
+  return 0;
+}
+
+int String_StartsWith_IgnoreCase(char *s1, char *s2)
+{
+  if(strncasecmp(s1, s2, strlen(s2)) == 0)
+  {
+    return 1;
+  }
+  
+  return 0;
+}
+
+/*
+ * I never got this to work yet but it strips the null terminator
+ * from a string - useful for string you don't want the null terminator
+ * in after using fgets or gets
+ */
+int String_StripChar(char *s)
+{
+  int i;
+  
+  for(i = 0; i &lt; (int) strlen(s); i++)
+  {
+    if(s[i] == '\n')
+    {
+      s[i] = '\0';
+      break;
+    }
+  }
+  
+  return 1;
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932/1</link>
+        <pubDate>Sat, 02 Jul 2011 06:32:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-401932-1</guid>
+        <source url="https://forum.moparisthebest.com/t/c-and-lua-console-game-creator/401932.rss">C and lua console game creator</source>
+      </item>
+  </channel>
+</rss>

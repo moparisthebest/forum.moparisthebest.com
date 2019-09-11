@@ -1,0 +1,600 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>-xlint problem</title>
+    <link>https://forum.moparisthebest.com/t/xlint-problem/387716</link>
+    <description>Note : Some input files use unchecked or unsafe operations
+Note : Recompile with-xlint:unchecked for details
+Press any key to continue..
+
+How to fix it? It says It&#39;s under my \src\server\event\*.java - If I Run the compiler as admin?
+
+Event: package server.event;
+
+
+/**
+ * A simple interface for an event.
+ * 
+ * @author Graham
+ * 
+ */
+public interface Event {
+
+	/**
+	 * Called when the event is executed.
+	 * 
+	 * @param container
+	 *            The event container, so the event can dynamically change the
+	 *            tick time etc.
+	 */
+	public void execute(EventContainer container);
+
+        }
+
+
+EventContainer : 
+
+
+package server.event;
+
+
+/**
+ * Holds extra data for an event (for example the tick time etc).
+ * 
+ * @author Graham
+ * 
+ */
+public class EventContainer {
+
+	/**
+	 * The actual event.
+	 */
+	private Event event;
+
+	/**
+	 * A flag which specifies if the event is running;
+	 */
+	private boolean isRunning;
+
+	/**
+	 * When this event was last run.
+	 */
+	private long lastRun;
+
+	/**
+	 * The tick time in milliseconds.
+	 */
+	private int tick;
+
+	/**
+	 * The event container.
+	 * 
+	 * @param evt
+	 * @param tick
+	 */
+	protected EventContainer(Event evt, int tick) {
+		this.tick = tick;
+		this.event = evt;
+		this.isRunning = true;
+		this.lastRun = System.currentTimeMillis();
+		// can be changed to 0 if you want events to run straight away
+	}
+
+	/**
+	 * Executes the event!
+	 */
+	public void execute() {
+		this.lastRun = System.currentTimeMillis();
+		this.event.execute(this);
+	}
+
+	/**
+	 * Gets the last run time.
+	 * 
+	 * @return
+	 */
+	public long getLastRun() {
+		return this.lastRun;
+	}
+
+	/**
+	 * Returns the tick time.
+	 * 
+	 * @return
+	 */
+	public int getTick() {
+		return this.tick;
+	}
+
+	/**
+	 * Returns the is running flag.
+	 * 
+	 * @return
+	 */
+	public boolean isRunning() {
+		return this.isRunning;
+	}
+
+	/**
+	 * Stops this event.
+	 */
+	public void stop() {
+		this.isRunning = false;
+	}
+
+}
+
+
+EventManager :
+
+
+package server.event;
+
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Manages events which will be run in the future. Has its own thread since some
+ * events may need to be ran faster than the cycle time in the main thread.
+ * 
+ * @author Graham
+ * 
+ */
+public class EventManager implements Runnable {
+
+	/**
+	 * A reference to the singleton;
+	 */
+	private static EventManager singleton = null;
+
+	/**
+	 * The waitFor variable is multiplied by this before the call to wait() is
+	 * made. We do this because other events may be executed after waitFor is
+	 * set (and take time). We may need to modify this depending on event count?
+	 * Some proper tests need to be done.
+	 */
+	private static final double WAIT_FOR_FACTOR = 0.5;
+
+	/**
+	 * Gets the event manager singleton. If there is no singleton, the singleton
+	 * is created.
+	 * 
+	 * @return The event manager singleton.
+	 */
+	public static EventManager getSingleton() {
+		if (singleton == null) {
+			singleton = new EventManager();
+			singleton.thread = new Thread(singleton);
+			singleton.thread.start();
+		}
+		return singleton;
+	}
+
+	/**
+	 * Initialises the event manager (if it needs to be).
+	 */
+	public static void initialize() {
+		getSingleton();
+	}
+
+	/**
+	 * A list of events that are being executed.
+	 */
+	private List&lt;EventContainer&gt; events;
+
+	/**
+	 * The event manager thread. So we can interrupt it and end it nicely on
+	 * shutdown.
+	 */
+	private Thread thread;
+
+	/**
+	 * Initialise the event manager.
+	 */
+	private EventManager() {
+		events = new ArrayList&lt;EventContainer&gt;();
+	}
+
+	/**
+	 * Adds an event.
+	 * 
+	 * @param event
+	 *            The event to add.
+	 * @param tick
+	 *            The tick time.
+	 */
+	public synchronized void addEvent(Event event, int tick) {
+		events.add(new EventContainer(event, tick));
+		notify();
+	}
+
+	@Override
+	/*
+	 * Processes events. Works kinda like newer versions of cron.
+	 */
+	public synchronized void run() {
+		long waitFor = -1;
+		List&lt;EventContainer&gt; remove = new ArrayList&lt;EventContainer&gt;();
+
+		while (true) {
+
+			// reset wait time
+			waitFor = -1;
+
+			// process all events
+			for (EventContainer container : events) {
+				if (container.isRunning()) {
+					if ((System.currentTimeMillis() - container.getLastRun()) &gt;= container
+							.getTick()) {
+						try {
+							container.execute();
+						} catch (Exception e){e.printStackTrace();}	
+					}
+					if (container.getTick() &lt; waitFor || waitFor == -1) {
+						waitFor = container.getTick();
+					}
+				} else {
+					// add to remove list
+					remove.add(container);
+				}
+			}
+
+			// remove events that have completed
+			for (EventContainer container : remove) {
+				events.remove(container);
+			}
+			remove.clear();
+
+			// no events running
+			try {
+				if (waitFor == -1) {
+					wait(); // wait with no timeout
+				} else {
+					// an event is running, wait for that time or until a new
+					// event is added
+					int decimalWaitFor = (int) (Math.ceil(waitFor
+							* WAIT_FOR_FACTOR));
+					wait(decimalWaitFor);
+				}
+			} catch (InterruptedException e) {
+				break; // stop running
+			}
+		}
+	}
+
+	/**
+	 * Shuts the event manager down.
+	 */
+	public void shutdown() {
+		this.thread.interrupt();
+	}
+
+}
+
+- Anything wrong? Got no ide what to do..</description>
+    
+    <lastBuildDate>Thu, 24 Mar 2011 01:07:36 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/xlint-problem/387716.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>-xlint problem</title>
+        <dc:creator><![CDATA[@knockudown knockudown]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/knockudown">@knockudown</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="387716">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/chassy13/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Chassy13:</div>
+<blockquote>
+<p>Nothing is wrong, it compiled fine. It is basically telling you that your program contains old operations compared to the current Java version, or something similar to that if I remember correctly.</p>
+</blockquote>
+</aside>
+<p>Thanks, was thinking lol :b</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/xlint-problem/387716/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/xlint-problem/387716/3</link>
+        <pubDate>Thu, 24 Mar 2011 01:07:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-387716-3</guid>
+        <source url="https://forum.moparisthebest.com/t/xlint-problem/387716.rss">-xlint problem</source>
+      </item>
+      <item>
+        <title>-xlint problem</title>
+        <dc:creator><![CDATA[@chassy13 Chassy13]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chassy13">@chassy13</a> wrote:</p>
+          <blockquote>
+              <p>Nothing is wrong, it compiled fine. It is basically telling you that your program contains old operations compared to the current Java version, or something similar to that if I remember correctly.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/xlint-problem/387716/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/xlint-problem/387716/2</link>
+        <pubDate>Thu, 24 Mar 2011 01:06:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-387716-2</guid>
+        <source url="https://forum.moparisthebest.com/t/xlint-problem/387716.rss">-xlint problem</source>
+      </item>
+      <item>
+        <title>-xlint problem</title>
+        <dc:creator><![CDATA[@knockudown knockudown]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/knockudown">@knockudown</a> wrote:</p>
+          <blockquote>
+              <p>Note : Some input files use unchecked or unsafe operations<br>
+Note : Recompile with-xlint:unchecked for details<br>
+Press any key to continue…</p>
+<p>How to fix it? It says It’s under my \src\server\event*.java - If I Run the compiler as admin?</p>
+<p>Event: package server.event;</p>
+<p>/**</p>
+<ul>
+<li>A simple interface for an event.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public interface Event {</p>
+<pre><code>/**
+ * Called when the event is executed.
+ * 
+ * @param container
+ *            The event container, so the event can dynamically change the
+ *            tick time etc.
+ */
+public void execute(EventContainer container);
+
+    }
+</code></pre>
+<p>EventContainer :</p>
+<p>package server.event;</p>
+<p>/**</p>
+<ul>
+<li>Holds extra data for an event (for example the tick time etc).</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class EventContainer {</p>
+<pre><code>/**
+ * The actual event.
+ */
+private Event event;
+
+/**
+ * A flag which specifies if the event is running;
+ */
+private boolean isRunning;
+
+/**
+ * When this event was last run.
+ */
+private long lastRun;
+
+/**
+ * The tick time in milliseconds.
+ */
+private int tick;
+
+/**
+ * The event container.
+ * 
+ * @param evt
+ * @param tick
+ */
+protected EventContainer(Event evt, int tick) {
+	this.tick = tick;
+	this.event = evt;
+	this.isRunning = true;
+	this.lastRun = System.currentTimeMillis();
+	// can be changed to 0 if you want events to run straight away
+}
+
+/**
+ * Executes the event!
+ */
+public void execute() {
+	this.lastRun = System.currentTimeMillis();
+	this.event.execute(this);
+}
+
+/**
+ * Gets the last run time.
+ * 
+ * @return
+ */
+public long getLastRun() {
+	return this.lastRun;
+}
+
+/**
+ * Returns the tick time.
+ * 
+ * @return
+ */
+public int getTick() {
+	return this.tick;
+}
+
+/**
+ * Returns the is running flag.
+ * 
+ * @return
+ */
+public boolean isRunning() {
+	return this.isRunning;
+}
+
+/**
+ * Stops this event.
+ */
+public void stop() {
+	this.isRunning = false;
+}
+</code></pre>
+<p>}</p>
+<p>EventManager :</p>
+<p>package server.event;</p>
+<p>import java.util.ArrayList;<br>
+import java.util.List;</p>
+<p>/**</p>
+<ul>
+<li>Manages events which will be run in the future. Has its own thread since some</li>
+<li>events may need to be ran faster than the cycle time in the main thread.</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class EventManager implements Runnable {</p>
+<pre><code>/**
+ * A reference to the singleton;
+ */
+private static EventManager singleton = null;
+
+/**
+ * The waitFor variable is multiplied by this before the call to wait() is
+ * made. We do this because other events may be executed after waitFor is
+ * set (and take time). We may need to modify this depending on event count?
+ * Some proper tests need to be done.
+ */
+private static final double WAIT_FOR_FACTOR = 0.5;
+
+/**
+ * Gets the event manager singleton. If there is no singleton, the singleton
+ * is created.
+ * 
+ * @return The event manager singleton.
+ */
+public static EventManager getSingleton() {
+	if (singleton == null) {
+		singleton = new EventManager();
+		singleton.thread = new Thread(singleton);
+		singleton.thread.start();
+	}
+	return singleton;
+}
+
+/**
+ * Initialises the event manager (if it needs to be).
+ */
+public static void initialize() {
+	getSingleton();
+}
+
+/**
+ * A list of events that are being executed.
+ */
+private List&lt;EventContainer&gt; events;
+
+/**
+ * The event manager thread. So we can interrupt it and end it nicely on
+ * shutdown.
+ */
+private Thread thread;
+
+/**
+ * Initialise the event manager.
+ */
+private EventManager() {
+	events = new ArrayList&lt;EventContainer&gt;();
+}
+
+/**
+ * Adds an event.
+ * 
+ * @param event
+ *            The event to add.
+ * @param tick
+ *            The tick time.
+ */
+public synchronized void addEvent(Event event, int tick) {
+	events.add(new EventContainer(event, tick));
+	notify();
+}
+
+@Override
+/*
+ * Processes events. Works kinda like newer versions of cron.
+ */
+public synchronized void run() {
+	long waitFor = -1;
+	List&lt;EventContainer&gt; remove = new ArrayList&lt;EventContainer&gt;();
+
+	while (true) {
+
+		// reset wait time
+		waitFor = -1;
+
+		// process all events
+		for (EventContainer container : events) {
+			if (container.isRunning()) {
+				if ((System.currentTimeMillis() - container.getLastRun()) &gt;= container
+						.getTick()) {
+					try {
+						container.execute();
+					} catch (Exception e){e.printStackTrace();}	
+				}
+				if (container.getTick() &lt; waitFor || waitFor == -1) {
+					waitFor = container.getTick();
+				}
+			} else {
+				// add to remove list
+				remove.add(container);
+			}
+		}
+
+		// remove events that have completed
+		for (EventContainer container : remove) {
+			events.remove(container);
+		}
+		remove.clear();
+
+		// no events running
+		try {
+			if (waitFor == -1) {
+				wait(); // wait with no timeout
+			} else {
+				// an event is running, wait for that time or until a new
+				// event is added
+				int decimalWaitFor = (int) (Math.ceil(waitFor
+						* WAIT_FOR_FACTOR));
+				wait(decimalWaitFor);
+			}
+		} catch (InterruptedException e) {
+			break; // stop running
+		}
+	}
+}
+
+/**
+ * Shuts the event manager down.
+ */
+public void shutdown() {
+	this.thread.interrupt();
+}
+</code></pre>
+<p>}</p>
+<ul>
+<li>Anything wrong? Got no ide what to do…</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/xlint-problem/387716/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/xlint-problem/387716/1</link>
+        <pubDate>Thu, 24 Mar 2011 01:04:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-387716-1</guid>
+        <source url="https://forum.moparisthebest.com/t/xlint-problem/387716.rss">-xlint problem</source>
+      </item>
+  </channel>
+</rss>

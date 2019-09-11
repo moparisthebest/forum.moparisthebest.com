@@ -1,0 +1,659 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>RSReflector</title>
+    <link>https://forum.moparisthebest.com/t/rsreflector/335267</link>
+    <description>[CODE]
+package org.rakura.rsreflector;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+public class RSReflector implements Runnable {
+
+	private final Class&lt;?&gt;[] classes;
+	private final RSReflectorListener listener;
+	private final ScheduledThreadPoolExecutor executor;
+
+	private final Builder builder;
+
+	private final ConcurrentMap&lt;Class&lt;?&gt;, LinkedList&lt;Field&gt;&gt; typeToStaticFields = new ConcurrentHashMap&lt;Class&lt;?&gt;, LinkedList&lt;Field&gt;&gt;();
+
+	private final ConcurrentMap&lt;Field, Object&gt; staticFieldToValue = new ConcurrentHashMap&lt;Field, Object&gt;();
+	private final ConcurrentMap&lt;Field, Map&lt;Object, Object&gt;&gt; instanceFieldToValues = new ConcurrentHashMap&lt;Field, Map&lt;Object, Object&gt;&gt;();
+
+	public static class Builder {
+
+		private Class&lt;?&gt;[] classes;
+		private RSReflectorListener listener;
+
+		private long staticRate = 1000L;
+		private long instanceRate = 1000L;
+		private long staticInitialDelay = 1000L;
+		private long instanceInitialDelay = 1000L;
+
+		public Builder(Class&lt;?&gt;[] classes, RSReflectorListener listener) {
+			this.classes = classes;
+			this.listener = listener;
+		}
+
+		public Builder staticRate(long millis) {
+			staticRate = millis;
+			return this;
+		}
+
+		public Builder instanceRate(long millis) {
+			instanceRate = millis;
+			return this;
+		}
+
+		public Builder staticInitialDelay(long millis) {
+			staticInitialDelay = millis;
+			return this;
+		}
+
+		public Builder instanceInitialDelay(long millis) {
+			instanceInitialDelay = millis;
+			return this;
+		}
+
+		public RSReflector build() {
+			return new RSReflector(this);
+		}
+
+	}
+
+	private RSReflector(Builder rsrb) {
+
+		builder = rsrb;
+
+		classes = builder.classes;
+		listener = builder.listener;
+
+		for (Class&lt;?&gt; curClass : classes) {
+			Field[] curFields = curClass.getDeclaredFields();
+			for (Field curField : curFields) {
+				if (!Modifier.isStatic(curField.getModifiers())) {
+					instanceFieldToValues.put(curField,
+							new HashMap&lt;Object, Object&gt;());
+					continue;
+				}
+				curField.setAccessible(true);
+				try {
+					staticFieldToValue.put(curField, curField.get(null));
+				} catch (IllegalArgumentException e) {
+					e.printStackTrace();
+					System.exit(1);
+				} catch (IllegalAccessException impossible) {
+				}
+				Class&lt;?&gt; type = curField.getType();
+				LinkedList&lt;Field&gt; fieldsOfType = typeToStaticFields.get(type);
+				if (fieldsOfType != null)
+					fieldsOfType.add(curField);
+				else {
+					fieldsOfType = new LinkedList&lt;Field&gt;();
+					fieldsOfType.add(curField);
+					typeToStaticFields.put(type, fieldsOfType);
+				}
+			}
+		}
+
+		executor = new ScheduledThreadPoolExecutor(2);
+
+	}
+
+	@Override
+	public void run() {
+
+		executor.scheduleWithFixedDelay(staticReflectionThread,
+				builder.staticInitialDelay, builder.staticRate,
+				TimeUnit.MILLISECONDS);
+
+		executor.scheduleWithFixedDelay(instanceReflectionThread,
+				builder.instanceInitialDelay, builder.instanceRate,
+				TimeUnit.MILLISECONDS);
+
+	}
+
+	public void stop() {
+		executor.shutdown();
+	}
+
+	private Runnable staticReflectionThread = new Runnable() {
+
+		@Override
+		public void run() {
+			for (Class&lt;?&gt; curClass : classes) {
+				Field[] curFields = curClass.getDeclaredFields();
+				for (Field curField : curFields) {
+					if (!Modifier.isStatic(curField.getModifiers()))
+						continue;
+					Object oldValue = staticFieldToValue.get(curField);
+					Object newValue = null;
+					curField.setAccessible(true);
+					try {
+						newValue = curField.get(null);
+					} catch (IllegalArgumentException e) {
+						e.printStackTrace();
+						System.exit(1);
+					} catch (IllegalAccessException impossible) {
+					}
+					if ((newValue != null &amp;&amp; !newValue.equals(oldValue))
+							|| (newValue == null &amp;&amp; oldValue != null)) {
+						listener.staticFieldChanged(curField, oldValue,
+								newValue);
+						staticFieldToValue.put(curField, newValue);
+					}
+				}
+			}
+		}
+
+	};
+
+	private Runnable instanceReflectionThread = new Runnable() {
+
+		@Override
+		public void run() {
+			for (Class&lt;?&gt; curClass : classes) {
+				Field[] curFields = curClass.getDeclaredFields();
+				for (Field curField : curFields) {
+					if (Modifier.isStatic(curField.getModifiers()))
+						continue;
+					LinkedList&lt;Field&gt; fieldsOfType = typeToStaticFields
+							.get(curClass);
+					if (fieldsOfType == null) {
+						listener
+								.acceptMessage(String
+										.format(
+												&quot;No static fields are of the type of the declaring class - %s - of instance field %s&quot;,
+												curClass.getName(), curField
+														.getName()));
+						continue;
+					}
+					curField.setAccessible(true);
+					try {
+						for (Field fieldOfType : fieldsOfType) {
+							Object anInstance = fieldOfType.get(null);
+							if (anInstance == null)
+								continue;
+							Map&lt;Object, Object&gt; oldValueMappings = (Map&lt;Object, Object&gt;) instanceFieldToValues
+									.get(curField);
+							Object oldValue = oldValueMappings.get(anInstance);
+							Object newValue = curField.get(anInstance);
+							if ((newValue != null &amp;&amp; !newValue.equals(oldValue))
+									|| (newValue == null &amp;&amp; oldValue != null)) {
+								listener.instanceFieldChanged(curField,
+										anInstance, oldValue, newValue);
+								instanceFieldToValues.get(curField).put(
+										anInstance, newValue);
+							}
+						}
+					} catch (IllegalArgumentException e) {
+						e.printStackTrace();
+						System.exit(1);
+					} catch (IllegalAccessException impossible) {
+					}
+				}
+			}
+		}
+
+	};
+
+}
+[/CODE]
+
+[CODE]
+package org.rakura.rsreflector;
+
+import java.lang.reflect.Field;
+
+public interface RSReflectorListener {
+
+	public void instanceFieldChanged(Field field, Object obj, Object oldValue,
+			Object newValue);
+
+	public void staticFieldChanged(Field field, Object oldValue, Object newValue);
+
+	public void acceptMessage(String message);
+
+}
+[/CODE]
+
+Use as you please. If you spot any mistakes, please let me know!</description>
+    
+    <lastBuildDate>Sun, 11 Jul 2010 02:41:49 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/rsreflector/335267.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Rakura, post:5, topic:335267”][quote author=pplsuqbawlz link=topic=431664.msg3177392#msg3177392 date=1270991338]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I just learned about it. Why?</p>
+</blockquote>
+</aside>
+<p>Because you’re doing absolutely nothing concurrent and therefore do not need the overhead such a package provides… There’s better solutions in java.util base package… He’s basically flaming you.<br>
+[/quote][quote author=pplsuqbawlz link=topic=431664.msg3177392#msg3177392 date=1270991338]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I just learned about it. Why?</p>
+</blockquote>
+</aside>
+<p>Because you’re doing absolutely nothing concurrent and therefore do not need the overhead such a package provides… There’s better solutions in java.util base package… He’s basically flaming you.<br>
+[/quote]<br>
+I’m going through the static and the instance fields concurrently?[/quote]<br>
+which is only grabbing values not modifying which is thread safe as is, it’s a concurrency issue when you try to grab data while modifying it, or modify it while modifying.<br>
+in summary: read only tasks are thread safe as long as no modification is going on.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/11</link>
+        <pubDate>Sun, 11 Jul 2010 02:41:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-11</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Evil1 Evil_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evil1">@Evil1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:9, topic:335267”]super_ is a dick and a troll<br>
+![/quote]Good gravedig; would gravedig again</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/10</link>
+        <pubDate>Sat, 10 Jul 2010 15:54:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-10</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>super_ is a dick and a troll<br>
+!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/9</link>
+        <pubDate>Sat, 10 Jul 2010 11:18:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-9</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Rolling  On  Java, post:6, topic:335267”]Thats cos super_ is a clever dick :{D[/quote]get on the train! (/prison break)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/8</link>
+        <pubDate>Tue, 08 Jun 2010 05:37:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-8</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="6" data-topic="335267">
+<div class="title">
+<div class="quote-controls"></div>
+ Rolling  On  Java:</div>
+<blockquote>
+<p>Thats cos super_ is a dick :{D</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/7</link>
+        <pubDate>Mon, 07 Jun 2010 23:59:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-7</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Rolling_On_Java Rolling  On  Java]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rolling_on_java">@Rolling_On_Java</a> wrote:</p>
+          <blockquote>
+              <p>Thats cos super_ is a clever dick :{D</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/6</link>
+        <pubDate>Mon, 07 Jun 2010 20:29:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-6</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Rakura Rakura]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rakura">@Rakura</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“pplsuqbawlz, post:4, topic:335267”][quote author=Rakura link=topic=431664.msg3176560#msg3176560 date=1270916574]<br>
+I just learned about it. Why?<br>
+[/quote]<br>
+Because you’re doing absolutely nothing concurrent and therefore do not need the overhead such a package provides… There’s better solutions in java.util base package… He’s basically flaming you.[/quote][quote=“pplsuqbawlz, post:4, topic:335267”][quote author=Rakura link=topic=431664.msg3176560#msg3176560 date=1270916574]<br>
+I just learned about it. Why?<br>
+[/quote]<br>
+Because you’re doing absolutely nothing concurrent and therefore do not need the overhead such a package provides… There’s better solutions in java.util base package… He’s basically flaming you.[/quote]</p>
+<p>I’m going through the static and the instance fields concurrently?</p>
+<p>P.S. super_ hasn’t probably ever posted anything that wasn’t a flame so I knew that he was “basically flaming me” <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/5</link>
+        <pubDate>Sun, 11 Apr 2010 17:59:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-5</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@pplsuqbawlz pplsuqbawlz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pplsuqbawlz">@pplsuqbawlz</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="3" data-topic="335267">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/rakura/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> Rakura:</div>
+<blockquote>
+<p>I just learned about it. Why?</p>
+</blockquote>
+</aside>
+<p>Because you’re doing absolutely nothing concurrent and therefore do not need the overhead such a package provides… There’s better solutions in java.util base package… He’s basically flaming you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/4</link>
+        <pubDate>Sun, 11 Apr 2010 13:08:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-4</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Rakura Rakura]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rakura">@Rakura</a> wrote:</p>
+          <blockquote>
+              <p>I just learned about it. Why?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/3</link>
+        <pubDate>Sat, 10 Apr 2010 16:22:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-3</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>polling ftl ps did you just learn about java.util.concurrent or are you always retarded</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/2</link>
+        <pubDate>Sat, 10 Apr 2010 01:31:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-2</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+      <item>
+        <title>RSReflector</title>
+        <dc:creator><![CDATA[@Rakura Rakura]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rakura">@Rakura</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">package org.rakura.rsreflector;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+public class RSReflector implements Runnable {
+
+	private final Class&lt;?&gt;[] classes;
+	private final RSReflectorListener listener;
+	private final ScheduledThreadPoolExecutor executor;
+
+	private final Builder builder;
+
+	private final ConcurrentMap&lt;Class&lt;?&gt;, LinkedList&lt;Field&gt;&gt; typeToStaticFields = new ConcurrentHashMap&lt;Class&lt;?&gt;, LinkedList&lt;Field&gt;&gt;();
+
+	private final ConcurrentMap&lt;Field, Object&gt; staticFieldToValue = new ConcurrentHashMap&lt;Field, Object&gt;();
+	private final ConcurrentMap&lt;Field, Map&lt;Object, Object&gt;&gt; instanceFieldToValues = new ConcurrentHashMap&lt;Field, Map&lt;Object, Object&gt;&gt;();
+
+	public static class Builder {
+
+		private Class&lt;?&gt;[] classes;
+		private RSReflectorListener listener;
+
+		private long staticRate = 1000L;
+		private long instanceRate = 1000L;
+		private long staticInitialDelay = 1000L;
+		private long instanceInitialDelay = 1000L;
+
+		public Builder(Class&lt;?&gt;[] classes, RSReflectorListener listener) {
+			this.classes = classes;
+			this.listener = listener;
+		}
+
+		public Builder staticRate(long millis) {
+			staticRate = millis;
+			return this;
+		}
+
+		public Builder instanceRate(long millis) {
+			instanceRate = millis;
+			return this;
+		}
+
+		public Builder staticInitialDelay(long millis) {
+			staticInitialDelay = millis;
+			return this;
+		}
+
+		public Builder instanceInitialDelay(long millis) {
+			instanceInitialDelay = millis;
+			return this;
+		}
+
+		public RSReflector build() {
+			return new RSReflector(this);
+		}
+
+	}
+
+	private RSReflector(Builder rsrb) {
+
+		builder = rsrb;
+
+		classes = builder.classes;
+		listener = builder.listener;
+
+		for (Class&lt;?&gt; curClass : classes) {
+			Field[] curFields = curClass.getDeclaredFields();
+			for (Field curField : curFields) {
+				if (!Modifier.isStatic(curField.getModifiers())) {
+					instanceFieldToValues.put(curField,
+							new HashMap&lt;Object, Object&gt;());
+					continue;
+				}
+				curField.setAccessible(true);
+				try {
+					staticFieldToValue.put(curField, curField.get(null));
+				} catch (IllegalArgumentException e) {
+					e.printStackTrace();
+					System.exit(1);
+				} catch (IllegalAccessException impossible) {
+				}
+				Class&lt;?&gt; type = curField.getType();
+				LinkedList&lt;Field&gt; fieldsOfType = typeToStaticFields.get(type);
+				if (fieldsOfType != null)
+					fieldsOfType.add(curField);
+				else {
+					fieldsOfType = new LinkedList&lt;Field&gt;();
+					fieldsOfType.add(curField);
+					typeToStaticFields.put(type, fieldsOfType);
+				}
+			}
+		}
+
+		executor = new ScheduledThreadPoolExecutor(2);
+
+	}
+
+	@Override
+	public void run() {
+
+		executor.scheduleWithFixedDelay(staticReflectionThread,
+				builder.staticInitialDelay, builder.staticRate,
+				TimeUnit.MILLISECONDS);
+
+		executor.scheduleWithFixedDelay(instanceReflectionThread,
+				builder.instanceInitialDelay, builder.instanceRate,
+				TimeUnit.MILLISECONDS);
+
+	}
+
+	public void stop() {
+		executor.shutdown();
+	}
+
+	private Runnable staticReflectionThread = new Runnable() {
+
+		@Override
+		public void run() {
+			for (Class&lt;?&gt; curClass : classes) {
+				Field[] curFields = curClass.getDeclaredFields();
+				for (Field curField : curFields) {
+					if (!Modifier.isStatic(curField.getModifiers()))
+						continue;
+					Object oldValue = staticFieldToValue.get(curField);
+					Object newValue = null;
+					curField.setAccessible(true);
+					try {
+						newValue = curField.get(null);
+					} catch (IllegalArgumentException e) {
+						e.printStackTrace();
+						System.exit(1);
+					} catch (IllegalAccessException impossible) {
+					}
+					if ((newValue != null &amp;&amp; !newValue.equals(oldValue))
+							|| (newValue == null &amp;&amp; oldValue != null)) {
+						listener.staticFieldChanged(curField, oldValue,
+								newValue);
+						staticFieldToValue.put(curField, newValue);
+					}
+				}
+			}
+		}
+
+	};
+
+	private Runnable instanceReflectionThread = new Runnable() {
+
+		@Override
+		public void run() {
+			for (Class&lt;?&gt; curClass : classes) {
+				Field[] curFields = curClass.getDeclaredFields();
+				for (Field curField : curFields) {
+					if (Modifier.isStatic(curField.getModifiers()))
+						continue;
+					LinkedList&lt;Field&gt; fieldsOfType = typeToStaticFields
+							.get(curClass);
+					if (fieldsOfType == null) {
+						listener
+								.acceptMessage(String
+										.format(
+												"No static fields are of the type of the declaring class - %s - of instance field %s",
+												curClass.getName(), curField
+														.getName()));
+						continue;
+					}
+					curField.setAccessible(true);
+					try {
+						for (Field fieldOfType : fieldsOfType) {
+							Object anInstance = fieldOfType.get(null);
+							if (anInstance == null)
+								continue;
+							Map&lt;Object, Object&gt; oldValueMappings = (Map&lt;Object, Object&gt;) instanceFieldToValues
+									.get(curField);
+							Object oldValue = oldValueMappings.get(anInstance);
+							Object newValue = curField.get(anInstance);
+							if ((newValue != null &amp;&amp; !newValue.equals(oldValue))
+									|| (newValue == null &amp;&amp; oldValue != null)) {
+								listener.instanceFieldChanged(curField,
+										anInstance, oldValue, newValue);
+								instanceFieldToValues.get(curField).put(
+										anInstance, newValue);
+							}
+						}
+					} catch (IllegalArgumentException e) {
+						e.printStackTrace();
+						System.exit(1);
+					} catch (IllegalAccessException impossible) {
+					}
+				}
+			}
+		}
+
+	};
+
+}</code></pre>
+<pre><code class="lang-auto">package org.rakura.rsreflector;
+
+import java.lang.reflect.Field;
+
+public interface RSReflectorListener {
+
+	public void instanceFieldChanged(Field field, Object obj, Object oldValue,
+			Object newValue);
+
+	public void staticFieldChanged(Field field, Object oldValue, Object newValue);
+
+	public void acceptMessage(String message);
+
+}</code></pre>
+<p>Use as you please. If you spot any mistakes, please let me know!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rsreflector/335267/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rsreflector/335267/1</link>
+        <pubDate>Fri, 02 Apr 2010 19:46:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-335267-1</guid>
+        <source url="https://forum.moparisthebest.com/t/rsreflector/335267.rss">RSReflector</source>
+      </item>
+  </channel>
+</rss>

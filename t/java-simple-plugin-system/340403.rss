@@ -1,0 +1,860 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Java] Simple Plugin System</title>
+    <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403</link>
+    <description>A simple plugin system, uses a custom class loader so that it can load classes on another class loader and overwrite the currently loaded plugin if needed.
+
+[code]/**
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+package com.anthony.mscp.sps;
+
+/**
+ * @author anthony
+ * 
+ */
+public interface IPlugin {
+
+	public void execute();
+	public String getName();
+}[/code]
+
+[code]/**
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+package com.anthony.mscp.sps;
+
+import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author anthony A simple plugin system that loads plugins dynamically then
+ *         allows the reloading of them.
+ */
+public class SimplePluginSystem {
+	private Map&lt;String, IPlugin&gt; loadedPlugins = new HashMap&lt;String, IPlugin&gt;();
+	private PluginClassLoader curLoader;
+
+	public void reloadPlugins() {
+		File pluginDir = new File(&quot;./bin/com/anthony/mscp/sps/impl/&quot;);
+		loadedPlugins.clear();
+		curLoader = new PluginClassLoader(&quot;./bin/&quot;);
+		if (pluginDir.isDirectory()) {
+			for (File i : pluginDir.listFiles()) {
+				String name = i.getName();
+				if (name.contains(&quot;.class&quot;)) {
+					try {
+						curLoader.addPlugin(&quot;com.anthony.mscp.sps.impl.&quot;
+								+ name.replace(&quot;.class&quot;, &quot;&quot;));
+						Class&lt;IPlugin&gt; c = curLoader.loadClass(
+								&quot;com.anthony.mscp.sps.impl.&quot;
+										+ name.replace(&quot;.class&quot;, &quot;&quot;), true);
+						if (IPlugin.class.isAssignableFrom(c)) {
+							IPlugin plugin = c.newInstance();
+							loadedPlugins.put(plugin.getName(), plugin);
+						}
+					} catch (ClassNotFoundException e) {
+						e.printStackTrace();
+					} catch (InstantiationException e) {
+						e.printStackTrace();
+					} catch (IllegalAccessException e) {
+						e.printStackTrace();
+					}
+
+				}
+			}
+
+		}
+	}
+
+	public IPlugin getPlugin(String name) {
+		IPlugin plugin = null;
+		for (String s : loadedPlugins.keySet()) {
+			if (s.equalsIgnoreCase(name)) {
+				plugin = loadedPlugins.get(s);
+			}
+		}
+		return plugin;
+	}
+
+	// Just random testing shit.
+	public static void main(String[] args) {
+		while (true) {
+			SimplePluginSystem shit = new SimplePluginSystem();
+			shit.reloadPlugins();
+			shit.getPlugin(&quot;test1&quot;).execute();
+			shit.getPlugin(&quot;test2&quot;).execute();
+			try {
+				Thread.sleep(10000);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		}
+
+	}
+}[/code]
+
+[code]//**
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+package com.anthony.mscp.sps;
+
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+
+/**
+ * @author anthony
+ * A simple class loader impl so we can load plugins.
+ */
+public class PluginClassLoader extends ClassLoader {
+	private String root;
+	private ArrayList&lt;String&gt; pluginNames = new ArrayList&lt;String&gt;();
+
+	public PluginClassLoader(String rootDir) {
+		if (rootDir == null)
+			throw new IllegalArgumentException(&quot;Null root directory&quot;);
+		root = rootDir;
+	}
+
+	public void addPlugin(String s) {
+		pluginNames.add(s);
+	}
+	
+	public boolean allowedPlugin(String s) {
+		boolean found = false;
+		for(String plg : pluginNames) {
+			if(plg.equalsIgnoreCase(s)) {
+				found = true;
+			}
+		}
+		return found;
+	}
+
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public Class&lt;IPlugin&gt; loadClass(String classname, boolean resolve)
+			throws ClassNotFoundException {
+		if (allowedPlugin(classname)) {
+			Class&lt;IPlugin&gt; c = null;
+			String filename = classname.replace(&#39;.&#39;, File.separatorChar) + &quot;.class&quot;;
+			try {
+				byte[] buffer = grabClassBytes(filename);
+				c = (Class&lt;IPlugin&gt;) defineClass(classname, buffer, 0, buffer.length);
+			} catch (IOException e) {
+				throw new ClassNotFoundException(&quot;cannot read file: &quot;
+						+ filename);
+			}
+			if (resolve) {
+				resolveClass(c);
+			}
+			return c;
+		}
+		return (Class&lt;IPlugin&gt;) super.loadClass(classname, resolve);
+	}
+
+	private byte[] grabClassBytes(String name) throws IOException {
+		File classFile = new File(root, name);
+		int bufsize = (int) classFile.length();
+		byte buffer[] = new byte[bufsize];
+		FileInputStream fis = new FileInputStream(classFile);
+		DataInputStream dis = new DataInputStream(fis);
+		dis.readFully(buffer);
+		dis.close();
+		return buffer;
+	}
+}[/code]
+
+If you have any criticism feel free to post it here, do note this isn&#39;t production ready it&#39;s just an example of how you could write something like this.</description>
+    
+    <lastBuildDate>Sun, 30 May 2010 18:05:27 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:23, topic:340403”][quote author=(Anthony) link=topic=436773.msg3221753#msg3221753 date=1275241646]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>great job on copying my exact design, except mine was even better since it checked the classpath</p>
+</blockquote>
+</aside>
+<p>I didn’t even look at your design???<br>
+[/quote]so you just magically ended up with the same exact reloading structure?? if so, then why didn’t you implement this since the beginning (ie before i released mine)? it’s obviously because you didn’t know how to do it until you saw mine[/quote]<br>
+I don’t see how they are similar at all. And the first time I was thinking about it straight but after it was pointed out I realized what I did wrong and fixed it.</p>
+<p>[quote=“PeeHPee, post:24, topic:340403”]<code>                                            for(Class&lt;?&gt; clazz : c.getInterfaces()) {
+                                                        if(clazz.getSimpleName().equalsIgnoreCase("IPlugin")) {
+                                                                IPlugin plugin = c.newInstance();
+</code><br>
+=&gt;</p>
+<p><code>
+if(clazz.isAssignableFrom(IPlugin.class)) {
+    ...
+}
+</code> btw[/quote]<br>
+Thanks that reminded me I can just do <span class="bbcode-i">IPlugin.class.isAssignableFrom©</span> instead of looping through them because it checks to see if it’s a superinterface/class too.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/25</link>
+        <pubDate>Sun, 30 May 2010 18:05:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-25</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@PeeHPee PeeHPee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peehpee">@PeeHPee</a> wrote:</p>
+          <blockquote>
+              <p><code>                                            for(Class&lt;?&gt; clazz : c.getInterfaces()) {
+                                                        if(clazz.getSimpleName().equalsIgnoreCase("IPlugin")) {
+                                                                IPlugin plugin = c.newInstance();
+</code><br>
+=&gt;</p>
+<p><code>
+if(clazz.isAssignableFrom(IPlugin.class)) {
+    ...
+}
+</code> btw</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/24</link>
+        <pubDate>Sun, 30 May 2010 17:58:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-24</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote="(Anthony), post:22, topic:340403"][quote author=abraham2119 link=topic=436773.msg3221726#msg3221726 date=1275237280]<br>
+great job on copying my exact design, except mine was even better since it checked the classpath<br>
+[/quote]<br>
+I didn’t even look at your design???[/quote]so you just magically ended up with the same exact reloading structure?? if so, then why didn’t you implement this since the beginning (ie before i released mine)? it’s obviously because you didn’t know how to do it until you saw mine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/23</link>
+        <pubDate>Sun, 30 May 2010 17:56:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-23</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="21" data-topic="340403">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>great job on copying my exact design, except mine was even better since it checked the classpath</p>
+</blockquote>
+</aside>
+<p>I didn’t even look at your design???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/22</link>
+        <pubDate>Sun, 30 May 2010 17:47:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-22</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>great job on copying my exact design, except mine was even better since it checked the classpath</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/21</link>
+        <pubDate>Sun, 30 May 2010 16:34:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-21</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>Updated the post with working code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/20</link>
+        <pubDate>Sun, 30 May 2010 08:58:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-20</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>jello its alive!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/19</link>
+        <pubDate>Sat, 29 May 2010 05:22:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-19</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="16" data-topic="340403">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/lothy/40/51_1.png" class="avatar"> Lothy:</div>
+<blockquote>
+<p>Stop being lazy and fix the problem if you know one exists. Leaving crappy code lying around where others can stumble upon it is the worst thing you can do.</p>
+</blockquote>
+</aside>
+<p>At the moment I can’t, no work environment. I’m in the process of repairing my computer. Feel free to lock this as right now it’s quite useless.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/18</link>
+        <pubDate>Sat, 29 May 2010 04:41:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-18</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:16, topic:340403”]Stop being lazy and fix the problem if you know one exists. Leaving crappy code lying around where others can stumble upon it is the worst thing you can do.[/quote]hello, i already made a working version:</p>
+<p>[quote=“abraham2119, post:13, topic:340403”][quote author=PeeHPee link=topic=436773.msg3218693#msg3218693 date=1274979676]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…</p>
+</blockquote>
+</aside>
+<p>Out of curiosity, how would you redefine a class?<br>
+[/quote]<a href="http://www.moparisthebest.com/smf/index.php/topic,437991.0.html%5B/quote%5D" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,437991.0.html[/quote]</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/17</link>
+        <pubDate>Fri, 28 May 2010 04:30:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-17</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>Stop being lazy and fix the problem if you know one exists. Leaving crappy code lying around where others can stumble upon it is the worst thing you can do.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/16</link>
+        <pubDate>Fri, 28 May 2010 04:28:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-16</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Frell, post:14, topic:340403”][quote author=c|p link=topic=436773.msg3218578#msg3218578 date=1274961789]<br>
+the difference between java coder and java guru is quite apparent.</p>
+<p>good job, frell.<br>
+[/quote]<br>
+Srs or troll? I tried using the java coffee cup but you cant see it at 32x32. I couldn’t think of anything else. Suggest what should be in its place and ill get it changed.</p>
+<p>And none of the mscp awards show on mitb.[/quote]</p>
+<p>was a serious post, please leave it as-is</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/15</link>
+        <pubDate>Thu, 27 May 2010 23:11:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-15</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@Frell Frell]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frell">@Frell</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“c|p, post:10, topic:340403”]the difference between java coder and java guru is quite apparent.</p>
+<p>good job, frell.[/quote]<br>
+Srs or troll? I tried using the java coffee cup but you cant see it at 32x32. I couldn’t think of anything else. Suggest what should be in its place and ill get it changed.</p>
+<p>And none of the mscp awards show on mitb.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/14</link>
+        <pubDate>Thu, 27 May 2010 23:09:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-14</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“PeeHPee, post:12, topic:340403”][quote author=abraham2119 link=topic=436773.msg3218519#msg3218519 date=1274939987]<br>
+HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…<br>
+[/quote]</p>
+<p>Out of curiosity, how would you redefine a class?[/quote]<a href="http://www.moparisthebest.com/smf/index.php/topic,437991.0.html" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,437991.0.html</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/13</link>
+        <pubDate>Thu, 27 May 2010 19:49:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-13</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@PeeHPee PeeHPee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peehpee">@PeeHPee</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="6" data-topic="340403">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…</p>
+</blockquote>
+</aside>
+<p>Out of curiosity, how would you redefine a class?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/12</link>
+        <pubDate>Thu, 27 May 2010 17:01:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-12</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>I never said this was ready to use I was simply posting an example of reloading classes for something like a plugin system, I actually realized the way I did it was horrible a few days ago and pointed it out to a friend of mine. I just never got around to rewriting it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/11</link>
+        <pubDate>Thu, 27 May 2010 14:42:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-11</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>the difference between java coder and java guru is quite apparent.</p>
+<p>good job, frell.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/10</link>
+        <pubDate>Thu, 27 May 2010 12:03:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-10</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@justinxg27 justinxg27]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justinxg27">@justinxg27</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:8, topic:340403”][quote author=(Anthony) link=topic=436773.msg3218521#msg3218521 date=1274940221]</p>
+<p>[quote author=abraham2119 link=topic=436773.msg3218519#msg3218519 date=1274939987]<br>
+HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…<br>
+[/quote]Yeah, I realized that flaw in my idea but I’m too lazy to fix it.<br>
+[/quote]you really are bad…</p>
+<p>instead of focusing so much on the superfluous things like plugin callback methods upon loaded, how about you focus on making the system ACTUALLY WORK??[/quote]Eat Dick.</p>
+<p><span class="mention">@Topic</span>: Welldone.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/9</link>
+        <pubDate>Thu, 27 May 2010 06:36:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-9</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote="(Anthony), post:7, topic:340403"][quote author=abraham2119 link=topic=436773.msg3218519#msg3218519 date=1274939987]<br>
+HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…<br>
+[/quote]Yeah, I realized that flaw in my idea but I’m too lazy to fix it.[/quote]you really are bad…</p>
+<p>instead of focusing so much on the superfluous things like plugin callback methods upon loaded, how about you focus on making the system ACTUALLY WORK??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/8</link>
+        <pubDate>Thu, 27 May 2010 06:16:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-8</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:6, topic:340403”]HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…[/quote]Yeah, I realized that flaw in my idea but I’m too lazy to fix it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/7</link>
+        <pubDate>Thu, 27 May 2010 06:03:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-7</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>HAHAHAHAHHAHAHA, so basically you can only reload the plugin “CLASS_LOADERS_COUNT” times…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/6</link>
+        <pubDate>Thu, 27 May 2010 05:59:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-6</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>That I am. Oh well, I get more done when I’m bored.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/5</link>
+        <pubDate>Mon, 17 May 2010 00:16:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-5</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@jc22493 Jc22493]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jc22493">@jc22493</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="3" data-topic="340403">
+<div class="title">
+<div class="quote-controls"></div>
+ (Anthony):</div>
+<blockquote>
+<p>Boredom of course…</p>
+</blockquote>
+</aside>
+<p>You’re always bored. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/4</link>
+        <pubDate>Mon, 17 May 2010 00:15:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-4</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>Boredom of course…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/3</link>
+        <pubDate>Sun, 16 May 2010 23:50:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-3</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@Project_Evolution Project Evolution]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/project_evolution">@Project_Evolution</a> wrote:</p>
+          <blockquote>
+              <p>This is really cool, what made you write a plugin system? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/2</link>
+        <pubDate>Sun, 16 May 2010 23:50:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-2</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+      <item>
+        <title>[Java] Simple Plugin System</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>A simple plugin system, uses a custom class loader so that it can load classes on another class loader and overwrite the currently loaded plugin if needed.</p>
+<p>[code]/**</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/<br>
+package com.anthony.mscp.sps;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> anthony</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public interface IPlugin {</p>
+<pre><code>public void execute();
+public String getName();
+</code></pre>
+<p>}[/code]</p>
+<p>[code]/**</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/<br>
+package com.anthony.mscp.sps;</li>
+</ul>
+<p>import java.io.File;<br>
+import java.util.HashMap;<br>
+import java.util.Map;</p>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> anthony A simple plugin system that loads plugins dynamically then</li>
+<li>
+<pre><code>    allows the reloading of them.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public class SimplePluginSystem {<br>
+private Map&lt;String, IPlugin&gt; loadedPlugins = new HashMap&lt;String, IPlugin&gt;();<br>
+private PluginClassLoader curLoader;</p>
+<pre><code>public void reloadPlugins() {
+	File pluginDir = new File("./bin/com/anthony/mscp/sps/impl/");
+	loadedPlugins.clear();
+	curLoader = new PluginClassLoader("./bin/");
+	if (pluginDir.isDirectory()) {
+		for (File i : pluginDir.listFiles()) {
+			String name = i.getName();
+			if (name.contains(".class")) {
+				try {
+					curLoader.addPlugin("com.anthony.mscp.sps.impl."
+							+ name.replace(".class", ""));
+					Class&lt;IPlugin&gt; c = curLoader.loadClass(
+							"com.anthony.mscp.sps.impl."
+									+ name.replace(".class", ""), true);
+					if (IPlugin.class.isAssignableFrom(c)) {
+						IPlugin plugin = c.newInstance();
+						loadedPlugins.put(plugin.getName(), plugin);
+					}
+				} catch (ClassNotFoundException e) {
+					e.printStackTrace();
+				} catch (InstantiationException e) {
+					e.printStackTrace();
+				} catch (IllegalAccessException e) {
+					e.printStackTrace();
+				}
+
+			}
+		}
+
+	}
+}
+
+public IPlugin getPlugin(String name) {
+	IPlugin plugin = null;
+	for (String s : loadedPlugins.keySet()) {
+		if (s.equalsIgnoreCase(name)) {
+			plugin = loadedPlugins.get(s);
+		}
+	}
+	return plugin;
+}
+
+// Just random testing shit.
+public static void main(String[] args) {
+	while (true) {
+		SimplePluginSystem shit = new SimplePluginSystem();
+		shit.reloadPlugins();
+		shit.getPlugin("test1").execute();
+		shit.getPlugin("test2").execute();
+		try {
+			Thread.sleep(10000);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[code]//**</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/<br>
+package com.anthony.mscp.sps;</li>
+</ul>
+<p>import java.io.DataInputStream;<br>
+import java.io.File;<br>
+import java.io.FileInputStream;<br>
+import java.io.IOException;<br>
+import java.util.ArrayList;</p>
+<p>/**</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> anthony</p>
+</li>
+<li>
+<p>A simple class loader impl so we can load plugins.<br>
+*/<br>
+public class PluginClassLoader extends ClassLoader {<br>
+private String root;<br>
+private ArrayList pluginNames = new ArrayList();</p>
+<p>public PluginClassLoader(String rootDir) {<br>
+if (rootDir == null)<br>
+throw new IllegalArgumentException(“Null root directory”);<br>
+root = rootDir;<br>
+}</p>
+<p>public void addPlugin(String s) {<br>
+pluginNames.add(s);<br>
+}</p>
+<p>public boolean allowedPlugin(String s) {<br>
+boolean found = false;<br>
+for(String plg : pluginNames) {<br>
+if(plg.equalsIgnoreCase(s)) {<br>
+found = true;<br>
+}<br>
+}<br>
+return found;<br>
+}</p>
+<p><span class="mention">@SuppressWarnings</span>(“unchecked”)<br>
+public Class loadClass(String classname, boolean resolve)<br>
+throws ClassNotFoundException {<br>
+if (allowedPlugin(classname)) {<br>
+Class c = null;<br>
+String filename = classname.replace(’.’, File.separatorChar) + “.class”;<br>
+try {<br>
+byte[] buffer = grabClassBytes(filename);<br>
+c = (Class) defineClass(classname, buffer, 0, buffer.length);<br>
+} catch (IOException e) {<br>
+throw new ClassNotFoundException("cannot read file: "<br>
++ filename);<br>
+}<br>
+if (resolve) {<br>
+resolveClass©;<br>
+}<br>
+return c;<br>
+}<br>
+return (Class) super.loadClass(classname, resolve);<br>
+}</p>
+<p>private byte[] grabClassBytes(String name) throws IOException {<br>
+File classFile = new File(root, name);<br>
+int bufsize = (int) classFile.length();<br>
+byte buffer[] = new byte[bufsize];<br>
+FileInputStream fis = new FileInputStream(classFile);<br>
+DataInputStream dis = new DataInputStream(fis);<br>
+dis.readFully(buffer);<br>
+dis.close();<br>
+return buffer;<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>If you have any criticism feel free to post it here, do note this isn’t production ready it’s just an example of how you could write something like this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-simple-plugin-system/340403/1</link>
+        <pubDate>Sun, 16 May 2010 23:31:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340403-1</guid>
+        <source url="https://forum.moparisthebest.com/t/java-simple-plugin-system/340403.rss">[Java] Simple Plugin System</source>
+      </item>
+  </channel>
+</rss>

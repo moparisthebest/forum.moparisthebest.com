@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Any way to optimize this?</title>
+    <link>https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833</link>
+    <description>[code]
+&lt;?php
+
+echo &#39;&lt;html&gt;
+&lt;head&gt;
+&lt;title&gt;Statistics&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;&#39;;
+
+$microtime = explode(&quot; &quot;, microtime());
+$microtime = $microtime[1];
+
+mysql_connect(&quot;localhost&quot;, &quot;user&quot;, &quot;pass&quot;) or die(mysql_error());
+mysql_select_db(&quot;dbname&quot;) or die(mysql_error());
+
+$query = mysql_query(&quot;SELECT timestamp FROM tracking ORDER BY timestamp ASC LIMIT 1&quot;);
+$result = mysql_fetch_array($query);
+$firstRequest = $result[&#39;timestamp&#39;];
+$firstRequestU = $firstRequest;
+
+$query = mysql_query(&quot;SELECT timestamp FROM tracking ORDER BY timestamp DESC LIMIT 1&quot;);
+$result = mysql_fetch_array($query);
+$lastRequest = $result[&#39;timestamp&#39;];
+$lastValidRequest = strtotime(date(&quot;Y&quot;, $result[&#39;timestamp&#39;]).&#39;-&#39;.date(&quot;M&quot;, $result[&#39;timestamp&#39;]).&#39;-&#39;.date(&quot;d&quot;, $result[&#39;timestamp&#39;]).&#39; 00:00:00&#39;)-1;
+
+$activeDays = (($lastValidRequest-$firstRequest)+43)/86400;
+$activeDays = 2;
+
+// Get data for all hits
+for($d = 1; $d &lt;= $activeDays; $d++) {
+  for($h = 0; $h &lt; 24; $h++) {
+   $lowerRange = $firstRequest;
+   $upperRange = $firstRequest+3600;
+   $query = mysql_query(&quot;SELECT timestamp FROM tracking WHERE timestamp &gt;= $lowerRange AND timestamp &lt;= $upperRange&quot;);
+   $requests = mysql_num_rows($query);
+   $firstRequest = $lowerRange+3600;
+   $results[$d][$h] = $requests;
+  }
+}
+
+// Get data for unique hits
+for($d = 1; $d &lt;= $activeDays; $d++) {
+  for($h = 0; $h &lt; 24; $h++) {
+   $lowerRange = $firstRequestU;
+   $upperRange = $firstRequestU+3600;
+   $query = mysql_query(&quot;SELECT timestamp FROM tracking WHERE timestamp &gt;= $lowerRange AND timestamp &lt;= $upperRange GROUP BY ip_address&quot;);
+   $requests = mysql_num_rows($query);
+   $firstRequestU = $lowerRange+3600;
+   $resultsU[$d][$h] = $requests;
+  }
+}
+
+
+// Resolve data stream into hourly averages showing all hits
+for($h = 0; $h &lt; 24; $h++) {
+  for($d = 1; $d &lt;= $activeDays; $d++) {
+    $totals[$h] = $totals[$h]+$results[$d][$h];
+  }
+  $averages[$h] = round($totals[$h]/$activeDays, 0);
+}
+
+// Resolve data stream into hourly averages showing unique hits
+for($h = 0; $h &lt; 24; $h++) {
+  for($d = 1; $d &lt;= $activeDays; $d++) {
+    $totalsU[$h] = $totalsU[$h]+$resultsU[$d][$h];
+  }
+  $averagesU[$h] = round($totalsU[$h]/$activeDays, 0);
+}
+
+echo &#39;Averages taken from the past &#39;.$activeDays.&#39; days&lt;hr /&gt;&#39;;
+
+echo &#39;&lt;table cellpadding=0 cellspacing=0 style=&quot;font-size: 14px;&quot;&gt;&#39;;
+
+echo &#39;&lt;tr style=&quot;text-align: center;&quot;&gt;
+        &lt;td style=&quot;font-weight: bold;&quot;&gt;Time&lt;/td&gt;
+        &lt;td style=&quot;font-weight: bold;&quot;&gt;Requests&lt;/td&gt;
+        &lt;td style=&quot;font-weight: bold;&quot;&gt;Unique&lt;/td&gt;
+        &lt;td style=&quot;text-align: left; font-weight: bold;&quot;&gt;Percentage of Visitors&lt;/td&gt;
+      &lt;/tr&gt;&#39;;
+
+for($h=0; $h &lt; 24; $h++) {
+  $averagesU[$h] = $averagesU[$h]*1;
+  echo &#39;&lt;tr&gt;&#39;;
+  echo &#39;&lt;td style=&quot;text-align: right;&quot;&gt;&#39; . $h . &#39;:00&lt;/td&gt;
+        &lt;td style=&quot;text-align: center;&quot;&gt;&#39; . $averages[$h] . &#39;&lt;/td&gt;
+        &lt;td style=&quot;text-align: center;&quot;&gt;&#39; . $averagesU[$h] . &#39;&lt;/td&gt;
+        &lt;td style=&quot;text-align: left;&quot;&gt;
+          &lt;div style=&quot;background-color: #FF7E00; width: &#39;.$averages[$h] . &#39;px; display: inline-block; border: 1px black dotted; border-left: none; height: 20px;&quot;&gt;&lt;div style=&quot;background-color: #0247FE; width: &#39; . $averagesU[$h] . &#39;px; display: inline-block; border: 1px white dotted; border-left: none; height: 10px; vertical-align: middle;&quot;&gt;&amp;nbsp;&lt;/div&gt;&amp;nbsp;&lt;/div&gt;
+        &lt;/td&gt;&#39;;
+
+  echo &#39;&lt;/tr&gt;&#39;;
+}
+
+echo &#39;&lt;/table&gt;&#39;;
+echo &#39;&lt;/body&gt;&lt;/html&gt;&#39;;
+
+?&gt;
+[/code]
+
+This just reports the average hourly usage of my site using a list of IP addresses and unix timestamps from a database.
+
+When I first implemented this it took a few seconds to load, but with just 14 days of stats it takes over 2 minutes to load (obv because its executing a query for each hour of every day, twice). There must be a nicer way to do this. The only option I can think of is running one big query and getting PHP to sort out the data, but I don&#39;t know how to handle data like this in PHP alone.
+
+I&#39;ve added ajax to a new page so it shows a progress bar depending on the days and current progress and I&#39;m thinking of using database caching because the result only changes once every day, but waiting two minutes for the average of just 14 days of results is pretty retarded..</description>
+    
+    <lastBuildDate>Wed, 14 Oct 2009 00:43:58 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Any way to optimize this?</title>
+        <dc:creator><![CDATA[@TabbyKiller TabbyKiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tabbykiller">@TabbyKiller</a> wrote:</p>
+          <blockquote>
+              <p>What Miss Silabsoft says turns to truthness</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/4</link>
+        <pubDate>Wed, 14 Oct 2009 00:43:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-306833-4</guid>
+        <source url="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833.rss">Any way to optimize this?</source>
+      </item>
+      <item>
+        <title>Any way to optimize this?</title>
+        <dc:creator><![CDATA[@inertia inertia]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/inertia">@inertia</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="306833">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>use a cron write complete calculations in a table, have page just query the calculations.</p>
+</blockquote>
+</aside>
+<p>Is that it then? There’s no fast way to collate the data?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/3</link>
+        <pubDate>Sun, 11 Oct 2009 10:40:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-306833-3</guid>
+        <source url="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833.rss">Any way to optimize this?</source>
+      </item>
+      <item>
+        <title>Any way to optimize this?</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>use a cron write complete calculations in a table, have page just query the calculations.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/2</link>
+        <pubDate>Sat, 10 Oct 2009 23:27:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-306833-2</guid>
+        <source url="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833.rss">Any way to optimize this?</source>
+      </item>
+      <item>
+        <title>Any way to optimize this?</title>
+        <dc:creator><![CDATA[@inertia inertia]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/inertia">@inertia</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">&lt;?php
+
+echo '&lt;html&gt;
+&lt;head&gt;
+&lt;title&gt;Statistics&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;';
+
+$microtime = explode(" ", microtime());
+$microtime = $microtime[1];
+
+mysql_connect("localhost", "user", "pass") or die(mysql_error());
+mysql_select_db("dbname") or die(mysql_error());
+
+$query = mysql_query("SELECT timestamp FROM tracking ORDER BY timestamp ASC LIMIT 1");
+$result = mysql_fetch_array($query);
+$firstRequest = $result['timestamp'];
+$firstRequestU = $firstRequest;
+
+$query = mysql_query("SELECT timestamp FROM tracking ORDER BY timestamp DESC LIMIT 1");
+$result = mysql_fetch_array($query);
+$lastRequest = $result['timestamp'];
+$lastValidRequest = strtotime(date("Y", $result['timestamp']).'-'.date("M", $result['timestamp']).'-'.date("d", $result['timestamp']).' 00:00:00')-1;
+
+$activeDays = (($lastValidRequest-$firstRequest)+43)/86400;
+$activeDays = 2;
+
+// Get data for all hits
+for($d = 1; $d &lt;= $activeDays; $d++) {
+  for($h = 0; $h &lt; 24; $h++) {
+   $lowerRange = $firstRequest;
+   $upperRange = $firstRequest+3600;
+   $query = mysql_query("SELECT timestamp FROM tracking WHERE timestamp &gt;= $lowerRange AND timestamp &lt;= $upperRange");
+   $requests = mysql_num_rows($query);
+   $firstRequest = $lowerRange+3600;
+   $results[$d][$h] = $requests;
+  }
+}
+
+// Get data for unique hits
+for($d = 1; $d &lt;= $activeDays; $d++) {
+  for($h = 0; $h &lt; 24; $h++) {
+   $lowerRange = $firstRequestU;
+   $upperRange = $firstRequestU+3600;
+   $query = mysql_query("SELECT timestamp FROM tracking WHERE timestamp &gt;= $lowerRange AND timestamp &lt;= $upperRange GROUP BY ip_address");
+   $requests = mysql_num_rows($query);
+   $firstRequestU = $lowerRange+3600;
+   $resultsU[$d][$h] = $requests;
+  }
+}
+
+
+// Resolve data stream into hourly averages showing all hits
+for($h = 0; $h &lt; 24; $h++) {
+  for($d = 1; $d &lt;= $activeDays; $d++) {
+    $totals[$h] = $totals[$h]+$results[$d][$h];
+  }
+  $averages[$h] = round($totals[$h]/$activeDays, 0);
+}
+
+// Resolve data stream into hourly averages showing unique hits
+for($h = 0; $h &lt; 24; $h++) {
+  for($d = 1; $d &lt;= $activeDays; $d++) {
+    $totalsU[$h] = $totalsU[$h]+$resultsU[$d][$h];
+  }
+  $averagesU[$h] = round($totalsU[$h]/$activeDays, 0);
+}
+
+echo 'Averages taken from the past '.$activeDays.' days&lt;hr /&gt;';
+
+echo '&lt;table cellpadding=0 cellspacing=0 style="font-size: 14px;"&gt;';
+
+echo '&lt;tr style="text-align: center;"&gt;
+        &lt;td style="font-weight: bold;"&gt;Time&lt;/td&gt;
+        &lt;td style="font-weight: bold;"&gt;Requests&lt;/td&gt;
+        &lt;td style="font-weight: bold;"&gt;Unique&lt;/td&gt;
+        &lt;td style="text-align: left; font-weight: bold;"&gt;Percentage of Visitors&lt;/td&gt;
+      &lt;/tr&gt;';
+
+for($h=0; $h &lt; 24; $h++) {
+  $averagesU[$h] = $averagesU[$h]*1;
+  echo '&lt;tr&gt;';
+  echo '&lt;td style="text-align: right;"&gt;' . $h . ':00&lt;/td&gt;
+        &lt;td style="text-align: center;"&gt;' . $averages[$h] . '&lt;/td&gt;
+        &lt;td style="text-align: center;"&gt;' . $averagesU[$h] . '&lt;/td&gt;
+        &lt;td style="text-align: left;"&gt;
+          &lt;div style="background-color: #FF7E00; width: '.$averages[$h] . 'px; display: inline-block; border: 1px black dotted; border-left: none; height: 20px;"&gt;&lt;div style="background-color: #0247FE; width: ' . $averagesU[$h] . 'px; display: inline-block; border: 1px white dotted; border-left: none; height: 10px; vertical-align: middle;"&gt;&amp;nbsp;&lt;/div&gt;&amp;nbsp;&lt;/div&gt;
+        &lt;/td&gt;';
+
+  echo '&lt;/tr&gt;';
+}
+
+echo '&lt;/table&gt;';
+echo '&lt;/body&gt;&lt;/html&gt;';
+
+?&gt;</code></pre>
+<p>This just reports the average hourly usage of my site using a list of IP addresses and unix timestamps from a database.</p>
+<p>When I first implemented this it took a few seconds to load, but with just 14 days of stats it takes over 2 minutes to load (obv because its executing a query for each hour of every day, twice). There must be a nicer way to do this. The only option I can think of is running one big query and getting PHP to sort out the data, but I don’t know how to handle data like this in PHP alone.</p>
+<p>I’ve added ajax to a new page so it shows a progress bar depending on the days and current progress and I’m thinking of using database caching because the result only changes once every day, but waiting two minutes for the average of just 14 days of results is pretty retarded…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833/1</link>
+        <pubDate>Wed, 07 Oct 2009 15:22:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-306833-1</guid>
+        <source url="https://forum.moparisthebest.com/t/any-way-to-optimize-this/306833.rss">Any way to optimize this?</source>
+      </item>
+  </channel>
+</rss>

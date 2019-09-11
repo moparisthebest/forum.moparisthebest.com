@@ -1,0 +1,1726 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+    <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165</link>
+    <description>Alright guys, I&#39;ve been having this problem for like two weeks now so I finally decided I&#39;d come to you and see if I could get some help.
+
+My problem is (lol!) making NPCs walk in the Hyperion server. This version of Hyperion is an early version (the first release actually, before it was named Hyperion) without the region system.
+First off, if I use absolute coordinates in the WalkingQueue to set the next step, the NPC walks northeast indefinitely, leading me to believe that it operates on local coordinates (it does get input [i]directly[/i] from the client).
+
+Here&#39;s the source of WalkingQueue:
+[code]
+package org.runeforge.model.util;
+
+import java.util.Deque;
+import java.util.LinkedList;
+
+import org.runeforge.model.Entity;
+import org.runeforge.util.Constants;
+
+/**
+ * &lt;p&gt;
+ * A &lt;code&gt;WalkingQueue&lt;/code&gt; stores steps the client needs to walk and allows
+ * this queue of steps to be modified.
+ * &lt;/p&gt;
+ * 
+ * &lt;p&gt;
+ * The class will also process these steps when {@link #processNextMovement()}
+ * is called. This should be called once per server cycle.
+ * &lt;/p&gt;
+ * 
+ * @author Graham
+ * @author blakeman8192
+ * 
+ */
+public class WalkingQueue {
+
+	/**
+	 * Represents a single point in the queue.
+	 * 
+	 * @author Graham
+	 * 
+	 */
+	private static class Point {
+		/**
+		 * The x-coordinate.
+		 */
+		private int x = 0;
+
+		/**
+		 * The y-coordinate.
+		 */
+		private int y = 0;
+
+		/**
+		 * The direction to walk to this point.
+		 */
+		private int dir = -1;
+	}
+
+	/**
+	 * The maximum size of the queue. If there are more points than this size,
+	 * they are discarded.
+	 */
+	public static final int MAXIMUM_SIZE = 50;
+
+	/**
+	 * The player.
+	 */
+	private Entity entity;
+
+	/**
+	 * The queue of waypoints.
+	 */
+	private Deque&lt;Point&gt; waypoints = new LinkedList&lt;Point&gt;();
+
+	private boolean runToggled = false;
+
+	private boolean runQueue = false;
+
+	/**
+	 * Creates the &lt;code&gt;WalkingQueue&lt;/code&gt; for the specified
+	 * &lt;code&gt;Player&lt;/code&gt;.
+	 * 
+	 * @param entity
+	 *            The player whose walking queue this is.
+	 */
+	public WalkingQueue(Entity entity) {
+		this.entity = entity;
+	}
+
+	/**
+	 * Sets the run toggled flag.
+	 * 
+	 * @param runToggled
+	 *            The run toggled flag.
+	 */
+	public void setRunningToggled(boolean runToggled) {
+		this.runToggled = runToggled;
+	}
+
+	/**
+	 * Sets the run queue flag.
+	 * 
+	 * @param runQueue
+	 *            The run queue flag.
+	 */
+	public void setRunningQueue(boolean runQueue) {
+		this.runQueue = runQueue;
+	}
+
+	/**
+	 * Gets the run toggled flag.
+	 * 
+	 * @return The run toggled flag.
+	 */
+	public boolean isRunningToggled() {
+		return runToggled;
+	}
+
+	/**
+	 * Gets the running queue flag.
+	 * 
+	 * @return The running queue flag.
+	 */
+	public boolean isRunningQueue() {
+		return runQueue;
+	}
+
+	/**
+	 * Checks if any running flag is set.
+	 * 
+	 * @return &lt;code&gt;true&lt;/code. if so, &lt;code&gt;false&lt;/code&gt; if not.
+	 */
+	public boolean isRunning() {
+		return runToggled || runQueue;
+	}
+
+	/**
+	 * Resets the walking queue so it contains no more steps.
+	 */
+	public void reset() {
+		runQueue = false;
+		waypoints.clear();
+		Point p = new Point();
+		p.x = entity.getLocation().getLocalX();
+		p.y = entity.getLocation().getLocalY();
+		waypoints.add(p);
+	}
+
+	/**
+	 * Removes the first waypoint which is only used for calculating directions.
+	 * This means walking begins at the correct time.
+	 */
+	public void finish() {
+		waypoints.removeFirst();
+	}
+
+	/**
+	 * Adds a single step to the walking queue, filling in the points to the
+	 * previous point in the queue if necessary.
+	 * 
+	 * @param x
+	 *            The local x coordinate.
+	 * @param y
+	 *            The local y coordinate.
+	 */
+	public void addStep(int x, int y) {
+
+		/*
+		 * We need to know the previous point to fill in the path.
+		 */
+		if (waypoints.size() == 0) {
+			/*
+			 * There is no last point, reset the queue to add the player&#39;s
+			 * current location.
+			 */
+			reset();
+		}
+
+		/*
+		 * We retrieve the previous point here.
+		 */
+		Point last = waypoints.peekLast();
+
+		/*
+		 * We now work out the difference between the points.
+		 */
+		int diffX = x - last.x;
+		int diffY = y - last.y;
+		/*
+		 * And calculate the number of steps there is between the points.
+		 */
+		int max = Math.max(Math.abs(diffX), Math.abs(diffY));
+		for (int i = 0; i &lt; max; i++) {
+			/*
+			 * Keep lowering the differences until they reach 0 - when our route
+			 * will be complete.
+			 */
+			if (diffX &lt; 0) {
+				diffX++;
+			} else if (diffX &gt; 0) {
+				diffX--;
+			}
+			if (diffY &lt; 0) {
+				diffY++;
+			} else if (diffY &gt; 0) {
+				diffY--;
+			}
+
+			/*
+			 * Add this next step to the queue.
+			 */
+			addStepInternal(x - diffX, y - diffY);
+		}
+	}
+
+	/**
+	 * Adds a single step to the queue internally without counting gaps. This
+	 * method is unsafe if used incorrectly so it is private to protect the
+	 * queue.
+	 * 
+	 * @param x
+	 *            The x coordinate of the step.
+	 * @param y
+	 *            The y coordinate of the step.
+	 */
+	private void addStepInternal(int x, int y) {
+		/*
+		 * Check if we are going to violate capacity restrictions.
+		 */
+		if (waypoints.size() &gt;= MAXIMUM_SIZE) {
+			/*
+			 * If we are we&#39;ll just skip the point. The player won&#39;t get a
+			 * complete route by large routes are not probable and are more
+			 * likely sent by bots to crash servers.
+			 */
+			return;
+		}
+
+		/*
+		 * We retrieve the previous point (this is to calculate the direction to
+		 * move in).
+		 */
+		Point last = waypoints.peekLast();
+
+		/*
+		 * Now we work out the difference between these steps.
+		 */
+		int diffX = x - last.x;
+		int diffY = y - last.y;
+
+		/*
+		 * And calculate the direction between them.
+		 */
+		int dir = DirectionUtils.direction(diffX, diffY);
+
+		/*
+		 * Check if we actually move anywhere.
+		 */
+		if (dir &gt; -1) {
+			/*
+			 * We now have the information to add a point to the queue! We
+			 * create the actual point object and add it.
+			 */
+			Point p = new Point();
+			p.x = x;
+			p.y = y;
+			p.dir = dir;
+			waypoints.add(p);
+
+		}
+	}
+
+	/**
+	 * Processes the next player&#39;s movement.
+	 */
+	public void processNextMovement() {
+		/*
+		 * Store our current location for checking for a region change later.
+		 */
+		Location currentLocation = entity.getLocation();
+
+		/*
+		 * Store the teleporting flag.
+		 */
+		boolean teleporting = entity.hasTeleportTarget();
+
+		/*
+		 * The points which we are walking to.
+		 */
+		Point walkPoint = null, runPoint = null;
+
+		/*
+		 * Checks if the player is teleporting i.e. not walking.
+		 */
+		if (teleporting) {
+
+			/*
+			 * Reset the walking queue as it will no longer apply after the
+			 * teleport.
+			 */
+			reset();
+
+			/*
+			 * Set the &#39;teleporting&#39; flag which indicates the player is
+			 * teleporting.
+			 */
+			entity.setTeleporting(true);
+
+			/*
+			 * Sets the player&#39;s new location to be their target.
+			 */
+			entity.setLocation(entity.getTeleportTarget());
+
+			/*
+			 * Resets the teleport target.
+			 */
+			entity.resetTeleportTarget();
+		} else {
+			/*
+			 * If the player isn&#39;t teleporting, they are walking (or standing
+			 * still). We get the next direction of movement here.
+			 */
+			walkPoint = getNextPoint();
+
+			/*
+			 * Technically we should check for running here.
+			 */
+			if (runToggled || runQueue) {
+				runPoint = getNextPoint();
+			}
+
+			/*
+			 * Now set the sprites.
+			 */
+			int walkDir = walkPoint == null ? -1 : walkPoint.dir;
+			int runDir = runPoint == null ? -1 : runPoint.dir;
+			entity.getSprites().setSprites(walkDir, runDir);
+		}
+
+		/*
+		 * Check for a map region change, and if the map region has changed, set
+		 * the appropriate flag so the new map region packet is sent.
+		 */
+		int localDiffX = entity.getLocation().getLocalX() - entity.getLastKnownRegion().getLocalX(entity.getLocation());
+		int localDiffY = entity.getLocation().getLocalY() - entity.getLastKnownRegion().getLocalY(entity.getLocation());
+		boolean changed = false;
+		int diffX = 0, diffY = 0;
+		if (localDiffX &lt;= -32) {
+			changed = true;
+			diffX -= 64;
+		} else if (localDiffX &gt;= 32) {
+			changed = true;
+			diffX += 64;
+		}
+		if (localDiffY &lt;= -32) {
+			changed = true;
+			diffY -= 64;
+		} else if (localDiffY &gt;= 32) {
+			changed = true;
+			diffY += 64;
+		}
+		if (changed) {
+			/*
+			 * Set the map region changing flag so the new map region packet is
+			 * sent upon the next update.
+			 */
+			entity.setMapRegionChanging(true);
+
+			/*
+			 * If we were not already teleporting we need to put some points
+			 * back onto the queue. These will be processed after the teleport
+			 * is complete as normal.
+			 */
+			if (!teleporting) {
+				/*
+				 * We are no longer walking throughout the map region change.
+				 */
+				entity.getSprites().setSprites(-1, -1);
+
+				/*
+				 * We should switch our location back.
+				 */
+				entity.setLocation(currentLocation);
+
+				/*
+				 * We should add the running and walking points back in reverse
+				 * order if necessary.
+				 */
+				if (runPoint != null) {
+					waypoints.addFirst(runPoint);
+				}
+				if (walkPoint != null) {
+					waypoints.addFirst(walkPoint);
+				}
+
+				/*
+				 * Now adjust all of our waypoint&#39;s coordinates.
+				 */
+				for (Point p : waypoints) {
+					p.x += diffX;
+					p.y += diffY;
+				}
+			}
+		}
+
+	}
+
+	/**
+	 * Gets the next point of movement.
+	 * 
+	 * @return The next point.
+	 */
+	private Point getNextPoint() {
+		/*
+		 * Take the next point from the queue.
+		 */
+		Point p = waypoints.poll();
+
+		/*
+		 * Checks if there are no more points.
+		 */
+		if (p == null || p.dir == -1) {
+			/*
+			 * Return &lt;code&gt;null&lt;/code&gt; indicating no movement happened.
+			 */
+			return null;
+		} else {
+			/*
+			 * Set the player&#39;s new location.
+			 */
+			int diffX = Constants.DIRECTION_DELTA_X[p.dir];
+			int diffY = Constants.DIRECTION_DELTA_Y[p.dir];
+			entity.setLocation(entity.getLocation().transform(diffX, diffY, 0));
+			/*
+			 * And return the direction.
+			 */
+			return p;
+		}
+	}
+
+}
+[/code]
+
+Now, when I try to use local X/Y with the walking queue, the NPC does walk properly, but there&#39;s a problem with getting the NPC to follow a player: the Location class calculates local coordinates from 48-56 (I&#39;ve had it print them out as I&#39;m walking). This makes it so that the NPC will not follow a player past coordinates 3200 or 3208 (this 8 step limitation applies for other &quot;regions&quot; I would assume) because when the player walks past the player will be at position 48 local, and the NPC will be at 55 or so local, so the NPC will walk backwards, then forwards, repeating, etc. I&#39;m not sure if the local coordinates are supposed to be like that, or if there is a problem with the local/region/absolute calculations in the Location class.
+
+Here is the source of Location:
+[code]
+package org.runeforge.model.util;
+
+/**
+ * Represents a single location in the game world.
+ * 
+ * @author Graham
+ * @author blakeman8192
+ * 
+ */
+public class Location {
+
+	/**
+	 * The x coordinate.
+	 */
+	private int x;
+
+	/**
+	 * The y coordinate.
+	 */
+	private int y;
+
+	/**
+	 * The z coordinate.
+	 */
+	private int z;
+
+	/**
+	 * Creates a location.
+	 * 
+	 * @param x
+	 *            The x coordinate.
+	 * @param y
+	 *            The y coordinate.
+	 * @param z
+	 *            The z coordinate.
+	 * @return The location.
+	 */
+	public static Location create(int x, int y, int z) {
+		return new Location(x, y, z);
+	}
+
+	/**
+	 * Creates a location.
+	 * 
+	 * @param x
+	 *            The x coordinate.
+	 * @param y
+	 *            The y coordinate.
+	 * @param z
+	 *            The z coordinate.
+	 */
+	private Location(int x, int y, int z) {
+		this.x = x;
+		this.y = y;
+	}
+
+	/**
+	 * Gets the absolute x coordinate.
+	 * 
+	 * @return The absolute x coordinate.
+	 */
+	public int getX() {
+		return x;
+	}
+
+	/**
+	 * Gets the absolute y coordinate.
+	 * 
+	 * @return The absolute y coordinate.
+	 */
+	public int getY() {
+		return y;
+	}
+
+	/**
+	 * Gets the z coordinate, or height.
+	 * 
+	 * @return The z coordinate.
+	 */
+	public int getZ() {
+		return z;
+	}
+
+	/**
+	 * Gets the local x coordinate relative to this region.
+	 * 
+	 * @return The local x coordinate relative to this region.
+	 */
+	public int getLocalX() {
+		return getLocalX(this);
+	}
+
+	/**
+	 * Gets the local y coordinate relative to this region.
+	 * 
+	 * @return The local y coordinate relative to this region.
+	 */
+	public int getLocalY() {
+		return getLocalY(this);
+	}
+
+	/**
+	 * Gets the local x coordinate relative to a specific region.
+	 * 
+	 * @param l
+	 *            The region the coordinate will be relative to.
+	 * @return The local x coordinate.
+	 */
+	public int getLocalX(Location l) {
+		return x - 8 * l.getRegionX();
+	}
+
+	/**
+	 * Gets the local y coordinate relative to a specific region.
+	 * 
+	 * @param l
+	 *            The region the coordinate will be relative to.
+	 * @return The local y coordinate.
+	 */
+	public int getLocalY(Location l) {
+		return y - 8 * l.getRegionY();
+	}
+
+	/**
+	 * Gets the region x coordinate.
+	 * 
+	 * @return The region x coordinate.
+	 */
+	public int getRegionX() {
+		return (x &gt;&gt; 3) - 6;
+	}
+
+	/**
+	 * Gets the region y coordinate.
+	 * 
+	 * @return The region y coordinate.
+	 */
+	public int getRegionY() {
+		return (y &gt;&gt; 3) - 6;
+	}
+
+	/**
+	 * Checks if this location is within range of another.
+	 * 
+	 * @param other
+	 *            The other location.
+	 * @return &lt;code&gt;true&lt;/code&gt; if the location is in range, &lt;code&gt;false&lt;/code&gt;
+	 *         if not.
+	 */
+	public boolean isWithinDistance(Location other) {
+		if (z != other.z) {
+			return false;
+		}
+		int deltaX = other.x - x, deltaY = other.y - y;
+		return deltaX &lt;= 15 &amp;&amp; deltaX &gt;= -16 &amp;&amp; deltaY &lt;= 15 &amp;&amp; deltaY &gt;= -16;
+	}
+
+	public boolean isWithinInteractionDistance(Location other) {
+		if (z != other.z) {
+			return false;
+		}
+		int deltaX = other.x - x, deltaY = other.y - y;
+		return deltaX &lt;= 1 &amp;&amp; deltaX &gt;= -1 &amp;&amp; deltaY &lt;= 1 &amp;&amp; deltaY &gt;= -1;
+	}
+
+	@Override
+	public int hashCode() {
+		return z &lt;&lt; 30 | x &lt;&lt; 15 | y;
+	}
+
+	@Override
+	public boolean equals(Object other) {
+		if (!(other instanceof Location)) {
+			return false;
+		}
+		Location loc = (Location) other;
+		return loc.x == x &amp;&amp; loc.y == y &amp;&amp; loc.z == z;
+	}
+
+	@Override
+	public String toString() {
+		return &quot;[&quot; + x + &quot;,&quot; + y + &quot;,&quot; + z + &quot;]&quot;;
+	}
+
+	/**
+	 * Creates a new location based on this location.
+	 * 
+	 * @param diffX
+	 *            X difference.
+	 * @param diffY
+	 *            Y difference.
+	 * @param diffZ
+	 *            Z difference.
+	 * @return The new location.
+	 */
+	public Location transform(int diffX, int diffY, int diffZ) {
+		return new Location(x + diffX, y + diffY, z + diffZ);
+	}
+
+}
+[/code]
+
+This problem has really been holding back my development on combat and other content in my server.
+So, I need to know what is exactly wrong here, and how I should go about fixing things. I appreciate all of your time and help.</description>
+    
+    <lastBuildDate>Tue, 17 Nov 2009 01:02:42 +0000</lastBuildDate>
+    <category>Community Inside Talk</category>
+    <atom:link href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="13" data-topic="314165">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>can someone please post the picture of lothyroo that is byfar his best picture.</p>
+</blockquote>
+</aside>
+<p>Haha, I used to have it somewhere (it was awesome) but I don’t think I do anymore. Ask zerofreeze, wasn’t it his creation? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> That or try IRC.</p>
+<p>[quote=“Moparisthebest, post:14, topic:314165”][quote author=Lothy link=topic=410644.msg3030742#msg3030742 date=1258363354]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>I’m older so you look like me.</p>
+</blockquote>
+</aside>
+<p>Oh cool. Always wanted to look good in a bikini or dress…<br>
+[/quote]</p>
+<p>CREEPY!</p>
+<p>I guess you do live in the same country as Kane…[/quote]<br>
+Was supposed to be a joke, but I’ll settle for scary.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/15</link>
+        <pubDate>Tue, 17 Nov 2009 01:02:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-15</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:11, topic:314165”][quote author=Miss Silabsoft link=topic=410644.msg3030705#msg3030705 date=1258354741]<br>
+I’m older so you look like me.<br>
+[/quote]<br>
+Oh cool. Always wanted to look good in a bikini or dress…[/quote]</p>
+<p>CREEPY!</p>
+<p>I guess you do live in the same country as Kane…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/14</link>
+        <pubDate>Mon, 16 Nov 2009 18:21:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-14</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>can someone please post the picture of lothyroo that is byfar his best picture.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/13</link>
+        <pubDate>Mon, 16 Nov 2009 17:17:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-13</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@Budda Budda]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/budda">@Budda</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:11, topic:314165”][quote author=Miss Silabsoft link=topic=410644.msg3030705#msg3030705 date=1258354741]<br>
+I’m older so you look like me.<br>
+[/quote]<br>
+Oh cool. Always wanted to look good in a bikini or dress…[/quote]<br>
+No I’m pretty sure you’ll never look good in anything. Maybe a costume.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/12</link>
+        <pubDate>Mon, 16 Nov 2009 13:14:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-12</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="10" data-topic="314165">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>I’m older so you look like me.</p>
+</blockquote>
+</aside>
+<p>Oh cool. Always wanted to look good in a bikini or dress…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/11</link>
+        <pubDate>Mon, 16 Nov 2009 09:22:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-11</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>I’m older so you look like me.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/10</link>
+        <pubDate>Mon, 16 Nov 2009 06:59:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-10</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="8" data-topic="314165">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>happens all the time must be because lothy and I look so similar IRL</p>
+</blockquote>
+</aside>
+<p>Do I look like you, or do you look like me? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/9</link>
+        <pubDate>Mon, 16 Nov 2009 05:58:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-9</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>happens all the time must be because lothy and I look so similar IRL</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/8</link>
+        <pubDate>Mon, 16 Nov 2009 05:06:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-8</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:6, topic:314165”]Thanks Lothy? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> I haven’t replied to the topic up until now – I think you mean thanks Silab, hehe.[/quote]The hell? I <span class="bbcode-b">SWEAR</span> it was you who posted that…<br>
+Fixed it, and my apologies go out to Silabsoft!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/7</link>
+        <pubDate>Mon, 16 Nov 2009 04:53:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-7</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>Thanks Lothy? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> I haven’t replied to the topic up until now – I think you mean thanks Silab, hehe.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/6</link>
+        <pubDate>Mon, 16 Nov 2009 01:50:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-6</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Miss Silabsoft, post:4, topic:314165”]you must be doing something wrong I just made a quick example to see what it takes to make the npcs move and it does infact take absolute coords. I put this code together really quickly and should not be taken as useful but it does work.</p>
+<pre><code class="lang-auto"> 	/**
+	 * Creates the NPC with the specified definition. With A default location for respawning the npc
+	 * @param definition The definition.
+     * @param defaultLocation The default location;
+	 */
+	public NPC(NPCDefinition definition,Location defaultLocation) {
+		super();
+		this.definition = definition;
+        this.defaultLocation = defaultLocation;
+        this.setLocation(defaultLocation);
+        this.setWalkableLocations(defaultLocation.getX() - walkable, defaultLocation.getY() - walkable, defaultLocation.getX() + walkable, defaultLocation.getY() +walkable);
+	}</code></pre>
+<pre><code class="lang-auto">   public void setWalkableLocations(int minX, int minY, int maxX, int maxY){
+        
+        int countX = maxX - minX;
+        int countY = maxY - minY;
+        Collection&lt;GameObject&gt; objects = getRegion().getGameObjects();
+        for( int x = 0; x &lt; countX; x++){
+            for(int y = 0; y &lt; countY; y++){
+                int locX = minX + x;
+                int locY = minY + y;
+                boolean canSet = true;
+                for(GameObject object : objects){
+                    if(object.getLocation().getX() == locX &amp;&amp; locY == object.getLocation().getY()){
+                        canSet = false;
+
+                    }
+                }
+                if(canSet){
+                    locations.add(new Integer[]{locX,locY});
+                }
+            }
+        }
+        
+    }
+</code></pre>
+<pre><code class="lang-auto">package org.hyperion.rs2.event.impl;
+
+import java.util.ArrayList;
+import java.util.Random;
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.NPC;
+import org.hyperion.rs2.model.World;
+
+/**
+ *
+ * @author silabsoft
+ */
+public class NPCMovementEvent extends Event {
+
+    public Random generator;
+
+    public NPCMovementEvent() {
+        super(10000);
+        generator = new Random();
+    }
+
+    public void execute() {
+
+        for (NPC npc : World.getWorld().getNPCs()) {
+        //    if (!npc.isInteracting() &amp;&amp; !npc.isInCombat()) {
+                if (generator.nextInt(5) == 2) {
+                    ArrayList&lt;Integer[]&gt; locations = npc.getWalkableLocations();
+                    int size = locations.size();
+                    int pick = generator.nextInt(size);
+                    Integer[] loc = locations.get(pick);
+                    npc.getWalkingQueue().addStep(loc[0], loc[1]);
+                }
+        //    }
+
+        }
+
+    }
+
+}
+</code></pre>
+<p>hope it helps.[/quote]Thanks for the code. I tried to use it (without the GameObject stuff/etc.) and the NPC just walked northeast for me…<br>
+Something must be wrong with the WalkingQueue or something…</p>
+<p>EDIT: I replaced the WalkingQueue and WalkingPacketHandler in my copy of Hyperion with the newest ones. Everything works like a charm now.<br>
+Thanks Miss Silabsoft.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/5</link>
+        <pubDate>Sun, 15 Nov 2009 04:54:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-5</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>you must be doing something wrong I just made a quick example to see what it takes to make the npcs move and it does infact take absolute coords. I put this code together really quickly and should not be taken as useful but it does work.</p>
+<pre><code class="lang-auto"> 	/**
+	 * Creates the NPC with the specified definition. With A default location for respawning the npc
+	 * @param definition The definition.
+     * @param defaultLocation The default location;
+	 */
+	public NPC(NPCDefinition definition,Location defaultLocation) {
+		super();
+		this.definition = definition;
+        this.defaultLocation = defaultLocation;
+        this.setLocation(defaultLocation);
+        this.setWalkableLocations(defaultLocation.getX() - walkable, defaultLocation.getY() - walkable, defaultLocation.getX() + walkable, defaultLocation.getY() +walkable);
+	}</code></pre>
+<pre><code class="lang-auto">   public void setWalkableLocations(int minX, int minY, int maxX, int maxY){
+        
+        int countX = maxX - minX;
+        int countY = maxY - minY;
+        Collection&lt;GameObject&gt; objects = getRegion().getGameObjects();
+        for( int x = 0; x &lt; countX; x++){
+            for(int y = 0; y &lt; countY; y++){
+                int locX = minX + x;
+                int locY = minY + y;
+                boolean canSet = true;
+                for(GameObject object : objects){
+                    if(object.getLocation().getX() == locX &amp;&amp; locY == object.getLocation().getY()){
+                        canSet = false;
+
+                    }
+                }
+                if(canSet){
+                    locations.add(new Integer[]{locX,locY});
+                }
+            }
+        }
+        
+    }
+</code></pre>
+<pre><code class="lang-auto">package org.hyperion.rs2.event.impl;
+
+import java.util.ArrayList;
+import java.util.Random;
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.NPC;
+import org.hyperion.rs2.model.World;
+
+/**
+ *
+ * @author silabsoft
+ */
+public class NPCMovementEvent extends Event {
+
+    public Random generator;
+
+    public NPCMovementEvent() {
+        super(10000);
+        generator = new Random();
+    }
+
+    public void execute() {
+
+        for (NPC npc : World.getWorld().getNPCs()) {
+        //    if (!npc.isInteracting() &amp;&amp; !npc.isInCombat()) {
+                if (generator.nextInt(5) == 2) {
+                    ArrayList&lt;Integer[]&gt; locations = npc.getWalkableLocations();
+                    int size = locations.size();
+                    int pick = generator.nextInt(size);
+                    Integer[] loc = locations.get(pick);
+                    npc.getWalkingQueue().addStep(loc[0], loc[1]);
+                }
+        //    }
+
+        }
+
+    }
+
+}
+</code></pre>
+<p>hope it helps.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/4</link>
+        <pubDate>Sun, 15 Nov 2009 03:16:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-4</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“oksuper_, post:2, topic:314165”]perhaps try to post again but a bit more coherently[/quote]Perhaps try to stop trolling and actually read my thread? :S</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/3</link>
+        <pubDate>Sun, 15 Nov 2009 01:50:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-3</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>perhaps try to post again but a bit more coherently</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/2</link>
+        <pubDate>Sun, 15 Nov 2009 01:23:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-2</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+      <item>
+        <title>I need serverside help from people (you) who know what they&#39;re doing</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>Alright guys, I’ve been having this problem for like two weeks now so I finally decided I’d come to you and see if I could get some help.</p>
+<p>My problem is (lol!) making NPCs walk in the Hyperion server. This version of Hyperion is an early version (the first release actually, before it was named Hyperion) without the region system.<br>
+First off, if I use absolute coordinates in the WalkingQueue to set the next step, the NPC walks northeast indefinitely, leading me to believe that it operates on local coordinates (it does get input <span class="bbcode-i">directly</span> from the client).</p>
+<p>Here’s the source of WalkingQueue:</p>
+<pre><code class="lang-auto">package org.runeforge.model.util;
+
+import java.util.Deque;
+import java.util.LinkedList;
+
+import org.runeforge.model.Entity;
+import org.runeforge.util.Constants;
+
+/**
+ * &lt;p&gt;
+ * A &lt;code&gt;WalkingQueue&lt;/code&gt; stores steps the client needs to walk and allows
+ * this queue of steps to be modified.
+ * &lt;/p&gt;
+ * 
+ * &lt;p&gt;
+ * The class will also process these steps when {@link #processNextMovement()}
+ * is called. This should be called once per server cycle.
+ * &lt;/p&gt;
+ * 
+ * @author Graham
+ * @author blakeman8192
+ * 
+ */
+public class WalkingQueue {
+
+	/**
+	 * Represents a single point in the queue.
+	 * 
+	 * @author Graham
+	 * 
+	 */
+	private static class Point {
+		/**
+		 * The x-coordinate.
+		 */
+		private int x = 0;
+
+		/**
+		 * The y-coordinate.
+		 */
+		private int y = 0;
+
+		/**
+		 * The direction to walk to this point.
+		 */
+		private int dir = -1;
+	}
+
+	/**
+	 * The maximum size of the queue. If there are more points than this size,
+	 * they are discarded.
+	 */
+	public static final int MAXIMUM_SIZE = 50;
+
+	/**
+	 * The player.
+	 */
+	private Entity entity;
+
+	/**
+	 * The queue of waypoints.
+	 */
+	private Deque&lt;Point&gt; waypoints = new LinkedList&lt;Point&gt;();
+
+	private boolean runToggled = false;
+
+	private boolean runQueue = false;
+
+	/**
+	 * Creates the &lt;code&gt;WalkingQueue&lt;/code&gt; for the specified
+	 * &lt;code&gt;Player&lt;/code&gt;.
+	 * 
+	 * @param entity
+	 *            The player whose walking queue this is.
+	 */
+	public WalkingQueue(Entity entity) {
+		this.entity = entity;
+	}
+
+	/**
+	 * Sets the run toggled flag.
+	 * 
+	 * @param runToggled
+	 *            The run toggled flag.
+	 */
+	public void setRunningToggled(boolean runToggled) {
+		this.runToggled = runToggled;
+	}
+
+	/**
+	 * Sets the run queue flag.
+	 * 
+	 * @param runQueue
+	 *            The run queue flag.
+	 */
+	public void setRunningQueue(boolean runQueue) {
+		this.runQueue = runQueue;
+	}
+
+	/**
+	 * Gets the run toggled flag.
+	 * 
+	 * @return The run toggled flag.
+	 */
+	public boolean isRunningToggled() {
+		return runToggled;
+	}
+
+	/**
+	 * Gets the running queue flag.
+	 * 
+	 * @return The running queue flag.
+	 */
+	public boolean isRunningQueue() {
+		return runQueue;
+	}
+
+	/**
+	 * Checks if any running flag is set.
+	 * 
+	 * @return &lt;code&gt;true&lt;/code. if so, &lt;code&gt;false&lt;/code&gt; if not.
+	 */
+	public boolean isRunning() {
+		return runToggled || runQueue;
+	}
+
+	/**
+	 * Resets the walking queue so it contains no more steps.
+	 */
+	public void reset() {
+		runQueue = false;
+		waypoints.clear();
+		Point p = new Point();
+		p.x = entity.getLocation().getLocalX();
+		p.y = entity.getLocation().getLocalY();
+		waypoints.add(p);
+	}
+
+	/**
+	 * Removes the first waypoint which is only used for calculating directions.
+	 * This means walking begins at the correct time.
+	 */
+	public void finish() {
+		waypoints.removeFirst();
+	}
+
+	/**
+	 * Adds a single step to the walking queue, filling in the points to the
+	 * previous point in the queue if necessary.
+	 * 
+	 * @param x
+	 *            The local x coordinate.
+	 * @param y
+	 *            The local y coordinate.
+	 */
+	public void addStep(int x, int y) {
+
+		/*
+		 * We need to know the previous point to fill in the path.
+		 */
+		if (waypoints.size() == 0) {
+			/*
+			 * There is no last point, reset the queue to add the player's
+			 * current location.
+			 */
+			reset();
+		}
+
+		/*
+		 * We retrieve the previous point here.
+		 */
+		Point last = waypoints.peekLast();
+
+		/*
+		 * We now work out the difference between the points.
+		 */
+		int diffX = x - last.x;
+		int diffY = y - last.y;
+		/*
+		 * And calculate the number of steps there is between the points.
+		 */
+		int max = Math.max(Math.abs(diffX), Math.abs(diffY));
+		for (int i = 0; i &lt; max; i++) {
+			/*
+			 * Keep lowering the differences until they reach 0 - when our route
+			 * will be complete.
+			 */
+			if (diffX &lt; 0) {
+				diffX++;
+			} else if (diffX &gt; 0) {
+				diffX--;
+			}
+			if (diffY &lt; 0) {
+				diffY++;
+			} else if (diffY &gt; 0) {
+				diffY--;
+			}
+
+			/*
+			 * Add this next step to the queue.
+			 */
+			addStepInternal(x - diffX, y - diffY);
+		}
+	}
+
+	/**
+	 * Adds a single step to the queue internally without counting gaps. This
+	 * method is unsafe if used incorrectly so it is private to protect the
+	 * queue.
+	 * 
+	 * @param x
+	 *            The x coordinate of the step.
+	 * @param y
+	 *            The y coordinate of the step.
+	 */
+	private void addStepInternal(int x, int y) {
+		/*
+		 * Check if we are going to violate capacity restrictions.
+		 */
+		if (waypoints.size() &gt;= MAXIMUM_SIZE) {
+			/*
+			 * If we are we'll just skip the point. The player won't get a
+			 * complete route by large routes are not probable and are more
+			 * likely sent by bots to crash servers.
+			 */
+			return;
+		}
+
+		/*
+		 * We retrieve the previous point (this is to calculate the direction to
+		 * move in).
+		 */
+		Point last = waypoints.peekLast();
+
+		/*
+		 * Now we work out the difference between these steps.
+		 */
+		int diffX = x - last.x;
+		int diffY = y - last.y;
+
+		/*
+		 * And calculate the direction between them.
+		 */
+		int dir = DirectionUtils.direction(diffX, diffY);
+
+		/*
+		 * Check if we actually move anywhere.
+		 */
+		if (dir &gt; -1) {
+			/*
+			 * We now have the information to add a point to the queue! We
+			 * create the actual point object and add it.
+			 */
+			Point p = new Point();
+			p.x = x;
+			p.y = y;
+			p.dir = dir;
+			waypoints.add(p);
+
+		}
+	}
+
+	/**
+	 * Processes the next player's movement.
+	 */
+	public void processNextMovement() {
+		/*
+		 * Store our current location for checking for a region change later.
+		 */
+		Location currentLocation = entity.getLocation();
+
+		/*
+		 * Store the teleporting flag.
+		 */
+		boolean teleporting = entity.hasTeleportTarget();
+
+		/*
+		 * The points which we are walking to.
+		 */
+		Point walkPoint = null, runPoint = null;
+
+		/*
+		 * Checks if the player is teleporting i.e. not walking.
+		 */
+		if (teleporting) {
+
+			/*
+			 * Reset the walking queue as it will no longer apply after the
+			 * teleport.
+			 */
+			reset();
+
+			/*
+			 * Set the 'teleporting' flag which indicates the player is
+			 * teleporting.
+			 */
+			entity.setTeleporting(true);
+
+			/*
+			 * Sets the player's new location to be their target.
+			 */
+			entity.setLocation(entity.getTeleportTarget());
+
+			/*
+			 * Resets the teleport target.
+			 */
+			entity.resetTeleportTarget();
+		} else {
+			/*
+			 * If the player isn't teleporting, they are walking (or standing
+			 * still). We get the next direction of movement here.
+			 */
+			walkPoint = getNextPoint();
+
+			/*
+			 * Technically we should check for running here.
+			 */
+			if (runToggled || runQueue) {
+				runPoint = getNextPoint();
+			}
+
+			/*
+			 * Now set the sprites.
+			 */
+			int walkDir = walkPoint == null ? -1 : walkPoint.dir;
+			int runDir = runPoint == null ? -1 : runPoint.dir;
+			entity.getSprites().setSprites(walkDir, runDir);
+		}
+
+		/*
+		 * Check for a map region change, and if the map region has changed, set
+		 * the appropriate flag so the new map region packet is sent.
+		 */
+		int localDiffX = entity.getLocation().getLocalX() - entity.getLastKnownRegion().getLocalX(entity.getLocation());
+		int localDiffY = entity.getLocation().getLocalY() - entity.getLastKnownRegion().getLocalY(entity.getLocation());
+		boolean changed = false;
+		int diffX = 0, diffY = 0;
+		if (localDiffX &lt;= -32) {
+			changed = true;
+			diffX -= 64;
+		} else if (localDiffX &gt;= 32) {
+			changed = true;
+			diffX += 64;
+		}
+		if (localDiffY &lt;= -32) {
+			changed = true;
+			diffY -= 64;
+		} else if (localDiffY &gt;= 32) {
+			changed = true;
+			diffY += 64;
+		}
+		if (changed) {
+			/*
+			 * Set the map region changing flag so the new map region packet is
+			 * sent upon the next update.
+			 */
+			entity.setMapRegionChanging(true);
+
+			/*
+			 * If we were not already teleporting we need to put some points
+			 * back onto the queue. These will be processed after the teleport
+			 * is complete as normal.
+			 */
+			if (!teleporting) {
+				/*
+				 * We are no longer walking throughout the map region change.
+				 */
+				entity.getSprites().setSprites(-1, -1);
+
+				/*
+				 * We should switch our location back.
+				 */
+				entity.setLocation(currentLocation);
+
+				/*
+				 * We should add the running and walking points back in reverse
+				 * order if necessary.
+				 */
+				if (runPoint != null) {
+					waypoints.addFirst(runPoint);
+				}
+				if (walkPoint != null) {
+					waypoints.addFirst(walkPoint);
+				}
+
+				/*
+				 * Now adjust all of our waypoint's coordinates.
+				 */
+				for (Point p : waypoints) {
+					p.x += diffX;
+					p.y += diffY;
+				}
+			}
+		}
+
+	}
+
+	/**
+	 * Gets the next point of movement.
+	 * 
+	 * @return The next point.
+	 */
+	private Point getNextPoint() {
+		/*
+		 * Take the next point from the queue.
+		 */
+		Point p = waypoints.poll();
+
+		/*
+		 * Checks if there are no more points.
+		 */
+		if (p == null || p.dir == -1) {
+			/*
+			 * Return &lt;code&gt;null&lt;/code&gt; indicating no movement happened.
+			 */
+			return null;
+		} else {
+			/*
+			 * Set the player's new location.
+			 */
+			int diffX = Constants.DIRECTION_DELTA_X[p.dir];
+			int diffY = Constants.DIRECTION_DELTA_Y[p.dir];
+			entity.setLocation(entity.getLocation().transform(diffX, diffY, 0));
+			/*
+			 * And return the direction.
+			 */
+			return p;
+		}
+	}
+
+}</code></pre>
+<p>Now, when I try to use local X/Y with the walking queue, the NPC does walk properly, but there’s a problem with getting the NPC to follow a player: the Location class calculates local coordinates from 48-56 (I’ve had it print them out as I’m walking). This makes it so that the NPC will not follow a player past coordinates 3200 or 3208 (this 8 step limitation applies for other “regions” I would assume) because when the player walks past the player will be at position 48 local, and the NPC will be at 55 or so local, so the NPC will walk backwards, then forwards, repeating, etc. I’m not sure if the local coordinates are supposed to be like that, or if there is a problem with the local/region/absolute calculations in the Location class.</p>
+<p>Here is the source of Location:</p>
+<pre><code class="lang-auto">package org.runeforge.model.util;
+
+/**
+ * Represents a single location in the game world.
+ * 
+ * @author Graham
+ * @author blakeman8192
+ * 
+ */
+public class Location {
+
+	/**
+	 * The x coordinate.
+	 */
+	private int x;
+
+	/**
+	 * The y coordinate.
+	 */
+	private int y;
+
+	/**
+	 * The z coordinate.
+	 */
+	private int z;
+
+	/**
+	 * Creates a location.
+	 * 
+	 * @param x
+	 *            The x coordinate.
+	 * @param y
+	 *            The y coordinate.
+	 * @param z
+	 *            The z coordinate.
+	 * @return The location.
+	 */
+	public static Location create(int x, int y, int z) {
+		return new Location(x, y, z);
+	}
+
+	/**
+	 * Creates a location.
+	 * 
+	 * @param x
+	 *            The x coordinate.
+	 * @param y
+	 *            The y coordinate.
+	 * @param z
+	 *            The z coordinate.
+	 */
+	private Location(int x, int y, int z) {
+		this.x = x;
+		this.y = y;
+	}
+
+	/**
+	 * Gets the absolute x coordinate.
+	 * 
+	 * @return The absolute x coordinate.
+	 */
+	public int getX() {
+		return x;
+	}
+
+	/**
+	 * Gets the absolute y coordinate.
+	 * 
+	 * @return The absolute y coordinate.
+	 */
+	public int getY() {
+		return y;
+	}
+
+	/**
+	 * Gets the z coordinate, or height.
+	 * 
+	 * @return The z coordinate.
+	 */
+	public int getZ() {
+		return z;
+	}
+
+	/**
+	 * Gets the local x coordinate relative to this region.
+	 * 
+	 * @return The local x coordinate relative to this region.
+	 */
+	public int getLocalX() {
+		return getLocalX(this);
+	}
+
+	/**
+	 * Gets the local y coordinate relative to this region.
+	 * 
+	 * @return The local y coordinate relative to this region.
+	 */
+	public int getLocalY() {
+		return getLocalY(this);
+	}
+
+	/**
+	 * Gets the local x coordinate relative to a specific region.
+	 * 
+	 * @param l
+	 *            The region the coordinate will be relative to.
+	 * @return The local x coordinate.
+	 */
+	public int getLocalX(Location l) {
+		return x - 8 * l.getRegionX();
+	}
+
+	/**
+	 * Gets the local y coordinate relative to a specific region.
+	 * 
+	 * @param l
+	 *            The region the coordinate will be relative to.
+	 * @return The local y coordinate.
+	 */
+	public int getLocalY(Location l) {
+		return y - 8 * l.getRegionY();
+	}
+
+	/**
+	 * Gets the region x coordinate.
+	 * 
+	 * @return The region x coordinate.
+	 */
+	public int getRegionX() {
+		return (x &gt;&gt; 3) - 6;
+	}
+
+	/**
+	 * Gets the region y coordinate.
+	 * 
+	 * @return The region y coordinate.
+	 */
+	public int getRegionY() {
+		return (y &gt;&gt; 3) - 6;
+	}
+
+	/**
+	 * Checks if this location is within range of another.
+	 * 
+	 * @param other
+	 *            The other location.
+	 * @return &lt;code&gt;true&lt;/code&gt; if the location is in range, &lt;code&gt;false&lt;/code&gt;
+	 *         if not.
+	 */
+	public boolean isWithinDistance(Location other) {
+		if (z != other.z) {
+			return false;
+		}
+		int deltaX = other.x - x, deltaY = other.y - y;
+		return deltaX &lt;= 15 &amp;&amp; deltaX &gt;= -16 &amp;&amp; deltaY &lt;= 15 &amp;&amp; deltaY &gt;= -16;
+	}
+
+	public boolean isWithinInteractionDistance(Location other) {
+		if (z != other.z) {
+			return false;
+		}
+		int deltaX = other.x - x, deltaY = other.y - y;
+		return deltaX &lt;= 1 &amp;&amp; deltaX &gt;= -1 &amp;&amp; deltaY &lt;= 1 &amp;&amp; deltaY &gt;= -1;
+	}
+
+	@Override
+	public int hashCode() {
+		return z &lt;&lt; 30 | x &lt;&lt; 15 | y;
+	}
+
+	@Override
+	public boolean equals(Object other) {
+		if (!(other instanceof Location)) {
+			return false;
+		}
+		Location loc = (Location) other;
+		return loc.x == x &amp;&amp; loc.y == y &amp;&amp; loc.z == z;
+	}
+
+	@Override
+	public String toString() {
+		return "[" + x + "," + y + "," + z + "]";
+	}
+
+	/**
+	 * Creates a new location based on this location.
+	 * 
+	 * @param diffX
+	 *            X difference.
+	 * @param diffY
+	 *            Y difference.
+	 * @param diffZ
+	 *            Z difference.
+	 * @return The new location.
+	 */
+	public Location transform(int diffX, int diffY, int diffZ) {
+		return new Location(x + diffX, y + diffY, z + diffZ);
+	}
+
+}</code></pre>
+<p>This problem has really been holding back my development on combat and other content in my server.<br>
+So, I need to know what is exactly wrong here, and how I should go about fixing things. I appreciate all of your time and help.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165/1</link>
+        <pubDate>Sat, 14 Nov 2009 21:51:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-314165-1</guid>
+        <source url="https://forum.moparisthebest.com/t/i-need-serverside-help-from-people-you-who-know-what-theyre-doing/314165.rss">I need serverside help from people (you) who know what they&#39;re doing</source>
+      </item>
+  </channel>
+</rss>

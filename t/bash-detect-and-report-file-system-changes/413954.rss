@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[bash] Detect and report file system changes</title>
+    <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954</link>
+    <description>In light of recent events, you can guess what I wrote this code for.  Basically you give it a known good directory (like where you backed up files to), and then another directory that you would like to verify any changes on, and finally a working directory it will store it&#39;s files in.  Optionally it will mail the report and the diff file to your email address.
+
+Edit the list_files() method to filter out log files or whatever else you DON&#39;T care about changing.
+
+After it runs the files you want will be in:
+$work_dir/report
+$work_dir/files_changed.diff
+
+What I do is list all the files in both directories, list the ones that were added, list the ones that were removed, then take the md5sum of all the files that exist in both folders to detect which ones have changed.  Then I generate a diff file with all of the changes (ignoring whitespace).
+
+You could even run it with crontab to mail you a report every X minutes, that&#39;s what I do.
+
+[code=bash]
+#!/bin/bash
+dir1=$1
+dir2=$2
+work_dir=$3
+mail_to=$4
+mail_from=$5
+
+[ &quot;$mail_from&quot; == &quot;&quot; ] &amp;&amp; mail_from=&quot;root&quot;
+
+mkdir -p $work_dir
+
+list_files(){
+	find -L . -not -type d -not -type l | egrep -v &quot;^./rdiff-backup-data&quot; | egrep -v &#39;.bash_history$&#39; | egrep -v &#39;logs/lighttpd/.*\.log$&#39;
+}
+
+print_report(){
+	[ -s &quot;$2&quot; ] &amp;&amp; (echo -e &quot;$1&quot;; cat &quot;$2&quot;; echo; echo -en &quot;$3&quot;) &gt;&gt; $work_dir/report
+}
+
+cd $dir1
+list_files &gt; $work_dir/dir1.files
+
+cd $dir2
+list_files &gt; $work_dir/dir2.files
+
+diff -Naurw $work_dir/dir1.files $work_dir/dir2.files &gt; $work_dir/files.diff
+
+egrep &quot;^\+&quot; $work_dir/files.diff | tail -n+2 | sed &quot;s/^\+//&quot; &gt; $work_dir/files_added
+egrep &quot;^-&quot;  $work_dir/files.diff | tail -n+2 | sed &quot;s/^-//&quot; &gt; $work_dir/files_removed
+cat $work_dir/dir1.files $work_dir/dir2.files | sort | uniq -d &gt; $work_dir/files_to_checksum
+cat $work_dir/dir1.files $work_dir/dir2.files | sort | uniq -u &gt; $work_dir/files_added_or_removed
+
+rm -f $work_dir/dir1.md5
+cd $dir1
+temp_ifs=$IFS
+IFS=&quot;
+&quot;
+for f in $(cat $work_dir/files_to_checksum)
+do
+	md5sum &quot;$f&quot; &gt;&gt; $work_dir/dir1.md5
+done
+
+cd $dir2
+cat $work_dir/dir1.md5 | md5sum -c | egrep -v &quot;: OK$&quot; | sed &quot;s/: FAILED$//&quot;  &gt; $work_dir/files_changed
+
+rm -f $work_dir/files_changed.diff
+dir1_sed=$(echo $dir1 | sed -e &#39;s/\(\.\|\/\|\*\|\[\|\]\|\\\)/\\&amp;/g&#39;)
+dir2_sed=$(echo $dir2 | sed -e &#39;s/\(\.\|\/\|\*\|\[\|\]\|\\\)/\\&amp;/g&#39;)
+for f in $(cat $work_dir/files_changed | sed &quot;s/\.\///&quot;)
+do
+	tmp=$(diff -Naurw &quot;$dir1/$f&quot; &quot;$dir2/$f&quot;)
+	# just use sed on the first 2 lines, so we know we won&#39;t mess up anything else
+	echo &quot;$tmp&quot; | head -n2 | sed &quot;s/^--- $dir1_sed/--- a/&quot; | sed &quot;s/^+++ $dir2_sed/+++ b/&quot; &gt;&gt; $work_dir/files_changed.diff
+	# copy from lines 3 on down
+	echo &quot;$tmp&quot; | tail -n+3 &gt;&gt; $work_dir/files_changed.diff
+done
+IFS=$temp_ifs
+
+rm -f $work_dir/report
+print_report &quot;Files added:\n&quot; &quot;$work_dir/files_added&quot;
+print_report &quot;Files removed:\n&quot; &quot;$work_dir/files_removed&quot;
+print_report &quot;Files changed:\n&quot; &quot;$work_dir/files_changed&quot; &quot;Diff file: $work_dir/files_changed.diff\n\n&quot;
+
+[ -s &quot;$work_dir/report&quot; ] || attach=&quot;no&quot; &amp;&amp; echo -e &quot;No changes!\n&quot; &gt;&gt; $work_dir/report
+
+[ &quot;$mail_to&quot; != &quot;&quot; ] &amp;&amp; ( echo -e &quot;To: $mail_to\nFrom: $mail_from\nSubject: Diff Report\n&quot;; cat $work_dir/report $work_dir/files_changed.diff; echo; [ &quot;$attach&quot; != &quot;no&quot; ] &amp;&amp; uuencode $work_dir/report report.txt; [ -s &quot;$work_dir/files_changed.diff&quot; ] &amp;&amp; uuencode $work_dir/files_changed.diff files_changed.diff.txt ) | sendmail -v $mail_to
+
+exit 0;
+[/code]
+
+Anyway, any comments/suggestions on it?
+
+edit:
+You can replace &#39;md5sum&#39; with &#39;sha1sum&#39; seamlessly, but it will take much more time, and it is very non-trivial to make md5 collisions.  I don&#39;t think it&#39;s ever been done in the real-world (only on contrived files), so I think this program is fairly safe using md5 for the time being.</description>
+    
+    <lastBuildDate>Fri, 07 Oct 2011 17:17:07 +0000</lastBuildDate>
+    <category>Technology</category>
+    <atom:link href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[bash] Detect and report file system changes</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <p>I’ve only ever used the file/directory watcher built into CSF, because its usually cpanel boxen I need to do this on.</p>
+<p>This looks interesting as a simple lightweight solution for boxes I don’t want CSF on though</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/5</link>
+        <pubDate>Fri, 07 Oct 2011 17:17:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-413954-5</guid>
+        <source url="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss">[bash] Detect and report file system changes</source>
+      </item>
+      <item>
+        <title>[bash] Detect and report file system changes</title>
+        <dc:creator><![CDATA[@Wizzup Wizzup?]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wizzup">@Wizzup</a> wrote:</p>
+          <blockquote>
+              <p>I’ve merged and configured it, wasn’t too impressed but it seems like the right tool for the job.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/4</link>
+        <pubDate>Thu, 06 Oct 2011 16:51:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-413954-4</guid>
+        <source url="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss">[bash] Detect and report file system changes</source>
+      </item>
+      <item>
+        <title>[bash] Detect and report file system changes</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I’ve actually improved this script a lot since this thread, I need to make it consumable for the public and release it again.  I did look at a few other solutions, but I wasn’t big fans.  Have you used tripwire yourself?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/3</link>
+        <pubDate>Thu, 06 Oct 2011 16:34:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-413954-3</guid>
+        <source url="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss">[bash] Detect and report file system changes</source>
+      </item>
+      <item>
+        <title>[bash] Detect and report file system changes</title>
+        <dc:creator><![CDATA[@Wizzup Wizzup?]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wizzup">@Wizzup</a> wrote:</p>
+          <blockquote>
+              <p>May I suggest using tripwire? It’s designed to handle this. <a href="http://sourceforge.net/projects/tripwire/" rel="nofollow noopener">http://sourceforge.net/projects/tripwire/</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/2</link>
+        <pubDate>Thu, 06 Oct 2011 09:03:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-413954-2</guid>
+        <source url="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss">[bash] Detect and report file system changes</source>
+      </item>
+      <item>
+        <title>[bash] Detect and report file system changes</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>In light of recent events, you can guess what I wrote this code for.  Basically you give it a known good directory (like where you backed up files to), and then another directory that you would like to verify any changes on, and finally a working directory it will store it’s files in.  Optionally it will mail the report and the diff file to your email address.</p>
+<p>Edit the list_files() method to filter out log files or whatever else you DON’T care about changing.</p>
+<p>After it runs the files you want will be in:<br>
+$work_dir/report<br>
+$work_dir/files_changed.diff</p>
+<p>What I do is list all the files in both directories, list the ones that were added, list the ones that were removed, then take the md5sum of all the files that exist in both folders to detect which ones have changed.  Then I generate a diff file with all of the changes (ignoring whitespace).</p>
+<p>You could even run it with crontab to mail you a report every X minutes, that’s what I do.</p>
+<pre><code class="lang-auto">#!/bin/bash
+dir1=$1
+dir2=$2
+work_dir=$3
+mail_to=$4
+mail_from=$5
+
+[ "$mail_from" == "" ] &amp;&amp; mail_from="root"
+
+mkdir -p $work_dir
+
+list_files(){
+	find -L . -not -type d -not -type l | egrep -v "^./rdiff-backup-data" | egrep -v '.bash_history$' | egrep -v 'logs/lighttpd/.*\.log$'
+}
+
+print_report(){
+	[ -s "$2" ] &amp;&amp; (echo -e "$1"; cat "$2"; echo; echo -en "$3") &gt;&gt; $work_dir/report
+}
+
+cd $dir1
+list_files &gt; $work_dir/dir1.files
+
+cd $dir2
+list_files &gt; $work_dir/dir2.files
+
+diff -Naurw $work_dir/dir1.files $work_dir/dir2.files &gt; $work_dir/files.diff
+
+egrep "^\+" $work_dir/files.diff | tail -n+2 | sed "s/^\+//" &gt; $work_dir/files_added
+egrep "^-"  $work_dir/files.diff | tail -n+2 | sed "s/^-//" &gt; $work_dir/files_removed
+cat $work_dir/dir1.files $work_dir/dir2.files | sort | uniq -d &gt; $work_dir/files_to_checksum
+cat $work_dir/dir1.files $work_dir/dir2.files | sort | uniq -u &gt; $work_dir/files_added_or_removed
+
+rm -f $work_dir/dir1.md5
+cd $dir1
+temp_ifs=$IFS
+IFS="
+"
+for f in $(cat $work_dir/files_to_checksum)
+do
+	md5sum "$f" &gt;&gt; $work_dir/dir1.md5
+done
+
+cd $dir2
+cat $work_dir/dir1.md5 | md5sum -c | egrep -v ": OK$" | sed "s/: FAILED$//"  &gt; $work_dir/files_changed
+
+rm -f $work_dir/files_changed.diff
+dir1_sed=$(echo $dir1 | sed -e 's/\(\.\|\/\|\*\|\[\|\]\|\\\)/\\&amp;/g')
+dir2_sed=$(echo $dir2 | sed -e 's/\(\.\|\/\|\*\|\[\|\]\|\\\)/\\&amp;/g')
+for f in $(cat $work_dir/files_changed | sed "s/\.\///")
+do
+	tmp=$(diff -Naurw "$dir1/$f" "$dir2/$f")
+	# just use sed on the first 2 lines, so we know we won't mess up anything else
+	echo "$tmp" | head -n2 | sed "s/^--- $dir1_sed/--- a/" | sed "s/^+++ $dir2_sed/+++ b/" &gt;&gt; $work_dir/files_changed.diff
+	# copy from lines 3 on down
+	echo "$tmp" | tail -n+3 &gt;&gt; $work_dir/files_changed.diff
+done
+IFS=$temp_ifs
+
+rm -f $work_dir/report
+print_report "Files added:\n" "$work_dir/files_added"
+print_report "Files removed:\n" "$work_dir/files_removed"
+print_report "Files changed:\n" "$work_dir/files_changed" "Diff file: $work_dir/files_changed.diff\n\n"
+
+[ -s "$work_dir/report" ] || attach="no" &amp;&amp; echo -e "No changes!\n" &gt;&gt; $work_dir/report
+
+[ "$mail_to" != "" ] &amp;&amp; ( echo -e "To: $mail_to\nFrom: $mail_from\nSubject: Diff Report\n"; cat $work_dir/report $work_dir/files_changed.diff; echo; [ "$attach" != "no" ] &amp;&amp; uuencode $work_dir/report report.txt; [ -s "$work_dir/files_changed.diff" ] &amp;&amp; uuencode $work_dir/files_changed.diff files_changed.diff.txt ) | sendmail -v $mail_to
+
+exit 0;</code></pre>
+<p>Anyway, any comments/suggestions on it?</p>
+<p>edit:<br>
+You can replace ‘md5sum’ with ‘sha1sum’ seamlessly, but it will take much more time, and it is very non-trivial to make md5 collisions.  I don’t think it’s ever been done in the real-world (only on contrived files), so I think this program is fairly safe using md5 for the time being.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954/1</link>
+        <pubDate>Thu, 08 Sep 2011 21:47:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-413954-1</guid>
+        <source url="https://forum.moparisthebest.com/t/bash-detect-and-report-file-system-changes/413954.rss">[bash] Detect and report file system changes</source>
+      </item>
+  </channel>
+</rss>

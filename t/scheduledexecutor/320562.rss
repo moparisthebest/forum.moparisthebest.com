@@ -1,0 +1,726 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ScheduledExecutor</title>
+    <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562</link>
+    <description>I am filth jr from run serba (look at the snippet there, i say at top of post).
+
+Anyways, this is like Graham&#39;s EventManager, but better. This is the whole class:
+
+[code]import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Iterator;
+
+public class ScheduledExecutor {
+
+
+	private static final ScheduledExecutor SINGLETON = new ScheduledExecutor();
+
+	public static ScheduledExecutor getSingleton() {
+		return SINGLETON;
+	}
+
+	private ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);
+
+	private List&lt;Event&gt; events = new ArrayList&lt;Event&gt;();
+
+	public void scheduleDelay(Object owner, Runnable r, long delay) {
+		ScheduledFuture&lt;?&gt; event = scheduler.schedule(r, delay, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}
+
+	public void scheduleEvent(Object owner, Runnable r, long delay, long tick) {
+		ScheduledFuture&lt;?&gt; event = scheduler.scheduleWithFixedDelay(r, delay, tick, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}
+
+	public void cancel(Runnable runnable) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getRunnable() == runnable) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+				break;
+			}
+		}
+	}
+
+	public void cancelAll(Object owner) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getOwner() == owner) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+			}
+		}
+	}
+
+	private class Event {
+
+		public Event(Object owner, ScheduledFuture&lt;?&gt; future, Runnable runnable) {
+			this.owner = owner;
+			this.future = future;
+			this.runnable = runnable;
+		}
+
+		private Object owner;
+		private ScheduledFuture&lt;?&gt; future;
+		private Runnable runnable;
+
+		public Object getOwner() {
+			return owner;
+		}
+
+		public ScheduledFuture&lt;?&gt; getFuture() {
+			return future;
+		}
+
+		public Runnable getRunnable() {
+			return runnable;
+		}
+	}
+}[/code]
+
+Ok now what does that all mean... Well first you have your imports:
+
+[code]import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Iterator;[/code]
+
+These are all the classes we will use. All the classes in the java.util.concurrent package are going to be for the actual events running, delaying them, thread pooling, etc. The ones in the java.util package are for storing all the events in a list (The iterator is for faster looping and also, so I can remove things from the list while I&#39;m looping through it).
+
+So then next we have the class name:
+
+[code]public class ScheduledExecutor {[/code]
+
+Yeah, it&#39;s a public class that can be accessed by other files, and the name is ScheduledExecutor.
+
+Now we have the singleton:
+
+[code]
+	private static ScheduledExecutor singleton = null;
+
+	public static ScheduledExecutor getSingleton() {
+		if (singleton == null)
+			singleton = new ScheduledExecutor();
+		return singleton;
+	}[/code]
+
+It allows us to get one instance of the class without making everything static.
+
+Alright, next we have this:
+
+[code]	private ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);[/code]
+
+There&#39;s our ScheduledExecutorService. It handles delaying and executing the tasks. Notice it&#39;s also in a thread pool of 3 threads, which means basically the work load will be split across 3 threads, so yeah, there&#39;s things happening concurrently. So if you don&#39;t know about synchronization you should probably learn about that. I might decide to explain it some other time.
+
+Then we want to organize all of the events happening in the server which is kind of the purpose of having this in one class. We do this by keeping them all in a list:
+
+[code]	private List&lt;Event&gt; events = new ArrayList&lt;Event&gt;();[/code]
+
+NOTE: If you&#39;re wondering what the &#39;Event&#39; class is, it&#39;s coming later.
+
+Ok, now with this list, we can access any events occuring, get their owners (players), and stop them.
+
+Next is:
+
+[code]	public void scheduleDelay(Object owner, Runnable r, long delay) {
+		ScheduledFuture&lt;?&gt; event = scheduler.schedule(r, delay, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}[/code]
+
+This little snippet delays an event. So lets say, you want to make it so that an action doesn&#39;t automatically happen, and just simply delay it.. You would use this (exact usage at end). This schedules a delayed event with the ScheduledExecutorService (that we saw earlier). Then it creates an instance of the Event class (will explain later) and adds it to the list.
+
+[code]	public void scheduleEvent(Object owner, Runnable r, long delay, long tick) {
+		ScheduledFuture&lt;?&gt; event = scheduler.scheduleWithFixedDelay(r, delay, tick, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}[/code]
+
+This snippet can delay an event, but even after the event is delayed, it will keep running at the tick you set. So I can make an event that has a delay of 100ms and a tick of 500ms. This means, the event will execute after 100ms. Then it will wait 500ms and execute again. Then it will wait another 500ms and execute again. It will continue until you stop it. You can also simply have a delay of 0ms. This also creates an instance of the Event class and adds it to the list.
+
+This next part puts use to that list we have:
+
+[code]	public void cancel(Runnable runnable) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getRunnable() == runnable) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+				break;
+			}
+		}
+	}
+[/code]
+
+Basically, it searches through the list for the Runnable (which is the action you&#39;re doing) and then stops it. How this is used specifically will be explained at the end of the thread.
+
+Now this next part is similar. But instead of using the runnable to find the event. It finds all the events using the &#39;owner&#39;, which would be the Client/Player class in most cases:
+
+[code]	public void cancelAll(Object owner) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getOwner() == owner) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+			}
+		}
+	}[/code]
+
+Like the name says, it cancels ALL events that the owner has running.
+
+Finally, the last thing is the Event class:
+
+[code]	private class Event {
+
+		public Event(Object owner, ScheduledFuture&lt;?&gt; future, Runnable runnable) {
+			this.owner = owner;
+			this.future = future;
+			this.runnable = runnable;
+		}
+
+		private Object owner;
+		private ScheduledFuture&lt;?&gt; future;
+		private Runnable runnable;
+
+		public Object getOwner() {
+			return owner;
+		}
+
+		public ScheduledFuture&lt;?&gt; getFuture() {
+			return future;
+		}
+
+		public Runnable getRunnable() {
+			return runnable;
+		}
+	}[/code]
+
+This is just a container class we use, so that we can store all this information in one list. It has the owner, the event that&#39;s running (ScheduledFuture&lt;?&gt;), and then the runnable.
+
+
+Now for usage:
+
+[code]// An event that sets the owner as &#39;client&#39;. It has a delay of 0ms and runs at a 1000ms tick. It will print &#39;lolcats&#39; every 1 second basically. This event will never stop until the program is terminated.
+
+		ScheduledExecutor.getSingleton().scheduleEvent(client, new Runnable() {
+			public void run() {
+				System.out.println(&quot;lolcats&quot;);
+			}
+		}, 0, 1000);[/code]
+[code]// This event is run only once, and with a delay. It will print &#39;Hi there.&#39; after 350ms. Because it&#39;s run once, it will not print out &#39;Hi there.&#39; again. The owner is set as &#39;null&#39;, you can do that for non-player related events if you want.
+		ScheduledExecutor.getSingleton().scheduleDelay(null, new Runnable() {
+			public void run() {
+				System.out.println(&quot;Hi there.&quot;);
+			}
+		}, 350);[/code]
+[code]// This event has the owner set as client. I have put a variable called &#39;times&#39; in the instance of the runnable interface (since it&#39;s an interface, you can do that). This event is delayed (it will execute after 200ms). Then after that it will execute every 1000ms. It will print out &#39;lolcats&#39; 5 times. After this it will stop. Why? &#39;ScheduledExecutor.getSingleton().cancel(this);&#39; That&#39;s why. We&#39;re stopping the event using the runnable (this). Look back at the ScheduledExecutor class and at the cancel(Runnable) method.
+		ScheduledExecutor.getSingleton().scheduleEvent(client, new Runnable() {
+			private int times = 0;
+
+			public void run() {
+				System.out.println(&quot;lolcats&quot;);
+				if (++times == 5)
+					ScheduledExecutor.getSingleton().cancel(this);
+			}
+		}, 200, 1000);[/code]</description>
+    
+    <lastBuildDate>Thu, 24 Dec 2009 01:16:32 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <p>That’s the noobs’ fault.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/15</link>
+        <pubDate>Thu, 24 Dec 2009 01:16:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-15</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@sir_pk_p00n sir pk p00n]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sir_pk_p00n">@sir_pk_p00n</a> wrote:</p>
+          <blockquote>
+              <p>i said if it isnt cancled, alot of people usally think its this.stop(); -.-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/14</link>
+        <pubDate>Wed, 23 Dec 2009 22:03:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-14</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sir pk p00n, post:12, topic:320562”]One:</p>
+<p>This is not thread safe.</p>
+<p>Two:</p>
+<p>A huge memory leek if you dont use the cancle to remove it from the list[/quote]</p>
+<p>Fixed thread safing (Graham), but I don’t get the memory leak part. It IS removed from the list once it’s canceled?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/13</link>
+        <pubDate>Wed, 23 Dec 2009 21:33:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-13</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@sir_pk_p00n sir pk p00n]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sir_pk_p00n">@sir_pk_p00n</a> wrote:</p>
+          <blockquote>
+              <p>One:</p>
+<p>This is not thread safe.</p>
+<p>Two:</p>
+<p>A huge memory leek if you dont use the cancle to remove it from the list</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/12</link>
+        <pubDate>Wed, 23 Dec 2009 15:36:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-12</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, ok, I wouldn’t call it a flaw. Even if I added the capability for multiple instancing, it’s not like it’s necessary to use.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/11</link>
+        <pubDate>Mon, 21 Dec 2009 22:29:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-11</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>i know very well how to use multiple instances… i was pointing out a flaw in your design.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/10</link>
+        <pubDate>Mon, 21 Dec 2009 21:23:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-10</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="8" data-topic="320562">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>multiple instances of the class… it is a singleton and therefore makes it (or at least should make it) impossible to have separate, multiple instances. my question was why i would use this as opposed to a vanilla scheduledexecutorservice since this just wraps one, which you answered in the post before.</p>
+</blockquote>
+</aside>
+<p>Ohh, why do you want multiple instances. (And if you’re bent on getting multiple instances, it’s easy enough, just change a few things.)</p>
+<p>But you could do something with multiple instancing like:</p>
+<p>[code]public ScheduledExecutor(int threadCount) {<br>
+scheduler = Executors.newScheduledThreadPool(threadCount);<br>
+}</p>
+<p>private ScheduledExecutorService scheduler;</p>
+<p>public List shutdown() {<br>
+return scheduler.shutdownNow();<br>
+}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/9</link>
+        <pubDate>Mon, 21 Dec 2009 00:43:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-9</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>multiple instances of the class… it is a singleton and therefore makes it (or at least should make it) impossible to have separate, multiple instances. my question was why i would use this as opposed to a vanilla scheduledexecutorservice since this just wraps one, which you answered in the post before.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/8</link>
+        <pubDate>Mon, 21 Dec 2009 00:40:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-8</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Souls2 Souls`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/souls2">@Souls2</a> wrote:</p>
+          <blockquote>
+              <p>Lol… Well thats really good codes <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/7</link>
+        <pubDate>Sun, 20 Dec 2009 23:45:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-7</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="5" data-topic="320562">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>why do you even wrap the service? what point is the facade here, lol? also, the difference is that ‘eventmanager’ supports delay/rate changes at execution time as opposed to scheduledexecutorservice’s static delay/rate</p>
+</blockquote>
+</aside>
+<p>For organization and slight more convenience… You could just remove the whole facade, but then you wouldn’t have the cancel options for owners, and you would have to keep the ScheduledFuture&lt;?&gt; (so that you may cancel it, well we still keep it anyways, but like you said this is a facade and makes it a whole lot easier on the eyes)</p>
+<p>Like isn’t this method easier instead of:</p>
+<p><code>    public void beepForAnHour() {
+        final Runnable beeper = new Runnable() {
+                public void run() { System.out.println("beep"); }
+            };
+        final ScheduledFuture&lt;?&gt; beeperHandle =
+            scheduler.scheduleAtFixedRate(beeper, 10, 10, SECONDS);
+        scheduler.schedule(new Runnable() {
+                public void run() { beeperHandle.cancel(true); }
+            }, 60 * 60, SECONDS);
+    }
+</code> (Example sun gives)[br][br][size=1]Posted on: December 20, 2009, 03:52:32 pm[/size][hr][quote=“oksuper_, post:3, topic:320562”]and for multiple instances? and why would i use this as opposed to a scheduledexecutorservice from executors.new(singlethread)?scheduled(threadpool)?executor[/quote]</p>
+<p>Multiple instances of what. Part of the point of me making this was so that it could have a thread pool, so I can do stuff concurrently. The server that I am making puts a lot of use to this (and I haven’t even gotten very far yet). You could use a single thread if you want… “scheduled(threadpool)” err isn’t that what I’m using.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/6</link>
+        <pubDate>Sun, 20 Dec 2009 21:48:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-6</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>why do you even wrap the service? what point is the facade here, lol? also, the difference is that ‘eventmanager’ supports delay/rate changes at execution time as opposed to scheduledexecutorservice’s static delay/rate</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/5</link>
+        <pubDate>Sun, 20 Dec 2009 17:33:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-5</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@cows1471 cows1471]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cows1471">@cows1471</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="3" data-topic="320562">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>and for multiple instances? and why would i use this as opposed to a scheduledexecutorservice from executors.new(singlethread)?scheduled(threadpool)?executor</p>
+</blockquote>
+</aside>
+<p>Thats a good point. Does that in theory make this tutorial worthless?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/4</link>
+        <pubDate>Sun, 20 Dec 2009 16:17:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-4</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>and for multiple instances? and why would i use this as opposed to a scheduledexecutorservice from executors.new(singlethread)?scheduled(threadpool)?executor</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/3</link>
+        <pubDate>Sun, 20 Dec 2009 15:29:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-3</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@cows1471 cows1471]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cows1471">@cows1471</a> wrote:</p>
+          <blockquote>
+              <p>nice <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/2</link>
+        <pubDate>Sun, 20 Dec 2009 13:27:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-2</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+      <item>
+        <title>ScheduledExecutor</title>
+        <dc:creator><![CDATA[@Mod_Momo Mod Momo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_momo">@Mod_Momo</a> wrote:</p>
+          <blockquote>
+              <p>I am filth jr from run serba (look at the snippet there, i say at top of post).</p>
+<p>Anyways, this is like Graham’s EventManager, but better. This is the whole class:</p>
+<p>[code]import java.util.concurrent.Executors;<br>
+import java.util.concurrent.ScheduledExecutorService;<br>
+import java.util.concurrent.ScheduledFuture;<br>
+import java.util.concurrent.TimeUnit;<br>
+import java.util.ArrayList;<br>
+import java.util.List;<br>
+import java.util.Iterator;</p>
+<p>public class ScheduledExecutor {</p>
+<pre><code>private static final ScheduledExecutor SINGLETON = new ScheduledExecutor();
+
+public static ScheduledExecutor getSingleton() {
+	return SINGLETON;
+}
+
+private ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);
+
+private List&lt;Event&gt; events = new ArrayList&lt;Event&gt;();
+
+public void scheduleDelay(Object owner, Runnable r, long delay) {
+	ScheduledFuture&lt;?&gt; event = scheduler.schedule(r, delay, TimeUnit.MILLISECONDS);
+	events.add(new Event(owner, event, r));
+}
+
+public void scheduleEvent(Object owner, Runnable r, long delay, long tick) {
+	ScheduledFuture&lt;?&gt; event = scheduler.scheduleWithFixedDelay(r, delay, tick, TimeUnit.MILLISECONDS);
+	events.add(new Event(owner, event, r));
+}
+
+public void cancel(Runnable runnable) {
+	Iterator&lt;Event&gt; iterator = events.iterator();
+	while (iterator.hasNext()) {
+		Event event = iterator.next();
+		if (event.getRunnable() == runnable) {
+			event.getFuture().cancel(true);
+			events.remove(event);
+			break;
+		}
+	}
+}
+
+public void cancelAll(Object owner) {
+	Iterator&lt;Event&gt; iterator = events.iterator();
+	while (iterator.hasNext()) {
+		Event event = iterator.next();
+		if (event.getOwner() == owner) {
+			event.getFuture().cancel(true);
+			events.remove(event);
+		}
+	}
+}
+
+private class Event {
+
+	public Event(Object owner, ScheduledFuture&lt;?&gt; future, Runnable runnable) {
+		this.owner = owner;
+		this.future = future;
+		this.runnable = runnable;
+	}
+
+	private Object owner;
+	private ScheduledFuture&lt;?&gt; future;
+	private Runnable runnable;
+
+	public Object getOwner() {
+		return owner;
+	}
+
+	public ScheduledFuture&lt;?&gt; getFuture() {
+		return future;
+	}
+
+	public Runnable getRunnable() {
+		return runnable;
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>Ok now what does that all mean… Well first you have your imports:</p>
+<p><code>import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Iterator;</code></p>
+<p>These are all the classes we will use. All the classes in the java.util.concurrent package are going to be for the actual events running, delaying them, thread pooling, etc. The ones in the java.util package are for storing all the events in a list (The iterator is for faster looping and also, so I can remove things from the list while I’m looping through it).</p>
+<p>So then next we have the class name:</p>
+<pre><code class="lang-auto">public class ScheduledExecutor {</code></pre>
+<p>Yeah, it’s a public class that can be accessed by other files, and the name is ScheduledExecutor.</p>
+<p>Now we have the singleton:</p>
+<pre><code class="lang-auto">	private static ScheduledExecutor singleton = null;
+
+	public static ScheduledExecutor getSingleton() {
+		if (singleton == null)
+			singleton = new ScheduledExecutor();
+		return singleton;
+	}[/code]
+
+It allows us to get one instance of the class without making everything static.
+
+Alright, next we have this:
+
+[code]	private ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);[/code]
+
+There's our ScheduledExecutorService. It handles delaying and executing the tasks. Notice it's also in a thread pool of 3 threads, which means basically the work load will be split across 3 threads, so yeah, there's things happening concurrently. So if you don't know about synchronization you should probably learn about that. I might decide to explain it some other time.
+
+Then we want to organize all of the events happening in the server which is kind of the purpose of having this in one class. We do this by keeping them all in a list:
+
+[code]	private List&lt;Event&gt; events = new ArrayList&lt;Event&gt;();[/code]
+
+NOTE: If you're wondering what the 'Event' class is, it's coming later.
+
+Ok, now with this list, we can access any events occuring, get their owners (players), and stop them.
+
+Next is:
+
+[code]	public void scheduleDelay(Object owner, Runnable r, long delay) {
+		ScheduledFuture&lt;?&gt; event = scheduler.schedule(r, delay, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}[/code]
+
+This little snippet delays an event. So lets say, you want to make it so that an action doesn't automatically happen, and just simply delay it.. You would use this (exact usage at end). This schedules a delayed event with the ScheduledExecutorService (that we saw earlier). Then it creates an instance of the Event class (will explain later) and adds it to the list.
+
+[code]	public void scheduleEvent(Object owner, Runnable r, long delay, long tick) {
+		ScheduledFuture&lt;?&gt; event = scheduler.scheduleWithFixedDelay(r, delay, tick, TimeUnit.MILLISECONDS);
+		events.add(new Event(owner, event, r));
+	}[/code]
+
+This snippet can delay an event, but even after the event is delayed, it will keep running at the tick you set. So I can make an event that has a delay of 100ms and a tick of 500ms. This means, the event will execute after 100ms. Then it will wait 500ms and execute again. Then it will wait another 500ms and execute again. It will continue until you stop it. You can also simply have a delay of 0ms. This also creates an instance of the Event class and adds it to the list.
+
+This next part puts use to that list we have:
+
+[code]	public void cancel(Runnable runnable) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getRunnable() == runnable) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+				break;
+			}
+		}
+	}</code></pre>
+<p>Basically, it searches through the list for the Runnable (which is the action you’re doing) and then stops it. How this is used specifically will be explained at the end of the thread.</p>
+<p>Now this next part is similar. But instead of using the runnable to find the event. It finds all the events using the ‘owner’, which would be the Client/Player class in most cases:</p>
+<p><code>	public void cancelAll(Object owner) {
+		Iterator&lt;Event&gt; iterator = events.iterator();
+		while (iterator.hasNext()) {
+			Event event = iterator.next();
+			if (event.getOwner() == owner) {
+				event.getFuture().cancel(true);
+				events.remove(event);
+			}
+		}
+	}</code></p>
+<p>Like the name says, it cancels ALL events that the owner has running.</p>
+<p>Finally, the last thing is the Event class:</p>
+<p>[code]	private class Event {</p>
+<pre><code>	public Event(Object owner, ScheduledFuture&lt;?&gt; future, Runnable runnable) {
+		this.owner = owner;
+		this.future = future;
+		this.runnable = runnable;
+	}
+
+	private Object owner;
+	private ScheduledFuture&lt;?&gt; future;
+	private Runnable runnable;
+
+	public Object getOwner() {
+		return owner;
+	}
+
+	public ScheduledFuture&lt;?&gt; getFuture() {
+		return future;
+	}
+
+	public Runnable getRunnable() {
+		return runnable;
+	}
+}[/code]
+</code></pre>
+<p>This is just a container class we use, so that we can store all this information in one list. It has the owner, the event that’s running (ScheduledFuture&lt;?&gt;), and then the runnable.</p>
+<p>Now for usage:</p>
+<p>[code]// An event that sets the owner as ‘client’. It has a delay of 0ms and runs at a 1000ms tick. It will print ‘lolcats’ every 1 second basically. This event will never stop until the program is terminated.</p>
+<pre><code>	ScheduledExecutor.getSingleton().scheduleEvent(client, new Runnable() {
+		public void run() {
+			System.out.println("lolcats");
+		}
+	}, 0, 1000);[/code]
+</code></pre>
+<p><code>// This event is run only once, and with a delay. It will print 'Hi there.' after 350ms. Because it's run once, it will not print out 'Hi there.' again. The owner is set as 'null', you can do that for non-player related events if you want.
+		ScheduledExecutor.getSingleton().scheduleDelay(null, new Runnable() {
+			public void run() {
+				System.out.println("Hi there.");
+			}
+		}, 350);</code></p>
+<p>[code]// This event has the owner set as client. I have put a variable called ‘times’ in the instance of the runnable interface (since it’s an interface, you can do that). This event is delayed (it will execute after 200ms). Then after that it will execute every 1000ms. It will print out ‘lolcats’ 5 times. After this it will stop. Why? ‘ScheduledExecutor.getSingleton().cancel(this);’ That’s why. We’re stopping the event using the runnable (this). Look back at the ScheduledExecutor class and at the cancel(Runnable) method.<br>
+ScheduledExecutor.getSingleton().scheduleEvent(client, new Runnable() {<br>
+private int times = 0;</p>
+<pre><code>		public void run() {
+			System.out.println("lolcats");
+			if (++times == 5)
+				ScheduledExecutor.getSingleton().cancel(this);
+		}
+	}, 200, 1000);[/code]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scheduledexecutor/320562/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scheduledexecutor/320562/1</link>
+        <pubDate>Sat, 19 Dec 2009 22:54:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-320562-1</guid>
+        <source url="https://forum.moparisthebest.com/t/scheduledexecutor/320562.rss">ScheduledExecutor</source>
+      </item>
+  </channel>
+</rss>

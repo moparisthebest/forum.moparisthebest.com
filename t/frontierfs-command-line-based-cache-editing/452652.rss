@@ -1,0 +1,1236 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>FrontierFS - Command line based cache editing</title>
+    <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652</link>
+    <description>Hello,
+
+Gem dependencies:
+
+[QUOTE]
+- SQLite3
+-Slop
+[/QUOTE]
+
+[B]Version 1.0.1[/B]
+
+[code]
+#!/usr/bin/env ruby
+
+#
+# Copyright (c) 2012 Hadyn Richard
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the &quot;Software&quot;), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
+                                                                        # Require the gems
+require &#39;sqlite3&#39;
+require &#39;slop&#39;
+require &#39;pathname&#39;
+require &#39;fileutils&#39;
+
+                                                                        # Declare the constants
+DEFAULT_PROTOCOL  = 5
+
+                                                                        # Declare the SQL queries
+CREATE_PROJECT_TABLE     = &quot;CREATE TABLE frontier_projects (
+                                                  id          INTEGER PRIMARY KEY AUTOINCREMENT
+                                                  CONSTRAINT  id REFERENCES frontier_indexes(project_id) ON DELETE CASCADE,
+                                                  name        STRING
+                                                )&quot;
+
+CREATE_INDEX_TABLE  = &quot;CREATE TABLE frontier_indexes  (
+                                                        id              INTEGER PRIMARY KEY AUTOINCREMENT
+                                                        CONSTRAINT id REFERENCES frontier_archives(index_id) ON DELETE CASCADE,
+                                                        name            STRING,
+                                                        project_id      INTEGER,
+                                                        index_id        INTEGER,
+                                                        protocol        INTEGER,
+                                                        is_named        INTEGER,
+                                                        FOREIGN KEY(project_id) REFERENCES frontier_projects(id)
+                                                      )&quot;
+
+CREATE_ENTRIES_TABLE = &quot;CREATE TABLE frontier_archives  (
+                                                              id          INTEGER PRIMARY KEY AUTOINCREMENT
+                                                              CONSTRAINT id REFERENCES frontier_files(entry_id) ON DELETE CASCADE,
+                                                              index_id    INTEGER,
+                                                              archive_id  INTEGER,
+                                                              name_hash   INTEGER,
+                                                              checksum    INTEGER DEFAULT 0,
+                                                              version     INTEGER DEFAULT 0,
+                                                              FOREIGN KEY(index_id) REFERENCES frontier_indexes(id)
+                                                            )&quot;
+
+CREATE_SELECTS_TABLE = &quot;CREATE TABLE frontier_selects (
+                                                        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                        type    INTEGER,
+                                                        name    STRING
+                                                      )&quot;
+
+###########################
+#                         #
+#  START UTILITY METHODS  #
+#                         #
+###########################
+
+
+#
+# Calculates a hash for a string.
+#
+# str =&gt; The string to calculate the hash for.
+#
+def getHash( str )
+  hash = 0
+  str.each_byte { |b|
+    hash = ((hash &lt;&lt; 5) - hash) + b
+  }
+  hash &amp; 0xFFFFFFFF                                                     # Limit to dword
+end
+
+
+#
+# Initializes all the global variables for all the files in a project.
+#
+# dir =&gt; The directory to retrieve the files from. The default directory is
+#        the current working directory.
+#
+def initFiles( dir = nil )
+  if( dir.equal?(nil) )
+    dir = Dir.pwd + &#39;/.fs/&#39;
+  end
+  $fsdb = SQLite3::Database.new( dir + &#39;fsconfig.db&#39; ) unless $fsdb != nil
+end
+
+
+#
+# Creates all the tables required for a project directory to be fully initialized.
+#
+def createTables( )
+    $fsdb.execute( CREATE_PROJECT_TABLE )
+    $fsdb.execute( CREATE_INDEX_TABLE )
+    $fsdb.execute( CREATE_ENTRIES_TABLE )
+    $fsdb.execute( CREATE_SELECTS_TABLE )
+end
+
+#
+# Initializes all the selects.
+#
+def initSelects( )
+  $fsdb.execute( &quot;SELECT type, name FROM frontier_selects&quot; ) do |row|
+    case row[0]
+      when 0
+        $project = row[1]
+      when 1
+        $index = row[1]
+      when 2
+        $archive = row[1]
+    end
+  end
+end
+
+#
+# Selects the current type.
+#
+# type =&gt; The type id of the type to select.
+#
+def selectCurrent( type , name )
+  count = -1
+  case type
+    when 0
+      count = $fsdb.get_first_value( &quot;SELECT COUNT(*) FROM frontier_projects WHERE name = :name&quot; , :name =&gt; name )
+    else
+      raise &#39;Unknown type passed to select current.&#39;
+  end
+  if( count &gt; 0)
+    $fsdb.execute( &quot;DELETE FROM frontier_selects WHERE type &gt;= :value&quot; , :value =&gt; type)
+    $fsdb.execute( &quot;INSERT INTO frontier_selects (type, name) VALUES (:type, :name)&quot; , :type =&gt; type , :name =&gt; name )
+  else
+    puts &quot;frontierfs: No such entry for requested select &#39;#{ name }&#39;.&quot;
+  end
+end
+
+#
+# Resets the current table.
+#
+def resetCurrent( )
+  $fsdb.execute( &quot;DELETE FROM frontier_selects WHERE type &gt;= 0&quot; )
+  puts &quot;frontierfs: No types were currently selected.&quot; if $fsdb.changes == 0
+end
+
+
+
+
+
+#########################
+#                       #
+# START PROJECT METHODS #
+#                       #
+#########################
+
+
+#
+# Creates a new project.
+#
+# name =&gt; The name of the project to create.
+#
+def createProject( name )
+  if( $fsdb.get_first_value( &quot;SELECT COUNT(*) FROM frontier_projects WHERE name = :name&quot;, :name =&gt; name) &gt; 0 )
+    puts &quot;frontierfs: Project &#39;#{ name }&#39; already exists.&quot;
+    exit
+  end
+  begin
+    Dir.mkdir( Dir.pwd + &#39;/&#39; + name )
+    $fsdb.execute( &quot;INSERT INTO frontier_projects (name) VALUES (:name)&quot; , :name =&gt; name )
+  rescue
+    puts &quot;frontierfs: Failed to create project &#39;#{ name }&#39;.&quot;
+  end
+end
+
+
+#
+# Deletes a project.
+#
+# name =&gt; The name of the project to create.
+#
+def deleteProject( name )
+  $fsdb.execute( &quot;DELETE FROM frontier_projects WHERE name = :name&quot; , :name =&gt; name )
+  if( $fsdb.changes &gt; 0 )
+    FileUtils.rm_rf( Dir.pwd + &#39;/&#39; + name )
+  else
+    puts &quot;frontierfs: Project &#39;#{ name }&#39; does not exist.&quot;
+  end
+end
+
+
+#
+# Lists all the projects.
+#
+def listProjects( )
+  $fsdb.execute( &quot;SELECT * FROM frontier_projects&quot; ) do |row|
+    puts row
+  end
+end
+
+
+
+
+#########################
+#                       #
+#  START INDEX METHODS  #
+#                       #
+#########################
+
+
+#
+# Creates a new index.
+#
+# name          =&gt; The name of the index to create.
+# project_name  =&gt; The name of the project to create the index for.
+# index_id      =&gt; The id of the index to create.
+# is_named      =&gt; Option for if entries within the index are named.
+#
+def createIndex( name , project_name , index_id , protocol , is_named )
+  project_id = $fsdb.get_first_row( &quot;SELECT id FROM frontier_projects WHERE name = :name&quot;, :name =&gt; project_name )
+  if( project_id.equal?(nil) or project_id.length == 0 )
+    puts &quot;frontierfs: Project &#39;#{ project_name }&#39; does not exist.&quot;
+    exit
+  end
+  if( $fsdb.get_first_value( &quot;SELECT COUNT(*) FROM frontier_indexes WHERE (name = :name OR index_id = :indexid) AND project_id = :project_id&quot;, :name =&gt; name, :project_id =&gt; project_id[0], :indexid =&gt; index_id) &gt; 0 )
+    puts &quot;frontierfs: An index with the name of &#39;#{ name }&#39; or id &#39;#{ index_id }&#39; already exists.&quot;
+    exit
+  end
+  begin
+    Dir.mkdir( Dir.pwd + &#39;/&#39; + project_name + &#39;/&#39; + name )
+    $fsdb.execute( &quot;INSERT INTO frontier_indexes (name, project_id, index_id, protocol, is_named) VALUES (:name, :project_id, :index_id, :protocol, :is_named)&quot; , :name =&gt; name, :project_id =&gt; project_id[0], :index_id =&gt; index_id, :protocol =&gt; protocol, :is_named =&gt; is_named ? 1 : 0)
+  rescue
+    puts &quot;frontierfs: Failed to create index #{ name }.&quot;
+  end
+end
+
+#
+# Edits an index.
+#
+# name =&gt; The name of the index to edit.
+#
+def editIndex( name , params )
+  query = &quot;UPDATE frontier_indexes SET &quot;
+  do_query = false
+  if( !params[:indexid].equal?(nil) )
+    query += do_query ? &quot;, &quot; : &quot;&quot; + &quot;index_id = :indexid&quot;
+    do_query = true
+  end
+  if( !params[:protocol].equal?(nil) )
+    query += do_query ? &quot;, &quot; : &quot;&quot; + &quot;protocol = :protocol&quot;
+    do_query = true
+  end
+  if( !params[:isnamed].equal?(nil) )
+    query += do_query ? &quot;, &quot; : &quot;&quot; + &quot;is_named = :is_named&quot;
+    do_query = true
+  end
+  if(do_query)
+    statement = $fsdb.prepare(query += &quot; WHERE name = :name&quot;)
+    statement.bind_param(&quot;name&quot;, name)
+    statement.bind_param(&quot;indexid&quot;, params[:indexid]) unless params[:indexid].equal?(nil)
+    statement.bind_param(&quot;protocol&quot;, params[:protocol]) unless params[:protocol].equal?(nil)
+    statement.bind_param(&quot;is_named&quot;, params[:isnamed] ? 1 : 0) unless params[:isnamed].equal?(nil)
+    statement.execute
+    puts &quot;frontierfs: Index &#39;#{ name }&#39; does not exist.&quot; if $fsdb.changes == 0
+  else
+    puts &quot;frontierfs: No update information specified.&quot;
+  end
+end
+
+#
+# Deletes an index.
+#
+# name =&gt; The name of the index to delete.
+#
+def deleteIndex( name )
+  project_id = $fsdb.get_first_row( &quot;SELECT project_id FROM frontier_indexes WHERE name = :name&quot; , :name =&gt; name)
+  if( project_id.length == 0 )
+    puts &quot;frontierfs: Index &#39;#{ name }&#39; does not exist.&quot;
+    exit
+  end
+  project_name = $fsdb.get_first_value( &quot;SELECT name FROM frontier_projects WHERE id = :id&quot; , :id =&gt; project_id[0] )
+  $fsdb.execute( &quot;DELETE FROM frontier_indexes WHERE name = :name&quot;, name)
+  FileUtils.rm_rf( Dir.pwd + &#39;/&#39; + project_name + &#39;/&#39; + name )
+end
+
+# Lists all the indexes.
+#
+def listIndexes( name )
+  $fsdb.execute( &quot;SELECT * FROM frontier_indexes&quot; ) do |row|
+    puts row
+  end
+end
+
+
+
+
+
+###########################
+#                         #
+#  START ARCHIVE METHODS  #
+#                         #
+###########################
+
+
+#
+# Creates a new archive.
+#
+# name          =&gt; The name of the archive to create.
+# project_name  =&gt; The name of the project that this entry is a child of.
+# index_name    =&gt; The name of the index that this entry is a child of.
+# id            =&gt; The id of the archive to create.
+#
+def createArchive( name , project_name , index_name , archive_id )
+  project_id = $fsdb.get_first_row( &quot;SELECT id FROM frontier_projects WHERE name = :name&quot;, :name =&gt; project_name )
+  if( project_id.equal?(nil) or project_id.length == 0 )
+    puts &quot;frontierfs: Project &#39;#{ project_name }&#39; does not exist.&quot;
+    exit
+  end
+  index_id = $fsdb.get_first_row( &quot;SELECT id FROM frontier_indexes WHERE name = :name AND project_id = :projectid&quot;, :name =&gt; index_name , :projectid =&gt; project_id[0] )
+  if( index_id.equal?(nil) or index_id.length == 0 )
+    puts &quot;frontierfs: Index &#39;#{ project_name }&#39; does not exist.&quot;
+    exit
+  end
+  name_hash = getHash( name )
+  if( $fsdb.get_first_value(&quot;SELECT COUNT(*) FROM frontier_archives WHERE name_hash = :namehash OR archive_id = :archiveid&quot; , :namehash =&gt; name_hash , :archiveid =&gt; archive_id) &gt; 0)
+    puts &quot;frontierfs: An archive named &#39;#{ name }&#39; or with an id of &#39;#{ archive_id }&#39; already exists.&quot;
+    exit
+  end
+  begin
+    $fsdb.execute( &quot;INSERT INTO frontier_archives (index_id, archive_id, name_hash) VALUES (:indexid, :archiveid, :namehash)&quot;, :indexid =&gt; index_id[0] , :archiveid =&gt; archive_id , :namehash =&gt; name_hash )
+    Dir.mkdir( Dir.pwd + &#39;/&#39; + project_name + &#39;/&#39; + index_name + &#39;/&#39; + name)
+  rescue
+    puts &quot;frontierfs: Failed to create archive #{ name }.&quot;
+  end
+end
+
+
+#
+# Deletes an archive.
+#
+# name  =&gt; The name of the archive to delete.
+#
+def deleteArchive( name )
+  name_hash = getHash( name )
+  index_id = $fsdb.get_first_row( &quot;SELECT index_id FROM frontier_indexes WHERE name_hash = :namehash&quot; , :namehash =&gt; name_hash)
+  if( index_id.length == 0 )
+    puts &quot;frontierfs: Archive &#39;#{ name }&#39; does not exist.&quot;
+    exit
+  end
+  index_query = $fsdb.get_first_row( &quot;SELECT name, project_id FROM frontier WHERE id = :id&quot; , :id =&gt; index_id[0] )
+  project_name = $fsdb.get_first_value( &quot;SELECT name FROM frontier_projects WHERE id = :id&quot; , :id =&gt; index_query[1] )
+  $fsdb.execute( &quot;DELETE FROM frontier_archives WHERE name_hash = :namehash&quot; , :namehash =&gt; name_hash )
+  FileUtils.rm_rf( Dir.pwd + &#39;/&#39; + project_name + &#39;/&#39; + index_query[0] + &#39;/&#39; + name )
+end
+
+
+
+
+
+###########################
+#                         #
+#  START COMMAND METHODS  #
+#                         #
+###########################
+
+
+                                                                        # Declare the new slop object
+slop = Slop.new(
+                  :ignore_case  =&gt;  true
+               )
+
+                                                                        # Declare the init command
+slop.command :init do
+  on :d, :directory, :argument =&gt; true, :default =&gt; Dir.pwd
+
+  execute do | opts, args |
+    path = Pathname.new( opts[ :directory ] )
+    if( path.relative? )
+      path = Pathname.pwd + path
+    end
+    path = path.join(&#39;./.fs/&#39;)
+    if( path.directory? )
+      puts &quot;frontierfs: Project folder already exists in the specified directory.&quot;
+      exit
+    end
+    path.mkpath
+    initFiles( path.to_s )
+    createTables( )
+  end
+end
+                                                                        # Declare the project command
+slop.command :project do
+  on :c, :create, :argument =&gt; true
+  on :d, :delete, :argument =&gt; true
+  on :l, :list
+
+
+  execute do | opts, args |
+    if( args[0].eql?(&quot;-c&quot;) or args[0].eql?(&quot;-create&quot;) )
+      initFiles( )
+      createProject( opts[:create] )
+    elsif( args[0].eql?(&quot;-d&quot;) or args[0].eql?(&quot;-delete&quot;) )
+      initFiles( )
+      deleteProject( opts[:delete] )
+    elsif( args[0].eql?(&quot;-l&quot;) or args[0].eql?(&quot;-list&quot;))
+      initFiles( )
+      listProjects( )
+    else
+      puts &quot;frontierfs: Unknown argument.&quot;
+    end
+  end
+end
+
+                                                                        # Declare the index command
+slop.command :index do
+  on :c, :create, :argument =&gt; true
+  on :d, :delete, :argument =&gt; true
+  on :e, :edit, :argument =&gt; true
+  on :l, :list
+  on :project, :argument =&gt; true
+  on :indexid, :argument =&gt; true, :as =&gt; :int
+  on :protocol, :argument =&gt; true, :as =&gt; :int
+  on :named, :optional =&gt; true
+  on :flags, :argument =&gt; true, :as =&gt; :int
+
+  execute do | opts, args |
+    if( args[0].eql?(&quot;-c&quot;) or args[0].eql?(&quot;-create&quot;) )
+      initFiles( )
+      initSelects( )
+      project = opts[:project]
+      project = $project if project.equal?(nil)
+      if( project.equal?(nil) )
+        puts &quot;frontierfs: Project not defined.&quot;
+        exit
+      end
+      if( opts[:indexid].equal?(nil) )
+        puts &quot;frontierfs: Indexid not defined.&quot;
+        exit
+      end
+      protocol = opts.protocol? ? opts[:protocol] : DEFAULT_PROTOCOL
+      if( protocol &lt; 5 or protocol &gt; 5)
+        puts &quot;frontierfs: Invalid protocol specified &#39;#{ protocol }&#39;.&quot;
+        exit
+      end
+      is_named = opts.named?
+      createIndex( opts[:create] , project , opts[:indexid], protocol, is_named )
+    elsif( args[0].eql?(&quot;-d&quot;) or args[0].eql?(&quot;-delete&quot;) )
+      initFiles( )
+      deleteIndex( opts[:delete] )
+    elsif( args[0].eql?(&quot;-e&quot;) or args[0].eql?(&quot;-edit&quot;) )
+      initFiles( )
+      params = {}
+      params[:indexid] = opts[:indexid]
+      params[:protocol] = opts[:protocol]
+      if( opts.flags? )
+        flags = opts[:flags]
+        if(flags &amp; 0x1 != 0)
+          params[:isnamed] = true
+        end
+      end
+      editIndex( opts[:edit] , params )
+    elsif( args[0].eql(&quot;-l&quot;) or args[0].eql?(&quot;-list&quot;) )
+      initFiles( )
+      listIndexes( )
+    else
+      puts &quot;frontierfs: Unknown argument.&quot;
+    end
+  end
+end
+
+                                                                        # Declare the entry command.
+slop.command :archive do
+   on :c, :create, :argument =&gt; true
+   on :d, :delete, :argument =&gt; true
+   on :project, :argument =&gt; true
+   on :index, :argument =&gt; true
+   on :id, :argument =&gt; true, :as =&gt; :int
+
+   execute do | opts, args |
+    if( args[0].eql?(&quot;-c&quot;) or args[0].eql?(&quot;-create&quot;) )
+      initFiles( )
+      initSelects( )
+      project = opts[:project]
+      project = $project if project.equal?(nil)
+      if( project.equal?(nil) )
+        puts &quot;frontierfs: Project not defined.&quot;
+        exit
+      end
+      index = opts[:index]
+      index = $index if index.equal?(nil)
+      if( index.equal?(nil) )
+        puts &quot;frontierfs: Index not defined.&quot;
+        exit
+      end
+      if( opts[:id].equal?(nil) )
+        puts &quot;frontierfs: Id not defined.&quot;
+        exit
+      end
+      createArchive( opts[:create] , opts[:project] , opts[:index], opts[:id] )
+    elsif( args[0].eql?(&quot;-d&quot;) or args[0].eql(&quot;-delete&quot;) )
+      initFiles( )
+      deleteArchive( opts[:delete] )
+    end
+   end
+end
+
+                                                                        # Declare the select command
+slop.command :select do
+  on :project, :argument =&gt; true
+  on :index, :argument =&gt; true
+  on :archive, :argument =&gt; true
+  on :r, :reset
+  
+  execute do | opts, args |
+    if( opts[0].eql?(&quot;-r&quot;) or opts[0].eql?(&quot;-reset&quot;) )
+      resetCurrent( )
+      exit
+    end
+    if( opts.project? )
+      selectCurrent( 0 , opts[:project] )
+    end
+    if( opts.index? )
+      selectCurrent( 1 , opts[:index] )
+    end
+    if( opts.archive? )
+      selectCurrent( 2 , opts[:archive] )
+    end
+  end
+end
+                                                                        # Parse the command
+slop.parse
+[/code]</description>
+    
+    <lastBuildDate>Sat, 11 Aug 2012 01:00:15 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Dead Magicka, post:6, topic:452652”]Holy shit, you’re awesome; I love you! <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"><br>
+This would allow me to edit my cache with (somewhat) simplicity, as shitty tom’s cache suite would never load my cache correctly and consistently threw sector/out of bounds errors :c[/quote]</p>
+<p>This is for the newer engine format</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/7</link>
+        <pubDate>Sat, 11 Aug 2012 01:00:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-7</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@Dead_Magicka Dead Magicka]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dead_magicka">@Dead_Magicka</a> wrote:</p>
+          <blockquote>
+              <p>Holy shit, you’re awesome; I love you! <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"><br>
+This would allow me to edit my cache with (somewhat) simplicity, as shitty tom’s cache suite would never load my cache correctly and consistently threw sector/out of bounds errors :c</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/6</link>
+        <pubDate>Fri, 10 Aug 2012 12:29:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-6</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="452652">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/hcojustin/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> HcoJustin:</div>
+<blockquote>
+<p>While I like the idea, how are you going to handle specific content types? Will models have to be in jag format when making commits? How will image groups be dealt with? What about archives?</p>
+</blockquote>
+</aside>
+<p>Possibly plugins in the future. The extent that I want to go as of right now is simply allowing files to be extracted, tracked, added, and then compiled into new cache archives.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/5</link>
+        <pubDate>Fri, 03 Aug 2012 19:24:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-5</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>While I like the idea, how are you going to handle specific content types? Will models have to be in jag format when making commits? How will image groups be dealt with? What about archives?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/4</link>
+        <pubDate>Fri, 03 Aug 2012 11:58:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-4</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>Nice job, sinisoul.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/3</link>
+        <pubDate>Fri, 03 Aug 2012 10:17:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-3</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@siege_engine siege engine]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/siege_engine">@siege_engine</a> wrote:</p>
+          <blockquote>
+              <p>what do you mean by cache editing? and good luck boys</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/2</link>
+        <pubDate>Fri, 03 Aug 2012 09:57:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-2</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+      <item>
+        <title>FrontierFS - Command line based cache editing</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Hello,</p>
+<p>Gem dependencies:</p>
+<aside class="quote">
+<blockquote>
+<ul>
+<li>SQLite3<br>
+-Slop</li>
+</ul>
+</blockquote>
+</aside>
+<p><span class="bbcode-b">Version 1.0.1</span></p>
+<pre><code class="lang-auto">#!/usr/bin/env ruby
+
+#
+# Copyright (c) 2012 Hadyn Richard
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
+                                                                        # Require the gems
+require 'sqlite3'
+require 'slop'
+require 'pathname'
+require 'fileutils'
+
+                                                                        # Declare the constants
+DEFAULT_PROTOCOL  = 5
+
+                                                                        # Declare the SQL queries
+CREATE_PROJECT_TABLE     = "CREATE TABLE frontier_projects (
+                                                  id          INTEGER PRIMARY KEY AUTOINCREMENT
+                                                  CONSTRAINT  id REFERENCES frontier_indexes(project_id) ON DELETE CASCADE,
+                                                  name        STRING
+                                                )"
+
+CREATE_INDEX_TABLE  = "CREATE TABLE frontier_indexes  (
+                                                        id              INTEGER PRIMARY KEY AUTOINCREMENT
+                                                        CONSTRAINT id REFERENCES frontier_archives(index_id) ON DELETE CASCADE,
+                                                        name            STRING,
+                                                        project_id      INTEGER,
+                                                        index_id        INTEGER,
+                                                        protocol        INTEGER,
+                                                        is_named        INTEGER,
+                                                        FOREIGN KEY(project_id) REFERENCES frontier_projects(id)
+                                                      )"
+
+CREATE_ENTRIES_TABLE = "CREATE TABLE frontier_archives  (
+                                                              id          INTEGER PRIMARY KEY AUTOINCREMENT
+                                                              CONSTRAINT id REFERENCES frontier_files(entry_id) ON DELETE CASCADE,
+                                                              index_id    INTEGER,
+                                                              archive_id  INTEGER,
+                                                              name_hash   INTEGER,
+                                                              checksum    INTEGER DEFAULT 0,
+                                                              version     INTEGER DEFAULT 0,
+                                                              FOREIGN KEY(index_id) REFERENCES frontier_indexes(id)
+                                                            )"
+
+CREATE_SELECTS_TABLE = "CREATE TABLE frontier_selects (
+                                                        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                        type    INTEGER,
+                                                        name    STRING
+                                                      )"
+
+###########################
+#                         #
+#  START UTILITY METHODS  #
+#                         #
+###########################
+
+
+#
+# Calculates a hash for a string.
+#
+# str =&gt; The string to calculate the hash for.
+#
+def getHash( str )
+  hash = 0
+  str.each_byte { |b|
+    hash = ((hash &lt;&lt; 5) - hash) + b
+  }
+  hash &amp; 0xFFFFFFFF                                                     # Limit to dword
+end
+
+
+#
+# Initializes all the global variables for all the files in a project.
+#
+# dir =&gt; The directory to retrieve the files from. The default directory is
+#        the current working directory.
+#
+def initFiles( dir = nil )
+  if( dir.equal?(nil) )
+    dir = Dir.pwd + '/.fs/'
+  end
+  $fsdb = SQLite3::Database.new( dir + 'fsconfig.db' ) unless $fsdb != nil
+end
+
+
+#
+# Creates all the tables required for a project directory to be fully initialized.
+#
+def createTables( )
+    $fsdb.execute( CREATE_PROJECT_TABLE )
+    $fsdb.execute( CREATE_INDEX_TABLE )
+    $fsdb.execute( CREATE_ENTRIES_TABLE )
+    $fsdb.execute( CREATE_SELECTS_TABLE )
+end
+
+#
+# Initializes all the selects.
+#
+def initSelects( )
+  $fsdb.execute( "SELECT type, name FROM frontier_selects" ) do |row|
+    case row[0]
+      when 0
+        $project = row[1]
+      when 1
+        $index = row[1]
+      when 2
+        $archive = row[1]
+    end
+  end
+end
+
+#
+# Selects the current type.
+#
+# type =&gt; The type id of the type to select.
+#
+def selectCurrent( type , name )
+  count = -1
+  case type
+    when 0
+      count = $fsdb.get_first_value( "SELECT COUNT(*) FROM frontier_projects WHERE name = :name" , :name =&gt; name )
+    else
+      raise 'Unknown type passed to select current.'
+  end
+  if( count &gt; 0)
+    $fsdb.execute( "DELETE FROM frontier_selects WHERE type &gt;= :value" , :value =&gt; type)
+    $fsdb.execute( "INSERT INTO frontier_selects (type, name) VALUES (:type, :name)" , :type =&gt; type , :name =&gt; name )
+  else
+    puts "frontierfs: No such entry for requested select '#{ name }'."
+  end
+end
+
+#
+# Resets the current table.
+#
+def resetCurrent( )
+  $fsdb.execute( "DELETE FROM frontier_selects WHERE type &gt;= 0" )
+  puts "frontierfs: No types were currently selected." if $fsdb.changes == 0
+end
+
+
+
+
+
+#########################
+#                       #
+# START PROJECT METHODS #
+#                       #
+#########################
+
+
+#
+# Creates a new project.
+#
+# name =&gt; The name of the project to create.
+#
+def createProject( name )
+  if( $fsdb.get_first_value( "SELECT COUNT(*) FROM frontier_projects WHERE name = :name", :name =&gt; name) &gt; 0 )
+    puts "frontierfs: Project '#{ name }' already exists."
+    exit
+  end
+  begin
+    Dir.mkdir( Dir.pwd + '/' + name )
+    $fsdb.execute( "INSERT INTO frontier_projects (name) VALUES (:name)" , :name =&gt; name )
+  rescue
+    puts "frontierfs: Failed to create project '#{ name }'."
+  end
+end
+
+
+#
+# Deletes a project.
+#
+# name =&gt; The name of the project to create.
+#
+def deleteProject( name )
+  $fsdb.execute( "DELETE FROM frontier_projects WHERE name = :name" , :name =&gt; name )
+  if( $fsdb.changes &gt; 0 )
+    FileUtils.rm_rf( Dir.pwd + '/' + name )
+  else
+    puts "frontierfs: Project '#{ name }' does not exist."
+  end
+end
+
+
+#
+# Lists all the projects.
+#
+def listProjects( )
+  $fsdb.execute( "SELECT * FROM frontier_projects" ) do |row|
+    puts row
+  end
+end
+
+
+
+
+#########################
+#                       #
+#  START INDEX METHODS  #
+#                       #
+#########################
+
+
+#
+# Creates a new index.
+#
+# name          =&gt; The name of the index to create.
+# project_name  =&gt; The name of the project to create the index for.
+# index_id      =&gt; The id of the index to create.
+# is_named      =&gt; Option for if entries within the index are named.
+#
+def createIndex( name , project_name , index_id , protocol , is_named )
+  project_id = $fsdb.get_first_row( "SELECT id FROM frontier_projects WHERE name = :name", :name =&gt; project_name )
+  if( project_id.equal?(nil) or project_id.length == 0 )
+    puts "frontierfs: Project '#{ project_name }' does not exist."
+    exit
+  end
+  if( $fsdb.get_first_value( "SELECT COUNT(*) FROM frontier_indexes WHERE (name = :name OR index_id = :indexid) AND project_id = :project_id", :name =&gt; name, :project_id =&gt; project_id[0], :indexid =&gt; index_id) &gt; 0 )
+    puts "frontierfs: An index with the name of '#{ name }' or id '#{ index_id }' already exists."
+    exit
+  end
+  begin
+    Dir.mkdir( Dir.pwd + '/' + project_name + '/' + name )
+    $fsdb.execute( "INSERT INTO frontier_indexes (name, project_id, index_id, protocol, is_named) VALUES (:name, :project_id, :index_id, :protocol, :is_named)" , :name =&gt; name, :project_id =&gt; project_id[0], :index_id =&gt; index_id, :protocol =&gt; protocol, :is_named =&gt; is_named ? 1 : 0)
+  rescue
+    puts "frontierfs: Failed to create index #{ name }."
+  end
+end
+
+#
+# Edits an index.
+#
+# name =&gt; The name of the index to edit.
+#
+def editIndex( name , params )
+  query = "UPDATE frontier_indexes SET "
+  do_query = false
+  if( !params[:indexid].equal?(nil) )
+    query += do_query ? ", " : "" + "index_id = :indexid"
+    do_query = true
+  end
+  if( !params[:protocol].equal?(nil) )
+    query += do_query ? ", " : "" + "protocol = :protocol"
+    do_query = true
+  end
+  if( !params[:isnamed].equal?(nil) )
+    query += do_query ? ", " : "" + "is_named = :is_named"
+    do_query = true
+  end
+  if(do_query)
+    statement = $fsdb.prepare(query += " WHERE name = :name")
+    statement.bind_param("name", name)
+    statement.bind_param("indexid", params[:indexid]) unless params[:indexid].equal?(nil)
+    statement.bind_param("protocol", params[:protocol]) unless params[:protocol].equal?(nil)
+    statement.bind_param("is_named", params[:isnamed] ? 1 : 0) unless params[:isnamed].equal?(nil)
+    statement.execute
+    puts "frontierfs: Index '#{ name }' does not exist." if $fsdb.changes == 0
+  else
+    puts "frontierfs: No update information specified."
+  end
+end
+
+#
+# Deletes an index.
+#
+# name =&gt; The name of the index to delete.
+#
+def deleteIndex( name )
+  project_id = $fsdb.get_first_row( "SELECT project_id FROM frontier_indexes WHERE name = :name" , :name =&gt; name)
+  if( project_id.length == 0 )
+    puts "frontierfs: Index '#{ name }' does not exist."
+    exit
+  end
+  project_name = $fsdb.get_first_value( "SELECT name FROM frontier_projects WHERE id = :id" , :id =&gt; project_id[0] )
+  $fsdb.execute( "DELETE FROM frontier_indexes WHERE name = :name", name)
+  FileUtils.rm_rf( Dir.pwd + '/' + project_name + '/' + name )
+end
+
+# Lists all the indexes.
+#
+def listIndexes( name )
+  $fsdb.execute( "SELECT * FROM frontier_indexes" ) do |row|
+    puts row
+  end
+end
+
+
+
+
+
+###########################
+#                         #
+#  START ARCHIVE METHODS  #
+#                         #
+###########################
+
+
+#
+# Creates a new archive.
+#
+# name          =&gt; The name of the archive to create.
+# project_name  =&gt; The name of the project that this entry is a child of.
+# index_name    =&gt; The name of the index that this entry is a child of.
+# id            =&gt; The id of the archive to create.
+#
+def createArchive( name , project_name , index_name , archive_id )
+  project_id = $fsdb.get_first_row( "SELECT id FROM frontier_projects WHERE name = :name", :name =&gt; project_name )
+  if( project_id.equal?(nil) or project_id.length == 0 )
+    puts "frontierfs: Project '#{ project_name }' does not exist."
+    exit
+  end
+  index_id = $fsdb.get_first_row( "SELECT id FROM frontier_indexes WHERE name = :name AND project_id = :projectid", :name =&gt; index_name , :projectid =&gt; project_id[0] )
+  if( index_id.equal?(nil) or index_id.length == 0 )
+    puts "frontierfs: Index '#{ project_name }' does not exist."
+    exit
+  end
+  name_hash = getHash( name )
+  if( $fsdb.get_first_value("SELECT COUNT(*) FROM frontier_archives WHERE name_hash = :namehash OR archive_id = :archiveid" , :namehash =&gt; name_hash , :archiveid =&gt; archive_id) &gt; 0)
+    puts "frontierfs: An archive named '#{ name }' or with an id of '#{ archive_id }' already exists."
+    exit
+  end
+  begin
+    $fsdb.execute( "INSERT INTO frontier_archives (index_id, archive_id, name_hash) VALUES (:indexid, :archiveid, :namehash)", :indexid =&gt; index_id[0] , :archiveid =&gt; archive_id , :namehash =&gt; name_hash )
+    Dir.mkdir( Dir.pwd + '/' + project_name + '/' + index_name + '/' + name)
+  rescue
+    puts "frontierfs: Failed to create archive #{ name }."
+  end
+end
+
+
+#
+# Deletes an archive.
+#
+# name  =&gt; The name of the archive to delete.
+#
+def deleteArchive( name )
+  name_hash = getHash( name )
+  index_id = $fsdb.get_first_row( "SELECT index_id FROM frontier_indexes WHERE name_hash = :namehash" , :namehash =&gt; name_hash)
+  if( index_id.length == 0 )
+    puts "frontierfs: Archive '#{ name }' does not exist."
+    exit
+  end
+  index_query = $fsdb.get_first_row( "SELECT name, project_id FROM frontier WHERE id = :id" , :id =&gt; index_id[0] )
+  project_name = $fsdb.get_first_value( "SELECT name FROM frontier_projects WHERE id = :id" , :id =&gt; index_query[1] )
+  $fsdb.execute( "DELETE FROM frontier_archives WHERE name_hash = :namehash" , :namehash =&gt; name_hash )
+  FileUtils.rm_rf( Dir.pwd + '/' + project_name + '/' + index_query[0] + '/' + name )
+end
+
+
+
+
+
+###########################
+#                         #
+#  START COMMAND METHODS  #
+#                         #
+###########################
+
+
+                                                                        # Declare the new slop object
+slop = Slop.new(
+                  :ignore_case  =&gt;  true
+               )
+
+                                                                        # Declare the init command
+slop.command :init do
+  on :d, :directory, :argument =&gt; true, :default =&gt; Dir.pwd
+
+  execute do | opts, args |
+    path = Pathname.new( opts[ :directory ] )
+    if( path.relative? )
+      path = Pathname.pwd + path
+    end
+    path = path.join('./.fs/')
+    if( path.directory? )
+      puts "frontierfs: Project folder already exists in the specified directory."
+      exit
+    end
+    path.mkpath
+    initFiles( path.to_s )
+    createTables( )
+  end
+end
+                                                                        # Declare the project command
+slop.command :project do
+  on :c, :create, :argument =&gt; true
+  on :d, :delete, :argument =&gt; true
+  on :l, :list
+
+
+  execute do | opts, args |
+    if( args[0].eql?("-c") or args[0].eql?("-create") )
+      initFiles( )
+      createProject( opts[:create] )
+    elsif( args[0].eql?("-d") or args[0].eql?("-delete") )
+      initFiles( )
+      deleteProject( opts[:delete] )
+    elsif( args[0].eql?("-l") or args[0].eql?("-list"))
+      initFiles( )
+      listProjects( )
+    else
+      puts "frontierfs: Unknown argument."
+    end
+  end
+end
+
+                                                                        # Declare the index command
+slop.command :index do
+  on :c, :create, :argument =&gt; true
+  on :d, :delete, :argument =&gt; true
+  on :e, :edit, :argument =&gt; true
+  on :l, :list
+  on :project, :argument =&gt; true
+  on :indexid, :argument =&gt; true, :as =&gt; :int
+  on :protocol, :argument =&gt; true, :as =&gt; :int
+  on :named, :optional =&gt; true
+  on :flags, :argument =&gt; true, :as =&gt; :int
+
+  execute do | opts, args |
+    if( args[0].eql?("-c") or args[0].eql?("-create") )
+      initFiles( )
+      initSelects( )
+      project = opts[:project]
+      project = $project if project.equal?(nil)
+      if( project.equal?(nil) )
+        puts "frontierfs: Project not defined."
+        exit
+      end
+      if( opts[:indexid].equal?(nil) )
+        puts "frontierfs: Indexid not defined."
+        exit
+      end
+      protocol = opts.protocol? ? opts[:protocol] : DEFAULT_PROTOCOL
+      if( protocol &lt; 5 or protocol &gt; 5)
+        puts "frontierfs: Invalid protocol specified '#{ protocol }'."
+        exit
+      end
+      is_named = opts.named?
+      createIndex( opts[:create] , project , opts[:indexid], protocol, is_named )
+    elsif( args[0].eql?("-d") or args[0].eql?("-delete") )
+      initFiles( )
+      deleteIndex( opts[:delete] )
+    elsif( args[0].eql?("-e") or args[0].eql?("-edit") )
+      initFiles( )
+      params = {}
+      params[:indexid] = opts[:indexid]
+      params[:protocol] = opts[:protocol]
+      if( opts.flags? )
+        flags = opts[:flags]
+        if(flags &amp; 0x1 != 0)
+          params[:isnamed] = true
+        end
+      end
+      editIndex( opts[:edit] , params )
+    elsif( args[0].eql("-l") or args[0].eql?("-list") )
+      initFiles( )
+      listIndexes( )
+    else
+      puts "frontierfs: Unknown argument."
+    end
+  end
+end
+
+                                                                        # Declare the entry command.
+slop.command :archive do
+   on :c, :create, :argument =&gt; true
+   on :d, :delete, :argument =&gt; true
+   on :project, :argument =&gt; true
+   on :index, :argument =&gt; true
+   on :id, :argument =&gt; true, :as =&gt; :int
+
+   execute do | opts, args |
+    if( args[0].eql?("-c") or args[0].eql?("-create") )
+      initFiles( )
+      initSelects( )
+      project = opts[:project]
+      project = $project if project.equal?(nil)
+      if( project.equal?(nil) )
+        puts "frontierfs: Project not defined."
+        exit
+      end
+      index = opts[:index]
+      index = $index if index.equal?(nil)
+      if( index.equal?(nil) )
+        puts "frontierfs: Index not defined."
+        exit
+      end
+      if( opts[:id].equal?(nil) )
+        puts "frontierfs: Id not defined."
+        exit
+      end
+      createArchive( opts[:create] , opts[:project] , opts[:index], opts[:id] )
+    elsif( args[0].eql?("-d") or args[0].eql("-delete") )
+      initFiles( )
+      deleteArchive( opts[:delete] )
+    end
+   end
+end
+
+                                                                        # Declare the select command
+slop.command :select do
+  on :project, :argument =&gt; true
+  on :index, :argument =&gt; true
+  on :archive, :argument =&gt; true
+  on :r, :reset
+  
+  execute do | opts, args |
+    if( opts[0].eql?("-r") or opts[0].eql?("-reset") )
+      resetCurrent( )
+      exit
+    end
+    if( opts.project? )
+      selectCurrent( 0 , opts[:project] )
+    end
+    if( opts.index? )
+      selectCurrent( 1 , opts[:index] )
+    end
+    if( opts.archive? )
+      selectCurrent( 2 , opts[:archive] )
+    end
+  end
+end
+                                                                        # Parse the command
+slop.parse</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652/1</link>
+        <pubDate>Fri, 03 Aug 2012 08:14:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-452652-1</guid>
+        <source url="https://forum.moparisthebest.com/t/frontierfs-command-line-based-cache-editing/452652.rss">FrontierFS - Command line based cache editing</source>
+      </item>
+  </channel>
+</rss>

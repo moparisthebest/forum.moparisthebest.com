@@ -1,0 +1,564 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How to change vote4cash to 12hours</title>
+    <link>https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179</link>
+    <description>How do i change it to 12 hours?
+[code=][code=abap]&lt;?php
+
+/**
+ * @author Stuart &lt;RogueX | iVariable&gt;
+ * @version 1.1 UPDATED: 06.09.2010
+ * @comment fixed a few bugs
+ */
+
+/**
+ * mysql database hostname
+ */
+define(&quot;MYSQL_HOST&quot;, &quot;localhost&quot;);
+/**
+ *  mysql username to connect to the database server
+ */
+define(&quot;MYSQL_USERNAME&quot;, &quot;583894&quot;);
+/**
+ *  mysql password the password to connect to the database server
+ */
+define(&quot;MYSQL_PASSWORD&quot;, &quot;123321joey&quot;);
+/**
+ *  mysql database the database name in which you have your vote table setup
+ */
+define(&quot;MYSQL_DATABASE&quot;, &quot;583894&quot;);
+/**
+ *  vote url this is the url which where users will be sent to on voting
+ */
+define(&quot;VOTE_URL&quot;, &quot;http://www.google.com/toplist/vote-23969.html&quot;);
+/**
+ * The number of hours between voting
+ */
+define(&quot;VOTE_HOURS&quot;, 12);
+
+
+/**
+ *  connect() this function is used to connect to the mysql database server.
+ */
+function connect()
+{
+    if (!@mysql_connect(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))
+        die(&quot;Could not connect to mysql database: &quot; . mysql_error());
+    if (!@mysql_select_db(MYSQL_DATABASE))
+        die(&quot;Could not select mysql database: &quot; . mysql_error());
+    $tables = mysql_list_tables(MYSQL_DATABASE);
+    while (list($temp) = mysql_fetch_array($tables)) {
+        if ($temp == &quot;votes&quot;) {
+            return;
+        }
+    }
+    query(&quot;CREATE TABLE `votes` (
+        `playerName` VARCHAR( 255 ) NOT NULL ,
+        `ip` VARCHAR( 255 ) NOT NULL,
+        `time` BIGINT NOT NULL ,
+        `recieved` INT( 1 ) NOT NULL DEFAULT &#39;0&#39;)&quot;);
+}
+/**
+ *  query(string query) this function is used to query the mysql database server.
+ */
+function query($s)
+{
+    $query = @mysql_query($s);
+    if (!$query)
+        die(&quot;Error running query(&#39;&quot; . $s . &quot;&#39;): &quot; . mysql_error());
+    return $query;
+}
+/**
+ *  anti_inject(string text) this function is used to make sure no injections can be made.
+ */
+function anti_inject($sql)
+{
+    $sql = preg_replace(sql_regcase(&quot;/(from|select|insert|delete|where|drop table|show tables|#|\*|--|\\\\)/&quot;),
+        &quot;&quot;, $sql);
+    $sql = trim($sql);
+    $sql = strip_tags($sql);
+    $sql = addslashes($sql);
+    $sql = strtolower($sql);
+    return $sql;
+}
+/**
+ *  clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.
+ */
+function clean_request($time, $username)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+    if (mysql_num_rows($query) &gt; 0) {
+        $row = mysql_fetch_array($query);
+        $timerequested = $row[&#39;time&#39;];
+        if ($time - $timerequested &gt; VOTE_HOURS * 3600)
+            query(&quot;DELETE FROM `votes` WHERE time=&#39;&quot; . $timerequested . &quot;&#39;&quot;);
+    }
+}
+/**
+ *  vote_entries(string ip) this function is used return the number of rows within the table
+ */
+function vote_entries($ip)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE ip=&#39;&quot; . $ip . &quot;&#39;&quot;);
+    return mysql_num_rows($query);
+}
+
+
+/**
+ * This is the actual working of the script please do not touch anything below if you do not know what you are doing...
+ */
+if (isset($_POST[&#39;submit&#39;]) || isset($_GET[&#39;username&#39;]) &amp;&amp; isset($_GET[&#39;type&#39;])) {
+    connect();
+    if ($_POST[&#39;submit&#39;]) {
+        if(@fsockopen($_SERVER[&#39;REMOTE_ADDR&#39;], 80, $errno, $errstr, 1))
+            die(&quot;Sorry but you have port 80 open, this is to stop voting by proxy address.&quot;);
+        if(isset($_COOKIE[&#39;voted&#39;]))
+            die(&quot;Sorry but it looks like you have already voted...&quot;);
+        $username = anti_inject($_POST[&#39;username&#39;]);
+        $ip = gethostbyaddr($_SERVER[&#39;REMOTE_ADDR&#39;]);
+        clean_request(time(), $username);
+        if (vote_entries($ip) == 0) {
+            setcookie (&quot;voted&quot;, &quot;yes&quot;, VOTE_HOURS * 3600);
+            query(&quot;INSERT INTO `votes` (`playerName`, `ip`, `time`) VALUES (&#39;&quot; . $username .
+                &quot;&#39;, &#39;&quot; . $ip . &quot;&#39;, &#39;&quot; . time() . &quot;&#39;)&quot;);
+            header(&quot;Location: &quot; . VOTE_URL . &quot;&quot;);
+        } else {
+            die(&quot;You have already voted once today.&quot;);
+        }
+    } elseif ($_GET[&#39;type&#39;] == &quot;checkvote&quot;) {
+        $username = anti_inject($_GET[&#39;username&#39;]);
+        $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+        if (mysql_num_rows($query) == 1) {
+            $results = mysql_fetch_array($query);
+            if ($results[&#39;recieved&#39;] == 0) {
+                query(&quot;UPDATE `votes` SET `recieved`=&#39;1&#39; WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+                die(&quot;user needs reward...&quot;);
+            } else {
+                die(&quot;user been given reward...&quot;);
+            }
+        } else {
+          die(&quot;Vote not found... &quot;.  $username .&quot;.&quot;);
+        }
+    }
+}
+
+?&gt;
+
+&lt;html&gt;
+	&lt;head&gt;
+		&lt;title&gt;PhantomX: Vote4Cash&lt;/title&gt;
+		&lt;style type=&quot;text/css&quot;&gt;
+body {
+
+background-color: #111111;
+font-family:Arial;
+}
+.link {
+cursor:pointer;
+color: #037;
+text-decoration: underline;
+}
+.link:hover {
+color: #3300FF;
+}
+.link-done {
+cursor:pointer;
+color: #037;
+text-decoration: line-through;
+}
+.link-done:hover {
+color: #3300FF;
+}
+#container {
+
+background-color: #222222;
+height: auto;
+width: 500px;
+padding: 5px;
+border: 1px solid #333333;
+margin: 0 auto auto auto;
+-moz-box-shadow: 0 0 5px #000000;
+-webkit-box-shadow: 0 0 5px #000000;
+box-shadow: 0 0 5px #000000;
+}
+
+#help {
+
+
+background-color: #222222;
+height: auto;
+width: 500px;
+padding: 5px;
+border: 1px solid #333333;
+margin: 0 auto auto auto;
+-moz-box-shadow: 0 0 5px #000000;
+-webkit-box-shadow: 0 0 5px #000000;
+box-shadow: 0 0 5px #000000;
+}
+		&lt;/style&gt;
+		&lt;script type=&quot;text/javascript&quot;&gt;
+			var timer;
+			var timeLeft = 15;
+		
+			var voted1 = false;
+
+			
+			function clickedLink(button) { 
+				switch(button) {
+					case 1:
+						voted1 = true;
+						javascript:window.open(&#39;http://www.google.com/toplist/vote-23969.html&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote1&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+				}
+				
+				setSitesLeft();
+				if (voted1) {
+					startCountDown();
+					document.getElementById(&#39;statusText&#39;).style.display = &#39;none&#39;; 
+				}
+			}
+			
+			function startCountDown() {
+				timer = setInterval(&quot;doCountDown();&quot;, 1000);
+				document.getElementById(&#39;timerText&#39;).style.display = &#39;block&#39;; 
+			}
+			
+			function doCountDown() {
+				document.getElementById(&#39;timeLeft&#39;).innerHTML = timeLeft;
+				timeLeft = (timeLeft - 1);
+				if (timeLeft &lt;= 0) {
+					document.getElementById(&#39;links&#39;).style.display = &#39;none&#39;; 
+					document.getElementById(&#39;voted&#39;).style.display = &#39;block&#39;; 
+					clearTimeout(timer);
+				}
+			}
+			
+			function setSitesLeft() {
+				var count = 1;
+				if (voted1) {
+					count = (count - 1);
+				}
+
+				document.getElementById(&#39;sitesLeft&#39;).innerHTML = count;
+			}
+		&lt;/script&gt;
+	&lt;/head&gt;
+
+	&lt;body&gt;
+&lt;center&gt;&lt;a href=&quot;LOGOCLICKLINK&quot;&gt;&lt;img src=&quot;LOGOIMAGEURL&quot; /&gt;&lt;/a&gt;&lt;/center&gt;&lt;br /&gt;
+&lt;div id=&quot;help&quot;&gt;&lt;strong&gt;How It Works:&lt;/strong&gt;&lt;br /&gt;&lt;br /&gt;Vote on each of the links below once you have voted on all of them you will be forwarded to A page that will allow you to input your username. When you are on this page make sure you put in your username and accept. Once in game type ::claim to receive your reward!&lt;/div&gt;&lt;br /&gt;
+
+&lt;div id=&quot;container&quot;&gt;
+		&lt;div id=&quot;links&quot;&gt;
+			1. &lt;a id=&quot;vote1&quot; onclick=&quot;clickedLink(1);&quot; class=&quot;link&quot;&gt;CLICK HERE TO VOTE FOR PHANTOMX&lt;/a&gt; &lt;br&gt;
+			
+			&lt;span id=&quot;statusText&quot;&gt;Click &amp; vote at all the links above to continue then come back to this page to type in your name, only &lt;b id=&quot;sitesLeft&quot;&gt;1&lt;/b&gt; left.&lt;/span&gt;
+			&lt;span id=&quot;timerText&quot; style=&quot;display: none;&quot;&gt;You have &lt;b id=&quot;timeLeft&quot;&gt;*&lt;/b&gt; seconds left before you can claim you reward. &lt;/span&gt;
+		&lt;/div&gt;
+		
+		&lt;div id=&quot;voted&quot; style=&quot;display: none;&quot;&gt;
+			&lt;form action=&quot;vote.php&quot; method=&quot;post&quot;&gt;
+				&lt;center&gt;Username: &lt;input type=&quot;text&quot; name=&quot;username&quot; /&gt; &lt;input type=&quot;submit&quot; name=&quot;submit&quot; value=&quot;Claim Reward!&quot; /&gt;&lt;/center&gt;
+			&lt;/form&gt;
+		&lt;/div&gt;
+&lt;/div&gt;
+	&lt;/body&gt;
+&lt;/html&gt;[code=actionscript][code=][/code][/code][/code][/code]</description>
+    
+    <lastBuildDate>Fri, 11 Jan 2013 23:20:08 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How to change vote4cash to 12hours</title>
+        <dc:creator><![CDATA[@k1ng0frs k1ng0frs]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k1ng0frs">@k1ng0frs</a> wrote:</p>
+          <blockquote>
+              <p><code>define("VOTE_HOURS", 12);</code>???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179/2</link>
+        <pubDate>Fri, 11 Jan 2013 23:20:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-478179-2</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179.rss">How to change vote4cash to 12hours</source>
+      </item>
+      <item>
+        <title>How to change vote4cash to 12hours</title>
+        <dc:creator><![CDATA[@ther3aper ther3aper]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ther3aper">@ther3aper</a> wrote:</p>
+          <blockquote>
+              <p>How do i change it to 12 hours?</p>
+<p>[code=][code=abap]&lt;?php</p>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> Stuart &lt;RogueX | iVariable&gt;</li>
+<li>
+<a class="mention" href="/u/version">@version</a> 1.1 UPDATED: 06.09.2010</li>
+<li>
+<span class="mention">@comment</span> fixed a few bugs<br>
+*/</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>mysql database hostname<br>
+<em>/<br>
+define(“MYSQL_HOST”, “localhost”);<br>
+/</em>*</li>
+<li>mysql username to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_USERNAME”, “583894”);<br>
+/</em>*</li>
+<li>mysql password the password to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_PASSWORD”, “123321joey”);<br>
+/</em>*</li>
+<li>mysql database the database name in which you have your vote table setup<br>
+<em>/<br>
+define(“MYSQL_DATABASE”, “583894”);<br>
+/</em>*</li>
+<li>vote url this is the url which where users will be sent to on voting<br>
+<em>/<br>
+define(“VOTE_URL”, “<a href="http://www.google.com/toplist/vote-23969.html" rel="nofollow noopener">http://www.google.com/toplist/vote-23969.html</a>”);<br>
+/</em>*</li>
+<li>The number of hours between voting<br>
+*/<br>
+define(“VOTE_HOURS”, 12);</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>connect() this function is used to connect to the mysql database server.<br>
+<em>/<br>
+function connect()<br>
+{<br>
+if (!<span class="mention">@mysql_connect</span>(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))<br>
+die("Could not connect to mysql database: " . mysql_error());<br>
+if (!<span class="mention">@mysql_select_db</span>(MYSQL_DATABASE))<br>
+die("Could not select mysql database: " . mysql_error());<br>
+$tables = mysql_list_tables(MYSQL_DATABASE);<br>
+while (list($temp) = mysql_fetch_array($tables)) {<br>
+if ($temp == “votes”) {<br>
+return;<br>
+}<br>
+}<br>
+query(“CREATE TABLE <code>votes</code> (<br>
+<code>playerName</code> VARCHAR( 255 ) NOT NULL ,<br>
+<code>ip</code> VARCHAR( 255 ) NOT NULL,<br>
+<code>time</code> BIGINT NOT NULL ,<br>
+<code>recieved</code> INT( 1 ) NOT NULL DEFAULT ‘0’)”);<br>
+}<br>
+/</em>*</li>
+<li>query(string query) this function is used to query the mysql database server.<br>
+<em>/<br>
+function query($s)<br>
+{<br>
+$query = <span class="mention">@mysql_query</span>($s);<br>
+if (!$query)<br>
+die(“Error running query(’” . $s . "’): " . mysql_error());<br>
+return $query;<br>
+}<br>
+/</em>*</li>
+<li>anti_inject(string text) this function is used to make sure no injections can be made.<br>
+<em>/<br>
+function anti_inject($sql)<br>
+{<br>
+$sql = preg_replace(sql_regcase("/(from|select|insert|delete|where|drop table|show tables|#|*|–|\\)/"),<br>
+“”, $sql);<br>
+$sql = trim($sql);<br>
+$sql = strip_tags($sql);<br>
+$sql = addslashes($sql);<br>
+$sql = strtolower($sql);<br>
+return $sql;<br>
+}<br>
+/</em>*</li>
+<li>clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.<br>
+<em>/<br>
+function clean_request($time, $username)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) &gt; 0) {<br>
+$row = mysql_fetch_array($query);<br>
+$timerequested = $row[‘time’];<br>
+if ($time - $timerequested &gt; VOTE_HOURS * 3600)<br>
+query(“DELETE FROM <code>votes</code> WHERE time=’” . $timerequested . “’”);<br>
+}<br>
+}<br>
+/</em>*</li>
+<li>vote_entries(string ip) this function is used return the number of rows within the table<br>
+*/<br>
+function vote_entries($ip)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE ip=’” . $ip . “’”);<br>
+return mysql_num_rows($query);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>This is the actual working of the script please do not touch anything below if you do not know what you are doing…<br>
+*/<br>
+if (isset($_POST[‘submit’]) || isset($_GET[‘username’]) &amp;&amp; isset($_GET[‘type’])) {<br>
+connect();<br>
+if ($_POST[‘submit’]) {<br>
+if(<span class="mention">@fsockopen</span>($_SERVER[‘REMOTE_ADDR’], 80, $errno, $errstr, 1))<br>
+die(“Sorry but you have port 80 open, this is to stop voting by proxy address.”);<br>
+if(isset($_COOKIE[‘voted’]))<br>
+die(“Sorry but it looks like you have already voted…”);<br>
+$username = anti_inject($_POST[‘username’]);<br>
+$ip = gethostbyaddr($_SERVER[‘REMOTE_ADDR’]);<br>
+clean_request(time(), $username);<br>
+if (vote_entries($ip) == 0) {<br>
+setcookie (“voted”, “yes”, VOTE_HOURS * 3600);<br>
+query(“INSERT INTO <code>votes</code> (<code>playerName</code>, <code>ip</code>, <code>time</code>) VALUES (’” . $username .<br>
+“’, '” . $ip . “’, '” . time() . “’)”);<br>
+header("Location: " . VOTE_URL . “”);<br>
+} else {<br>
+die(“You have already voted once today.”);<br>
+}<br>
+} elseif ($_GET[‘type’] == “checkvote”) {<br>
+$username = anti_inject($_GET[‘username’]);<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) == 1) {<br>
+$results = mysql_fetch_array($query);<br>
+if ($results[‘recieved’] == 0) {<br>
+query(“UPDATE <code>votes</code> SET <code>recieved</code>=‘1’ WHERE <code>playerName</code>=’” . $username . “’”);<br>
+die(“user needs reward…”);<br>
+} else {<br>
+die(“user been given reward…”);<br>
+}<br>
+} else {<br>
+die(“Vote not found… “.  $username .”.”);<br>
+}<br>
+}<br>
+}</li>
+</ul>
+<p>?&gt;</p>
+
+	
+		PhantomX: Vote4Cash
+		
+body {
+<p>background-color: <span class="hashtag">#111111</span>;<br>
+font-family:Arial;<br>
+}<br>
+.link {<br>
+cursor:pointer;<br>
+color: <span class="hashtag">#037</span>;<br>
+text-decoration: underline;<br>
+}<br>
+.link:hover {<br>
+color: <span class="hashtag">#3300FF</span>;<br>
+}<br>
+.link-done {<br>
+cursor:pointer;<br>
+color: <span class="hashtag">#037</span>;<br>
+text-decoration: line-through;<br>
+}<br>
+.link-done:hover {<br>
+color: <span class="hashtag">#3300FF</span>;<br>
+}<br>
+<span class="hashtag">#container</span> {</p>
+<p>background-color: <span class="hashtag">#222222</span>;<br>
+height: auto;<br>
+width: 500px;<br>
+padding: 5px;<br>
+border: 1px solid <span class="hashtag">#333333</span>;<br>
+margin: 0 auto auto auto;<br>
+-moz-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+-webkit-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+}</p>
+<p><span class="hashtag">#help</span> {</p>
+<p>background-color: <span class="hashtag">#222222</span>;<br>
+height: auto;<br>
+width: 500px;<br>
+padding: 5px;<br>
+border: 1px solid <span class="hashtag">#333333</span>;<br>
+margin: 0 auto auto auto;<br>
+-moz-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+-webkit-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+}<br>
+<br>
+<br>
+var timer;<br>
+var timeLeft = 15;</p>
+<pre><code>		var voted1 = false;
+
+		
+		function clickedLink(button) { 
+			switch(button) {
+				case 1:
+					voted1 = true;
+					javascript:window.open('http://www.google.com/toplist/vote-23969.html', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote1").setAttribute("class", "link-done");
+					break;
+			}
+			
+			setSitesLeft();
+			if (voted1) {
+				startCountDown();
+				document.getElementById('statusText').style.display = 'none'; 
+			}
+		}
+		
+		function startCountDown() {
+			timer = setInterval("doCountDown();", 1000);
+			document.getElementById('timerText').style.display = 'block'; 
+		}
+		
+		function doCountDown() {
+			document.getElementById('timeLeft').innerHTML = timeLeft;
+			timeLeft = (timeLeft - 1);
+			if (timeLeft &lt;= 0) {
+				document.getElementById('links').style.display = 'none'; 
+				document.getElementById('voted').style.display = 'block'; 
+				clearTimeout(timer);
+			}
+		}
+		
+		function setSitesLeft() {
+			var count = 1;
+			if (voted1) {
+				count = (count - 1);
+			}
+
+			document.getElementById('sitesLeft').innerHTML = count;
+		}
+	&lt;/script&gt;
+&lt;/head&gt;
+
+&lt;body&gt;
+</code></pre>
+<a><img></a><br>
+<div>
+<strong>How It Works:</strong><br><br>Vote on each of the links below once you have voted on all of them you will be forwarded to A page that will allow you to input your username. When you are on this page make sure you put in your username and accept. Once in game type ::claim to receive your reward!</div><br>
+<div>
+		<div>
+			1. <a>CLICK HERE TO VOTE FOR PHANTOMX</a> <br>
+<pre><code>		&lt;span id="statusText"&gt;Click &amp; vote at all the links above to continue then come back to this page to type in your name, only &lt;b id="sitesLeft"&gt;1&lt;/b&gt; left.&lt;/span&gt;
+		&lt;span id="timerText" style="display: none;"&gt;You have &lt;b id="timeLeft"&gt;*&lt;/b&gt; seconds left before you can claim you reward. &lt;/span&gt;
+	&lt;/div&gt;
+	
+	&lt;div id="voted" style="display: none;"&gt;
+		&lt;form action="vote.php" method="post"&gt;
+			&lt;center&gt;Username: &lt;input type="text" name="username" /&gt; &lt;input type="submit" name="submit" value="Claim Reward!" /&gt;&lt;/center&gt;
+		&lt;/form&gt;
+	&lt;/div&gt;
+</code></pre>
+</div>
+	
+[code=actionscript][code=][/code][/code][/code][/code]</div>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179/1</link>
+        <pubDate>Fri, 11 Jan 2013 20:20:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-478179-1</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-change-vote4cash-to-12hours/478179.rss">How to change vote4cash to 12hours</source>
+      </item>
+  </channel>
+</rss>

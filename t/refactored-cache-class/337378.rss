@@ -1,0 +1,734 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Refactored Cache class</title>
+    <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378</link>
+    <description>I got kinda bored so I looked at Moparisthebest&#39;s packaged, refactored client and realized he had started renaming the Decompressor as he so called it an never finished. So I decided to take a look at in and determined Decompressor was an improper name seeing as it grabs and submits data to the cache.
+I refactored the whole class and commented the getFile(id) method to give you enough information to do whatever you need. (Grabbing files/entries related at least) The rest you have to figure out on your own. :D If I have anything poorly named feel free to tell me. As an after-reference I used newbiehacker&#39;s refactored CacheFile class(Same thing).
+
+[code]package rs.cache;
+
+import java.io.IOException;
+import java.io.RandomAccessFile;
+
+/**
+ * Represents a subcache of the cache identified by a specified index.
+ *
+ * @author Jagex Ltd.
+ */
+public final class Cache {
+
+    /**
+     * Create a new Cache instance.
+     *
+     * @param dataFile The file that holds all the cache data.
+     * @param indexFile The indexes for the cache data.
+     * @param cacheId The cache id.
+     */
+    public Cache(RandomAccessFile dataFile, RandomAccessFile indexFile, int cacheId) {
+        this.cacheId = cacheId;
+        this.dataFile = dataFile;
+        this.indexFile = indexFile;
+    }
+
+    /**
+     * Gets a file or entry from the cache. A chunk is a 520 byte block of data. &lt;3 newbiehacker for the name.
+     * @param fileId The id of the entry or file.
+     * @return The byte array that contains all the file data.
+     */
+    public synchronized byte[] getFile(int fileId) {
+        try {
+            // Seek to the file index. IDx6 because each index is 6 bytes long.
+            seekTo(indexFile, fileId * 6);
+
+            // Read the data in the index.
+            int bytesRead; // How many bytes have been read.
+            for (int i = 0; i &lt; 6; i += bytesRead) { // Loop through each byte that should be in the index file.
+                bytesRead = indexFile.read(buffer, i, 6 - i); // Append the data to the buffer.
+                if (bytesRead == -1) { // Make sure we got data.
+                    return null; // Return null if we didn&#39;t.
+                }
+            }
+
+            // The header data. tri-byte for length and tri-byte for start chunk position.
+            int length = ((buffer[0] &amp; 0xff) &lt;&lt; 16) + ((buffer[1] &amp; 0xff) &lt;&lt; 8) + (buffer[2] &amp; 0xff);
+            int currentChunkPosition = ((buffer[3] &amp; 0xff) &lt;&lt; 16) + ((buffer[4] &amp; 0xff) &lt;&lt; 8) + (buffer[5] &amp; 0xff);
+
+            if (length &lt; 0 || length &gt; 0x7a120) { // Make sure the length is over 0 and less than 500,000.
+                return null; // If it&#39;s not, return null.
+            }
+
+            if (currentChunkPosition &lt;= 0 || (long) currentChunkPosition &gt; dataFile.length() / 520L) { // Check if valid position.
+                return null; // Return null if it&#39;s not.
+            }
+
+            byte data[] = new byte[length]; // The array of bytes in this file.
+
+            int nextChunkPos = 0; // The next chunk&#39;s position.
+            for (int i = 0; nextChunkPos &lt; length; i++) { // Loop through until all chunks are read.
+                
+                if (currentChunkPosition == 0) { // Make sure there is a current chunk.
+                    return null; // If there isn&#39;t, return null.
+                }
+
+                // Seek to the current chunk. POSx520 because each chunk is 520 bytes long.
+                seekTo(dataFile, currentChunkPosition * 520);
+                int remainingBytes = length - nextChunkPos; // Check how many more bytes there are to read.
+                if (remainingBytes &gt; 512) { // Check if there are more than 512 remaining bytes.
+                    remainingBytes = 512; // If there are, make it 512 remaining.
+                }
+
+                int bytesRead2; // How many bytes have been read for this chunk.
+                for (int i1 = 0; i1 &lt; remainingBytes + 8; i1 += bytesRead2) { // Loop until all bytes are read.
+                    bytesRead2 = dataFile.read(buffer, i1, (remainingBytes + 8) - i1); // Append data to the buffer.
+                    if (bytesRead2 == -1) { // Make sure we read bytes.
+                        return null; // If we didn&#39;t, return null.
+                    }
+                }
+
+                int id = ((buffer[0] &amp; 0xff) &lt;&lt; 8) + (buffer[1] &amp; 0xff); // The id of this &quot;file&quot;.  2 bytes.
+                int currentChunk = ((buffer[2] &amp; 0xff) &lt;&lt; 8) + (buffer[3] &amp; 0xff); // The position. 2 bytes.
+                int nextChunk = ((buffer[4] &amp; 0xff) &lt;&lt; 16) + ((buffer[5] &amp; 0xff) &lt;&lt; 8) + (buffer[6] &amp; 0xff); // Next chunk position, 3 bytes.
+                int cacheIndex = buffer[7] &amp; 0xff; // Cache id/index. 1 byte.
+                if (id != fileId || currentChunk != i || cacheIndex != cacheId) { // Check and make sure it&#39;s what we want.
+                    return null; // If it&#39;s not what we want return null.
+                }
+                if (nextChunk &lt; 0 || (long) nextChunk &gt; dataFile.length() / 520L) { // Make sure our next chunk isn&#39;t invalid.
+                    return null; // If it is, return null.
+                }
+
+                for (int i1 = 0; i1 &lt; remainingBytes; i1++) { // Loop through the remanining bytes. Should be a 512 byte block of data.
+                    data[nextChunkPos++] = buffer[i1 + 8]; // Append it to the data array.
+                }
+
+                currentChunkPosition = nextChunk; // Set the current chunk posisition.
+            }
+
+            return data;
+        } catch (IOException _ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Put a file in the cache.
+     *
+     * @param length The length of the file.
+     * @param data The buffer.
+     * @param fileId The file id.
+     * @return Success or no success.
+     */
+    public synchronized boolean putFile(int length, byte data[], int fileId) {
+        boolean success = putFile(true, fileId, length, data); // Try to replace an existing file.
+        if (!success) { // Check to see if it failed.
+            success = putFile(false, fileId, length, data); // If it did fail, try appending it to the end.
+        }
+        return success; // Return whether or not it added it.
+    }
+
+    /**
+     * Put a file in the cache.
+     *
+     * @param replace Replace an existing entry.
+     * @param fileId The file id.
+     * @param length The file length.
+     * @param data The buffer.
+     * @return Success or no success.
+     */
+    private synchronized boolean putFile(boolean replace, int fileId, int length, byte data[]) {
+        try {
+            int currentChunkPos;
+            if (replace) {
+                seekTo(indexFile, fileId * 6);
+                int bytesRead;
+                for (int offset = 0; offset &lt; 6; offset += bytesRead) {
+                    bytesRead = indexFile.read(buffer, offset, 6 - offset);
+                    if (bytesRead == -1) {
+                        return false;
+                    }
+                }
+
+                currentChunkPos = ((buffer[3] &amp; 0xff) &lt;&lt; 16) + ((buffer[4] &amp; 0xff) &lt;&lt; 8) + (buffer[5] &amp; 0xff);
+                if (currentChunkPos &lt;= 0 || (long) currentChunkPos &gt; dataFile.length() / 520L) {
+                    return false;
+                }
+            } else {
+                currentChunkPos = (int) ((dataFile.length() + 519L) / 520L);
+                if (currentChunkPos == 0) {
+                    currentChunkPos = 1;
+                }
+            }
+            buffer[0] = (byte) (length &gt;&gt; 16);
+            buffer[1] = (byte) (length &gt;&gt; 8);
+            buffer[2] = (byte) length;
+            buffer[3] = (byte) (currentChunkPos &gt;&gt; 16);
+            buffer[4] = (byte) (currentChunkPos &gt;&gt; 8);
+            buffer[5] = (byte) currentChunkPos;
+            seekTo(indexFile, fileId * 6);
+            indexFile.write(buffer, 0, 6);
+            int bytesWritten = 0;
+            for (int i = 0; bytesWritten &lt; length; i++) {
+                int nextChunkPos = 0;
+                if (replace) {
+                    seekTo(dataFile, currentChunkPos * 520);
+                    int offset;
+                    int bytesRead;
+                    for (offset = 0; offset &lt; 8; offset += bytesRead) {
+                        bytesRead = dataFile.read(buffer, offset, 8 - offset);
+                        if (bytesRead == -1) {
+                            break;
+                        }
+                    }
+
+                    if (offset == 8) {
+                        int id = ((buffer[0] &amp; 0xff) &lt;&lt; 8) + (buffer[1] &amp; 0xff);
+                        int currentChunk = ((buffer[2] &amp; 0xff) &lt;&lt; 8) + (buffer[3] &amp; 0xff);
+                        nextChunkPos = ((buffer[4] &amp; 0xff) &lt;&lt; 16) + ((buffer[5] &amp; 0xff) &lt;&lt; 8) + (buffer[6] &amp; 0xff);
+                        int cacheIndex = buffer[7] &amp; 0xff;
+                        if (id != fileId || currentChunk != i || cacheIndex != cacheId) {
+                            return false;
+                        }
+                        if (nextChunkPos &lt; 0 || (long) nextChunkPos &gt; dataFile.length() / 520L) {
+                            return false;
+                        }
+                    }
+                }
+                if (nextChunkPos == 0) {
+                    replace = false;
+                    nextChunkPos = (int) ((dataFile.length() + 519L) / 520L);
+                    if (nextChunkPos == 0) {
+                        nextChunkPos++;
+                    }
+                    if (nextChunkPos == currentChunkPos) {
+                        nextChunkPos++;
+                    }
+                }
+                if (length - bytesWritten &lt;= 512) {
+                    nextChunkPos = 0;
+                }
+                buffer[0] = (byte) (fileId &gt;&gt; 8);
+                buffer[1] = (byte) fileId;
+                buffer[2] = (byte) (i &gt;&gt; 8);
+                buffer[3] = (byte) i;
+                buffer[4] = (byte) (nextChunkPos &gt;&gt; 16);
+                buffer[5] = (byte) (nextChunkPos &gt;&gt; 8);
+                buffer[6] = (byte) nextChunkPos;
+                buffer[7] = (byte) cacheId;
+                seekTo(dataFile, currentChunkPos * 520);
+                dataFile.write(buffer, 0, 8);
+                int remainingBytes = length - bytesWritten;
+                if (remainingBytes &gt; 512) {
+                    remainingBytes = 512;
+                }
+                dataFile.write(data, bytesWritten, remainingBytes);
+                bytesWritten += remainingBytes;
+                currentChunkPos = nextChunkPos;
+            }
+
+            return true;
+        } catch (IOException _ex) {
+            return false;
+        }
+    }
+
+    /**
+     * Seek to a position.
+     *
+     * @param randomaccessfile The file to be seeked.
+     * @param seekPos The position to seek to.
+     * @throws IOException Throws IOException when no length or no seek.
+     */
+    private synchronized void seekTo(RandomAccessFile randomaccessfile, int seekPos) throws IOException {
+        if (seekPos &lt; 0 || seekPos &gt; 0x3c00000) { // Make sure the seek position is valid.
+            System.out.println(&quot;Badseek - pos:&quot; + seekPos + &quot; len:&quot; + randomaccessfile.length());
+            seekPos = 0x3c00000;
+            try {
+                Thread.sleep(1000L);
+            } catch (Exception _ex) {
+            }
+        }
+        randomaccessfile.seek(seekPos); // Seek to the specified position.
+    }
+
+    private static final byte[] buffer = new byte[520];
+    private final RandomAccessFile dataFile;
+    private final RandomAccessFile indexFile;
+    private final int cacheId;
+}[/code]
+This is 317.</description>
+    
+    <lastBuildDate>Tue, 20 Apr 2010 01:37:19 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wolfs goal, post:7, topic:337378”][quote author=The Soul link=topic=433781.msg3185317#msg3185317 date=1271676622]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Nice, but doesn’t most client’s use a 317 Item loader?  Just having added customs.</p>
+</blockquote>
+</aside>
+<p>What? All he did was finish refactoring this class.</p>
+<p>@(Anthony): Good job. &lt;3<br>
+[/quote]</p>
+<p>Sorry, I misinterpreted the code at first.  I wonder if this would allow the extensive loading of idx files.[/quote]<br>
+What do you mean? <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/9</link>
+        <pubDate>Tue, 20 Apr 2010 01:37:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-9</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@glestrts glestrts]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/glestrts">@glestrts</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wolfs goal, post:7, topic:337378”][quote author=The Soul link=topic=433781.msg3185317#msg3185317 date=1271676622]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Nice, but doesn’t most client’s use a 317 Item loader?  Just having added customs.</p>
+</blockquote>
+</aside>
+<p>What? All he did was finish refactoring this class.</p>
+<p>@(Anthony): Good job. &lt;3<br>
+[/quote]</p>
+<p>Sorry, I misinterpreted the code at first.  I wonder if this would allow the extensive loading of idx files.[/quote]</p>
+<p>probably with some modifications, if you really are interested compare a 508/525 client with a normal 508, basically you need to just swap out the cache loaders and configure the client to read some data.</p>
+<p>In old engine clients, to change from 317-377 all that was required was adding another switch in one of the classes, and changing a value in the client.java.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/8</link>
+        <pubDate>Mon, 19 Apr 2010 22:38:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-8</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@wolfs_goal wolfs goal]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wolfs_goal">@wolfs_goal</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“The Soul, post:5, topic:337378”][quote author=wolfs goal link=topic=433781.msg3185293#msg3185293 date=1271674568]<br>
+Nice, but doesn’t most client’s use a 317 Item loader?  Just having added customs.<br>
+[/quote]</p>
+<p>What? All he did was finish refactoring this class.</p>
+<p>@(Anthony): Good job. &lt;3[/quote]</p>
+<p>Sorry, I misinterpreted the code at first.  I wonder if this would allow the extensive loading of idx files.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/7</link>
+        <pubDate>Mon, 19 Apr 2010 21:24:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-7</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@the_elve_age the elve age]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_elve_age">@the_elve_age</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="337378">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/glestrts/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> glestrts:</div>
+<blockquote>
+<p>sweet, looks really nice so far, i am digging how you commented nearly everything out  ;D</p>
+</blockquote>
+</aside>
+<p>You mean how a proper java document SHOULD be?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/6</link>
+        <pubDate>Mon, 19 Apr 2010 20:50:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-6</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@the_soul The Soul]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_soul">@the_soul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="4" data-topic="337378">
+<div class="title">
+<div class="quote-controls"></div>
+ wolfs goal:</div>
+<blockquote>
+<p>Nice, but doesn’t most client’s use a 317 Item loader?  Just having added customs.</p>
+</blockquote>
+</aside>
+<p>What? All he did was finish refactoring this class.</p>
+<p>@(Anthony): Good job. &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/5</link>
+        <pubDate>Mon, 19 Apr 2010 11:30:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-5</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@wolfs_goal wolfs goal]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wolfs_goal">@wolfs_goal</a> wrote:</p>
+          <blockquote>
+              <p>Nice, but doesn’t most client’s use a 317 Item loader?  Just having added customs.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/4</link>
+        <pubDate>Mon, 19 Apr 2010 10:56:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-4</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, I didn’t comment the putFile method as I was just too lazy. But it follows the same thing seeing as the structure doesn’t change <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/3</link>
+        <pubDate>Mon, 19 Apr 2010 04:21:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-3</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@glestrts glestrts]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/glestrts">@glestrts</a> wrote:</p>
+          <blockquote>
+              <p>sweet, looks really nice so far, i am digging how you commented nearly everything out  ;D</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/2</link>
+        <pubDate>Mon, 19 Apr 2010 03:38:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-2</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+      <item>
+        <title>Refactored Cache class</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>I got kinda bored so I looked at Moparisthebest’s packaged, refactored client and realized he had started renaming the Decompressor as he so called it an never finished. So I decided to take a look at in and determined Decompressor was an improper name seeing as it grabs and submits data to the cache.<br>
+I refactored the whole class and commented the getFile(id) method to give you enough information to do whatever you need. (Grabbing files/entries related at least) The rest you have to figure out on your own. <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"> If I have anything poorly named feel free to tell me. As an after-reference I used newbiehacker’s refactored CacheFile class(Same thing).</p>
+<p>[code]package rs.cache;</p>
+<p>import java.io.IOException;<br>
+import java.io.RandomAccessFile;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Represents a subcache of the cache identified by a specified index.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> Jagex Ltd.<br>
+*/<br>
+public final class Cache {</p>
+<p>/**</p>
+<ul>
+<li>Create a new Cache instance.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> dataFile The file that holds all the cache data.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> indexFile The indexes for the cache data.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> cacheId The cache id.<br>
+*/<br>
+public Cache(RandomAccessFile dataFile, RandomAccessFile indexFile, int cacheId) {<br>
+this.cacheId = cacheId;<br>
+this.dataFile = dataFile;<br>
+this.indexFile = indexFile;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Gets a file or entry from the cache. A chunk is a 520 byte block of data. &lt;3 newbiehacker for the name.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> fileId The id of the entry or file.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> The byte array that contains all the file data.<br>
+*/<br>
+public synchronized byte[] getFile(int fileId) {<br>
+try {<br>
+// Seek to the file index. IDx6 because each index is 6 bytes long.<br>
+seekTo(indexFile, fileId * 6);</p>
+<pre><code> // Read the data in the index.
+ int bytesRead; // How many bytes have been read.
+ for (int i = 0; i &lt; 6; i += bytesRead) { // Loop through each byte that should be in the index file.
+     bytesRead = indexFile.read(buffer, i, 6 - i); // Append the data to the buffer.
+     if (bytesRead == -1) { // Make sure we got data.
+         return null; // Return null if we didn't.
+     }
+ }
+
+ // The header data. tri-byte for length and tri-byte for start chunk position.
+ int length = ((buffer[0] &amp; 0xff) &lt;&lt; 16) + ((buffer[1] &amp; 0xff) &lt;&lt; 8) + (buffer[2] &amp; 0xff);
+ int currentChunkPosition = ((buffer[3] &amp; 0xff) &lt;&lt; 16) + ((buffer[4] &amp; 0xff) &lt;&lt; 8) + (buffer[5] &amp; 0xff);
+
+ if (length &lt; 0 || length &gt; 0x7a120) { // Make sure the length is over 0 and less than 500,000.
+     return null; // If it's not, return null.
+ }
+
+ if (currentChunkPosition &lt;= 0 || (long) currentChunkPosition &gt; dataFile.length() / 520L) { // Check if valid position.
+     return null; // Return null if it's not.
+ }
+
+ byte data[] = new byte[length]; // The array of bytes in this file.
+
+ int nextChunkPos = 0; // The next chunk's position.
+ for (int i = 0; nextChunkPos &lt; length; i++) { // Loop through until all chunks are read.
+     
+     if (currentChunkPosition == 0) { // Make sure there is a current chunk.
+         return null; // If there isn't, return null.
+     }
+
+     // Seek to the current chunk. POSx520 because each chunk is 520 bytes long.
+     seekTo(dataFile, currentChunkPosition * 520);
+     int remainingBytes = length - nextChunkPos; // Check how many more bytes there are to read.
+     if (remainingBytes &gt; 512) { // Check if there are more than 512 remaining bytes.
+         remainingBytes = 512; // If there are, make it 512 remaining.
+     }
+
+     int bytesRead2; // How many bytes have been read for this chunk.
+     for (int i1 = 0; i1 &lt; remainingBytes + 8; i1 += bytesRead2) { // Loop until all bytes are read.
+         bytesRead2 = dataFile.read(buffer, i1, (remainingBytes + 8) - i1); // Append data to the buffer.
+         if (bytesRead2 == -1) { // Make sure we read bytes.
+             return null; // If we didn't, return null.
+         }
+     }
+
+     int id = ((buffer[0] &amp; 0xff) &lt;&lt; 8) + (buffer[1] &amp; 0xff); // The id of this "file".  2 bytes.
+     int currentChunk = ((buffer[2] &amp; 0xff) &lt;&lt; 8) + (buffer[3] &amp; 0xff); // The position. 2 bytes.
+     int nextChunk = ((buffer[4] &amp; 0xff) &lt;&lt; 16) + ((buffer[5] &amp; 0xff) &lt;&lt; 8) + (buffer[6] &amp; 0xff); // Next chunk position, 3 bytes.
+     int cacheIndex = buffer[7] &amp; 0xff; // Cache id/index. 1 byte.
+     if (id != fileId || currentChunk != i || cacheIndex != cacheId) { // Check and make sure it's what we want.
+         return null; // If it's not what we want return null.
+     }
+     if (nextChunk &lt; 0 || (long) nextChunk &gt; dataFile.length() / 520L) { // Make sure our next chunk isn't invalid.
+         return null; // If it is, return null.
+     }
+
+     for (int i1 = 0; i1 &lt; remainingBytes; i1++) { // Loop through the remanining bytes. Should be a 512 byte block of data.
+         data[nextChunkPos++] = buffer[i1 + 8]; // Append it to the data array.
+     }
+
+     currentChunkPosition = nextChunk; // Set the current chunk posisition.
+ }
+
+ return data;
+</code></pre>
+<p>} catch (IOException _ex) {<br>
+return null;<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Put a file in the cache.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> length The length of the file.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> data The buffer.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> fileId The file id.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> Success or no success.<br>
+*/<br>
+public synchronized boolean putFile(int length, byte data[], int fileId) {<br>
+boolean success = putFile(true, fileId, length, data); // Try to replace an existing file.<br>
+if (!success) { // Check to see if it failed.<br>
+success = putFile(false, fileId, length, data); // If it did fail, try appending it to the end.<br>
+}<br>
+return success; // Return whether or not it added it.<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Put a file in the cache.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> replace Replace an existing entry.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> fileId The file id.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> length The file length.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> data The buffer.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> Success or no success.<br>
+*/<br>
+private synchronized boolean putFile(boolean replace, int fileId, int length, byte data[]) {<br>
+try {<br>
+int currentChunkPos;<br>
+if (replace) {<br>
+seekTo(indexFile, fileId * 6);<br>
+int bytesRead;<br>
+for (int offset = 0; offset &lt; 6; offset += bytesRead) {<br>
+bytesRead = indexFile.read(buffer, offset, 6 - offset);<br>
+if (bytesRead == -1) {<br>
+return false;<br>
+}<br>
+}</p>
+<pre><code>     currentChunkPos = ((buffer[3] &amp; 0xff) &lt;&lt; 16) + ((buffer[4] &amp; 0xff) &lt;&lt; 8) + (buffer[5] &amp; 0xff);
+     if (currentChunkPos &lt;= 0 || (long) currentChunkPos &gt; dataFile.length() / 520L) {
+         return false;
+     }
+ } else {
+     currentChunkPos = (int) ((dataFile.length() + 519L) / 520L);
+     if (currentChunkPos == 0) {
+         currentChunkPos = 1;
+     }
+ }
+ buffer[0] = (byte) (length &gt;&gt; 16);
+ buffer[1] = (byte) (length &gt;&gt; 8);
+ buffer[2] = (byte) length;
+ buffer[3] = (byte) (currentChunkPos &gt;&gt; 16);
+ buffer[4] = (byte) (currentChunkPos &gt;&gt; 8);
+ buffer[5] = (byte) currentChunkPos;
+ seekTo(indexFile, fileId * 6);
+ indexFile.write(buffer, 0, 6);
+ int bytesWritten = 0;
+ for (int i = 0; bytesWritten &lt; length; i++) {
+     int nextChunkPos = 0;
+     if (replace) {
+         seekTo(dataFile, currentChunkPos * 520);
+         int offset;
+         int bytesRead;
+         for (offset = 0; offset &lt; 8; offset += bytesRead) {
+             bytesRead = dataFile.read(buffer, offset, 8 - offset);
+             if (bytesRead == -1) {
+                 break;
+             }
+         }
+
+         if (offset == 8) {
+             int id = ((buffer[0] &amp; 0xff) &lt;&lt; 8) + (buffer[1] &amp; 0xff);
+             int currentChunk = ((buffer[2] &amp; 0xff) &lt;&lt; 8) + (buffer[3] &amp; 0xff);
+             nextChunkPos = ((buffer[4] &amp; 0xff) &lt;&lt; 16) + ((buffer[5] &amp; 0xff) &lt;&lt; 8) + (buffer[6] &amp; 0xff);
+             int cacheIndex = buffer[7] &amp; 0xff;
+             if (id != fileId || currentChunk != i || cacheIndex != cacheId) {
+                 return false;
+             }
+             if (nextChunkPos &lt; 0 || (long) nextChunkPos &gt; dataFile.length() / 520L) {
+                 return false;
+             }
+         }
+     }
+     if (nextChunkPos == 0) {
+         replace = false;
+         nextChunkPos = (int) ((dataFile.length() + 519L) / 520L);
+         if (nextChunkPos == 0) {
+             nextChunkPos++;
+         }
+         if (nextChunkPos == currentChunkPos) {
+             nextChunkPos++;
+         }
+     }
+     if (length - bytesWritten &lt;= 512) {
+         nextChunkPos = 0;
+     }
+     buffer[0] = (byte) (fileId &gt;&gt; 8);
+     buffer[1] = (byte) fileId;
+     buffer[2] = (byte) (i &gt;&gt; 8);
+     buffer[3] = (byte) i;
+     buffer[4] = (byte) (nextChunkPos &gt;&gt; 16);
+     buffer[5] = (byte) (nextChunkPos &gt;&gt; 8);
+     buffer[6] = (byte) nextChunkPos;
+     buffer[7] = (byte) cacheId;
+     seekTo(dataFile, currentChunkPos * 520);
+     dataFile.write(buffer, 0, 8);
+     int remainingBytes = length - bytesWritten;
+     if (remainingBytes &gt; 512) {
+         remainingBytes = 512;
+     }
+     dataFile.write(data, bytesWritten, remainingBytes);
+     bytesWritten += remainingBytes;
+     currentChunkPos = nextChunkPos;
+ }
+
+ return true;
+</code></pre>
+<p>} catch (IOException _ex) {<br>
+return false;<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Seek to a position.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> randomaccessfile The file to be seeked.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> seekPos The position to seek to.</li>
+<li>
+<span class="mention">@throws</span> IOException Throws IOException when no length or no seek.<br>
+*/<br>
+private synchronized void seekTo(RandomAccessFile randomaccessfile, int seekPos) throws IOException {<br>
+if (seekPos &lt; 0 || seekPos &gt; 0x3c00000) { // Make sure the seek position is valid.<br>
+System.out.println(“Badseek - pos:” + seekPos + " len:" + randomaccessfile.length());<br>
+seekPos = 0x3c00000;<br>
+try {<br>
+Thread.sleep(1000L);<br>
+} catch (Exception _ex) {<br>
+}<br>
+}<br>
+randomaccessfile.seek(seekPos); // Seek to the specified position.<br>
+}</li>
+</ul>
+<p>private static final byte[] buffer = new byte[520];<br>
+private final RandomAccessFile dataFile;<br>
+private final RandomAccessFile indexFile;<br>
+private final int cacheId;<br>
+}[/code]<br>
+This is 317.</p>
+</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/refactored-cache-class/337378/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/refactored-cache-class/337378/1</link>
+        <pubDate>Mon, 19 Apr 2010 01:51:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-337378-1</guid>
+        <source url="https://forum.moparisthebest.com/t/refactored-cache-class/337378.rss">Refactored Cache class</source>
+      </item>
+  </channel>
+</rss>

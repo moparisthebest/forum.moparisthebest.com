@@ -1,0 +1,751 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>My own PRNG</title>
+    <link>https://forum.moparisthebest.com/t/my-own-prng/304206</link>
+    <description>I created a PRNG a few months back, and I&#39;ve been updating it slowly over those few months. Every time I updated it, I compared its speed versus the speed of [tt]java.util.Random[/tt]. Only up to recently was I happy with the results. My generator manages to get nearly the exact same speeds as [tt]java.util.Random[/tt]. That was tested at 10,000 iterations across both generators&#39; [tt]nextDouble()[/tt] methods. When I bumped up the iteration count to 1,000,000 my generator become one fourth the speed of [tt]java.util.Random[/tt]. Even so, one million invocations of my generator&#39;s [tt]nextDouble()[/tt] method inside 400 milliseconds is impressive in my mind, so I&#39;m fine and dandy with it.
+
+Anyway, on to the code:
+
+[code]
+package com.taharok.prng;
+
+/**
+ * A pseudo-random number generator which
+ * applies the following formula on a
+ * rotating two-seed basis:
+ * &lt;p&gt;
+ * &lt;code&gt;int(r) = ((2x - x/4) mod (355 / 113)) * 99999999&lt;/code&gt;
+ * &lt;p&gt;
+ * The above equation originated as a
+ * sine power function, but was limited
+ * after x^7. It was then reworked to
+ * use divisors that were divisible by 2
+ * and applied the modulus of PI. This
+ * &quot;simulated&quot; sine value multiplied by
+ * a selectively large whole number
+ * (99999999) gave a decent return value.
+ * This equation was further reworked and
+ * simplified until the above was extracted.
+ * &lt;p&gt;
+ * The idea of pseudo-randomization comes
+ * from the loss of precision that occurs
+ * as the distorted long value is converted
+ * to a double floating-point integer and
+ * then back to a signed long integer. The
+ * loss of precision gives the randomization
+ * equation a &quot;sense&quot; of unpredictable behavior,
+ * which is exactly what was desired inside
+ * this particular pseudo-random number generator.
+ * 
+ * @author Ben Henning
+ */
+public class Random {
+
+	/**
+	 * Simple calculation that approximately equals PI.
+	 * This was discovered by mathematician Zu Chongzhi
+	 * around 480 AD.
+	 */
+	private static final double pi = 355.0 / 113.0;
+
+	/**
+	 * Used in the generation of a pseudo-random double
+	 * value. The equation for generating a double value
+	 * is v = x / 9007199254740992 where x is a 53 bit
+	 * long integer.
+	 */
+	private static final double dprecDivisor = 1L &lt;&lt; 53L;
+
+	/**
+	 * Used in the generation of a pseudo-random float
+	 * value. The equation for generating a double value
+	 * is v = x / 16777216 where x is a 24 bit integer.
+	 */
+	private static final float sprecDivisor = 1 &lt;&lt; 24;
+	private static final long dmask = 0x1FFFFFFFFFFFFFL;
+	private static final int smask = 0xFFFFFF;
+
+	private long currentSeed, nextSeed;
+
+	public Random() {
+		this(System.currentTimeMillis());
+	}
+
+	public Random(long seed) {
+		this.nextSeed = randomize(seed) + (seed &lt;&lt; 32L);
+		reseed();
+	}
+
+	// pseudo-random formula: y = ((2x - x/4) mod (355 / 113)) * 99999999
+	// where y is integer-rounded
+	private static final long randomize(long seed) {
+		return (long)((((seed &lt;&lt; 1) - (seed &gt;&gt; 2)) % pi) * 99999999D);
+	}
+
+	/**
+	 * This method rebuilds the two
+	 * rotating seeds. The current
+	 * seed is set to the next seed
+	 * multiplied by a large number.
+	 * The next seed is then set to
+	 * the pseudo-randomization of
+	 * the new current seed combined
+	 * with an unrandomized version
+	 * of the current seed.
+	 * 
+	 * @return The original current seed prior to reseeding
+	 */
+	protected long reseed() {
+		long last = currentSeed;
+		this.currentSeed = nextSeed &lt;&lt; 64;
+		this.nextSeed = randomize(currentSeed) + (currentSeed &lt;&lt; 32L);
+		return last;
+	}
+
+	// this method is based of off java.util.Random.next(bits)
+	// it is inaccurate with my random formula and thus needs
+	// to be redone, but it works for now
+	protected int next(int bitcount) {
+		return (int)(reseed() &gt;&gt;&gt; (48 - bitcount));
+	}
+
+	public boolean nextBoolean() {
+		return random(2) == 0;
+	}
+
+	public byte nextByte() {
+		return (byte)next(8);
+	}
+
+	public int nextByteU() {
+		return next(8) &amp; 0xff;
+	}
+
+	public short nextShort() {
+		return (short)next(16);
+	}
+
+	public int nextShortU() {
+		return next(16) &amp; 0xffff;
+	}
+
+	public int nextInt() {
+		return next(32);
+	}
+
+	public long nextIntU() {
+		return next(32) &amp; 0xffffffffL;
+	}
+
+	public long nextLong() {
+		return ((next(32) &amp; 0xffffffffL) &lt;&lt; 32L) + next(32);
+	}
+
+	public float nextFloat() {
+		return (reseed() &amp; smask) / sprecDivisor;
+	}
+
+	public double nextDouble() {
+		return (reseed() &amp; dmask) / dprecDivisor;
+	}
+
+	public int random(int min, int max) {
+		return (int)(nextDouble() * (max - min)) + min;
+	}
+
+	public int random(int limit) {
+		return (int)(nextDouble() * limit);
+	}
+
+	public String randomString() {
+		return randomString(nextByteU(), false);
+	}
+
+	public String randomString(boolean readable) {
+		return randomString(nextByteU(), readable);
+	}
+
+	public String randomString(int length) {
+		return randomString(length, false);
+	}
+
+	public String randomString(int length, boolean readable) {
+		char[] string = new char[length];
+		for (int i = 0; i &lt; length; i++)
+			string[i] = (char)(readable ? random(&#39;!&#39;, &#39;~&#39; + 1) : random(0, 178));
+		return new String(string);
+	}
+}
+[/code]
+
+If anyone wants to put it to entertaining use, try out the following code:
+
+[code]
+		Random random = new Random();
+
+		char[] vowels = new char[] { &#39;a&#39;, &#39;e&#39;, &#39;i&#39;, &#39;o&#39;, &#39;u&#39; };
+		char[] consonants = &quot;bcdfghjklmnpqrstvwxyz&quot;.toCharArray();
+
+		String gen = &quot;&quot;;
+		boolean vow = false;
+		for (int i = 0; i &lt; random.random(10, 15); i++) {
+			char next = vow ? vowels[random.random(0, vowels.length)] : consonants[random.random(0,
+					consonants.length)];
+			gen += next;
+			switch (next) {
+			case &#39;q&#39;:
+				gen += &#39;u&#39;;
+				break;
+			case &#39;t&#39;:
+				if (random.nextBoolean())
+					gen += &#39;h&#39;;
+				break;
+			case &#39;c&#39;:
+				if (random.nextBoolean())
+					gen += &#39;h&#39;;
+				break;
+			}
+			vow = !vow;
+		}
+		System.out.println(&quot;Hello, my name is &quot; + gen + &quot;.&quot;);
+[/code]
+
+Here are some of the results:
+
+&lt;blockquote&gt;Hello, my name is chaniposobuz.
+Hello, my name is kavilelojithi.
+Hello, my name is fefiyidadoko.
+Hello, my name is vunarizofex.
+Hello, my name is dagejosetafi.&lt;/blockquote&gt;
+
+PS: This isn&#39;t as bad as my &quot;HashList&quot; :P</description>
+    
+    <lastBuildDate>Wed, 30 Sep 2009 10:47:58 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/my-own-prng/304206.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>is it cryptographically secure/not retarded? i dont think so</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/27</link>
+        <pubDate>Wed, 30 Sep 2009 10:47:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-27</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://www.psgd.org/paul/docs/steal/steal-toc.html" data-bbcode="true" rel="nofollow noopener">How To Steal Code, or Inventing The Wheel Only Once</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/26</link>
+        <pubDate>Tue, 29 Sep 2009 16:14:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-26</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@Killer-99-pkz Killer-99-pkz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/killer-99-pkz">@Killer-99-pkz</a> wrote:</p>
+          <blockquote>
+              <p>why is taharok doing the same thing i do, optimizing “badly?”[br][br][size=1]Posted on: September 29, 2009, 06:45:10 am[/size][hr]i made the near same random string name generator months ago, no joke!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/25</link>
+        <pubDate>Tue, 29 Sep 2009 12:40:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-25</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@sanga282 sanga282]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sanga282">@sanga282</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="22" data-topic="304206">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ownagesbot/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> ownagesbot:</div>
+<blockquote>
+<p>Sanga that would be a retarded thing to do, doing that you are giving the programmer a WAY better chance at predicting the next result, the programmer could totally disregard the previous number in the next result. With that kind of horrid bias, you couldn’t really call it random…</p>
+</blockquote>
+</aside>
+<p>welcome to the UK IT A level course</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/24</link>
+        <pubDate>Tue, 29 Sep 2009 06:35:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-24</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@zstars zstars]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zstars">@zstars</a> wrote:</p>
+          <blockquote>
+              <p>Calculations done through Ent on 4,000,000 bytes samples (~3.81 mb).<br>
+Details to interpret the results: <a href="http://fourmilab.ch/random/" rel="nofollow noopener">http://fourmilab.ch/random/</a></p>
+<p>Note that these tests measure randomness, not speed or cryptographical security.</p>
+<p>ISAAC seems to be the most random, whereas Taharok’s seems to have a small bias towards lower numbers, which is possibly more significant in the higher bits of the randomly generated numbers than on the low ones.</p>
+<p>*** java random ***</p>
+<p>Entropy = 7.999952 bits per byte.</p>
+<p>Optimum compression would reduce the size<br>
+of this 4000000 byte file by 0 percent.</p>
+<p>Chi square distribution for 4000000 samples is 265.23, and randomly<br>
+would exceed this value 31.69 percent of the times.</p>
+<p>Arithmetic mean value of data bytes is 127.4606 (127.5 = random).<br>
+Monte Carlo value for Pi is 3.139155139 (error 0.08 percent).<br>
+Serial correlation coefficient is 0.000414 (totally uncorrelated = 0.0).</p>
+<p>*** taharok 1 ***</p>
+<p>Entropy = 7.662476 bits per byte.</p>
+<p>Optimum compression would reduce the size<br>
+of this 4000000 byte file by 4 percent.</p>
+<p>Chi square distribution for 4000000 samples is 3141224.60, and randomly<br>
+would exceed this value less than 0.01 percent of the times.</p>
+<p>Arithmetic mean value of data bytes is 97.5069 (127.5 = random).<br>
+Monte Carlo value for Pi is 3.577659578 (error 13.88 percent).<br>
+Serial correlation coefficient is -0.128573 (totally uncorrelated = 0.0).</p>
+<p>*** taharok 2 ***</p>
+<p>Entropy = 7.662476 bits per byte.</p>
+<p>Optimum compression would reduce the size<br>
+of this 4000000 byte file by 4 percent.</p>
+<p>Chi square distribution for 4000000 samples is 3141224.60, and randomly<br>
+would exceed this value less than 0.01 percent of the times.</p>
+<p>Arithmetic mean value of data bytes is 97.5069 (127.5 = random).<br>
+Monte Carlo value for Pi is 3.577659578 (error 13.88 percent).<br>
+Serial correlation coefficient is -0.128573 (totally uncorrelated = 0.0).</p>
+<p>*** ISAAC ***</p>
+<p>Entropy = 7.999956 bits per byte.</p>
+<p>Optimum compression would reduce the size<br>
+of this 4000000 byte file by 0 percent.</p>
+<p>Chi square distribution for 4000000 samples is 245.81, and randomly<br>
+would exceed this value 64.89 percent of the times.</p>
+<p>Arithmetic mean value of data bytes is 127.4521 (127.5 = random).<br>
+Monte Carlo value for Pi is 3.142437142 (error 0.03 percent).<br>
+Serial correlation coefficient is -0.000278 (totally uncorrelated = 0.0).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/23</link>
+        <pubDate>Mon, 28 Sep 2009 19:05:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-23</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@ownagesbot ownagesbot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ownagesbot">@ownagesbot</a> wrote:</p>
+          <blockquote>
+              <p>Sanga that would be a retarded thing to do, doing that you are giving the programmer a WAY better chance at predicting the next result, the programmer could totally disregard the previous number in the next result. With that kind of horrid bias, you couldn’t really call it random…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/22</link>
+        <pubDate>Mon, 28 Sep 2009 17:17:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-22</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@sanga282 sanga282]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sanga282">@sanga282</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Nueb35, post:19, topic:304206”][quote author=sanga282 link=topic=400491.msg2973960#msg2973960 date=1254119954]<br>
+ok i’ve got a question, if you generated a number and the in the same session the generator generated the same number does the generator discard it and regenerate a new one? I ask because we had to make a random number generator at school for one of our IT projects and that was one of the things we had to include (it was in actionscript so was fairly easy to add that sort of function)<br>
+[/quote]</p>
+<p>so you can only call the function 10 times?[/quote]<br>
+why would you only be able to call it 10 times? it wasnt if each individual character was the same it was if the whole 10 digit number was the same and thats about 10! combinations.<br>
+<span class="mention">@Taharok</span> was just wondering because we had to do it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/21</link>
+        <pubDate>Mon, 28 Sep 2009 16:11:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-21</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="18" data-topic="304206">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sanga282/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> sanga282:</div>
+<blockquote>
+<p>ok i’ve got a question, if you generated a number and the in the same session the generator generated the same number does the generator discard it and regenerate a new one? I ask because we had to make a random number generator at school for one of our IT projects and that was one of the things we had to include (it was in actionscript so was fairly easy to add that sort of function)</p>
+</blockquote>
+</aside>
+<p>No, the generator does not ensure that you get a different value every time. That’s one of the stresses of it being random at all. You shouldn’t be able to predict it’s output under any circumstance or at any time.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/20</link>
+        <pubDate>Mon, 28 Sep 2009 13:56:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-20</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@nueb35 Nueb35]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nueb35">@nueb35</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="18" data-topic="304206">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sanga282/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> sanga282:</div>
+<blockquote>
+<p>ok i’ve got a question, if you generated a number and the in the same session the generator generated the same number does the generator discard it and regenerate a new one? I ask because we had to make a random number generator at school for one of our IT projects and that was one of the things we had to include (it was in actionscript so was fairly easy to add that sort of function)</p>
+</blockquote>
+</aside>
+<p>so you can only call the function 10 times?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/19</link>
+        <pubDate>Mon, 28 Sep 2009 12:26:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-19</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@sanga282 sanga282]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sanga282">@sanga282</a> wrote:</p>
+          <blockquote>
+              <p>ok i’ve got a question, if you generated a number and the in the same session the generator generated the same number does the generator discard it and regenerate a new one? I ask because we had to make a random number generator at school for one of our IT projects and that was one of the things we had to include (it was in actionscript so was fairly easy to add that sort of function)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/18</link>
+        <pubDate>Mon, 28 Sep 2009 06:39:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-18</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://java.sun.com/javase/6/docs/api/java/security/SecureRandom.html" class="onebox" target="_blank" rel="nofollow noopener">http://java.sun.com/javase/6/docs/api/java/security/SecureRandom.html</a></p>
+<p>of course it all depends on what you’re actually using the PRNGs for</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/17</link>
+        <pubDate>Sun, 27 Sep 2009 23:54:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-17</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:14, topic:304206”]There is a difference between ISAAC and yours in that ISAAC has been peer-reviewed.</p>
+<p>For kind of stuff a process of peer-review is essential for security.</p>
+<p>I dont you have the right to say that there are “some concerns that it’s predictable”, while not mentioning your own algorithm’s possible predictability.[/quote]</p>
+<p>Mine has never been evaluated from the security context. So whether it is predictable is non-determinant. I was also comparing ISAAC’s predictability to [tt]java.util.Random[/tt], not my generator. Whether that one is predictable, I don’t know. You’d have to read the book they took it from.</p>
+<p>And if mine is more predictable than ISSAC, so be it. I’ll work on one that is less predictable then. It really doesn’t bother me either way. :rolleyes:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/16</link>
+        <pubDate>Sun, 27 Sep 2009 22:13:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-16</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@Uriko Uriko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uriko">@Uriko</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:14, topic:304206”]I dont think you have the right to say that there are “some concerns that it’s predictable”, while not mentioning your own algorithm’s possible predictability.[/quote]I noticed that whilst reading, too</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/15</link>
+        <pubDate>Sun, 27 Sep 2009 22:07:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-15</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>There is a difference between ISAAC and yours in that ISAAC has been peer-reviewed.</p>
+<p>For kind of stuff a process of peer-review is essential for security.</p>
+<p>I dont you have the right to say that there are “some concerns that it’s predictable”, while not mentioning your own algorithm’s possible predictability.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/14</link>
+        <pubDate>Sun, 27 Sep 2009 21:50:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-14</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <blockquote>n 2006 Jean-Philippe Aumasson discovered several sets of weak states[3]. The fourth presented (and smallest) set of weak states leads to a highly biased output for the first round of ISAAC and allows the derivation of the internal state, similar to a weakness in RC4. It is not clear if an attacker can tell from just the output whether the generator is in one of these weak states or not. He also shows that a previous attack[4] is flawed, since the Paul-Preneel attack is based on an erroneous algorithm rather than the real ISAAC. An improved version of ISAAC is proposed, called ISAAC+.</blockquote>
+<p>And of course, some of you don’t like Wikipedia because you feel like it. In such cases, you can take a look directly at the <a href="http://www.springerlink.com/content/f011562n2152pk17/" data-bbcode="true" rel="nofollow noopener">book</a> that is referenced in the above Wikipedia text.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/13</link>
+        <pubDate>Sun, 27 Sep 2009 19:06:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-13</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@ownagesbot ownagesbot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ownagesbot">@ownagesbot</a> wrote:</p>
+          <blockquote>
+              <p>from what I remember ISAAC is very very hard to predict, unless you have the seed under which circumstances you can predict it’s every move.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/12</link>
+        <pubDate>Sun, 27 Sep 2009 18:18:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-12</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>This isn’t exactly a benchmark, but it is a few speed comparisons between my generator, java.util.Random, and ISAAC:</p>
+<blockquote># iterations: 1000
+random.nextDouble() Time taken: 1
+java.util.Random.nextDouble() Time taken: 3
+ISAACNumberGen.nextInt() Time taken: 2</blockquote>
+<blockquote># iterations: 10000
+random.nextDouble() Time taken: 19
+java.util.Random.nextDouble() Time taken: 102
+ISAACNumberGen.nextInt() Time taken: 42</blockquote>
+<blockquote># iterations: 100000
+random.nextDouble() Time taken: 183
+java.util.Random.nextDouble() Time taken: 99
+ISAACNumberGen.nextInt() Time taken: 86</blockquote>
+<blockquote># iterations: 1000000
+random.nextDouble() Time taken: 448
+java.util.Random.nextDouble() Time taken: 138
+ISAACNumberGen.nextInt() Time taken: 101</blockquote>
+<blockquote># iterations: 10000000
+random.nextDouble() Time taken: 3791
+java.util.Random.nextDouble() Time taken: 799
+ISAACNumberGen.nextInt() Time taken: 349</blockquote>
+<p>ISAAC proved to be the fastest. But there are some concerns that it’s predictable after the first round of generating values. I’m not exactly sure about this.</p>
+<p>Mine proved to be the fastest at 1000 and 10000 iterations. So if you are only going to call the generator method every now and then, mine would probably be better to use over java.util.Random or ISAAC.</p>
+<p>Okay, I am running the test again. This time I am calling the [tt]nextInt()[/tt] methods for all three generators:</p>
+<blockquote># iterations: 1000
+random.nextInt() Time taken: 1
+java.util.Random.nextInt() Time taken: 3
+ISAACNumberGen.nextInt() Time taken: 3</blockquote>
+<blockquote># iterations: 10000
+random.nextInt() Time taken: 20
+java.util.Random.nextInt() Time taken: 20
+ISAACNumberGen.nextInt() Time taken: 30</blockquote>
+<blockquote># iterations: 100000
+random.nextInt() Time taken: 102
+java.util.Random.nextInt() Time taken: 42
+ISAACNumberGen.nextInt() Time taken: 90</blockquote>
+<blockquote># iterations: 1000000
+random.nextInt() Time taken: 423
+java.util.Random.nextInt() Time taken: 82
+ISAACNumberGen.nextInt() Time taken: 104</blockquote>
+<blockquote># iterations: 10000000
+random.nextInt() Time taken: 3755
+java.util.Random.nextInt() Time taken: 406
+ISAACNumberGen.nextInt() Time taken: 358</blockquote>
+<p>Obviously java.util.Random surpasses the other two in nextInt(). This means that ISAAC is both potentially predictable and is slower than the default Java PRNG utility.</p>
+<p>But of course, mine isn’t that bad if you use it periodically. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/11</link>
+        <pubDate>Sun, 27 Sep 2009 13:57:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-11</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:7, topic:304206”][quote author=abraham2119 link=topic=400491.msg2972218#msg2972218 date=1254026920]<br>
+why would i use this over java.util.random<br>
+[/quote]<br>
+He just explained it, it is faster.[/quote]</p>
+<aside class="quote no-group" data-post="1" data-topic="304206">
+<div class="title">
+<div class="quote-controls"></div>
+ Taharok:</div>
+<blockquote>
+<p>Only up to recently was I happy with the results. My generator manages to get <span class="bbcode-b">nearly</span> the exact same speeds as [tt]java.util.Random[/tt].</p>
+</blockquote>
+</aside>
+<p>wut</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/10</link>
+        <pubDate>Sun, 27 Sep 2009 11:54:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-10</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@ownagesbot ownagesbot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ownagesbot">@ownagesbot</a> wrote:</p>
+          <blockquote>
+              <p>Have you back to backed it with an ISAAC? I wonder how the speed/predictability compares?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/9</link>
+        <pubDate>Sun, 27 Sep 2009 09:48:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-9</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:7, topic:304206”][quote author=abraham2119 link=topic=400491.msg2972218#msg2972218 date=1254026920]<br>
+why would i use this over java.util.random<br>
+[/quote]</p>
+<p>He just explained it, it is faster.  And maybe you like this algorithm better than the one Sun uses.</p>
+<p>Nice job Taharok, very interesting and useful at the same time.  Did you derive that formula or where did you find it from?[/quote]</p>
+<p>The first time I created it, I was using [tt]Math.sin()[/tt] to “randomize” the seed. But naturally, this was way too slow for practical use of the generator. So I eventually used the first three rounds of a sine power function combined with [tt]% Math.PI[/tt]. A lot of simplified changes later, and I came up with what I have now.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/8</link>
+        <pubDate>Sun, 27 Sep 2009 06:16:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-8</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="6" data-topic="304206">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>why would i use this over java.util.random</p>
+</blockquote>
+</aside>
+<p>He just explained it, it is faster.  And maybe you like this algorithm better than the one Sun uses.</p>
+<p>Nice job Taharok, very interesting and useful at the same time.  Did you derive that formula or where did you find it from?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/7</link>
+        <pubDate>Sun, 27 Sep 2009 05:01:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-7</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>why would i use this over java.util.random</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/6</link>
+        <pubDate>Sun, 27 Sep 2009 04:48:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-6</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>PeeHPee, he’s too cool to conform.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/5</link>
+        <pubDate>Fri, 25 Sep 2009 12:39:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-5</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@PeeHPee PeeHPee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peehpee">@PeeHPee</a> wrote:</p>
+          <blockquote>
+              <p><code>
+Math.PI</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/4</link>
+        <pubDate>Fri, 25 Sep 2009 11:55:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-4</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+      <item>
+        <title>My own PRNG</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>Nice naming of constants.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/my-own-prng/304206/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/my-own-prng/304206/3</link>
+        <pubDate>Fri, 25 Sep 2009 11:40:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-304206-3</guid>
+        <source url="https://forum.moparisthebest.com/t/my-own-prng/304206.rss">My own PRNG</source>
+      </item>
+  </channel>
+</rss>

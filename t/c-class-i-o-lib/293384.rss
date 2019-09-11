@@ -1,0 +1,836 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[C] Class I/O lib</title>
+    <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384</link>
+    <description>Disregard the library name, it&#39;s not a true bytecode lib, because I never implemented it to that point :|
+
+Lemme start off by saying thanks to frank_ for the concept and various opinions on doing things certain ways. It can read and write classes, that&#39;s about all. If I continue on this I&#39;ll be doing a major overhaul so it doesn&#39;t allocate so much shit on the heap, and I&#39;ll use frank_&#39;s approach of using an anonymous union :O The code gets VERY ugly in places and I do apologize for that. But anyway here&#39;s an example [ugly] program:
+[code]
+#include &lt;classio.h&gt;
+
+#define eprintf(format, args...)	fprintf(stderr, format, ## args)
+
+char *getutf(cp_info **cpool, int idx) {
+    return ((cp_utf8_info *) cpool[idx])-&gt;bytes;
+}
+
+main(int argc, char *argv[]) {
+    if (argc == 2) {
+        char *path = argv[1];
+        FILE *fp = fopen(path, &quot;rb&quot;);
+        if (!fp) {
+            eprintf(&quot;couldn&#39;t open file: %s\n&quot;, path);
+            perror(&quot;fopen(...)&quot;);
+            return 1;
+        }
+        classfile cf;
+        classio_read(&amp;cf, fp);
+        fclose(fp);
+        cp_info **cpool = cf.cpool;
+        printf(&quot;cp_size: %d\n&quot;, cf.cpool_size);
+        int i;
+        for (i = 1; i &lt; cf.cpool_size; ++i) {
+            cp_info *cinfo = cpool[i];
+            switch (cinfo-&gt;tag) {
+                case CLASS_INFO_TAG: {
+                    cp_class_info *clazz = (cp_class_info *) cinfo;
+                    printf(&quot;[%d] cp_class_info: %s\n&quot;, i, getutf(cpool, clazz-&gt;name_index));
+                    break;
+                }
+                case FIELDREF_INFO_TAG: {
+                    cp_fieldref_info *fref = (cp_fieldref_info *) cinfo;
+                    cp_class_info *clazz = (cp_class_info *) cpool[fref-&gt;class_index];
+                    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[fref-&gt;name_and_type_index];
+                    char *classname = getutf(cpool, clazz-&gt;name_index);
+                    char *fieldname = getutf(cpool, nat-&gt;name_index);
+                    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+                    printf(&quot;[%d] cp_fieldref_info: %s/%s %s\n&quot;, i, classname, fieldname, desc);
+                    break;
+                }
+                case METHODREF_INFO_TAG: {
+                    cp_methodref_info *mref = (cp_methodref_info *) cinfo;
+                    cp_class_info *clazz = (cp_class_info *) cpool[mref-&gt;class_index];
+                    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[mref-&gt;name_and_type_index];
+                    char *classname = getutf(cpool, clazz-&gt;name_index);
+                    char *mthdname = getutf(cpool, nat-&gt;name_index);
+                    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+                    printf(&quot;[%d] cp_methodref_info: %s/%s %s\n&quot;, i, classname, mthdname, desc);
+                    break;
+                }
+                case INTERFACEMETHODREF_INFO_TAG: {
+                    cp_interfacemethodref_info *imref = (cp_interfacemethodref_info *) cinfo;
+                    cp_class_info *clazz = (cp_class_info *) cpool[imref-&gt;class_index];
+                    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[imref-&gt;name_and_type_index];
+                    char *classname = getutf(cpool, clazz-&gt;name_index);
+                    char *mthdname = getutf(cpool, nat-&gt;name_index);
+                    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+                    printf(&quot;[%d] cp_interfacemethodref_info: %s/%s %s\n&quot;, i, classname, mthdname, desc);
+                    break;
+                }
+                case STRING_INFO_TAG: {
+                    cp_string_info *str = (cp_string_info *) cinfo;
+                    printf(&quot;[%d] cp_string_info: %s\n&quot;, i, getutf(cpool, str-&gt;string_index));
+                    break;
+                }
+                case INTEGER_INFO_TAG: {
+                    cp_integer_info *iinfo = (cp_integer_info *) cinfo;
+                    printf(&quot;[%d] cp_integer_info: %d\n&quot;, i, iinfo-&gt;bytes);
+                    break;
+                }
+                case FLOAT_INFO_TAG: {
+                    cp_float_info *finfo = (cp_float_info *) cinfo;
+                    printf(&quot;[%d] cp_float_info: %f\n&quot;, i, finfo-&gt;bytes);
+                    break;
+                }
+                case LONG_INFO_TAG: {
+                    cp_long_info *linfo = (cp_long_info *) cinfo;
+                    printf(&quot;[%d] cp_long_info: %d\n&quot;, i, linfo-&gt;bytes);
+                    break;
+                }
+                case DOUBLE_INFO_TAG: {
+                    cp_double_info *dinfo = (cp_double_info *) cinfo;
+                    printf(&quot;[%d] cp_double_info: %f\n&quot;, i, dinfo-&gt;bytes);
+                    break;
+                }
+                case NAMEANDTYPE_INFO_TAG: {
+                    cp_nameandtype_info *ninfo = (cp_nameandtype_info *) cinfo;
+                    char *name = getutf(cpool, ninfo-&gt;name_index);
+                    char *desc = getutf(cpool, ninfo-&gt;descriptor_index);
+                    printf(&quot;[%d] cp_nameandtype_info: %s %s\n&quot;, i, name, desc);
+                    break;
+                }
+                case UTF8_INFO_TAG: {
+                    cp_utf8_info *utf = (cp_utf8_info *) cinfo;
+                    printf(&quot;[%d] cp_utf8_info: %s\n&quot;, i, utf-&gt;bytes);
+                    break;
+                }
+            }
+        }
+        classfile_free(&amp;cf);
+        return 0;
+    } else {
+        eprintf(&quot;Usage: %s &lt;path to classfile&gt;\n&quot;, argv[0]);
+        return 1;
+    }
+}
+[/code]
+
+To build the lib:
+[code]gcc -c classio.c classfile.c[/code] &amp; [code]ar rs libbytecode.a classio.o classfile.o[/code]
+
+To build example program:
+[code]gcc -I . -c lscpinfo.c[/code] &amp; [code]gcc -I . -L . -o lscpinfo -l bytecode lscpinfo.o[/code]
+
+Example output:
+[code]
+C:\bytecode\example&gt;lscpinfo ./class/Test_cpy.class
+cp_size: 19
+[1] cp_methodref_info: java/lang/Object/&lt;init&gt; ()V
+[2] cp_methodref_info: Test/method1 ()I
+[3] cp_class_info: Test
+[4] cp_class_info: java/lang/Object
+[5] cp_utf8_info: &lt;init&gt;
+[6] cp_utf8_info: ()V
+[7] cp_utf8_info: Code
+[8] cp_utf8_info: LineNumberTable
+[9] cp_utf8_info: method1
+[10] cp_utf8_info: ()I
+[11] cp_utf8_info: main
+[12] cp_utf8_info: ([Ljava/lang/String;)V
+[13] cp_utf8_info: SourceFile
+[14] cp_utf8_info: Test.java
+[15] cp_nameandtype_info: &lt;init&gt; ()V
+[16] cp_nameandtype_info: method1 ()I
+[17] cp_utf8_info: Test
+[18] cp_utf8_info: java/lang/Object
+[/code]
+
+NOTE this was written under windows vista and compiled via MinGW (Minimalistic GNU for Windows). 
+
+Feel free to go through the horrid source code and give feedback, orrr try and find bugs :)
+
+GO![br][br][size=1]Posted on: August 06, 2009, 11:21:21 pm[/size][hr]BTW yes I could&#39;ve improved the example program and the actual library quite a bit.</description>
+    
+    <lastBuildDate>Sun, 27 Feb 2011 15:37:05 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Procedural, post:35, topic:293384”]Super_ I love to see you get trolled on you useless fuck.[/quote]Way to gravedig douchebag</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/36</link>
+        <pubDate>Sun, 27 Feb 2011 15:37:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-36</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Procedural Procedural]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/procedural">@Procedural</a> wrote:</p>
+          <blockquote>
+              <p>Super_ I love to see you get trolled on you useless fuck.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/35</link>
+        <pubDate>Sun, 27 Feb 2011 15:17:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-35</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@xeez xeez`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xeez">@xeez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mopman, post:30, topic:293384”]except that xeez was arguing the same point as the bank, that those are NOT API FLAWS</p>
+<p>hence my assumption that he cannot read[/quote]Finally, someone sees my actual point.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/34</link>
+        <pubDate>Mon, 07 Sep 2009 20:26:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-34</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@the_bank the bank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_bank">@the_bank</a> wrote:</p>
+          <blockquote>
+              <p>You guys killed my buzz <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/33</link>
+        <pubDate>Sat, 29 Aug 2009 12:53:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-33</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <p>oh.</p>
+<p>he is not frank <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/32</link>
+        <pubDate>Sat, 29 Aug 2009 12:15:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-32</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@light232 light232]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/light232">@light232</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mopman, post:30, topic:293384”]except that xeez was arguing the same point as the bank, that those are NOT API FLAWS</p>
+<p>hence my assumption that he cannot read[/quote]<br>
+he was trying to be funny i think</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/31</link>
+        <pubDate>Sat, 29 Aug 2009 03:13:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-31</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <p>except that xeez was arguing the same point as the bank, that those are NOT API FLAWS</p>
+<p>hence my assumption that he cannot read</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/30</link>
+        <pubDate>Sat, 29 Aug 2009 01:42:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-30</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@light232 light232]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/light232">@light232</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mopman, post:28, topic:293384”][quote author=the bank link=topic=388216.msg2934874#msg2934874 date=1251498422]<br>
+Api “flaws”?<br>
+[/quote]</p>
+<p>Above poster cannot read.[/quote]<br>
+he referrs to xeez’ as, api flaws due to his(xeez’) thread <a href="http://www.moparisthebest.com/smf/index.php/topic,391885.0.html" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,391885.0.html</a><br>
+not that funny but it is for him…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/29</link>
+        <pubDate>Sat, 29 Aug 2009 01:41:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-29</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="27" data-topic="293384">
+<div class="title">
+<div class="quote-controls"></div>
+ the bank:</div>
+<blockquote>
+<p>Api “flaws”?</p>
+</blockquote>
+</aside>
+<p>Above poster cannot read.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/28</link>
+        <pubDate>Sat, 29 Aug 2009 01:03:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-28</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@the_bank the bank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_bank">@the_bank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xeez`, post:19, topic:293384”]oksuper_, the bank is probably correct in what he says. There is no point in making this in a language like C over an object oriented programming language, like Java. Where memory leaks, like the one you had before yakman spotted it, would not occur.</p>
+<p>Any valid reasons as to why you should develop this in C?[/quote]That is not what I was saying…what are you on about?  Api “flaws”?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/27</link>
+        <pubDate>Fri, 28 Aug 2009 22:27:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-27</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@light232 light232]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/light232">@light232</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="25" data-topic="293384">
+<div class="title">
+<div class="quote-controls"></div>
+ frank_:</div>
+<blockquote>
+<p>i didnt read it, but java only leaks memory if you are an complete moron</p>
+</blockquote>
+</aside>
+<p>win++</p>
+<blockquote>When C/C++ programmers refer to memory leaks in
+Java, it often means that they don't understand how
+Java works.</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/26</link>
+        <pubDate>Fri, 28 Aug 2009 21:03:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-26</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>i didnt read it, but java only leaks memory if you are an complete moron</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/25</link>
+        <pubDate>Fri, 28 Aug 2009 19:59:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-25</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>object.dispose people?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/24</link>
+        <pubDate>Fri, 28 Aug 2009 18:06:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-24</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@light232 light232]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/light232">@light232</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xeez`, post:19, topic:293384”]oksuper_, the bank is probably correct in what he says. There is no point in making this in a language like C over an object oriented programming language, like Java. Where memory leaks, like the one you had before yakman spotted it, would not occur.</p>
+<p>Any valid reasons as to why you should develop this in C?[/quote]<br>
+“java has memory leaks” is a myth.</p>
+<blockquote>JAVA HAS MEMORY LEAKS
+When C/C++ programmers refer to memory leaks in
+Java, it often means that they don't understand how
+Java works. Java doesn't offer pointer arithmetic, and
+typical C-style memory leaks—such as out-of-bounds
+array accesses—are caught by the Java compiler.
+However, these programmers may mean that objects
+which are no longer needed by the program are not
+being garbage collected. This becomes an issue if the
+program keeps creating new objects—requiring more
+memory—and eventually crashes when the maximum
+memory allocation is exceeded.
+This kind of problem is a consequence of bad
+programming style, since the garbage collector can
+only do its job when an object is completely
+dereferenced, meaning the program no longer refers to
+the object. A good profiling tool, such as JProfiler
+(http://www.ej-
+technologies.com/products/jprofiler/overview.html),
+can be a great help in identifying code using excessive
+amounts of memory. JProfiler is a commercial product;
+many open source profilers are listed at http://java-
+source.net/; Java SE 6 comes with a great graphical
+profiler, jhat.
+Another memory-related complaint is that the Java
+garbage collector is executing at poorly timed
+intervals, causing the application to halt for seconds
+while the collector sweeps and cleans. The JVM comes
+with several different garbage collectors, which collect
+in various ways, and can be selected and fine-tuned
+from the command line. Information on the
+performance of the chosen collector can be gathered
+and analyzed, and Java SE 6 offers many tools for
+these tasks, including jps, jstat, jhat, and jstack.</blockquote>
+<p><a href="http://docs.google.com/gview?a=v&amp;q=cache:qgD0K2LpcqUJ:fivedots.coe.psu.ac.th/~ad/jg/ch00/myths.pdf+java+memory+leaks+myth&amp;hl=en&amp;gl=us" data-bbcode="true" rel="nofollow noopener">http://docs.google.com/gview?a=v&amp;q=cache:qgD0K2LpcqUJ:fivedots.coe.psu.ac.th/~ad/jg/ch00/myths.pdf+java+memory+leaks+myth&amp;hl=en&amp;gl=us</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/23</link>
+        <pubDate>Fri, 28 Aug 2009 15:19:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-23</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xeez`, post:19, topic:293384”]oksuper_, the bank is probably correct in what he says. There is no point in making this in a language like C over an object oriented programming language, like Java. Where memory leaks, like the one you had before yakman spotted it, would not occur.</p>
+<p>Any valid reasons as to why you should develop this in C?[/quote]</p>
+<p>java has many problems of its own.</p>
+<p>For instance, my version of lscpinfo makes a lot of use of function pointers for handling the constant pool. A similar method could be used with actual instructions.<br>
+java cant do this method because it doesnt have function pointers, you could argue it can use polymorphism instead, but that would involve +200 classes and objects being alive in the program before a single class could be parsed.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/22</link>
+        <pubDate>Fri, 28 Aug 2009 14:58:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-22</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xeez`, post:19, topic:293384”]oksuper_, the bank is probably correct in what he says. There is no point in making this in a language like C over an object oriented programming language, like Java. Where memory leaks, like the one you had before yakman spotted it, would not occur.</p>
+<p>Any valid reasons as to why you should develop this in C?[/quote]because he programs c and wants to be able to use it for any future projects?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/21</link>
+        <pubDate>Fri, 28 Aug 2009 02:18:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-21</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“the bank, post:17, topic:293384”][quote author=Ollie link=topic=388216.msg2929830#msg2929830 date=1251203282]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>what does mitb think of my version of lscpinfo</p>
+</blockquote>
+</aside>
+<p><aside class="onebox wikipedia">
+  <header class="source">
+      <a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">en.wikipedia.org</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:175/484;"><img src="//upload.wikimedia.org/wikipedia/commons/thumb/0/08/Lenz_Entwurf_zu_einem_Engel.jpg/175px-Lenz_Entwurf_zu_einem_Engel.jpg" class="thumbnail"></div>
+
+<h3><a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">Good</a></h3>
+
+<p>In its most general context, the concept of good denotes that conduct which is to be or should be preferred when posed with a choice between a set of possible actions. Good is generally considered to be the opposite of evil. The concept is of interest in the study of morality, ethics, religion and philosophy, and the specific meaning and etiology of the term and its associated translations among ancient and contemporary languages has varied substantially in its inflected meaning depending on circ...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+<br>
+[/quote]Well done, you made my night with that!</p>
+<p><span class="mention">@super_</span><br>
+I don’t see a practical use for this over Java other than epeen++, is there one?[/quote]</p>
+<p>Neither do I but the epeen++ is all you need amirite?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/20</link>
+        <pubDate>Fri, 28 Aug 2009 02:13:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-20</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@xeez xeez`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xeez">@xeez</a> wrote:</p>
+          <blockquote>
+              <p>oksuper_, the bank is probably correct in what he says. There is no point in making this in a language like C over an object oriented programming language, like Java. Where memory leaks, like the one you had before yakman spotted it, would not occur.</p>
+<p>Any valid reasons as to why you should develop this in C?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/19</link>
+        <pubDate>Fri, 28 Aug 2009 01:59:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-19</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“the bank, post:17, topic:293384”][quote author=Ollie link=topic=388216.msg2929830#msg2929830 date=1251203282]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>what does mitb think of my version of lscpinfo</p>
+</blockquote>
+</aside>
+<p><aside class="onebox wikipedia">
+  <header class="source">
+      <a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">en.wikipedia.org</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:175/484;"><img src="//upload.wikimedia.org/wikipedia/commons/thumb/0/08/Lenz_Entwurf_zu_einem_Engel.jpg/175px-Lenz_Entwurf_zu_einem_Engel.jpg" class="thumbnail"></div>
+
+<h3><a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">Good</a></h3>
+
+<p>In its most general context, the concept of good denotes that conduct which is to be or should be preferred when posed with a choice between a set of possible actions. Good is generally considered to be the opposite of evil. The concept is of interest in the study of morality, ethics, religion and philosophy, and the specific meaning and etiology of the term and its associated translations among ancient and contemporary languages has varied substantially in its inflected meaning depending on circ...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+<br>
+[/quote]Well done, you made my night with that!</p>
+<p><span class="mention">@super_</span><br>
+I don’t see a practical use for this over Java other than epeen++, is there one?[/quote]</p>
+<p>Probably because you don’t know how to program in C.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/18</link>
+        <pubDate>Wed, 26 Aug 2009 01:35:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-18</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@the_bank the bank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_bank">@the_bank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ollie, post:15, topic:293384”][quote author=yakman link=topic=388216.msg2929801#msg2929801 date=1251201761]<br>
+what does mitb think of my version of lscpinfo<br>
+[/quote]</p>
+<p><a href="http://en.wikipedia.org/wiki/Good%5B/quote%5DWell" rel="nofollow noopener">http://en.wikipedia.org/wiki/Good[/quote]Well</a> done, you made my night with that!</p>
+<p><span class="mention">@super_</span><br>
+I don’t see a practical use for this over Java other than epeen++, is there one?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/17</link>
+        <pubDate>Wed, 26 Aug 2009 00:36:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-17</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>Interesting yakman.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/16</link>
+        <pubDate>Tue, 25 Aug 2009 22:31:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-16</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="14" data-topic="293384">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/yakman/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> yakman:</div>
+<blockquote>
+<p>what does mitb think of my version of lscpinfo</p>
+</blockquote>
+</aside>
+<aside class="onebox wikipedia">
+  <header class="source">
+      <a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">en.wikipedia.org</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:175/484;"><img src="//upload.wikimedia.org/wikipedia/commons/thumb/0/08/Lenz_Entwurf_zu_einem_Engel.jpg/175px-Lenz_Entwurf_zu_einem_Engel.jpg" class="thumbnail"></div>
+
+<h3><a href="https://en.wikipedia.org/wiki/Good" target="_blank" rel="nofollow noopener">Good</a></h3>
+
+<p>In its most general context, the concept of good denotes that conduct which is to be or should be preferred when posed with a choice between a set of possible actions. Good is generally considered to be the opposite of evil. The concept is of interest in the study of morality, ethics, religion and philosophy, and the specific meaning and etiology of the term and its associated translations among ancient and contemporary languages has varied substantially in its inflected meaning depending on circ...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/15</link>
+        <pubDate>Tue, 25 Aug 2009 12:28:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-15</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>what does mitb think of my version of lscpinfo</p>
+<pre><code class="lang-auto">#include "classio.h"
+
+#define eprintf(format, args...)	fprintf(stderr, format, ## args)
+
+#define MAX_CP_INFO_TAG		12
+#define MIN_CP_INFO_TAG			1
+
+typedef void (*cp_handler_funct) (int, cp_info*, cp_info**);
+
+
+char *getutf(cp_info **cpool, int idx) {
+    return ((cp_utf8_info *) cpool[idx])-&gt;bytes;
+}
+
+
+void utf8_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_utf8_info *utf = (cp_utf8_info *) cinfo;
+    printf("[%d] cp_utf8_info: %s\n", i, utf-&gt;bytes);
+}
+
+void integer_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_integer_info *iinfo = (cp_integer_info *) cinfo;
+    printf("[%d] cp_integer_info: %d\n", i, iinfo-&gt;bytes);
+}
+
+void float_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_float_info *finfo = (cp_float_info *) cinfo;
+    printf("[%d] cp_float_info: %f\n", i, finfo-&gt;bytes);
+}
+
+void long_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_long_info *linfo = (cp_long_info *) cinfo;
+    printf("[%d] cp_long_info: %d\n", i, linfo-&gt;bytes);
+}
+
+void double_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_double_info *dinfo = (cp_double_info *) cinfo;
+    printf("[%d] cp_double_info: %f\n", i, dinfo-&gt;bytes);
+}
+
+void class_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_class_info *clazz = (cp_class_info *) cinfo;
+    printf("[%d] cp_class_info: %s\n", i, getutf(cpool, clazz-&gt;name_index));
+}
+
+void string_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_string_info *str = (cp_string_info *) cinfo;
+    printf("[%d] cp_string_info: %s\n", i, getutf(cpool, str-&gt;string_index));
+}
+
+void fieldref_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_fieldref_info *fref = (cp_fieldref_info *) cinfo;
+    cp_class_info *clazz = (cp_class_info *) cpool[fref-&gt;class_index];
+    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[fref-&gt;name_and_type_index];
+    char *classname = getutf(cpool, clazz-&gt;name_index);
+    char *fieldname = getutf(cpool, nat-&gt;name_index);
+    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+    printf("[%d] cp_fieldref_info: %s/%s %s\n", i, classname, fieldname, desc);
+}
+
+void methodref_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_methodref_info *mref = (cp_methodref_info *) cinfo;
+    cp_class_info *clazz = (cp_class_info *) cpool[mref-&gt;class_index];
+    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[mref-&gt;name_and_type_index];
+    char *classname = getutf(cpool, clazz-&gt;name_index);
+    char *mthdname = getutf(cpool, nat-&gt;name_index);
+    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+    printf("[%d] cp_methodref_info: %s/%s %s\n", i, classname, mthdname, desc);
+}
+
+void interfacemethodref_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_interfacemethodref_info *imref = (cp_interfacemethodref_info *) cinfo;
+    cp_class_info *clazz = (cp_class_info *) cpool[imref-&gt;class_index];
+    cp_nameandtype_info *nat = (cp_nameandtype_info *) cpool[imref-&gt;name_and_type_index];
+    char *classname = getutf(cpool, clazz-&gt;name_index);
+    char *mthdname = getutf(cpool, nat-&gt;name_index);
+    char *desc = getutf(cpool, nat-&gt;descriptor_index);
+    printf("[%d] cp_interfacemethodref_info: %s/%s %s\n", i, classname, mthdname, desc);
+}
+
+void nameandtype_info_handler(int i, cp_info* cinfo, cp_info** cpool) {
+    cp_nameandtype_info *ninfo = (cp_nameandtype_info *) cinfo;
+    char *name = getutf(cpool, ninfo-&gt;name_index);
+    char *desc = getutf(cpool, ninfo-&gt;descriptor_index);
+    printf("[%d] cp_nameandtype_info: %s %s\n", i, name, desc);
+}
+
+main(int argc, char *argv[]) {
+    if (argc == 2) {
+        char *path = argv[1];
+        FILE *fp = fopen(path, "rb");
+        if (!fp) {
+            eprintf("couldn't open file: %s\n", path);
+            perror("fopen(...)");
+            return 1;
+        }
+
+        cp_handler_funct cp_handlers[13] = {
+          NULL,
+          &amp;utf8_info_handler,
+          NULL,
+          &amp;integer_info_handler,
+          &amp;float_info_handler,
+          &amp;long_info_handler,
+          &amp;double_info_handler,
+          &amp;class_info_handler,
+          &amp;string_info_handler,
+          &amp;fieldref_info_handler,
+          &amp;methodref_info_handler,
+          &amp;interfacemethodref_info_handler,
+          &amp;nameandtype_info_handler
+        };
+
+        classfile cf;
+        classio_read(&amp;cf, fp);
+        fclose(fp);
+        cp_info **cpool = cf.cpool;
+        printf("cp_size: %d\n", cf.cpool_size);
+        int i;
+        for (i = 1; i &lt; cf.cpool_size; ++i) {
+            cp_info *cinfo = cpool[i];
+            if(cinfo-&gt;tag &lt; MIN_CP_INFO_TAG || cinfo-&gt;tag &gt; MAX_CP_INFO_TAG || cp_handlers[cinfo-&gt;tag] == NULL) {
+                eprintf("invalid tag in constant pool: %d\n", cinfo-&gt;tag);
+                return 1;
+            }
+            cp_handlers[cinfo-&gt;tag](i, cinfo, cpool);
+        }
+        classfile_free(&amp;cf);
+        return 0;
+    } else {
+        eprintf("Usage: %s &lt;path to classfile&gt;\n", argv[0]);
+        return 1;
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/14</link>
+        <pubDate>Tue, 25 Aug 2009 12:02:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-14</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>good job, but mines better xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/13</link>
+        <pubDate>Mon, 24 Aug 2009 21:06:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-13</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+      <item>
+        <title>[C] Class I/O lib</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="11" data-topic="293384">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/mopman/40/33_1.png" class="avatar"> Mopman:</div>
+<blockquote>
+<p>They are, thats why not <span class="hashtag">#including</span> &lt;stdlib.h&gt; was causing problems:P</p>
+</blockquote>
+</aside>
+<p>I was… :([br][br][size=1]Posted on: August 24, 2009, 04:07:17 pm[/size][hr]OH WAIT DISREGARD THAT HAHAHA I DIDNT AHAHA I SUCK COCKS</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-class-i-o-lib/293384/12</link>
+        <pubDate>Mon, 24 Aug 2009 16:05:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-293384-12</guid>
+        <source url="https://forum.moparisthebest.com/t/c-class-i-o-lib/293384.rss">[C] Class I/O lib</source>
+      </item>
+  </channel>
+</rss>

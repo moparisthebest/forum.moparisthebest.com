@@ -1,0 +1,1202 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Donator drop rates x bonus help?</title>
+    <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366</link>
+    <description>hello, first sorry about my last post being so large and stuff i fully understand what you mean i was more looking someone to teach me a bit and show me how to add some of it but anyways
+
+im using rusev2 and trying to add a multiply bonus for donator drop rates, i have been messing about a bit but cant get it right any help is appreciated!
+NPCDrops.java
+[code]package com.ruse.model.definitions;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.ruse.model.Graphic;
+import com.ruse.model.GroundItem;
+import com.ruse.model.Item;
+import com.ruse.model.PlayerRights;
+import com.ruse.model.Locations.Location;
+import com.ruse.model.Position;
+import com.ruse.model.Skill;
+import com.ruse.model.container.impl.Bank;
+import com.ruse.model.container.impl.Equipment;
+import com.ruse.util.JsonLoader;
+import com.ruse.util.Misc;
+import com.ruse.world.World;
+import com.ruse.world.content.DropLog;
+import com.ruse.world.content.DropLog.DropLogEntry;
+import com.ruse.world.content.PlayerLogs;
+import com.ruse.world.content.clan.ClanChatManager;
+import com.ruse.world.content.minigames.impl.WarriorsGuild;
+import com.ruse.world.content.skill.impl.prayer.BonesData;
+import com.ruse.world.content.skill.impl.summoning.CharmingImp;
+import com.ruse.world.entity.impl.GroundItemManager;
+import com.ruse.world.entity.impl.npc.NPC;
+import com.ruse.world.entity.impl.player.Player;
+
+/**
+ * Controls the npc drops
+ * 
+ * @author 2012 &lt;http://www.rune-server.org/members/dexter+morgan/&gt;, Gabbe &amp;
+ *         Samy
+ * 
+ */
+public class NPCDrops {
+
+	/**
+	 * The map containing all the npc drops.
+	 */
+	private static Map&lt;Integer, NPCDrops&gt; dropControllers = new HashMap&lt;Integer, NPCDrops&gt;();
+
+	public static JsonLoader parseDrops() {
+
+		ItemDropAnnouncer.init();
+
+		return new JsonLoader() {
+
+			@Override
+			public void load(JsonObject reader, Gson builder) {
+				int[] npcIds = builder.fromJson(reader.get(&quot;npcIds&quot;),
+						int[].class);
+				NpcDropItem[] drops = builder.fromJson(reader.get(&quot;drops&quot;),
+						NpcDropItem[].class);
+
+				NPCDrops d = new NPCDrops();
+				d.npcIds = npcIds;
+				d.drops = drops;
+				for (int id : npcIds) {
+					dropControllers.put(id, d);
+				}
+			}
+
+			@Override
+			public String filePath() {
+				return &quot;./data/def/json/drops.json&quot;;
+			}
+		};
+	}
+
+	/**
+	 * The id&#39;s of the NPC&#39;s that &quot;owns&quot; this class.
+	 */
+	private int[] npcIds;
+
+	/**
+	 * All the drops that belongs to this class.
+	 */
+	private NpcDropItem[] drops;
+
+	/**
+	 * Gets the NPC drop controller by an id.
+	 * 
+	 * @return The NPC drops associated with this id.
+	 */
+	public static NPCDrops forId(int id) {
+		return dropControllers.get(id);
+	}
+
+	public static Map&lt;Integer, NPCDrops&gt; getDrops() {
+		return dropControllers;
+	}
+
+	/**
+	 * Gets the drop list
+	 * 
+	 * @return the list
+	 */
+	public NpcDropItem[] getDropList() {
+		return drops;
+	}
+
+	/**
+	 * Gets the npcIds
+	 * 
+	 * @return the npcIds
+	 */
+	public int[] getNpcIds() {
+		return npcIds;
+	}
+
+	/**
+	 * Represents a npc drop item
+	 */
+	public static class NpcDropItem {
+
+		/**
+		 * The id.
+		 */
+		private final int id;
+
+		/**
+		 * Array holding all the amounts of this item.
+		 */
+		private final int[] count;
+
+		/**
+		 * The chance of getting this item.
+		 */
+		private final int chance;
+
+		/**
+		 * New npc drop item
+		 * 
+		 * @param id
+		 *            the item
+		 * @param count
+		 *            the count
+		 * @param chance
+		 *            the chance
+		 */
+		public NpcDropItem(int id, int[] count, int chance) {
+			this.id = id;
+			this.count = count;
+			this.chance = chance;
+		}
+
+		/**
+		 * Gets the item id.
+		 * 
+		 * @return The item id.
+		 */
+		public int getId() {
+			return id;
+		}
+
+		/**
+		 * Gets the chance.
+		 * 
+		 * @return The chance.
+		 */
+		public int[] getCount() {
+			return count;
+		}
+
+		/**
+		 * Gets the chance.
+		 * 
+		 * @return The chance.
+		 */
+		public DropChance getChance() {
+			switch (chance) {
+			case 1:
+				return DropChance.ALMOST_ALWAYS;// 50% &lt;-&gt; 1/2
+			case 2:
+				return DropChance.VERY_COMMON; // 20% &lt;-&gt; 1/5
+			case 3:
+				return DropChance.COMMON; // 5% &lt;-&gt; 1/20
+			case 4:
+				return DropChance.UNCOMMON; // 2% &lt;-&gt; 1/50
+			case 5:
+				return DropChance.RARE; // 0.5% &lt;-&gt; 1/200
+			case 6:
+				return DropChance.LEGENDARY; // 0.2% &lt;-&gt; 1/500
+			case 7:
+				return DropChance.LEGENDARY_2;
+			case 8:
+				return DropChance.LEGENDARY_3;
+			case 9:
+				return DropChance.LEGENDARY_4;
+			case 10:
+				return DropChance.LEGENDARY_5;
+			case 11:
+				return DropChance.LEGENDARY_6;
+			case 12:
+				return DropChance.LEGENDARY_7;
+			default:
+				return DropChance.ALWAYS; // 100% &lt;-&gt; 1/1
+			}
+		}
+
+		/**
+		 * Gets the item
+		 * 
+		 * @return the item
+		 */
+		public Item getItem() {
+			int amount = 0;
+			for (int i = 0; i &lt; count.length; i++)
+				amount += count[i];
+			if (amount &gt; count[0])
+				amount = count[0] + Misc.getRandom(count[1]);
+			return new Item(id, amount);
+		}
+	}
+
+	public enum DropChance {
+		ALWAYS(0), ALMOST_ALWAYS(2), VERY_COMMON(5), COMMON(15), UNCOMMON(40), NOTTHATRARE(
+				100), RARE(155), LEGENDARY(320), LEGENDARY_2(410), LEGENDARY_3(485), LEGENDARY_4(680), LEGENDARY_5(810), LEGENDARY_6(950), LEGENDARY_7(1100);
+		
+		
+		DropChance(int randomModifier) {
+			this.random = randomModifier;
+		}
+
+		private int random;
+
+		public int getRandom() {
+			return this.random;
+		}
+	}
+
+	/**
+	 * Drops items for a player after killing an npc. A player can max receive
+	 * one item per drop chance.
+	 * 
+	 * @param p
+	 *            Player to receive drop.
+	 * @param npc
+	 *            NPC to receive drop FROM.
+	 */
+	public static void dropItems(Player p, NPC npc) {
+		if (npc.getLocation() == Location.WARRIORS_GUILD)
+			WarriorsGuild.handleDrop(p, npc);
+		NPCDrops drops = NPCDrops.forId(npc.getId());
+		if (drops == null) {
+			return;
+		}
+		final boolean goGlobal = p.getPosition().getZ() &gt;= 0 &amp;&amp; p.getPosition().getZ() &lt; 4;
+		final boolean ringOfWealth = p.getEquipment().get(Equipment.RING_SLOT).getId() == 2572;
+		final Position npcPos = npc.getPosition().copy();
+		boolean[] dropsReceived = new boolean[14];
+
+		if (drops.getDropList().length &gt; 0 &amp;&amp; p.getPosition().getZ() &gt;= 0 &amp;&amp; p.getPosition().getZ() &lt; 4) {
+			casketDrop(p, npc.getDefinition().getCombatLevel(), npcPos);
+		}
+
+
+		for (int i = 0; i &lt; drops.getDropList().length; i++) {
+			if (drops.getDropList()[i].getItem().getId() &lt;= 0 || drops.getDropList()[i].getItem().getId() &gt; ItemDefinition.getMaxAmountOfItems() || drops.getDropList()[i].getItem().getAmount() &lt;= 0) {
+				continue;
+			}
+
+			final DropChance dropChance = drops.getDropList()[i].getChance();
+
+			if (dropChance == DropChance.ALWAYS) {
+				drop(p, drops.getDropList()[i].getItem(), npc, npcPos, goGlobal);
+			} else {
+				if(shouldDrop(dropsReceived, dropChance, ringOfWealth)) {
+					drop(p, drops.getDropList()[i].getItem(), npc, npcPos, goGlobal);
+					dropsReceived[dropChance.ordinal()] = true;
+				}
+			}
+		}
+	}
+
+	public static boolean shouldDrop(boolean[] b, DropChance chance,
+			boolean ringOfWealth) {
+		int random = chance.getRandom();
+		if (ringOfWealth &amp;&amp; random &gt;= 60) {
+			random -= (random / 10);
+		}
+		return !b[chance.ordinal()] &amp;&amp; Misc.getRandom(random) == 1;
+	}
+
+	public static void drop(Player player, Item item, NPC npc, Position pos,
+			boolean goGlobal) {
+		if (player.getInventory().contains(18337)
+				&amp;&amp; BonesData.forId(item.getId()) != null) {
+			player.getPacketSender().sendGlobalGraphic(new Graphic(777), pos);
+			player.getSkillManager().addExperience(Skill.PRAYER,
+					BonesData.forId(item.getId()).getBuryingXP());
+			return;
+		}
+		int itemId = item.getId();
+		int amount = item.getAmount();
+
+		if (itemId == CharmingImp.GOLD_CHARM
+				|| itemId == CharmingImp.GREEN_CHARM
+				|| itemId == CharmingImp.CRIM_CHARM
+				|| itemId == CharmingImp.BLUE_CHARM) {
+			if (player.getInventory().contains(6500)
+					&amp;&amp; CharmingImp.handleCharmDrop(player, itemId, amount)) {
+				return;
+			}
+		}
+
+		Player toGive = player;
+
+		boolean ccAnnounce = false;
+		if(Location.inMulti(player)) {
+			if(player.getCurrentClanChat() != null &amp;&amp; player.getCurrentClanChat().getLootShare()) {
+				CopyOnWriteArrayList&lt;Player&gt; playerList = new CopyOnWriteArrayList&lt;Player&gt;();
+				for(Player member : player.getCurrentClanChat().getMembers()) {
+					if(member != null) {
+						if(member.getPosition().isWithinDistance(player.getPosition())) {
+							playerList.add(member);
+						}
+					}
+				}
+				if(playerList.size() &gt; 0) {
+					toGive = playerList.get(Misc.getRandom(playerList.size() - 1));
+					if(toGive == null || toGive.getCurrentClanChat() == null || toGive.getCurrentClanChat() != player.getCurrentClanChat()) {
+						toGive = player;
+					}
+					ccAnnounce = true;
+				}
+			}
+		}
+		
+		if(itemId == 18778) { //Effigy, don&#39;t drop one if player already has one
+			if(toGive.getInventory().contains(18778) || toGive.getInventory().contains(18779) || toGive.getInventory().contains(18780) || toGive.getInventory().contains(18781)) {
+				return;
+			} 
+			for(Bank bank : toGive.getBanks()) {
+				if(bank == null) {
+					continue;
+				}
+				if(bank.contains(18778) || bank.contains(18779) || bank.contains(18780) || bank.contains(18781)) {
+					return;
+				}
+			}
+		}
+
+		if (ItemDropAnnouncer.announce(itemId)) {
+			String itemName = item.getDefinition().getName();
+			String itemMessage = Misc.anOrA(itemName) + &quot; &quot; + itemName;
+			String npcName = Misc.formatText(npc.getDefinition().getName());
+			switch (itemId) {
+			case 14484:
+				itemMessage = &quot;a pair of Dragon Claws&quot;;
+				break;
+			case 20000:
+			case 20001:
+			case 20002:
+				itemMessage = itemName;
+				break;
+			}
+			switch (npc.getId()) {
+			case 50:
+			case 3200:
+			case 8133:
+			case 4540:
+			case 1160:
+			case 8549:
+				npcName = &quot;The &quot; + npcName + &quot;&quot;;
+				break;
+			case 51:
+			case 54:
+			case 5363:
+			case 8349:
+			case 1592:
+			case 1591:
+			case 1590:
+			case 1615:
+			case 9463:
+			case 9465:
+			case 9467:
+			case 1382:
+			case 13659:
+			case 11235:
+				npcName = &quot;&quot; + Misc.anOrA(npcName) + &quot; &quot; + npcName + &quot;&quot;;
+				break;
+			}
+			String message = &quot;&lt;img=10&gt;&lt;col=009966&gt; &quot; + toGive.getUsername()
+					+ &quot; has just received &quot; + itemMessage + &quot; from &quot; + npcName
+					+ &quot;!&quot;;
+			World.sendMessage(message);
+
+			if(ccAnnounce) {
+				ClanChatManager.sendMessage(player.getCurrentClanChat(), &quot;&lt;col=16777215&gt;[&lt;col=255&gt;Lootshare&lt;col=16777215&gt;]&lt;col=3300CC&gt; &quot;+toGive.getUsername()+&quot; received &quot; + itemMessage + &quot; from &quot;+npcName+&quot;!&quot;);
+			}
+
+			PlayerLogs.log(toGive.getUsername(), &quot;&quot; + toGive.getUsername() + &quot; received &quot; + itemMessage + &quot; from &quot; + npcName + &quot;&quot;);
+		}
+
+		if(npc.getId() == 2007) {
+			pos = player.getPosition().copy();
+		}
+		GroundItemManager.spawnGroundItem(toGive, new GroundItem(item, pos,
+				toGive.getUsername(), false, 150, goGlobal, 200));
+		DropLog.submit(toGive, new DropLogEntry(itemId, item.getAmount()));
+	}
+
+	public static void casketDrop(Player player, int combat, Position pos) {
+		int chance = (int) (1 + combat);
+		if (Misc.getRandom(combat &lt;= 50 ? 1300 : 1000) &lt; chance) {
+			GroundItemManager.spawnGroundItem(player, new GroundItem(new Item(7956), pos, player.getUsername(), false, 150, true, 200));
+		}
+	}
+
+	public static class ItemDropAnnouncer {
+
+		private static List&lt;Integer&gt; ITEM_LIST;
+
+		private static final int[] TO_ANNOUNCE = new int[] { 14484, 4224,
+			11702, 11704, 11706, 11708, 11704, 11724, 11726, 11728, 11718,
+			11720, 11722, 11730, 11716, 14876, 11286, 13427, 6731, 6737,
+			6735, 4151, 2513, 15259, 13902, 13890, 13884, 13861, 13858,
+			13864, 13905, 13887, 13893, 13899, 13873, 13879, 13876, 13870,
+			6571, 14008, 14009, 14010, 14011, 14012, 14013, 14014, 14015,
+			14016, 13750, 13748, 13746, 13752, 11335, 15486, 13870, 13873,
+			13876, 13884, 13890, 13896, 13902, 13858, 13861, 13864, 13867,
+			11995, 11996, 11997, 11978, 12001, 12002, 12003, 12004, 12005,
+			12006, 11990, 11991, 11992, 11993, 11994, 11989, 11988, 11987,
+			11986, 11985, 11984, 11983, 11982, 11981, 11979, 13659, 11235,
+			20000, 20001, 20002, 15103,
+			15104, 15105, 15106, 12603, 12601, 12605, 19908};
+
+		private static void init() {
+			ITEM_LIST = new ArrayList&lt;Integer&gt;();
+			for (int i : TO_ANNOUNCE) {
+				ITEM_LIST.add(i);
+			}
+		}
+
+		public static boolean announce(int item) {
+			return ITEM_LIST.contains(item);
+		}
+	}
+}[/code]
+
+SkillManager.java add exp part only &amp; the code i was trying, i have tried other things also but cant seem to get it right,
+[code]	public SkillManager addExperience(Skill skill, int experience) {
+		if(player.experienceLocked())
+			return this;
+		/*
+		 * If the experience in the skill is already greater or equal to
+		 * {@code MAX_EXPERIENCE} then stop.
+		 */
+		if (this.skills.experience[skill.ordinal()] &gt;= MAX_EXPERIENCE)
+			return this;
+
+		experience *= player.getRights().getExperienceGainModifier();
+		
+		if(WellOfGoodwill.isActive())
+			experience *= 1.3;
+		if(player.getGameMode() != GameMode.NORMAL) {
+			experience *= 0.6;
+		}
+		if(player.getRights() == PlayerRights.BRONZE_MEMBER) {
+			NpcDropItem *= 1.3;
+		}
+		if(player.getRights() == PlayerRights.SILVER_MEMBER) { 
+		}
+		if(player.getRights() == PlayerRights.GOLD_MEMBER) {
+		}
+		if(player.getRights() == PlayerRights.PLATINUM_MEMBER) {
+		}
+		if(player.getRights() == PlayerRights.DIAMOND_MEMBER) {
+		}
+		if(GameSettings.BONUS_EXP) {
+		}
+
+		if(player.getMinutesBonusExp() != -1) {
+			if(player.getGameMode() != GameMode.NORMAL) {
+			} else {
+				experience *= 1.30;
+			}
+		}[/code]
+
+
+any help is appreciated thanks 
+
+
+
+note some code is removed as you can probbaly tell, that part is fine dont worry</description>
+    
+    <lastBuildDate>Wed, 11 May 2016 18:42:47 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@X-J-K-X X-J-K-X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x-j-k-x">@X-J-K-X</a> wrote:</p>
+          <blockquote>
+              <p>1 and down</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/10</link>
+        <pubDate>Wed, 11 May 2016 18:42:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-10</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>so i should go from 1.7 down?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/9</link>
+        <pubDate>Wed, 11 May 2016 17:17:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-9</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@X-J-K-X X-J-K-X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x-j-k-x">@X-J-K-X</a> wrote:</p>
+          <blockquote>
+              <p>Bare in mind you want to make this number smaller, not larger.</p>
+<p>random = 20</p>
+<p>random *= 1.2</p>
+<p>random = 24</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/8</link>
+        <pubDate>Wed, 11 May 2016 17:09:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-8</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>not sure i understand what you mean but again thanks for the reply</p>
+<p>this is what ive done not sure if its right or not no errors shown but i will have to check</p>
+<pre><code>	if(PlayerRights.getRights() == PlayerRights.BRONZE_MEMBER) {
+		random *= 0.8;
+	}
+	if(PlayerRights.getRights() == PlayerRights.SILVER_MEMBER) {
+		random *= 1.0;
+	}
+	if(PlayerRights.getRights() == PlayerRights.GOLD_MEMBER) {
+		random *= 1.2;
+	}
+	if(PlayerRights.getRights() == PlayerRights.PLATINUM_MEMBER) {
+		random *= 1.5;
+	}
+	if(PlayerRights.getRights() == PlayerRights.DIAMOND_MEMBER) {
+		random *= 1.7;
+	}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/7</link>
+        <pubDate>Wed, 11 May 2016 16:25:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-7</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@X-J-K-X X-J-K-X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x-j-k-x">@X-J-K-X</a> wrote:</p>
+          <blockquote>
+              <p><code>
+int random = chance.getRandom();</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/6</link>
+        <pubDate>Wed, 11 May 2016 16:10:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-6</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>ive tried a load of things tbh lol but here is the most recent one was</p>
+<pre><code>[code]public static boolean shouldDrop(boolean[] b, DropChance chance,
+		boolean ringOfWealth) {
+	int random = chance.getRandom();
+	if (ringOfWealth &amp;&amp; random &gt;= 60) {
+		random -= (random / 10);
+	}
+	if(player.getRights() == PlayerRights.BRONZE_MEMBER) {
+		dropChance *= 0.8;
+	}
+	if(player.getRights() == PlayerRights.SILVER_MEMBER) {
+		dropChance *= 1.0;
+	}
+	if(player.getRights() == PlayerRights.GOLD_MEMBER) {
+		dropChance *= 1.2;
+	}
+	if(player.getRights() == PlayerRights.PLATINUM_MEMBER) {
+		dropChance *= 1.5;
+	}
+	if(player.getRights() == PlayerRights.DIAMOND_MEMBER) {
+		dropChance *= 1.7;
+	}
+	return !b[chance.ordinal()] &amp;&amp; Misc.getRandom(random) == 1;
+}
+</code></pre>
+<p>[/code]</p>
+<p>and had dropChance changed a few times trying different ones but cant seem to call the right thing?</p>
+<p>thanks again for the reply</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/5</link>
+        <pubDate>Wed, 11 May 2016 15:40:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-5</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@X-J-K-X X-J-K-X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x-j-k-x">@X-J-K-X</a> wrote:</p>
+          <blockquote>
+              <p>Then what did you try, because that will work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/4</link>
+        <pubDate>Wed, 11 May 2016 10:05:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-4</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>ok thanks for the reply il try that</p>
+<p>edit</p>
+<p>cant seem to get it working yet, tried a few things but i cant get the chance multiplyer right</p>
+<p>any more help please?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/3</link>
+        <pubDate>Tue, 10 May 2016 15:00:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-3</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@X-J-K-X X-J-K-X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x-j-k-x">@X-J-K-X</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">public static boolean shouldDrop(boolean[] b, DropChance chance,
+			boolean ringOfWealth) {</code></pre>
+<p>In here you need to check if they are a donator, then apply your donator rates</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/2</link>
+        <pubDate>Tue, 10 May 2016 14:51:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-2</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+      <item>
+        <title>Donator drop rates x bonus help?</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>hello, first sorry about my last post being so large and stuff i fully understand what you mean i was more looking someone to teach me a bit and show me how to add some of it but anyways</p>
+<p>im using rusev2 and trying to add a multiply bonus for donator drop rates, i have been messing about a bit but cant get it right any help is appreciated!<br>
+NPCDrops.java</p>
+<p>[code]package com.ruse.model.definitions;</p>
+<p>import java.util.ArrayList;<br>
+import java.util.HashMap;<br>
+import java.util.List;<br>
+import java.util.Map;<br>
+import java.util.concurrent.CopyOnWriteArrayList;</p>
+<p>import com.google.gson.Gson;<br>
+import com.google.gson.JsonObject;<br>
+import com.ruse.model.Graphic;<br>
+import com.ruse.model.GroundItem;<br>
+import com.ruse.model.Item;<br>
+import com.ruse.model.PlayerRights;<br>
+import com.ruse.model.Locations.Location;<br>
+import com.ruse.model.Position;<br>
+import com.ruse.model.Skill;<br>
+import com.ruse.model.container.impl.Bank;<br>
+import com.ruse.model.container.impl.Equipment;<br>
+import com.ruse.util.JsonLoader;<br>
+import com.ruse.util.Misc;<br>
+import com.ruse.world.World;<br>
+import com.ruse.world.content.DropLog;<br>
+import com.ruse.world.content.DropLog.DropLogEntry;<br>
+import com.ruse.world.content.PlayerLogs;<br>
+import com.ruse.world.content.clan.ClanChatManager;<br>
+import com.ruse.world.content.minigames.impl.WarriorsGuild;<br>
+import com.ruse.world.content.skill.impl.prayer.BonesData;<br>
+import com.ruse.world.content.skill.impl.summoning.CharmingImp;<br>
+import com.ruse.world.entity.impl.GroundItemManager;<br>
+import com.ruse.world.entity.impl.npc.NPC;<br>
+import com.ruse.world.entity.impl.player.Player;</p>
+<p>/**</p>
+<ul>
+<li>Controls the npc drops</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> 2012 <a href="http://www.rune-server.org/members/dexter+morgan/" rel="nofollow noopener">http://www.rune-server.org/members/dexter+morgan/</a>, Gabbe &amp;</li>
+<li>
+<pre><code>    Samy
+</code></pre>
+</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class NPCDrops {</p>
+<pre><code>/**
+ * The map containing all the npc drops.
+ */
+private static Map&lt;Integer, NPCDrops&gt; dropControllers = new HashMap&lt;Integer, NPCDrops&gt;();
+
+public static JsonLoader parseDrops() {
+
+	ItemDropAnnouncer.init();
+
+	return new JsonLoader() {
+
+		@Override
+		public void load(JsonObject reader, Gson builder) {
+			int[] npcIds = builder.fromJson(reader.get("npcIds"),
+					int[].class);
+			NpcDropItem[] drops = builder.fromJson(reader.get("drops"),
+					NpcDropItem[].class);
+
+			NPCDrops d = new NPCDrops();
+			d.npcIds = npcIds;
+			d.drops = drops;
+			for (int id : npcIds) {
+				dropControllers.put(id, d);
+			}
+		}
+
+		@Override
+		public String filePath() {
+			return "./data/def/json/drops.json";
+		}
+	};
+}
+
+/**
+ * The id's of the NPC's that "owns" this class.
+ */
+private int[] npcIds;
+
+/**
+ * All the drops that belongs to this class.
+ */
+private NpcDropItem[] drops;
+
+/**
+ * Gets the NPC drop controller by an id.
+ * 
+ * @return The NPC drops associated with this id.
+ */
+public static NPCDrops forId(int id) {
+	return dropControllers.get(id);
+}
+
+public static Map&lt;Integer, NPCDrops&gt; getDrops() {
+	return dropControllers;
+}
+
+/**
+ * Gets the drop list
+ * 
+ * @return the list
+ */
+public NpcDropItem[] getDropList() {
+	return drops;
+}
+
+/**
+ * Gets the npcIds
+ * 
+ * @return the npcIds
+ */
+public int[] getNpcIds() {
+	return npcIds;
+}
+
+/**
+ * Represents a npc drop item
+ */
+public static class NpcDropItem {
+
+	/**
+	 * The id.
+	 */
+	private final int id;
+
+	/**
+	 * Array holding all the amounts of this item.
+	 */
+	private final int[] count;
+
+	/**
+	 * The chance of getting this item.
+	 */
+	private final int chance;
+
+	/**
+	 * New npc drop item
+	 * 
+	 * @param id
+	 *            the item
+	 * @param count
+	 *            the count
+	 * @param chance
+	 *            the chance
+	 */
+	public NpcDropItem(int id, int[] count, int chance) {
+		this.id = id;
+		this.count = count;
+		this.chance = chance;
+	}
+
+	/**
+	 * Gets the item id.
+	 * 
+	 * @return The item id.
+	 */
+	public int getId() {
+		return id;
+	}
+
+	/**
+	 * Gets the chance.
+	 * 
+	 * @return The chance.
+	 */
+	public int[] getCount() {
+		return count;
+	}
+
+	/**
+	 * Gets the chance.
+	 * 
+	 * @return The chance.
+	 */
+	public DropChance getChance() {
+		switch (chance) {
+		case 1:
+			return DropChance.ALMOST_ALWAYS;// 50% &lt;-&gt; 1/2
+		case 2:
+			return DropChance.VERY_COMMON; // 20% &lt;-&gt; 1/5
+		case 3:
+			return DropChance.COMMON; // 5% &lt;-&gt; 1/20
+		case 4:
+			return DropChance.UNCOMMON; // 2% &lt;-&gt; 1/50
+		case 5:
+			return DropChance.RARE; // 0.5% &lt;-&gt; 1/200
+		case 6:
+			return DropChance.LEGENDARY; // 0.2% &lt;-&gt; 1/500
+		case 7:
+			return DropChance.LEGENDARY_2;
+		case 8:
+			return DropChance.LEGENDARY_3;
+		case 9:
+			return DropChance.LEGENDARY_4;
+		case 10:
+			return DropChance.LEGENDARY_5;
+		case 11:
+			return DropChance.LEGENDARY_6;
+		case 12:
+			return DropChance.LEGENDARY_7;
+		default:
+			return DropChance.ALWAYS; // 100% &lt;-&gt; 1/1
+		}
+	}
+
+	/**
+	 * Gets the item
+	 * 
+	 * @return the item
+	 */
+	public Item getItem() {
+		int amount = 0;
+		for (int i = 0; i &lt; count.length; i++)
+			amount += count[i];
+		if (amount &gt; count[0])
+			amount = count[0] + Misc.getRandom(count[1]);
+		return new Item(id, amount);
+	}
+}
+
+public enum DropChance {
+	ALWAYS(0), ALMOST_ALWAYS(2), VERY_COMMON(5), COMMON(15), UNCOMMON(40), NOTTHATRARE(
+			100), RARE(155), LEGENDARY(320), LEGENDARY_2(410), LEGENDARY_3(485), LEGENDARY_4(680), LEGENDARY_5(810), LEGENDARY_6(950), LEGENDARY_7(1100);
+	
+	
+	DropChance(int randomModifier) {
+		this.random = randomModifier;
+	}
+
+	private int random;
+
+	public int getRandom() {
+		return this.random;
+	}
+}
+
+/**
+ * Drops items for a player after killing an npc. A player can max receive
+ * one item per drop chance.
+ * 
+ * @param p
+ *            Player to receive drop.
+ * @param npc
+ *            NPC to receive drop FROM.
+ */
+public static void dropItems(Player p, NPC npc) {
+	if (npc.getLocation() == Location.WARRIORS_GUILD)
+		WarriorsGuild.handleDrop(p, npc);
+	NPCDrops drops = NPCDrops.forId(npc.getId());
+	if (drops == null) {
+		return;
+	}
+	final boolean goGlobal = p.getPosition().getZ() &gt;= 0 &amp;&amp; p.getPosition().getZ() &lt; 4;
+	final boolean ringOfWealth = p.getEquipment().get(Equipment.RING_SLOT).getId() == 2572;
+	final Position npcPos = npc.getPosition().copy();
+	boolean[] dropsReceived = new boolean[14];
+
+	if (drops.getDropList().length &gt; 0 &amp;&amp; p.getPosition().getZ() &gt;= 0 &amp;&amp; p.getPosition().getZ() &lt; 4) {
+		casketDrop(p, npc.getDefinition().getCombatLevel(), npcPos);
+	}
+
+
+	for (int i = 0; i &lt; drops.getDropList().length; i++) {
+		if (drops.getDropList()[i].getItem().getId() &lt;= 0 || drops.getDropList()[i].getItem().getId() &gt; ItemDefinition.getMaxAmountOfItems() || drops.getDropList()[i].getItem().getAmount() &lt;= 0) {
+			continue;
+		}
+
+		final DropChance dropChance = drops.getDropList()[i].getChance();
+
+		if (dropChance == DropChance.ALWAYS) {
+			drop(p, drops.getDropList()[i].getItem(), npc, npcPos, goGlobal);
+		} else {
+			if(shouldDrop(dropsReceived, dropChance, ringOfWealth)) {
+				drop(p, drops.getDropList()[i].getItem(), npc, npcPos, goGlobal);
+				dropsReceived[dropChance.ordinal()] = true;
+			}
+		}
+	}
+}
+
+public static boolean shouldDrop(boolean[] b, DropChance chance,
+		boolean ringOfWealth) {
+	int random = chance.getRandom();
+	if (ringOfWealth &amp;&amp; random &gt;= 60) {
+		random -= (random / 10);
+	}
+	return !b[chance.ordinal()] &amp;&amp; Misc.getRandom(random) == 1;
+}
+
+public static void drop(Player player, Item item, NPC npc, Position pos,
+		boolean goGlobal) {
+	if (player.getInventory().contains(18337)
+			&amp;&amp; BonesData.forId(item.getId()) != null) {
+		player.getPacketSender().sendGlobalGraphic(new Graphic(777), pos);
+		player.getSkillManager().addExperience(Skill.PRAYER,
+				BonesData.forId(item.getId()).getBuryingXP());
+		return;
+	}
+	int itemId = item.getId();
+	int amount = item.getAmount();
+
+	if (itemId == CharmingImp.GOLD_CHARM
+			|| itemId == CharmingImp.GREEN_CHARM
+			|| itemId == CharmingImp.CRIM_CHARM
+			|| itemId == CharmingImp.BLUE_CHARM) {
+		if (player.getInventory().contains(6500)
+				&amp;&amp; CharmingImp.handleCharmDrop(player, itemId, amount)) {
+			return;
+		}
+	}
+
+	Player toGive = player;
+
+	boolean ccAnnounce = false;
+	if(Location.inMulti(player)) {
+		if(player.getCurrentClanChat() != null &amp;&amp; player.getCurrentClanChat().getLootShare()) {
+			CopyOnWriteArrayList&lt;Player&gt; playerList = new CopyOnWriteArrayList&lt;Player&gt;();
+			for(Player member : player.getCurrentClanChat().getMembers()) {
+				if(member != null) {
+					if(member.getPosition().isWithinDistance(player.getPosition())) {
+						playerList.add(member);
+					}
+				}
+			}
+			if(playerList.size() &gt; 0) {
+				toGive = playerList.get(Misc.getRandom(playerList.size() - 1));
+				if(toGive == null || toGive.getCurrentClanChat() == null || toGive.getCurrentClanChat() != player.getCurrentClanChat()) {
+					toGive = player;
+				}
+				ccAnnounce = true;
+			}
+		}
+	}
+	
+	if(itemId == 18778) { //Effigy, don't drop one if player already has one
+		if(toGive.getInventory().contains(18778) || toGive.getInventory().contains(18779) || toGive.getInventory().contains(18780) || toGive.getInventory().contains(18781)) {
+			return;
+		} 
+		for(Bank bank : toGive.getBanks()) {
+			if(bank == null) {
+				continue;
+			}
+			if(bank.contains(18778) || bank.contains(18779) || bank.contains(18780) || bank.contains(18781)) {
+				return;
+			}
+		}
+	}
+
+	if (ItemDropAnnouncer.announce(itemId)) {
+		String itemName = item.getDefinition().getName();
+		String itemMessage = Misc.anOrA(itemName) + " " + itemName;
+		String npcName = Misc.formatText(npc.getDefinition().getName());
+		switch (itemId) {
+		case 14484:
+			itemMessage = "a pair of Dragon Claws";
+			break;
+		case 20000:
+		case 20001:
+		case 20002:
+			itemMessage = itemName;
+			break;
+		}
+		switch (npc.getId()) {
+		case 50:
+		case 3200:
+		case 8133:
+		case 4540:
+		case 1160:
+		case 8549:
+			npcName = "The " + npcName + "";
+			break;
+		case 51:
+		case 54:
+		case 5363:
+		case 8349:
+		case 1592:
+		case 1591:
+		case 1590:
+		case 1615:
+		case 9463:
+		case 9465:
+		case 9467:
+		case 1382:
+		case 13659:
+		case 11235:
+			npcName = "" + Misc.anOrA(npcName) + " " + npcName + "";
+			break;
+		}
+		String message = "&lt;img=10&gt;&lt;col=009966&gt; " + toGive.getUsername()
+				+ " has just received " + itemMessage + " from " + npcName
+				+ "!";
+		World.sendMessage(message);
+
+		if(ccAnnounce) {
+			ClanChatManager.sendMessage(player.getCurrentClanChat(), "&lt;col=16777215&gt;[&lt;col=255&gt;Lootshare&lt;col=16777215&gt;]&lt;col=3300CC&gt; "+toGive.getUsername()+" received " + itemMessage + " from "+npcName+"!");
+		}
+
+		PlayerLogs.log(toGive.getUsername(), "" + toGive.getUsername() + " received " + itemMessage + " from " + npcName + "");
+	}
+
+	if(npc.getId() == 2007) {
+		pos = player.getPosition().copy();
+	}
+	GroundItemManager.spawnGroundItem(toGive, new GroundItem(item, pos,
+			toGive.getUsername(), false, 150, goGlobal, 200));
+	DropLog.submit(toGive, new DropLogEntry(itemId, item.getAmount()));
+}
+
+public static void casketDrop(Player player, int combat, Position pos) {
+	int chance = (int) (1 + combat);
+	if (Misc.getRandom(combat &lt;= 50 ? 1300 : 1000) &lt; chance) {
+		GroundItemManager.spawnGroundItem(player, new GroundItem(new Item(7956), pos, player.getUsername(), false, 150, true, 200));
+	}
+}
+
+public static class ItemDropAnnouncer {
+
+	private static List&lt;Integer&gt; ITEM_LIST;
+
+	private static final int[] TO_ANNOUNCE = new int[] { 14484, 4224,
+		11702, 11704, 11706, 11708, 11704, 11724, 11726, 11728, 11718,
+		11720, 11722, 11730, 11716, 14876, 11286, 13427, 6731, 6737,
+		6735, 4151, 2513, 15259, 13902, 13890, 13884, 13861, 13858,
+		13864, 13905, 13887, 13893, 13899, 13873, 13879, 13876, 13870,
+		6571, 14008, 14009, 14010, 14011, 14012, 14013, 14014, 14015,
+		14016, 13750, 13748, 13746, 13752, 11335, 15486, 13870, 13873,
+		13876, 13884, 13890, 13896, 13902, 13858, 13861, 13864, 13867,
+		11995, 11996, 11997, 11978, 12001, 12002, 12003, 12004, 12005,
+		12006, 11990, 11991, 11992, 11993, 11994, 11989, 11988, 11987,
+		11986, 11985, 11984, 11983, 11982, 11981, 11979, 13659, 11235,
+		20000, 20001, 20002, 15103,
+		15104, 15105, 15106, 12603, 12601, 12605, 19908};
+
+	private static void init() {
+		ITEM_LIST = new ArrayList&lt;Integer&gt;();
+		for (int i : TO_ANNOUNCE) {
+			ITEM_LIST.add(i);
+		}
+	}
+
+	public static boolean announce(int item) {
+		return ITEM_LIST.contains(item);
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>SkillManager.java add exp part only &amp; the code i was trying, i have tried other things also but cant seem to get it right,</p>
+<p>[code]	public SkillManager addExperience(Skill skill, int experience) {<br>
+if(player.experienceLocked())<br>
+return this;<br>
+/*<br>
+* If the experience in the skill is already greater or equal to<br>
+* {<a class="mention" href="/u/code">@code</a> MAX_EXPERIENCE} then stop.<br>
+*/<br>
+if (this.skills.experience[skill.ordinal()] &gt;= MAX_EXPERIENCE)<br>
+return this;</p>
+<pre><code>	experience *= player.getRights().getExperienceGainModifier();
+	
+	if(WellOfGoodwill.isActive())
+		experience *= 1.3;
+	if(player.getGameMode() != GameMode.NORMAL) {
+		experience *= 0.6;
+	}
+	if(player.getRights() == PlayerRights.BRONZE_MEMBER) {
+		NpcDropItem *= 1.3;
+	}
+	if(player.getRights() == PlayerRights.SILVER_MEMBER) { 
+	}
+	if(player.getRights() == PlayerRights.GOLD_MEMBER) {
+	}
+	if(player.getRights() == PlayerRights.PLATINUM_MEMBER) {
+	}
+	if(player.getRights() == PlayerRights.DIAMOND_MEMBER) {
+	}
+	if(GameSettings.BONUS_EXP) {
+	}
+
+	if(player.getMinutesBonusExp() != -1) {
+		if(player.getGameMode() != GameMode.NORMAL) {
+		} else {
+			experience *= 1.30;
+		}
+	}[/code]
+</code></pre>
+<p>any help is appreciated thanks</p>
+<p>note some code is removed as you can probbaly tell, that part is fine dont worry</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366/1</link>
+        <pubDate>Tue, 10 May 2016 14:34:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555366-1</guid>
+        <source url="https://forum.moparisthebest.com/t/donator-drop-rates-x-bonus-help/555366.rss">Donator drop rates x bonus help?</source>
+      </item>
+  </channel>
+</rss>

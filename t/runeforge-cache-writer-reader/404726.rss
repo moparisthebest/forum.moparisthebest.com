@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>RuneForge - Cache Writer/Reader</title>
+    <link>https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726</link>
+    <description>*</description>
+    
+    <lastBuildDate>Sun, 17 Jul 2011 17:34:22 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>RuneForge - Cache Writer/Reader</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“kingdomkey01, post:2, topic:404726”][quote author=sinisoul link=topic=501740.msg3670878#msg3670878 date=1310922070]<br>
+[CENTER]<br>
+My planned updates include having a full GUI interface in which users can add custom files and inject them into their client not to load higher content, but rather to load their <span class="bbcode-b">OWN</span> content. The project is not to suffice people who are to lazy to try and create a modern server, it is a tool to help make your OWN game.<br>
+[/CENTER]<br>
+[/quote]</p>
+<p>Very interesting, I hope to see this tool/addon/tutorial come through successfully.[/quote]</p>
+<p>I have already released many tutorials on some cache definitions, and the actually writing/reading piece of the cache and the structure of the cache. Sorry going to use this post for more paste space. The final result will be a tool that is very gooey so that everyone can use it and understand it.</p>
+<hr>
+<p>Container Archive</p>
+<pre><code class="lang-auto">package org.forge.cache.archives;
+
+import java.nio.ByteBuffer;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+
+import org.forge.cache.Archive;
+import org.forge.cache.util.CompressionUtils;
+import org.forge.io.Stream;
+
+/**
+ * RuneForge | 317
+ * Container.java
+ * @version 1.0.0
+ * @author SiniSoul (SiniSoul@live.com)
+ */
+public class ContainerArchive extends Archive {
+    
+    /**
+     * If the archive is completed compressed then the file entries
+     * will not need to be decompressed on retrieval. But if the archive
+     * is not compressed then the entries will be decompressed with a
+     * BZip2 algorithm.
+     */
+    private boolean compressed = false;
+    
+    /**
+     * The entries map, the key to fetch an entry is the name hash.
+     */
+    private Map&lt;Integer, Entry&gt; entries;
+    
+    @Override
+    public void initialize(byte[] data) {
+        entries = new HashMap&lt;Integer, Entry&gt;();
+        if(data == null) return;
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        int uncompressed_size = getTri(buffer);
+        int compressed_size   = getTri(buffer);        
+        /* Archive is compressed */
+        if(compressed_size != uncompressed_size) {
+           try {
+               buffer = ByteBuffer.wrap(CompressionUtils.uBZip2(6, buffer.array().length, buffer.array()));
+           } catch(Exception ex) {
+               throw new RuntimeException("Error uBzip: "+ex);
+           }
+           compressed = true;
+        } 
+        /* Entries are compressed */
+        else {
+            /* Nothing */
+        }
+        int amount = buffer.getShort() &amp; 0xFFFF;
+        /* Each entry information block is 10 bytes */
+        int offset   = buffer.position() + (amount * 10);
+        Entry entry = null;
+        for(int i = 0; i &lt; amount; i++) {
+            entry = new Entry(this);
+            entry.name_hash = buffer.getInt();
+            entry.uncompressed_size = getTri(buffer);
+            entry.compressed_size = getTri(buffer);
+            entry.compressed = !compressed;
+            byte[] bytes = new byte[entry.compressed_size];
+            System.arraycopy(buffer.array(), offset, bytes, 0, bytes.length);
+            entry.stream = new Stream(bytes);
+            offset += entry.compressed_size;           
+            /* Store the entry */
+            entries.put(entry.name_hash, entry);
+        }
+    }
+
+    @Override
+    public Stream getCompressedStream() {
+        Stream mainblock  = new Stream(),
+               entryblock = new Stream();
+        short amount = (short) (entries.size() &amp; 0xFFFF);
+        /* Put the amount of entries */
+        entryblock.put((short) amount);
+        Set&lt;Integer&gt; keys = entries.keySet();
+        for(int hash : keys) {
+            Entry entry = entries.get(hash);
+            if(entry == null || (entry.compressed_size == -1 || entry.uncompressed_size == -1)) continue;
+            /* This should not happen but would be nice to know if it did */
+            if(entry.name_hash != hash)
+                throw new RuntimeException("Compression Error - "
+                                           + "Entry Hash does not match given hash.");
+            entryblock.put((int) entry.name_hash);
+            /* Put the compressed and uncompressed sizes */
+            putTri(entry.uncompressed_size, entryblock);
+            putTri(entry.compressed_size, entryblock);
+        }
+        for(int hash : keys) {
+            Entry entry = entries.get(hash);
+            if(entry == null || (entry.compressed_size == -1 || entry.uncompressed_size == -1)) continue;
+            entryblock.put(entry.stream.getByteBuffer().array());
+        }
+        putTri(entryblock.getByteBuffer().array().length, mainblock);
+        /* Compress the bytes */
+        if(compressed) {
+            try {
+                entryblock = new Stream(CompressionUtils.uBZip2(0, entryblock.getByteBuffer().position(), entryblock.getByteBuffer().array()));
+            } catch (Exception ex) {
+                throw new RuntimeException("Compression failed: "+ex);
+            }
+        }
+        putTri(entryblock.getByteBuffer().array().length, mainblock);
+        mainblock.put(entryblock.getByteBuffer().array());
+        return mainblock;
+    }
+
+    @Override
+    public Stream getUncompressedStream() {
+        return null;
+    }
+    
+    /**
+     * Sets if the archive is entirely compressed.
+     * @param compressed If the archive is entirely compressed.
+     */
+    public void setCompressed(boolean compressed) {
+        this.compressed = compressed;
+    }
+    
+    /**
+     * A value representing if the entire archive is compressed versus each
+     * archive being compressed.
+     * @return If the entire archive is compressed versus each archive.
+     */
+    public boolean isCompressed() {
+        return compressed;
+    }
+    
+    /**
+     * Gets the entry hash from a string.
+     * @param s The name of the entry.
+     * @return The hash value of the name.
+     */
+    public static int getEntryHash(String s) {
+        int hash = 0;
+        s = s.toUpperCase();
+        for(int j = 0; j &lt; s.length(); j++)
+            hash = (hash * 61 + s.charAt(j)) - 32;
+        return hash;
+    }
+    
+    /**
+     * Put a tri byte integer into a stream.
+     * @param value The tri byte value.
+     * @param stream The stream to put the tri byte into.
+     */
+    private void putTri(int value, Stream stream) {
+        value &amp;= 0xFFFFFF;
+        stream.put((byte) (value &gt;&gt; 16));
+        stream.put((byte) (value &gt;&gt;  8));
+        stream.put((byte) (value));
+    }
+    
+    /**
+     * Gets a tri byte integer from a byte buffer.
+     * @param buffer The buffer to parse the tri byte from.
+     * @return A 24 big endian bit integer.
+     */
+    private int getTri(ByteBuffer buffer) {
+        return (0xFF0000 &amp; (buffer.get() &lt;&lt; 16)) | 
+               (0x00FF00 &amp; (buffer.get() &lt;&lt;  8)) |
+               (0x0000FF &amp; buffer.get());
+    }
+    
+    /**
+     * Creates a new entry, but does not store that entry.
+     * @param name The name of the entry.
+     * @param data The data of the entry.
+     * @return The newly created entry.
+     */
+    public Entry createEntry(String name, byte[] data) {
+        Entry entry = new Entry(this);
+        entry.setHash(name);
+        entry.setStream(data);
+        return entry;
+    }
+    
+    /**
+     * Store an entry in the entries map, if there is an entry
+     * with the same name hash a RuntimeException is thrown.
+     * @param entry The entry to store.
+     */
+    public void store(Entry entry) {
+        if(entries.containsKey(entry.name_hash))
+            throw new RuntimeException("Collision detected!");
+        entries.put(entry.name_hash, entry);
+    }
+    
+    /**
+     * 
+     * @param data The archives data.
+     */
+    public ContainerArchive(byte[] data) {
+        super(data);
+    }
+    
+    /**
+     * A container entry.
+     */
+    public static class Entry {
+        
+        /**
+         * If the entry is compressed or not.
+         */
+        boolean compressed = false;
+        
+        /**
+         * The entries:
+         * 
+         * Uncompressed size:
+         *  If the archive is compressed this value
+         *  will equal the compressed size.
+         */
+        int uncompressed_size = -1,
+            compressed_size   = -1,
+            name_hash         = -1;  
+        
+        /** 
+         * The entries stream.
+         */
+        Stream stream;
+        
+        /**
+         * The archive this entry belongs to.
+         */
+        ContainerArchive archive;
+        
+        /**
+         * Sets the entries stream. If the entry is compressed automatically 
+         * compresses the data and then uses the compressed bytes as the
+         * byte array.
+         * 
+         * @param data The data for the archive.
+         */
+        public void setStream(byte[] data) {
+            /* Set the uncompressed size */
+            uncompressed_size = data.length;
+            if(compressed)
+                try {
+                    data = CompressionUtils.BZip2(data);
+                } catch(Exception ex) {
+                    throw new RuntimeException("Failed to compress data: "+ex);
+                }
+            stream = new Stream(data);
+            /* Set the compressed size */
+            compressed_size = data.length;
+        }
+        
+        /**
+         * 
+         * @return 
+         */
+        public Stream getStream() {
+            byte[] data = new byte[uncompressed_size];
+            if(compressed)
+                try {
+                data = CompressionUtils.uBZip2(0, stream.getByteBuffer().array().length,
+                                                      stream.getByteBuffer().array());
+                } catch(Exception ex) {
+                    throw new RuntimeException("Error while unzipping: "+ex);
+                }
+            else 
+                System.arraycopy(stream.getByteBuffer().array(), 0, data, 0, uncompressed_size);
+            return new Stream(data);
+        }      
+        
+        /**
+         * Sets the name hash of the entry, if the 
+         * @param name 
+         */
+        public void setHash(String name) {
+            if(name_hash != -1)
+                archive.entries.remove(name_hash);
+            name_hash = getEntryHash(name);
+            archive.entries.put(name_hash, this);
+        }
+        
+        /**
+         * 
+         * @param owner 
+         */
+        Entry(ContainerArchive archive) { 
+            this.archive = archive;
+        }
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/3</link>
+        <pubDate>Sun, 17 Jul 2011 17:34:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-404726-3</guid>
+        <source url="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726.rss">RuneForge - Cache Writer/Reader</source>
+      </item>
+      <item>
+        <title>RuneForge - Cache Writer/Reader</title>
+        <dc:creator><![CDATA[@kingdomkey01 kingdomkey01]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kingdomkey01">@kingdomkey01</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:1, topic:404726”][CENTER]<br>
+My planned updates include having a full GUI interface in which users can add custom files and inject them into their client not to load higher content, but rather to load their <span class="bbcode-b">OWN</span> content. The project is not to suffice people who are to lazy to try and create a modern server, it is a tool to help make your OWN game.<br>
+[/CENTER][/quote]</p>
+<p>Very interesting, I hope to see this tool/addon/tutorial come through successfully.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/2</link>
+        <pubDate>Sun, 17 Jul 2011 17:31:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-404726-2</guid>
+        <source url="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726.rss">RuneForge - Cache Writer/Reader</source>
+      </item>
+      <item>
+        <title>RuneForge - Cache Writer/Reader</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <ul>
+<li>
+</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726/1</link>
+        <pubDate>Sun, 17 Jul 2011 17:01:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-404726-1</guid>
+        <source url="https://forum.moparisthebest.com/t/runeforge-cache-writer-reader/404726.rss">RuneForge - Cache Writer/Reader</source>
+      </item>
+  </channel>
+</rss>

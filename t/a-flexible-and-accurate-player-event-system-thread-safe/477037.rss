@@ -1,0 +1,947 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+    <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037</link>
+    <description>[b]This will be a very beefy tutorial, make sure you read everything or you may be missing out on valuable information.[/b]
+
+
+[u][b]Introduction[/b][/u]
+With that out of the way I&#39;m kinda proud, cause about two or three months ago I never thought that I could even attempt to make something of this manner. I basically made this because every task/event system I had used either had not met my expectations or wasn&#39;t as flexible as I hoped. So I figured, why not design my own to meet my own needs?
+
+I&#39;m going to give you all the code and explain how to add it and then explain everything later.
+
+
+[b][u]The Event System[/u][/b]
+
+[u]Event class[/u]
+This is basically a dynamic container class that holds data for an event. Or in simpler terms this class represents a single event.
+
+[code=java]package server.event;
+
+import server.rs2.players.Client;
+
+/**
+ * Represents a single event
+ * 
+ * @author lare96
+ */
+public abstract class Event {
+
+	/**
+	 * Amount of cycles before the event executes
+	 */
+	private int cycles;
+
+	/**
+	 * If the event is running
+	 */
+	private boolean running;
+
+	/**
+	 * Player the event is binded too
+	 */
+	private Client player;
+
+	/**
+	 * Amount of ticks this event holds
+	 */
+	public int ticks;
+
+	/**
+	 * Stop without executing &#39;done()&#39;
+	 */
+	private boolean stopNoExecute;
+
+	/**
+	 * Creates a new event
+	 */
+	public Event(int cycles, Client player) {
+		setCycles(cycles);
+		setRunning(true);
+		setStopNoExecute(false);
+		setPlayer(player);
+	}
+
+	/**
+	 * Called on execution of the event
+	 */
+	protected abstract void event();
+
+	/**
+	 * Called whenever the &#39;stop()&#39; method is invoked
+	 */
+	protected abstract void done();
+
+	/**
+	 * Stop the current event
+	 */
+	public void stop() {
+		this.setRunning(false);
+	}
+
+	/**
+	 * Stop the current event, do not execute &#39;done()&#39;
+	 */
+	public void stopNoExecute() {
+		this.setRunning(false);
+		this.setStopNoExecute(true);
+	}
+
+	/**
+	 * @return the cycles
+	 */
+	public int getCycles() {
+		return cycles;
+	}
+
+	/**
+	 * @param cycles
+	 *            the cycles to set
+	 */
+	public void setCycles(int cycles) {
+		this.cycles = cycles;
+	}
+
+	/**
+	 * @return the running
+	 */
+	public boolean isRunning() {
+		return running;
+	}
+
+	/**
+	 * @param running
+	 *            the running to set
+	 */
+	public void setRunning(boolean running) {
+		this.running = running;
+	}
+
+	/**
+	 * @return the player
+	 */
+	public Client getPlayer() {
+		return player;
+	}
+
+	/**
+	 * @param player
+	 *            the player to set
+	 */
+	public void setPlayer(Client player) {
+		this.player = player;
+	}
+
+	/**
+	 * @return the stopNoExecute
+	 */
+	public boolean isStopNoExecute() {
+		return stopNoExecute;
+	}
+
+	/**
+	 * @param stopNoExecute
+	 *            the stopNoExecute to set
+	 */
+	public void setStopNoExecute(boolean stopNoExecute) {
+		this.stopNoExecute = stopNoExecute;
+	}
+}
+[/code]
+
+
+[u]EventScheduler class[/u]
+Processes all events
+
+[code=java]package server.event;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * The event scheduler which is processed by ScheduledExecutorService and runs
+ * on its own thread is basically to manage and process all events
+ * 
+ * @author lare96
+ */
+public class EventScheduler implements Runnable {
+
+	/**
+	 * The event scheduler
+	 */
+	private static EventScheduler instance;
+
+	/**
+	 * Scheduled executor service, used to process the event scheduler
+	 */
+	private final static ScheduledExecutorService processing = Executors
+			.newSingleThreadScheduledExecutor();
+
+	/**
+	 * The status of the event scheduler, making this false will essentially
+	 * shut down the scheduler
+	 */
+	public static boolean running = true;
+
+	/**
+	 * List of active events instanced for every player
+	 */
+	public List&lt;Event&gt; active = new ArrayList&lt;Event&gt;();
+
+	/**
+	 * Starts the event scheduler
+	 */
+	public void start() {
+		processing.scheduleAtFixedRate(this, 0, 600, TimeUnit.MILLISECONDS);
+	}
+
+	/**
+	 * Called every 600ms by ScheduledExecutorService, and processes all events.
+	 * This method should never be called directly or you will experience
+	 * exetreme timing issues.
+	 */
+	@Override
+	public void run() {
+		try {
+			/**
+			 * If not running, shut down
+			 */
+			if (!running) {
+				processing.shutdown();
+				return;
+			}
+
+			/**
+			 * No elements, do not proceed with processing, why waste cpu time
+			 * looping through an empty array?
+			 */
+			if (active.isEmpty()) {
+				return;
+			}
+
+			/**
+			 * Loop through all active events
+			 */
+			for (int i = 0; i &lt; active.size(); i++) {
+				/**
+				 * To make sure no null objects are being processed
+				 */
+				if (active.get(i) == null) {
+					continue;
+				}
+
+				/**
+				 * Remove events that are no longer running
+				 */
+				if (!active.get(i).isRunning()) {
+
+					if (!active.get(i).isStopNoExecute()) {
+						active.get(i).done();
+					}
+
+					synchronized (active) {
+						active.remove(active.get(i));
+					}
+					return;
+				}
+
+				/**
+				 * Increase the events ticks by one
+				 */
+				synchronized (active.get(i)) {
+					active.get(i).ticks++;
+				}
+
+				/**
+				 * If enough ticks have passed, execute this event
+				 */
+				if (active.get(i).ticks == active.get(i).getCycles()
+						&amp;&amp; active.get(i).isRunning()) {
+					active.get(i).event();
+
+					synchronized (active.get(i)) {
+						active.get(i).ticks = 0;
+					}
+				}
+			}
+			/**
+			 * Error handling
+			 */
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Ends the event scheduler
+	 */
+	public static void end() {
+		running = false;
+	}
+
+	/**
+	 * Gets the scheduler
+	 */
+	public static EventScheduler getSingleton() {
+		if (instance == null) {
+			instance = new EventScheduler();
+		}
+
+		return instance;
+	}
+}
+[/code]
+
+
+[u]Stopping events on logout[/u]
+Since our events are binded to a player, we can stop all events binded to a certain player. This means that we can stop all events for a player whenever we choose. This is extremely helpful because now we don&#39;t have to check if the player has logged out on our events!
+
+Add this method somewhere, preferably in your Client class:
+[code=java]	/**
+	 * Stop all events for designated a player
+	 * 
+	 * @param player
+	 *            the player to stop all events for
+	 */
+	public void stopAllEvents(Client player) {
+		try {
+			if (EventScheduler.getSingleton().active.isEmpty()) {
+				return;
+			}
+			if (player == null) {
+				return;
+			}
+
+			for (int i = 0; i &lt; EventScheduler.getSingleton().active.size(); i++) {
+				if (EventScheduler.getSingleton().active.get(i) == null) {
+					continue;
+				}
+
+				if (EventScheduler.getSingleton().active.get(i).getPlayer() == player) {
+					synchronized (EventScheduler.getSingleton().active.get(i)) {
+						EventScheduler.getSingleton().active.get(i)
+								.stopNoExecute();
+					}
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+[/code]
+
+Put this in your &#39;logout()&#39; method
+
+[code=java]stopAllEvents(this);[/code]
+
+
+[u]Starting the EventScheduler[/u]
+Open your Server class, and right under somewhere in &quot;public static void main(java.lang.String args[]) {&quot;
+
+[code=java]		/**
+		 * Starts the event scheduler
+		 */
+		EventScheduler.getSingleton().start();[/code]
+
+[u]Submitting a new event[/u]
+Add this in your Server class
+
+[code=java]        /**
+	 * Submits a new active event to the event scheduler to be processed and
+	 * later executed
+	 * 
+	 * @param event
+	 *            the event to be submitted
+	 */
+	public void submit(Event event) {
+		if (event.getPlayer() == null) {
+			return;
+		}
+
+		synchronized (EventScheduler.getSingleton().active) {
+			EventScheduler.getSingleton().active.add(event);
+		}
+	}[/code]
+
+
+[u][b]How this works?[/b][/u]
+A lot of the times people make useful things, but don&#39;t explain how they work which can cause confusion (especially with inexperienced users).
+
+[i]The event class[/i]: Represents a single event. Every time you submit a new event, you create a new Event object and it is added to the list of active events (Containing other Event objects).
+
+[i]The event scheduler class[/i]: This is the engine. It executes events that need to be executed, and removes Events from the list of active events that have been flagged as no longer running. Without this events would not be able to be processed which would defeat the purpose of this whole thing.
+
+[i]So...[/i]
+
+1. An new Event object is added to the list of active events
+2. The scheduler determines when that event needs to be executed
+3. When it is time, the event executes, and depending on the event, it either stops (then the &#39;done()&#39; method will execute) or its ticks are reset and it keeps looping.
+4. If the event stops, it is flagged as not running
+5. In the next cycle it is removed from the list of active events (because it was flagged as not running)
+
+
+[u][b]How do I use this?[/b][/u]
+Trying to keep this short because I know I&#39;m gonna hit the character limit. Lets start with the structure of an event:
+
+[code=java]submit(new Event(THE DELAY IN TICKS!!, THE CLIENT OBJECT TO BIND THE EVENT TOO) {
+	@Override
+	public void event() {
+		// what will happen after the delay in ticks
+
+	}
+
+	@Override
+	public void done() {
+		// This is only called when the &#39;stop()&#39; method is invoked
+
+	}
+});[/code]
+
+
+If you don&#39;t know what the client object is, look at the examples below. So say I want to send a message to this player after 5 ticks (3000ms/3seconds), and right after I want the event to stop. Let&#39;s also say this code was put in the Client class!
+
+[code=java]sendMessage(&quot;Hi, I&#39;ll talk to you 5 ticks later dude!&quot;);
+
+submit(new Event(5, this) {
+	@Override
+	public void event() {
+		getPlayer().sendMessage(&quot;Hi, It&#39;s me again!&quot;);
+                stop();
+	}
+
+	@Override
+	public void done() {
+		getPlayer().sendMessage(&quot;I&#39;ve been stopped :(&quot;);
+	}
+});[/code]
+
+
+[u]The result would be:[/u]
+&quot;Hi, I&#39;ll talk to you 5 ticks later dude!&quot;
+[i]3 seconds later...[/i]
+&quot;Hi, It&#39;s me again!&quot;
+&quot;I&#39;ve been stopped :(&quot;
+
+
+[u][b]Important[/b][/u]
+A tick = 600ms
+We use &quot;getPlayer().&quot; to ensure that the effects of the event are happening to the player the event is bound too! This is optional! It won&#39;t make a difference whether you decide to use that or not.
+Anything else I missed, post below
+
+
+[u][b]Updates[/b][/u]
+The first being that you cannot submit events with the Client Object being null, you also can also now not do [i]stopAllEvents(null)[/i].
+
+I also had to re-write the [i]stopAllEvents[/i] method because it was throwing a CurrentModificationException (stupid mistake on my part). There was also an issue with the method that it wouldn&#39;t stop all the events, that&#39;s been fixed.
+
+I&#39;ve added a new function to the Event class, this being [i]stopNoExecute[/i]. This function serves the same purpose as the stop function (to stop the event) but it does not execute the done method.
+
+This was not thread safe when first posted. I&#39;ve applied the appropriate changes. Thanks Graham for your post on thread safety, and thanks for saifix from rune-server for notifying me!
+
+
+[u][b]Thanks[/b][/u]
+Graham
+Stuart
+Null++
+saifix
+imthenull
+oobe</description>
+    
+    <lastBuildDate>Thu, 31 Jan 2013 23:24:58 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="42" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/yesteryear/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Yesteryear:</div>
+<blockquote>
+<p>Looks good, but you need some tweaking on the thread-safeness. The list (‘active’), isn’t always used safely.</p>
+</blockquote>
+</aside>
+<p>it shouldn’t even be running on its own thread, that was my first mistake</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/43</link>
+        <pubDate>Thu, 31 Jan 2013 23:24:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-43</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Yesteryear Yesteryear]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yesteryear">@Yesteryear</a> wrote:</p>
+          <blockquote>
+              <p>Looks good, but you need some tweaking on the thread-safeness. The list (‘active’), isn’t always used safely.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/42</link>
+        <pubDate>Thu, 31 Jan 2013 21:52:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-42</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>I just dont see the point in stripping out what comes with most servers and replacing it without something that works in an equal manner. And if a server does not come with it, delete it pl0x.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/41</link>
+        <pubDate>Mon, 14 Jan 2013 07:37:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-41</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@I_InDrEk_I I InDrEk I]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/i_indrek_i">@I_InDrEk_I</a> wrote:</p>
+          <blockquote>
+              <p>Looks good, thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/40</link>
+        <pubDate>Mon, 07 Jan 2013 15:19:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-40</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="37" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>I ask you this, should I use this or use the cycle event manager?</p>
+</blockquote>
+</aside>
+<p>Use this: <a href="https://www.dropbox.com/sh/wihsxh1qqmefo7b/Bj0-EfqdE_" rel="nofollow noopener">https://www.dropbox.com/sh/wihsxh1qqmefo7b/Bj0-EfqdE_</a></p>
+<p>If you can’t figure out how to use it drop a pm.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/39</link>
+        <pubDate>Sat, 05 Jan 2013 23:22:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-39</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@thock321 thock321]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/thock321">@thock321</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="37" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>I ask you this, should I use this or use the cycle event manager?</p>
+</blockquote>
+</aside>
+<p>They both do the same thing, but differently.</p>
+<p><a class="mention" href="/u/fox2007">@Fox2007</a><br>
+Yes, and you definitely proved it yourself.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/38</link>
+        <pubDate>Sat, 05 Jan 2013 06:21:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-38</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>I ask you this, should I use this or use the cycle event manager?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/37</link>
+        <pubDate>Sat, 05 Jan 2013 04:06:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-37</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="35" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/fox2007/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Fox2007:</div>
+<blockquote>
+<p>defo? Wow the intelligence of this community really has stooped to an all time low -_-</p>
+</blockquote>
+</aside>
+<p>You’re a real retard, m8.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/36</link>
+        <pubDate>Sat, 05 Jan 2013 02:29:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-36</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>defo? Wow the intelligence of this community really has stooped to an all time low -_-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/35</link>
+        <pubDate>Sat, 05 Jan 2013 02:23:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-35</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="29" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/fox2007/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Fox2007:</div>
+<blockquote>
+<p>Alright sore ass…didnt mean to make you all pussy hurt.</p>
+</blockquote>
+</aside>
+<p>you didn’t have to go accusing like a fucking retard without even looking at the code.</p>
+<p>my fucking god, how stupid can you get? you’re defo the butthurt one here.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/34</link>
+        <pubDate>Fri, 04 Jan 2013 23:29:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-34</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="32" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/imthenull/40/1273_1.png" class="avatar"> imthenull:</div>
+<blockquote>
+<p>it’s useless anywhere. you’re just returning the object’s instance, which you would need an instance of the object to call, so it’s redundant.</p>
+</blockquote>
+</aside>
+<p>which is why i changed it <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/33</link>
+        <pubDate>Fri, 04 Jan 2013 23:10:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-33</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>it’s useless anywhere. you’re just returning the object’s instance, which you would need an instance of the object to call, so it’s redundant.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/32</link>
+        <pubDate>Fri, 04 Jan 2013 21:33:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-32</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:30, topic:477037”]<code>    /**
+     * The event type
+     */
+    @Override
+    public Event type() {
+        return this;
+    }</code><br>
+wat[/quote]<br>
+lolololol that was from a previous version when I was doing processing based on the event type. Mister maggot told me that was wrong so I came up with another solution. But yeah that function is pretty much useless now.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/31</link>
+        <pubDate>Fri, 04 Jan 2013 20:27:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-31</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p><code>    /**
+     * The event type
+     */
+    @Override
+    public Event type() {
+        return this;
+    }</code><br>
+wat</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/30</link>
+        <pubDate>Fri, 04 Jan 2013 16:08:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-30</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>Alright sore ass…didnt mean to make you all pussy hurt.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/29</link>
+        <pubDate>Fri, 04 Jan 2013 01:00:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-29</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fox2007, post:25, topic:477037”]This isnt Clawz work. Its Graham’s from Rune-Server<br>
+Unless Claws = Grahm, but I somehow doubt it.</p>
+<p><a href="http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html" data-bbcode="true" rel="nofollow noopener">http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html</a></p>
+<p>Unless this is different in some way ???<br>
+Looks alittle different, but pretty much functions the same way.<br>
+Pretty useless tbh to post this, as most server nowadays already have this.[/quote]<br>
+I’m pretty sure your mentally retarded, or you haven’t looked at the code.</p>
+<p>Our systems are completely different, how?</p>
+<p>[ul][li]Grahams uses polling and queues, mine does not[/li]<br>
+[li]Grahams uses an iterator to iterate over the elements while I use a loop[/li]<br>
+[li]My event system is bound to a player, while his is “global” in a sense[/li][/ul]</p>
+<p>And the design concepts of both are just completely different. The only thing I think are the same about the two is the fact that they both run on their own threads. Please don’t make accusations like that because it makes you seem like a senseless moron.</p>
+<p>If you still don’t believe me, I completely redesigned this and you can find it here: <a href="https://www.dropbox.com/sh/wihsxh1qqmefo7b/Bj0-EfqdE_" rel="nofollow noopener">https://www.dropbox.com/sh/wihsxh1qqmefo7b/Bj0-EfqdE_</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/28</link>
+        <pubDate>Fri, 04 Jan 2013 00:59:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-28</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>Yea i come around every now and again :3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/27</link>
+        <pubDate>Fri, 04 Jan 2013 00:36:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-27</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fox2007, post:25, topic:477037”]This isnt Clawz work. Its Graham’s from Rune-Server<br>
+Unless Claws = Grahm, but I somehow doubt it.</p>
+<p><a href="http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html" data-bbcode="true" rel="nofollow noopener">http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html</a></p>
+<p>Unless this is different in some way ???<br>
+Looks alittle different, but pretty much functions the same way.<br>
+Pretty useless tbh to post this, as most server nowadays already have this.[/quote]its claws work, it does the same thing, actually he got some help off graham. btw your back foxie?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/26</link>
+        <pubDate>Fri, 04 Jan 2013 00:32:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-26</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>This isnt Clawz work. Its Graham’s from Rune-Server<br>
+Unless Claws = Grahm, but I somehow doubt it.</p>
+<p><a href="http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html" data-bbcode="true" rel="nofollow noopener">http://www.rune-server.org/runescape-development/google/tutorials/302738-cycle-based-task-manager.html</a></p>
+<p>Unless this is different in some way ???<br>
+Looks alittle different, but pretty much functions the same way.<br>
+Pretty useless tbh to post this, as most server nowadays already have this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/25</link>
+        <pubDate>Fri, 04 Jan 2013 00:27:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-25</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>stop spamming or ill get zyle to ban u ok?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/24</link>
+        <pubDate>Thu, 03 Jan 2013 19:15:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-24</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:22, topic:477037”][quote author=arham 4 link=topic=595228.msg4193936#msg4193936 date=1357233925]<br>
+U NUB!!!<br>
+[/quote]<br>
+…?[/quote]</p>
+<p>ur a fukin n0b obv u nub</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/23</link>
+        <pubDate>Thu, 03 Jan 2013 19:10:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-23</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="21" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>U NUB!!!</p>
+</blockquote>
+</aside>
+<p>…?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/22</link>
+        <pubDate>Thu, 03 Jan 2013 17:36:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-22</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>U NUB!!!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/21</link>
+        <pubDate>Thu, 03 Jan 2013 17:25:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-21</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:19, topic:477037”][quote author=thock321 link=topic=595228.msg4193173#msg4193173 date=1357112878]<br>
+It’s called a fail-safe.  Also, this doesn’t have anything to do with how stable my source is, so you should just move yourself to the trash now.<br>
+[/quote]<br>
+ur garbage bro[/quote]<br>
+no fighting now u guys r both cool and r 1 of the few people here who actually know what they’re doing feel special</p>
+<p>ii, this is outdated and isn’t that great. I have a better version that I’m improving on though that I won’t be releasing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/20</link>
+        <pubDate>Thu, 03 Jan 2013 06:11:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-20</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+      <item>
+        <title>A Flexible and Accurate Player Event System [Thread Safe]</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="18" data-topic="477037">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/thock321/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> thock321:</div>
+<blockquote>
+<p>It’s called a fail-safe.  Also, this doesn’t have anything to do with how stable my source is, so you should just move yourself to the trash now.</p>
+</blockquote>
+</aside>
+<p>ur garbage bro</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037/19</link>
+        <pubDate>Wed, 02 Jan 2013 15:31:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-477037-19</guid>
+        <source url="https://forum.moparisthebest.com/t/a-flexible-and-accurate-player-event-system-thread-safe/477037.rss">A Flexible and Accurate Player Event System [Thread Safe]</source>
+      </item>
+  </channel>
+</rss>

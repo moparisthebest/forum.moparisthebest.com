@@ -1,0 +1,631 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Fixed woo!</title>
+    <link>https://forum.moparisthebest.com/t/fixed-woo/523829</link>
+    <description>i&#39;ve implemented netty with my PI and i&#39;ve added RSA with it, but it keeps spamming:
+
+[code]Encrypted size mismatch[loginEncryptPacketSize:0, blockLength - 40:128].[/code] 
+
+here&#39;s the server sided code:
+
+[code]package server.net;
+
+import java.math.BigInteger;
+import java.security.SecureRandom;
+
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.handler.codec.frame.FrameDecoder;
+
+import server.Config;
+import server.Connection;
+import server.Server;
+import server.engine.HandleConnection;
+import server.model.players.Client;
+import server.model.players.PlayerHandler;
+import server.model.players.PlayerSave;
+import server.net.PacketBuilder;
+import server.util.ISAACCipher;
+import server.util.Misc;
+
+public class RS2LoginProtocolDecoder extends FrameDecoder {
+
+	
+	private static final BigInteger RSA_MODULUS = new BigInteger(&quot;134879924117018689760458617113763010794928714932318058467109552420048747861644217016255598201828589101722456409486834737042810145044971733480806210971246858756450230199459844416953238964275407953368738189689602122143864920074673229804529378820732033043260467820015292026023179060008040229774580922064833792491&quot;);
+
+	private static final BigInteger RSA_EXPONENT = new BigInteger(&quot;90234148541839990140799054102809488461370745952554327409432095095970479290262432684753810024275945810395950055961377271021025802208702575380814921553066912655199489970700117073408649367015293924129928310987520073084130900423361880923927472681140195478097378187149074976649709577953631380990519168830771137473&quot;);
+
+	
+	
+	private static final int CONNECTED = 0;
+	private static final int LOGGING_IN = 1;
+	private int state = CONNECTED;
+
+	@Override
+	protected Object decode(ChannelHandlerContext ctx, Channel channel, ChannelBuffer buffer) throws Exception {
+		if(!channel.isConnected()) {
+			return null;
+		}
+		switch (state) {
+		case CONNECTED:
+			if (buffer.readableBytes() &lt; 2)
+				return null;
+			int request = buffer.readUnsignedByte();
+			if (request != 14) {
+				System.out.println(&quot;Invalid login request: &quot; + request);
+				channel.close();
+				return null;
+			}
+			buffer.readUnsignedByte();
+			channel.write(new PacketBuilder().putLong(0).put((byte) 0).putLong(new SecureRandom().nextLong()).toPacket());
+			state = LOGGING_IN;
+			return null;
+		case LOGGING_IN:
+			
+			if (buffer.readableBytes() &lt; 2) {
+				return null;
+			}
+			
+			int loginType = buffer.readByte();
+			if (loginType != 16 &amp;&amp; loginType != 18) {
+				System.out.println(&quot;Invalid login type: &quot; + loginType);
+			}
+			int blockLength = buffer.readByte() &amp; 0xff;
+			if (buffer.readableBytes() &lt; blockLength) {
+				return null;
+			}
+			
+			buffer.readByte();
+			
+			for (int i = 0; i &lt; 9; i++)
+				buffer.readInt();
+
+			int loginEncryptPacketSize = buffer.readUnsignedByte();
+			blockLength--;
+			if(loginEncryptPacketSize != (blockLength - 40)) {
+				System.out.println(&quot;Encrypted size mismatch[loginEncryptPacketSize:&quot; + loginEncryptPacketSize + &quot;, blockLength - 40:&quot; + (blockLength - 40) + &quot;].&quot;);
+				channel.close();
+				return false;
+			}
+			
+			ChannelBuffer rsaBuffer = buffer.readBytes(loginEncryptPacketSize);
+
+			BigInteger bigInteger = new BigInteger(rsaBuffer.array());
+			bigInteger = bigInteger.modPow(RSA_EXPONENT, RSA_MODULUS);
+
+			rsaBuffer = ChannelBuffers.wrappedBuffer(bigInteger.toByteArray());
+			if((rsaBuffer.readLong() &amp; 0xff) != 10) {
+				System.out.println(&quot;Encrypted id != 10.&quot;);
+				channel.close();
+				return false;
+			}
+			final long clientHalf = rsaBuffer.readLong();
+			final long serverHalf = rsaBuffer.readLong();
+			
+			final int[] isaacSeed = { (int) (clientHalf &gt;&gt; 32), (int) clientHalf, (int) (serverHalf &gt;&gt; 32), (int) serverHalf };
+			final ISAACCipher inCipher = new ISAACCipher(isaacSeed);
+			for (int i = 0; i &lt; isaacSeed.length; i++)
+				isaacSeed[i] += 50;
+			final ISAACCipher outCipher = new ISAACCipher(isaacSeed);
+			final int version = buffer.readInt();
+			final String name = Misc.formatPlayerName(Misc.getRS2String(rsaBuffer));
+			final String pass = Misc.getRS2String(rsaBuffer);
+			channel.getPipeline().replace(&quot;decoder&quot;, &quot;decoder&quot;, new RS2ProtocolDecoder(inCipher));
+			return login(channel, inCipher, outCipher, version, name, pass);
+		}
+		return null;
+	}
+
+	private static Client login(Channel channel, ISAACCipher inCipher, ISAACCipher outCipher, int version, String name, String pass) {
+		int returnCode = 2;
+		if (!name.matches(&quot;[A-Za-z0-9 ]+&quot;)) {
+			returnCode = 4;
+		}
+		if (name.length() &gt; 12) {
+			returnCode = 8;
+		}
+		Client cl = new Client(channel, -1);
+		cl.playerName = name;
+		cl.playerName2 = cl.playerName;
+		cl.playerPass = pass;
+		cl.outStream.packetEncryption = outCipher;
+		cl.saveCharacter = false;
+		cl.isActive = true;
+		if (Connection.isNamedBanned(cl.playerName)) {
+			returnCode = 4;
+		}
+		if (PlayerHandler.isPlayerOn(name)) {
+			returnCode = 5;
+		}
+		if (PlayerHandler.getPlayerCount() &gt;= Config.MAX_PLAYERS) {
+			returnCode = 7;
+		}
+		if (HandleConnection.UpdateServer) {
+			returnCode = 14;
+		}
+		if (returnCode == 2) {
+			int load = PlayerSave.loadGame(cl, cl.playerName, cl.playerPass);
+			if (load == 0)
+				cl.addStarter = true;
+			if (load == 3) {
+				returnCode = 3;
+				cl.saveFile = false;
+			} else {
+				for (int i = 0; i &lt; cl.playerEquipment.length; i++) {
+					if (cl.playerEquipment[i] == 0) {
+						cl.playerEquipment[i] = -1;
+						cl.playerEquipmentN[i] = 0;
+					}
+				}
+				if (!Server.playerHandler.newPlayerClient(cl)) {
+					returnCode = 7;
+					cl.saveFile = false;
+				} else {
+					cl.saveFile = true;
+				}
+			}
+		}
+		if(returnCode == 2) {
+			cl.saveCharacter = true;
+			cl.packetType = -1;
+			cl.packetSize = 0;
+			final PacketBuilder bldr = new PacketBuilder();
+			bldr.put((byte) 2);
+			if (cl.playerRights == 3) {
+				bldr.put((byte) 2);
+			} else {
+				bldr.put((byte) cl.playerRights);
+			}
+			bldr.put((byte) 0);
+			channel.write(bldr.toPacket());
+		} else {
+			System.out.println(&quot;returncode:&quot; + returnCode);
+			sendReturnCode(channel, returnCode);
+			return null;
+		}
+		synchronized (PlayerHandler.lock) {
+			cl.initialize();
+			cl.initialized = true;
+		}
+		return cl;
+	}
+
+	public static void sendReturnCode(final Channel channel, final int code) {
+		channel.write(new PacketBuilder().put((byte) code).toPacket()).addListener(new ChannelFutureListener() {
+			@Override
+			public void operationComplete(final ChannelFuture arg0) throws Exception {
+				arg0.getChannel().close();
+			}
+		});
+	}
+
+}[/code]
+
+this is client sided:
+
+[code]	public void doKeys() {
+		int i = currentOffset;
+		currentOffset = 0;
+		byte abyte0[] = new byte[i];
+		readBytes(i, 0, abyte0);
+		BigInteger biginteger2 = new BigInteger(abyte0);
+		BigInteger biginteger3 = biginteger2.modPow(RSA_EXPONENT, RSA_MODULUS);
+		byte abyte1[] = biginteger3.toByteArray();
+		currentOffset = 0;
+		writeWordBigEndian(abyte1.length);
+		writeBytes(abyte1, abyte1.length, 0);
+	}[/code]
+
+[code]	private static final BigInteger RSA_MODULUS = new BigInteger(&quot;134879924117018689760458617113763010794928714932318058467109552420048747861644217016255598201828589101722456409486834737042810145044971733480806210971246858756450230199459844416953238964275407953368738189689602122143864920074673229804529378820732033043260467820015292026023179060008040229774580922064833792491&quot;);
+
+	private static final BigInteger RSA_EXPONENT = new BigInteger(&quot;65537&quot;);[/code]
+
+literally tried everything, thanks.</description>
+    
+    <lastBuildDate>Wed, 03 Jul 2013 20:45:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/fixed-woo/523829.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@James-RevolutionX James-RevolutionX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/james-revolutionx">@James-RevolutionX</a> wrote:</p>
+          <blockquote>
+              <p>FIXED IT WOO!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/10</link>
+        <pubDate>Wed, 03 Jul 2013 20:45:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-10</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>Hmm lets see. Magic number, version check, reported size, and you’re reading the block opcode wrong</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/9</link>
+        <pubDate>Wed, 03 Jul 2013 20:32:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-9</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@James-RevolutionX James-RevolutionX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/james-revolutionx">@James-RevolutionX</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“HcoJustin, post:6, topic:523829”][quote author=James-RevolutionX link=topic=642377.msg4325685#msg4325685 date=1372880704]</p>
+<aside class="quote">
+<blockquote>
+<p>your missing a step to decode rsa lol</p>
+</blockquote>
+</aside>
+<p>100% sure i’m not?<br>
+[/quote]<br>
+Erm… yes you are. You’re missing a shitload of data that comes before the encrypted block. You’re also reading a lot of the encrypted block wrong.[/quote]</p>
+<p>i’ve implemented it into mina, and i’m referencing it from mina but converting it. would be useful if you could point me in the right direction, seeing as ‘i’ think i’ve implemented it correctly.</p>
+<p>thanks.</p>
+<p>edit: don’t know what step i’m missing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/8</link>
+        <pubDate>Wed, 03 Jul 2013 20:10:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-8</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@k1ng0frs k1ng0frs]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k1ng0frs">@k1ng0frs</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“James-RevolutionX, post:4, topic:523829”][quote author=k1ng0frs link=topic=642377.msg4325679#msg4325679 date=1372880122]</p>
+<pre><code class="lang-auto"></code></pre>
+<p>Comment that out?<br>
+[/quote]</p>
+<p>what lol? yes its printing it out but that’s not the problem. it’s not letting me login, and thats the error message it prints out lol.</p>
+<aside class="quote">
+<blockquote>
+<p>your missing a step to decode rsa lol</p>
+</blockquote>
+</aside>
+<p>100% sure i’m not?[/quote]<br>
+Oh lol been miss reading stuff lately</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/7</link>
+        <pubDate>Wed, 03 Jul 2013 20:09:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-7</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“James-RevolutionX, post:4, topic:523829”][quote author=Arcik link=topic=642377.msg4325684#msg4325684 date=1372880532]<br>
+your missing a step to decode rsa lol<br>
+[/quote]<br>
+100% sure i’m not?[/quote]<br>
+Erm… yes you are. You’re missing a shitload of data that comes before the encrypted block. You’re also reading a lot of the encrypted block wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/6</link>
+        <pubDate>Wed, 03 Jul 2013 20:04:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-6</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@Angel_Carlos Angel Carlos]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/angel_carlos">@Angel_Carlos</a> wrote:</p>
+          <blockquote>
+              <p><img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"> k</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/5</link>
+        <pubDate>Wed, 03 Jul 2013 19:56:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-5</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@James-RevolutionX James-RevolutionX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/james-revolutionx">@James-RevolutionX</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“k1ng0frs, post:2, topic:523829”]<code>System.out.println("Encrypted size mismatch[loginEncryptPacketSize:" + loginEncryptPacketSize + ", blockLength - 40:" + (blockLength - 40) + "].");</code><br>
+Comment that out?[/quote]</p>
+<p>what lol? yes its printing it out but that’s not the problem. it’s not letting me login, and thats the error message it prints out lol.</p>
+<aside class="quote" data-post="3" data-topic="523829">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/arcik/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Arcik:</div>
+<blockquote>
+<p>your missing a step to decode rsa lol</p>
+</blockquote>
+</aside>
+<p>100% sure i’m not?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/4</link>
+        <pubDate>Wed, 03 Jul 2013 19:45:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-4</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>your missing a step to decode rsa lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/3</link>
+        <pubDate>Wed, 03 Jul 2013 19:42:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-3</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@k1ng0frs k1ng0frs]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k1ng0frs">@k1ng0frs</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">Comment that out?</code></pre>
+<p>Comment that out?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/2</link>
+        <pubDate>Wed, 03 Jul 2013 19:35:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-2</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+      <item>
+        <title>Fixed woo!</title>
+        <dc:creator><![CDATA[@James-RevolutionX James-RevolutionX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/james-revolutionx">@James-RevolutionX</a> wrote:</p>
+          <blockquote>
+              <p>i’ve implemented netty with my PI and i’ve added RSA with it, but it keeps spamming:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>here’s the server sided code:</p>
+<p>[code]package <a href="http://server.net" rel="nofollow noopener">server.net</a>;</p>
+<p>import java.math.BigInteger;<br>
+import java.security.SecureRandom;</p>
+<p>import org.jboss.netty.buffer.ChannelBuffer;<br>
+import org.jboss.netty.buffer.ChannelBuffers;<br>
+import org.jboss.netty.channel.Channel;<br>
+import org.jboss.netty.channel.ChannelFuture;<br>
+import org.jboss.netty.channel.ChannelFutureListener;<br>
+import org.jboss.netty.channel.ChannelHandlerContext;<br>
+import org.jboss.netty.handler.codec.frame.FrameDecoder;</p>
+<p>import server.Config;<br>
+import server.Connection;<br>
+import server.Server;<br>
+import server.engine.HandleConnection;<br>
+import server.model.players.Client;<br>
+import server.model.players.PlayerHandler;<br>
+import server.model.players.PlayerSave;<br>
+import server.net.PacketBuilder;<br>
+import server.util.ISAACCipher;<br>
+import server.util.Misc;</p>
+<p>public class RS2LoginProtocolDecoder extends FrameDecoder {</p>
+<pre><code>private static final BigInteger RSA_MODULUS = new BigInteger("134879924117018689760458617113763010794928714932318058467109552420048747861644217016255598201828589101722456409486834737042810145044971733480806210971246858756450230199459844416953238964275407953368738189689602122143864920074673229804529378820732033043260467820015292026023179060008040229774580922064833792491");
+
+private static final BigInteger RSA_EXPONENT = new BigInteger("90234148541839990140799054102809488461370745952554327409432095095970479290262432684753810024275945810395950055961377271021025802208702575380814921553066912655199489970700117073408649367015293924129928310987520073084130900423361880923927472681140195478097378187149074976649709577953631380990519168830771137473");
+
+
+
+private static final int CONNECTED = 0;
+private static final int LOGGING_IN = 1;
+private int state = CONNECTED;
+
+@Override
+protected Object decode(ChannelHandlerContext ctx, Channel channel, ChannelBuffer buffer) throws Exception {
+	if(!channel.isConnected()) {
+		return null;
+	}
+	switch (state) {
+	case CONNECTED:
+		if (buffer.readableBytes() &lt; 2)
+			return null;
+		int request = buffer.readUnsignedByte();
+		if (request != 14) {
+			System.out.println("Invalid login request: " + request);
+			channel.close();
+			return null;
+		}
+		buffer.readUnsignedByte();
+		channel.write(new PacketBuilder().putLong(0).put((byte) 0).putLong(new SecureRandom().nextLong()).toPacket());
+		state = LOGGING_IN;
+		return null;
+	case LOGGING_IN:
+		
+		if (buffer.readableBytes() &lt; 2) {
+			return null;
+		}
+		
+		int loginType = buffer.readByte();
+		if (loginType != 16 &amp;&amp; loginType != 18) {
+			System.out.println("Invalid login type: " + loginType);
+		}
+		int blockLength = buffer.readByte() &amp; 0xff;
+		if (buffer.readableBytes() &lt; blockLength) {
+			return null;
+		}
+		
+		buffer.readByte();
+		
+		for (int i = 0; i &lt; 9; i++)
+			buffer.readInt();
+
+		int loginEncryptPacketSize = buffer.readUnsignedByte();
+		blockLength--;
+		if(loginEncryptPacketSize != (blockLength - 40)) {
+			System.out.println("Encrypted size mismatch[loginEncryptPacketSize:" + loginEncryptPacketSize + ", blockLength - 40:" + (blockLength - 40) + "].");
+			channel.close();
+			return false;
+		}
+		
+		ChannelBuffer rsaBuffer = buffer.readBytes(loginEncryptPacketSize);
+
+		BigInteger bigInteger = new BigInteger(rsaBuffer.array());
+		bigInteger = bigInteger.modPow(RSA_EXPONENT, RSA_MODULUS);
+
+		rsaBuffer = ChannelBuffers.wrappedBuffer(bigInteger.toByteArray());
+		if((rsaBuffer.readLong() &amp; 0xff) != 10) {
+			System.out.println("Encrypted id != 10.");
+			channel.close();
+			return false;
+		}
+		final long clientHalf = rsaBuffer.readLong();
+		final long serverHalf = rsaBuffer.readLong();
+		
+		final int[] isaacSeed = { (int) (clientHalf &gt;&gt; 32), (int) clientHalf, (int) (serverHalf &gt;&gt; 32), (int) serverHalf };
+		final ISAACCipher inCipher = new ISAACCipher(isaacSeed);
+		for (int i = 0; i &lt; isaacSeed.length; i++)
+			isaacSeed[i] += 50;
+		final ISAACCipher outCipher = new ISAACCipher(isaacSeed);
+		final int version = buffer.readInt();
+		final String name = Misc.formatPlayerName(Misc.getRS2String(rsaBuffer));
+		final String pass = Misc.getRS2String(rsaBuffer);
+		channel.getPipeline().replace("decoder", "decoder", new RS2ProtocolDecoder(inCipher));
+		return login(channel, inCipher, outCipher, version, name, pass);
+	}
+	return null;
+}
+
+private static Client login(Channel channel, ISAACCipher inCipher, ISAACCipher outCipher, int version, String name, String pass) {
+	int returnCode = 2;
+	if (!name.matches("[A-Za-z0-9 ]+")) {
+		returnCode = 4;
+	}
+	if (name.length() &gt; 12) {
+		returnCode = 8;
+	}
+	Client cl = new Client(channel, -1);
+	cl.playerName = name;
+	cl.playerName2 = cl.playerName;
+	cl.playerPass = pass;
+	cl.outStream.packetEncryption = outCipher;
+	cl.saveCharacter = false;
+	cl.isActive = true;
+	if (Connection.isNamedBanned(cl.playerName)) {
+		returnCode = 4;
+	}
+	if (PlayerHandler.isPlayerOn(name)) {
+		returnCode = 5;
+	}
+	if (PlayerHandler.getPlayerCount() &gt;= Config.MAX_PLAYERS) {
+		returnCode = 7;
+	}
+	if (HandleConnection.UpdateServer) {
+		returnCode = 14;
+	}
+	if (returnCode == 2) {
+		int load = PlayerSave.loadGame(cl, cl.playerName, cl.playerPass);
+		if (load == 0)
+			cl.addStarter = true;
+		if (load == 3) {
+			returnCode = 3;
+			cl.saveFile = false;
+		} else {
+			for (int i = 0; i &lt; cl.playerEquipment.length; i++) {
+				if (cl.playerEquipment[i] == 0) {
+					cl.playerEquipment[i] = -1;
+					cl.playerEquipmentN[i] = 0;
+				}
+			}
+			if (!Server.playerHandler.newPlayerClient(cl)) {
+				returnCode = 7;
+				cl.saveFile = false;
+			} else {
+				cl.saveFile = true;
+			}
+		}
+	}
+	if(returnCode == 2) {
+		cl.saveCharacter = true;
+		cl.packetType = -1;
+		cl.packetSize = 0;
+		final PacketBuilder bldr = new PacketBuilder();
+		bldr.put((byte) 2);
+		if (cl.playerRights == 3) {
+			bldr.put((byte) 2);
+		} else {
+			bldr.put((byte) cl.playerRights);
+		}
+		bldr.put((byte) 0);
+		channel.write(bldr.toPacket());
+	} else {
+		System.out.println("returncode:" + returnCode);
+		sendReturnCode(channel, returnCode);
+		return null;
+	}
+	synchronized (PlayerHandler.lock) {
+		cl.initialize();
+		cl.initialized = true;
+	}
+	return cl;
+}
+
+public static void sendReturnCode(final Channel channel, final int code) {
+	channel.write(new PacketBuilder().put((byte) code).toPacket()).addListener(new ChannelFutureListener() {
+		@Override
+		public void operationComplete(final ChannelFuture arg0) throws Exception {
+			arg0.getChannel().close();
+		}
+	});
+}
+</code></pre>
+<p>}[/code]</p>
+<p>this is client sided:</p>
+<p><code>	public void doKeys() {
+		int i = currentOffset;
+		currentOffset = 0;
+		byte abyte0[] = new byte[i];
+		readBytes(i, 0, abyte0);
+		BigInteger biginteger2 = new BigInteger(abyte0);
+		BigInteger biginteger3 = biginteger2.modPow(RSA_EXPONENT, RSA_MODULUS);
+		byte abyte1[] = biginteger3.toByteArray();
+		currentOffset = 0;
+		writeWordBigEndian(abyte1.length);
+		writeBytes(abyte1, abyte1.length, 0);
+	}</code></p>
+<p>[code]	private static final BigInteger RSA_MODULUS = new BigInteger(“134879924117018689760458617113763010794928714932318058467109552420048747861644217016255598201828589101722456409486834737042810145044971733480806210971246858756450230199459844416953238964275407953368738189689602122143864920074673229804529378820732033043260467820015292026023179060008040229774580922064833792491”);</p>
+<pre><code>private static final BigInteger RSA_EXPONENT = new BigInteger("65537");[/code]
+</code></pre>
+<p>literally tried everything, thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/fixed-woo/523829/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/fixed-woo/523829/1</link>
+        <pubDate>Wed, 03 Jul 2013 19:13:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-523829-1</guid>
+        <source url="https://forum.moparisthebest.com/t/fixed-woo/523829.rss">Fixed woo!</source>
+      </item>
+  </channel>
+</rss>

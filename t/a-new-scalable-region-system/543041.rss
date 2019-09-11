@@ -1,0 +1,923 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A new scalable region system</title>
+    <link>https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041</link>
+    <description>
+[b]EDIT: Aaaaaaand scratch that, I&#39;ve got some of the arithmetic wrong. Sorry to get your hopes up. If you see a way to fix the bug though then by all means. :P[/b]
+
+
+
+Hi guys. It&#39;s been a while since I&#39;ve contributed anything, so here&#39;s a region manager that should scale quite well and is algorithmically simpler than previous implementations.
+
+Note that this implementation is not thread-safe.
+
+Currently untested. The idea behind this is sound though. It relies on range searches provided by concrete implementations of NavigableMap.
+
+For those who want to move away from having large numbers of tiles in memory, you could choose to have a tile check if it&#39;s empty on any given remove operation. If it is empty, have it remove itself using the RegionManager.
+
+You could also implement things like sweeps. Add a lastUsed field to the ActiveTile, write a comparator that orders by this field (least recently used first). Add all tiles to a collection, sort the collection, loop through and remove tiles from the region. Break out of the loop when you hit the first tile that has been used more recently than the specified maximum unused period.
+
+
+[code]
+import java.util.LinkedList;
+import java.util.List;
+import java.util.NavigableMap;
+import java.util.TreeMap;
+
+/**
+ * Region manager for obtaining tiles within view.
+ * This class is NOT THREAD-SAFE.
+ *
+ * @author Lothy
+ */
+public final class RegionManager {
+
+    private static final NavigableMap&lt;Integer, ActiveTile&gt; tileMap =
+            new TreeMap&lt;Integer, ActiveTile&gt;();
+
+    private static final NavigableMap&lt;Integer, GameObject&gt; objectMap =
+            new TreeMap&lt;Integer, GameObject&gt;();
+
+    private static int hash(int x, int y) {
+        return x &lt;&lt; 16 | y;
+    }
+
+    private static ActiveTile tile(int x, int y) {
+        int hash = hash(x, y);
+        ActiveTile t = tileMap.get(hash);
+
+        if (t == null) {
+            t = new ActiveTile(x, y);
+            tileMap.put(hash, t);
+        }
+
+        return t;
+    }
+
+    private static int getMinHash(int x, int y, int range) {
+        int minX = x - range &lt; 0 ? 0 : x - range;
+        int minY = y - range &lt; 0 ? 0 : y - range;
+        return hash(minX, minY);
+    }
+
+    private static int getMaxHash(int x, int y, int range) {
+        int maxX = x + range &gt;= Short.MAX_VALUE ? Short.MAX_VALUE - 1 : x + range;
+        int maxY = y + range &gt;= Short.MAX_VALUE ? Short.MAX_VALUE - 1 : y + range;
+        return hash(maxX, maxY);
+    }
+
+    /**
+     * Returns a list of all tiles that fall within the specified range
+     * of the specified cartesian point.
+     *
+     * @param x The cartesian x-ordinate
+     * @param y The cartesian y-ordinate
+     * @param range The range to search within
+     * @return All tiles that fall within the range, inclusive
+     */
+    public static List&lt;ActiveTile&gt; getTilesInRange(int x, int y, int range) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid x: %d\n&quot;, x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid y: %d\n&quot;, y));
+        }
+
+        if (range &lt; 0) {
+            throw new IllegalArgumentException(&quot;negative range&quot;);
+        }
+
+        int minHash = getMinHash(x, y, range);
+        int maxHash = getMaxHash(x, y, range);
+
+        List&lt;ActiveTile&gt; results = new LinkedList&lt;ActiveTile&gt;();
+        results.addAll(tileMap.subMap(minHash, true, maxHash, true).values());
+
+        return results;
+    }
+
+    /**
+     * Returns a list of all game objects that fall within the specified range
+     * of the specified cartesian point.
+     *
+     * @param x The cartesian x-ordinate
+     * @param y The cartesian y-ordinate
+     * @param range The range to search within
+     * @return All game objects that fall within the range, inclusive
+     */
+    public static List&lt;GameObject&gt; getGameObjectsInRange(int x, int y, int range) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid x: %d\n&quot;, x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid y: %d\n&quot;, y));
+        }
+
+        if (range &lt; 0) {
+            throw new IllegalArgumentException(&quot;negative range&quot;);
+        }
+
+        int minHash = getMinHash(x, y, range);
+        int maxHash = getMaxHash(x, y, range);
+
+        List&lt;GameObject&gt; results = new LinkedList&lt;GameObject&gt;();
+        results.addAll(objectMap.subMap(minHash, true, maxHash, true).values());
+
+
+        return results;
+    }
+
+
+    public static void addPlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException(&quot;player&quot;);
+        }
+
+
+        ActiveTile t = tile(player.getX(), player.getY());
+        t.addPlayer(player);
+    }
+
+
+    public static void addNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException(&quot;npc&quot;);
+        }
+
+
+        ActiveTile t = tile(npc.getX(), npc.getY());
+        t.addNpc(npc);
+    }
+
+
+    public static void addItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException(&quot;item&quot;);
+        }
+
+
+        ActiveTile t = tile(item.getX(), item.getY());
+        t.addItem(item);
+    }
+
+
+    public static void removePlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException(&quot;player&quot;);
+        }
+
+
+        ActiveTile t = tile(player.getX(), player.getY());
+        t.removePlayer(player);
+    }
+
+
+    public static void removeNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException(&quot;npc&quot;);
+        }
+
+
+        ActiveTile t = tile(npc.getX(), npc.getY());
+        t.removeNpc(npc);
+    }
+
+
+    public static void removeItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException(&quot;item&quot;);
+        }
+
+
+        ActiveTile t = tile(item.getX(), item.getY());
+        t.removeItem(item);
+    }
+
+
+    public static void addEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException(&quot;entity&quot;);
+        }
+
+
+        ActiveTile t = tile(entity.getX(), entity.getY());
+        entity.addToTile(t);
+    }
+
+
+    public static void removeEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException(&quot;entity&quot;);
+        }
+
+
+        ActiveTile t = tile(entity.getX(), entity.getY());
+        entity.removeFromTile(t);
+    }
+}
+[/code]
+
+
+[code]
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Bog standard ActiveTile.
+ * This implementation is NOT THREAD-SAFE.
+ *
+ * @author Lothy
+ */
+public final class ActiveTile implements Comparable&lt;ActiveTile&gt; {
+
+    private final int x;
+    private final int y;
+    private final int hash;
+
+    private List&lt;Player&gt; players = null;
+    private List&lt;Npc&gt; npcs = null;
+    private List&lt;Item&gt; items = null;
+
+    public ActiveTile(int x, int y) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid x: %d\n&quot;, x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format(&quot;Invalid y: %d\n&quot;, y));
+        }
+
+        this.x = x;
+        this.y = y;
+        this.hash = x &lt;&lt; 16 | y;
+    }
+
+    private List&lt;Player&gt; players() {
+        if (players == null) {
+            players = new LinkedList&lt;Player&gt;();
+        }
+
+        return players;
+    }
+
+    private List&lt;Npc&gt; npcs() {
+        if (npcs == null) {
+            npcs = new LinkedList&lt;Npc&gt;();
+        }
+
+        return npcs;
+    }
+
+    private List&lt;Item&gt; items() {
+        if (items == null) {
+            items = new LinkedList&lt;Item&gt;();
+        }
+
+        return items;
+    }
+
+    public List&lt;Player&gt; getPlayers() {
+        return players != null ? players : Collections.&lt;Player&gt;emptyList();
+    }
+
+    public List&lt;Npc&gt; getNpcs() {
+        return npcs != null ? npcs : Collections.&lt;Npc&gt;emptyList();
+    }
+
+    public List&lt;Item&gt; getItems() {
+        return items != null ? items : Collections.&lt;Item&gt;emptyList();
+    }
+
+    public boolean hasPlayers() {
+        return players != null &amp;&amp; players.size() &gt; 0;
+    }
+
+    public boolean hasNpcs() {
+        return npcs != null &amp;&amp; npcs.size() &gt; 0;
+    }
+
+    public boolean hasItems() {
+        return items != null &amp;&amp; items.size() &gt; 0;
+    }
+
+    public void addPlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException(&quot;player&quot;);
+        }
+
+        List&lt;Player&gt; players = players();
+        players.add(player);
+    }
+
+    public void addNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException(&quot;npc&quot;);
+        }
+
+        List&lt;Npc&gt; npcs = npcs();
+        npcs.add(npc);
+    }
+
+    public void addItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException(&quot;item&quot;);
+        }
+
+        List&lt;Item&gt; items = items();
+        items.add(item);
+    }
+
+    public void addEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException(&quot;entity&quot;);
+        }
+
+        entity.addToTile(this);
+    }
+
+    public void removePlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException(&quot;player&quot;);
+        }
+
+        List&lt;Player&gt; players = players();
+        players.remove(player);
+    }
+
+    public void removeNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException(&quot;npc&quot;);
+        }
+
+        List&lt;Npc&gt; npcs = npcs();
+        npcs.remove(npc);
+    }
+
+    public void removeItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException(&quot;item&quot;);
+        }
+
+        List&lt;Item&gt; items = items();
+        items.remove(item);
+    }
+
+    public void removeEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException(&quot;entity&quot;);
+        }
+
+        entity.removeFromTile(this);
+    }
+
+    public int getX() {
+        return x;
+    }
+
+    public int getY() {
+        return y;
+    }
+
+    @Override
+    public int hashCode() {
+        return hash;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null) {
+            return false;
+        }
+
+        if (o == this) {
+            return true;
+        }
+
+        if (!(o instanceof ActiveTile)) {
+            return false;
+        }
+
+        ActiveTile other = (ActiveTile) o;
+        return hash == other.hash;
+    }
+
+    @Override
+    public int compareTo(ActiveTile other) {
+        return compare(this, other);
+    }
+
+    public static int compare(ActiveTile x, ActiveTile y) {
+        return (x.hash &lt; y.hash) ? -1 : ((x.hash == y.hash) ? 0 : 1);
+    }
+}
+[/code]
+
+
+Functions that need to go in concrete implementations of the Entity class.
+[code]
+    public void addToTile(ActiveTile tile) {
+        throw new UnsupportedOperationException();
+        // Sample implementations for subclasses:
+        // Npc: tile.addNpc(this);
+        // Player: tile.addPlayer(this);
+        // etc
+    }
+
+    public void removeFromTile(ActiveTile tile) {
+        throw new UnsupportedOperationException();
+        // Sample implementations for subclasses:
+        // Npc: tile.removeNpc(this);
+        // Player: tile.removePlayer(this);
+        // etc
+    }
+[/code]</description>
+    
+    <lastBuildDate>Wed, 14 May 2014 08:08:21 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A new scalable region system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>You need a container object of some sort (i.e., ActiveTile is the popular name in RSC servers) because any given cartesian point can hold zero to many NPCs/players/items.<br>
+As you can see in the example, game objects don’t need to be contained within an ActiveTile. This is because precisely zero or one objects are situated on any given cartesian point, and the mapping can be direct as a result.</p>
+<p>The error-proneness is mostly an issue with object life-cycle. Specifically, people are storing references to things in too many locations and consequently the garbage cleaner isn’t getting it’s moment to shine.</p>
+<p>If you read the code you’ll see that there are no sectors/regions/etc. This implementation relies on the properties of tree data structures to efficiently obtain the relevant tiles.</p>
+<p><span class="bbcode-b">EDIT: By the way guys, this doesn’t work.</span><br>
+I was under the impression yesterday that I could fix it by mapping a cartesian point (instead of just a hash) to the tile. And then I figured my implementation of compareTo was poor, and responsible for the algorithm failing.<br>
+Anyway, I can’t think of a way to make this work using the above solution while still performing well.</p>
+<p>Perhaps a grid solution is the best approach. I might try my hand at implementing a quadtree solution over the weekend though, if I have time. Apparently grid solutions are better when entities are dispersed in a uniform manner, but quadtrees are better when that dispersal is less uniform (i.e., players and npcs more often than not form clusters).</p>
+<p>So yeah, ignore this and chalk it up to a naive attempt.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/4</link>
+        <pubDate>Wed, 14 May 2014 08:08:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543041-4</guid>
+        <source url="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041.rss">A new scalable region system</source>
+      </item>
+      <item>
+        <title>A new scalable region system</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>ActiveTiles are useless. Why are you still using them? You could just make a list of every entity in that specific region and it would save more memory and wouldn’t be so error prone. Tile values have to be saved for path finding like CodeForFame said, but ActiveTiles serve no purpose if you are splitting world down into sectors.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/3</link>
+        <pubDate>Tue, 13 May 2014 23:14:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543041-3</guid>
+        <source url="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041.rss">A new scalable region system</source>
+      </item>
+      <item>
+        <title>A new scalable region system</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>Bare minimum, you need to have TileValues in memory, for path finding. Though, I guess you could remove all tiles that don’t cause blocking.</p>
+<p>Also, just putting ActiveTiles in a normal collection that has them removed when there is nothing in them would save a lot of memory.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/2</link>
+        <pubDate>Tue, 13 May 2014 12:08:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543041-2</guid>
+        <source url="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041.rss">A new scalable region system</source>
+      </item>
+      <item>
+        <title>A new scalable region system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">EDIT: Aaaaaaand scratch that, I’ve got some of the arithmetic wrong. Sorry to get your hopes up. If you see a way to fix the bug though then by all means. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></span></p>
+<p>Hi guys. It’s been a while since I’ve contributed anything, so here’s a region manager that should scale quite well and is algorithmically simpler than previous implementations.</p>
+<p>Note that this implementation is not thread-safe.</p>
+<p>Currently untested. The idea behind this is sound though. It relies on range searches provided by concrete implementations of NavigableMap.</p>
+<p>For those who want to move away from having large numbers of tiles in memory, you could choose to have a tile check if it’s empty on any given remove operation. If it is empty, have it remove itself using the RegionManager.</p>
+<p>You could also implement things like sweeps. Add a lastUsed field to the ActiveTile, write a comparator that orders by this field (least recently used first). Add all tiles to a collection, sort the collection, loop through and remove tiles from the region. Break out of the loop when you hit the first tile that has been used more recently than the specified maximum unused period.</p>
+<pre><code class="lang-auto">import java.util.LinkedList;
+import java.util.List;
+import java.util.NavigableMap;
+import java.util.TreeMap;
+
+/**
+ * Region manager for obtaining tiles within view.
+ * This class is NOT THREAD-SAFE.
+ *
+ * @author Lothy
+ */
+public final class RegionManager {
+
+    private static final NavigableMap&lt;Integer, ActiveTile&gt; tileMap =
+            new TreeMap&lt;Integer, ActiveTile&gt;();
+
+    private static final NavigableMap&lt;Integer, GameObject&gt; objectMap =
+            new TreeMap&lt;Integer, GameObject&gt;();
+
+    private static int hash(int x, int y) {
+        return x &lt;&lt; 16 | y;
+    }
+
+    private static ActiveTile tile(int x, int y) {
+        int hash = hash(x, y);
+        ActiveTile t = tileMap.get(hash);
+
+        if (t == null) {
+            t = new ActiveTile(x, y);
+            tileMap.put(hash, t);
+        }
+
+        return t;
+    }
+
+    private static int getMinHash(int x, int y, int range) {
+        int minX = x - range &lt; 0 ? 0 : x - range;
+        int minY = y - range &lt; 0 ? 0 : y - range;
+        return hash(minX, minY);
+    }
+
+    private static int getMaxHash(int x, int y, int range) {
+        int maxX = x + range &gt;= Short.MAX_VALUE ? Short.MAX_VALUE - 1 : x + range;
+        int maxY = y + range &gt;= Short.MAX_VALUE ? Short.MAX_VALUE - 1 : y + range;
+        return hash(maxX, maxY);
+    }
+
+    /**
+     * Returns a list of all tiles that fall within the specified range
+     * of the specified cartesian point.
+     *
+     * @param x The cartesian x-ordinate
+     * @param y The cartesian y-ordinate
+     * @param range The range to search within
+     * @return All tiles that fall within the range, inclusive
+     */
+    public static List&lt;ActiveTile&gt; getTilesInRange(int x, int y, int range) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid x: %d\n", x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid y: %d\n", y));
+        }
+
+        if (range &lt; 0) {
+            throw new IllegalArgumentException("negative range");
+        }
+
+        int minHash = getMinHash(x, y, range);
+        int maxHash = getMaxHash(x, y, range);
+
+        List&lt;ActiveTile&gt; results = new LinkedList&lt;ActiveTile&gt;();
+        results.addAll(tileMap.subMap(minHash, true, maxHash, true).values());
+
+        return results;
+    }
+
+    /**
+     * Returns a list of all game objects that fall within the specified range
+     * of the specified cartesian point.
+     *
+     * @param x The cartesian x-ordinate
+     * @param y The cartesian y-ordinate
+     * @param range The range to search within
+     * @return All game objects that fall within the range, inclusive
+     */
+    public static List&lt;GameObject&gt; getGameObjectsInRange(int x, int y, int range) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid x: %d\n", x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid y: %d\n", y));
+        }
+
+        if (range &lt; 0) {
+            throw new IllegalArgumentException("negative range");
+        }
+
+        int minHash = getMinHash(x, y, range);
+        int maxHash = getMaxHash(x, y, range);
+
+        List&lt;GameObject&gt; results = new LinkedList&lt;GameObject&gt;();
+        results.addAll(objectMap.subMap(minHash, true, maxHash, true).values());
+
+
+        return results;
+    }
+
+
+    public static void addPlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException("player");
+        }
+
+
+        ActiveTile t = tile(player.getX(), player.getY());
+        t.addPlayer(player);
+    }
+
+
+    public static void addNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException("npc");
+        }
+
+
+        ActiveTile t = tile(npc.getX(), npc.getY());
+        t.addNpc(npc);
+    }
+
+
+    public static void addItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException("item");
+        }
+
+
+        ActiveTile t = tile(item.getX(), item.getY());
+        t.addItem(item);
+    }
+
+
+    public static void removePlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException("player");
+        }
+
+
+        ActiveTile t = tile(player.getX(), player.getY());
+        t.removePlayer(player);
+    }
+
+
+    public static void removeNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException("npc");
+        }
+
+
+        ActiveTile t = tile(npc.getX(), npc.getY());
+        t.removeNpc(npc);
+    }
+
+
+    public static void removeItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException("item");
+        }
+
+
+        ActiveTile t = tile(item.getX(), item.getY());
+        t.removeItem(item);
+    }
+
+
+    public static void addEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException("entity");
+        }
+
+
+        ActiveTile t = tile(entity.getX(), entity.getY());
+        entity.addToTile(t);
+    }
+
+
+    public static void removeEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException("entity");
+        }
+
+
+        ActiveTile t = tile(entity.getX(), entity.getY());
+        entity.removeFromTile(t);
+    }
+}</code></pre>
+<pre><code class="lang-auto">import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Bog standard ActiveTile.
+ * This implementation is NOT THREAD-SAFE.
+ *
+ * @author Lothy
+ */
+public final class ActiveTile implements Comparable&lt;ActiveTile&gt; {
+
+    private final int x;
+    private final int y;
+    private final int hash;
+
+    private List&lt;Player&gt; players = null;
+    private List&lt;Npc&gt; npcs = null;
+    private List&lt;Item&gt; items = null;
+
+    public ActiveTile(int x, int y) {
+        if (x &lt; 0 || x &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid x: %d\n", x));
+        }
+
+        if (y &lt; 0 || y &gt;= Short.MAX_VALUE) {
+            throw new IllegalArgumentException(String.format("Invalid y: %d\n", y));
+        }
+
+        this.x = x;
+        this.y = y;
+        this.hash = x &lt;&lt; 16 | y;
+    }
+
+    private List&lt;Player&gt; players() {
+        if (players == null) {
+            players = new LinkedList&lt;Player&gt;();
+        }
+
+        return players;
+    }
+
+    private List&lt;Npc&gt; npcs() {
+        if (npcs == null) {
+            npcs = new LinkedList&lt;Npc&gt;();
+        }
+
+        return npcs;
+    }
+
+    private List&lt;Item&gt; items() {
+        if (items == null) {
+            items = new LinkedList&lt;Item&gt;();
+        }
+
+        return items;
+    }
+
+    public List&lt;Player&gt; getPlayers() {
+        return players != null ? players : Collections.&lt;Player&gt;emptyList();
+    }
+
+    public List&lt;Npc&gt; getNpcs() {
+        return npcs != null ? npcs : Collections.&lt;Npc&gt;emptyList();
+    }
+
+    public List&lt;Item&gt; getItems() {
+        return items != null ? items : Collections.&lt;Item&gt;emptyList();
+    }
+
+    public boolean hasPlayers() {
+        return players != null &amp;&amp; players.size() &gt; 0;
+    }
+
+    public boolean hasNpcs() {
+        return npcs != null &amp;&amp; npcs.size() &gt; 0;
+    }
+
+    public boolean hasItems() {
+        return items != null &amp;&amp; items.size() &gt; 0;
+    }
+
+    public void addPlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException("player");
+        }
+
+        List&lt;Player&gt; players = players();
+        players.add(player);
+    }
+
+    public void addNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException("npc");
+        }
+
+        List&lt;Npc&gt; npcs = npcs();
+        npcs.add(npc);
+    }
+
+    public void addItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException("item");
+        }
+
+        List&lt;Item&gt; items = items();
+        items.add(item);
+    }
+
+    public void addEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException("entity");
+        }
+
+        entity.addToTile(this);
+    }
+
+    public void removePlayer(Player player) {
+        if (player == null) {
+            throw new NullPointerException("player");
+        }
+
+        List&lt;Player&gt; players = players();
+        players.remove(player);
+    }
+
+    public void removeNpc(Npc npc) {
+        if (npc == null) {
+            throw new NullPointerException("npc");
+        }
+
+        List&lt;Npc&gt; npcs = npcs();
+        npcs.remove(npc);
+    }
+
+    public void removeItem(Item item) {
+        if (item == null) {
+            throw new NullPointerException("item");
+        }
+
+        List&lt;Item&gt; items = items();
+        items.remove(item);
+    }
+
+    public void removeEntity(Entity entity) {
+        if (entity == null) {
+            throw new NullPointerException("entity");
+        }
+
+        entity.removeFromTile(this);
+    }
+
+    public int getX() {
+        return x;
+    }
+
+    public int getY() {
+        return y;
+    }
+
+    @Override
+    public int hashCode() {
+        return hash;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null) {
+            return false;
+        }
+
+        if (o == this) {
+            return true;
+        }
+
+        if (!(o instanceof ActiveTile)) {
+            return false;
+        }
+
+        ActiveTile other = (ActiveTile) o;
+        return hash == other.hash;
+    }
+
+    @Override
+    public int compareTo(ActiveTile other) {
+        return compare(this, other);
+    }
+
+    public static int compare(ActiveTile x, ActiveTile y) {
+        return (x.hash &lt; y.hash) ? -1 : ((x.hash == y.hash) ? 0 : 1);
+    }
+}</code></pre>
+<p>Functions that need to go in concrete implementations of the Entity class.</p>
+<pre><code class="lang-auto">    public void addToTile(ActiveTile tile) {
+        throw new UnsupportedOperationException();
+        // Sample implementations for subclasses:
+        // Npc: tile.addNpc(this);
+        // Player: tile.addPlayer(this);
+        // etc
+    }
+
+    public void removeFromTile(ActiveTile tile) {
+        throw new UnsupportedOperationException();
+        // Sample implementations for subclasses:
+        // Npc: tile.removeNpc(this);
+        // Player: tile.removePlayer(this);
+        // etc
+    }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041/1</link>
+        <pubDate>Tue, 13 May 2014 11:40:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543041-1</guid>
+        <source url="https://forum.moparisthebest.com/t/a-new-scalable-region-system/543041.rss">A new scalable region system</source>
+      </item>
+  </channel>
+</rss>

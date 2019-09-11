@@ -1,0 +1,417 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>VERY good aid with hooking fields</title>
+    <link>https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068</link>
+    <description>I made this today, the sample main method in FieldHooker hooks a method that uses all three minimap ints. I&#39;m quite proud of it. Please post your thoughts on it. By the way, the argument that you need to provide is the rs version. This assumes that you have your rs classes stored i n /rs(versionnumber)/
+[code=java]import org.apache.bcel.generic.ClassGen;
+import org.apache.bcel.classfile.ClassParser;
+import java.io.File;
+import java.util.ArrayList;
+
+public class FieldHooker {
+    public static void main(String[] args) throws Exception{
+        MethodSearcher m = new MethodSearcher(unpack(Integer.parseInt(args[0])));
+        ArrayList&lt;String&gt; hash1 = new ArrayList&lt;String&gt;();
+        ArrayList&lt;String&gt; hash2 = new ArrayList&lt;String&gt;();
+        ArrayList&lt;String&gt; hash3 = new ArrayList&lt;String&gt;();
+        for(InstructionSearcher s : m.searchForSIPUSH(&quot;undefined&quot;, 2047))
+            hash1.add(s.toString());
+        for(InstructionSearcher s : m.searchForSIPUSH(&quot;undefined&quot;, 151))
+            hash2.add(s.toString());
+        for(InstructionSearcher s : m.searchForSIPUSH(&quot;undefined&quot;, 464))
+            hash3.add(s.toString());
+        for(String s : getCommon(hash1, hash2, hash3))
+            System.out.println(s);
+    }
+    private static ArrayList&lt;String&gt; getCommon(ArrayList&lt;String&gt;... maps){
+        ArrayList&lt;String&gt; a = new ArrayList&lt;String&gt;();
+        for(ArrayList&lt;String&gt; map : maps){
+            for(String s : map){
+                boolean add = true;
+                for(ArrayList&lt;String&gt; hm : maps){
+                    if(!hm.contains(s))
+                        add = false;
+                }
+                if(add &amp;&amp; !a.contains(s))
+                    a.add(s);
+            }
+        }
+        return a;
+    }
+
+    private static ClassGen[] unpack(int vernum) throws Exception{
+        File f = new File(System.getProperty(&quot;user.dir&quot;)+&quot;\\rs&quot;+vernum);
+        ClassGen[] c = new ClassGen[f.list().length];
+        for(int i = 0; i &lt; c.length; i++)
+            c[i] = new ClassGen(new ClassParser(f.getName()+&quot;\\&quot;+f.list()[i]).parse());
+        System.out.println(&quot;Loaded &quot;+c.length+&quot; classes.&quot;);
+        return c;
+    }
+}
+[/code][code=java]import org.apache.bcel.classfile.Method;
+import org.apache.bcel.generic.ClassGen;
+import org.apache.bcel.generic.ConstantPoolGen;
+import java.util.ArrayList;
+
+public class MethodSearcher {
+    private ArrayList&lt;ClassGen&gt; classes;
+    public ArrayList&lt;InstructionSearcher&gt; searchForField(String cname, String name, String sig){
+        ArrayList&lt;InstructionSearcher&gt; ret = new ArrayList&lt;InstructionSearcher&gt;();
+        for(ClassGen cg : classes){
+            ConstantPoolGen cpg = cg.getConstantPool();
+            if(cpg.lookupFieldref(cname, name, sig) != -1){
+                for(Method m : cg.getMethods()){
+                    InstructionSearcher s = new InstructionSearcher(cg, m);
+                    if(s.hasFieldInstruction(cname, name, sig))
+                        ret.add(s);
+                }
+            }
+        }
+        return ret;
+    }
+    public ArrayList&lt;InstructionSearcher&gt; searchForLDC(String methodname, int x){
+        ArrayList&lt;InstructionSearcher&gt; ret = new ArrayList&lt;InstructionSearcher&gt;();
+        for(ClassGen cg : classes){
+            ConstantPoolGen cpg = cg.getConstantPool();
+            if(cpg.lookupInteger(x) != -1){
+                for(Method m : cg.getMethods()){
+                    if(m.getName().equals(methodname) || methodname.equals(&quot;undefined&quot;)){
+                        InstructionSearcher s = new InstructionSearcher(cg, m);
+                        if(s.hasLDC(x))
+                            ret.add(s);
+                    }
+                }
+            }
+        }
+        return ret;
+    }
+    public ArrayList&lt;InstructionSearcher&gt; searchForSIPUSH(String methodname, int x){
+        ArrayList&lt;InstructionSearcher&gt; ret = new ArrayList&lt;InstructionSearcher&gt;();
+        for(ClassGen cg : classes){
+            for(Method m : cg.getMethods()){
+                if(m.getName().equals(methodname) || methodname.equals(&quot;undefined&quot;)){
+                    try{
+                        InstructionSearcher s = new InstructionSearcher(cg, m);
+                        if(s.hasSIPUSH(x))
+                            ret.add(s);
+                    }
+                    catch(Exception e){}
+                }
+            }
+        }
+        return ret;
+    }
+    public ArrayList&lt;InstructionSearcher&gt; searchForSequence(String methodname, String sequence){
+        ArrayList&lt;InstructionSearcher&gt; ret = new ArrayList&lt;InstructionSearcher&gt;();
+        for(ClassGen cg : classes){
+            for(Method m : cg.getMethods()){
+                if(m.getName().equals(methodname) || methodname.equals(&quot;undefined&quot;)){
+                    try{
+                        InstructionSearcher s = new InstructionSearcher(cg, m);
+                        if(s.hasSequence(sequence))
+                            ret.add(s);
+                    }
+                    catch(Exception e){}
+                }
+            }
+        }
+        return ret;
+    }
+    public MethodSearcher(ClassGen[] cs){
+        classes = new ArrayList&lt;ClassGen&gt;();
+        for(ClassGen cg : cs)
+            classes.add(cg);
+    }
+}[/code][code=java]import org.apache.bcel.generic.*;
+import org.apache.bcel.classfile.Method;
+import org.apache.bcel.util.InstructionFinder;
+
+public class InstructionSearcher {
+    private Instruction[] instructions;
+    private ConstantPoolGen cpg;
+    private String classname;
+    private String methodname;
+    private String sig;
+    private boolean isstatic;
+    public InstructionSearcher(ClassGen cg, Method m){
+        this.instructions = new MethodGen(m, cg.getClassName(), cg.getConstantPool()).getInstructionList().getInstructions();
+        this.cpg = cg.getConstantPool();
+        this.methodname = m.getName();
+        this.classname = cg.getClassName();
+        this.sig = m.getSignature();
+        this.isstatic = m.isStatic();
+    }
+    public boolean hasFieldInstruction(String cname, String name, String sig){
+        for(Instruction i : instructions){
+            if(i instanceof FieldInstruction){
+                FieldInstruction fi = (FieldInstruction)i;
+                String cn = fi.getReferenceType(cpg).toString();
+                String fn = fi.getFieldName(cpg);
+                String s = fi.getSignature(cpg);
+                if(s.equals(sig) &amp;&amp; cn.equals(cname) &amp;&amp; fn.equals(name))
+                    return true;
+            }
+        }
+        return false;
+    }
+    public boolean hasLDC(int x){
+        for(Instruction i : instructions){
+            if(i instanceof LDC){
+                LDC l = (LDC)i;
+                if(l.getValue(cpg) instanceof Integer &amp;&amp; (Integer)l.getValue(cpg) == x)
+                    return true;
+            }
+        }
+        return false;
+    }
+    public boolean hasSIPUSH(int x){
+        for(Instruction i : instructions){
+            if(i instanceof SIPUSH){
+                SIPUSH l = (SIPUSH)i;
+                if(l.getValue().intValue() == x)
+                    return true;
+            }
+        }
+        return false;
+    }
+    public boolean hasSequence(String sequence){
+        InstructionList ilist = new InstructionList();
+        for(Instruction i : instructions)
+            ilist.append(i);
+        return new InstructionFinder(ilist).search(sequence).hasNext();
+    }
+    public String toString(){
+        return classname+&quot;.&quot;+methodname+&quot;:&quot;+sig+&quot;:&quot;+instructions.length+&quot;:&quot;+isstatic;
+    }
+}[/code]</description>
+    
+    <lastBuildDate>Thu, 28 Jun 2007 07:48:32 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>VERY good aid with hooking fields</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>Nice job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>-Mh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/3</link>
+        <pubDate>Thu, 28 Jun 2007 07:48:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-117068-3</guid>
+        <source url="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068.rss">VERY good aid with hooking fields</source>
+      </item>
+      <item>
+        <title>VERY good aid with hooking fields</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>good job</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/2</link>
+        <pubDate>Wed, 27 Jun 2007 19:52:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-117068-2</guid>
+        <source url="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068.rss">VERY good aid with hooking fields</source>
+      </item>
+      <item>
+        <title>VERY good aid with hooking fields</title>
+        <dc:creator><![CDATA[@Silver_Lining Silver Lining]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silver_lining">@Silver_Lining</a> wrote:</p>
+          <blockquote>
+              <p>I made this today, the sample main method in FieldHooker hooks a method that uses all three minimap ints. I’m quite proud of it. Please post your thoughts on it. By the way, the argument that you need to provide is the rs version. This assumes that you have your rs classes stored i n /rs(versionnumber)/</p>
+<p>[code=java]import org.apache.bcel.generic.ClassGen;<br>
+import org.apache.bcel.classfile.ClassParser;<br>
+import java.io.File;<br>
+import java.util.ArrayList;</p>
+<p>public class FieldHooker {<br>
+public static void main(String[] args) throws Exception{<br>
+MethodSearcher m = new MethodSearcher(unpack(Integer.parseInt(args[0])));<br>
+ArrayList hash1 = new ArrayList();<br>
+ArrayList hash2 = new ArrayList();<br>
+ArrayList hash3 = new ArrayList();<br>
+for(InstructionSearcher s : m.searchForSIPUSH(“undefined”, 2047))<br>
+hash1.add(s.toString());<br>
+for(InstructionSearcher s : m.searchForSIPUSH(“undefined”, 151))<br>
+hash2.add(s.toString());<br>
+for(InstructionSearcher s : m.searchForSIPUSH(“undefined”, 464))<br>
+hash3.add(s.toString());<br>
+for(String s : getCommon(hash1, hash2, hash3))<br>
+System.out.println(s);<br>
+}<br>
+private static ArrayList getCommon(ArrayList… maps){<br>
+ArrayList a = new ArrayList();<br>
+for(ArrayList map : maps){<br>
+for(String s : map){<br>
+boolean add = true;<br>
+for(ArrayList hm : maps){<br>
+if(!hm.contains(s))<br>
+add = false;<br>
+}<br>
+if(add &amp;&amp; !a.contains(s))<br>
+a.add(s);<br>
+}<br>
+}<br>
+return a;<br>
+}</p>
+<pre><code>private static ClassGen[] unpack(int vernum) throws Exception{
+    File f = new File(System.getProperty("user.dir")+"\\rs"+vernum);
+    ClassGen[] c = new ClassGen[f.list().length];
+    for(int i = 0; i &lt; c.length; i++)
+        c[i] = new ClassGen(new ClassParser(f.getName()+"\\"+f.list()[i]).parse());
+    System.out.println("Loaded "+c.length+" classes.");
+    return c;
+}
+</code></pre>
+<p>}<br>
+[/code][code=java]import org.apache.bcel.classfile.Method;<br>
+import org.apache.bcel.generic.ClassGen;<br>
+import org.apache.bcel.generic.ConstantPoolGen;<br>
+import java.util.ArrayList;</p>
+<p>public class MethodSearcher {<br>
+private ArrayList classes;<br>
+public ArrayList searchForField(String cname, String name, String sig){<br>
+ArrayList ret = new ArrayList();<br>
+for(ClassGen cg : classes){<br>
+ConstantPoolGen cpg = cg.getConstantPool();<br>
+if(cpg.lookupFieldref(cname, name, sig) != -1){<br>
+for(Method m : cg.getMethods()){<br>
+InstructionSearcher s = new InstructionSearcher(cg, m);<br>
+if(s.hasFieldInstruction(cname, name, sig))<br>
+ret.add(s);<br>
+}<br>
+}<br>
+}<br>
+return ret;<br>
+}<br>
+public ArrayList searchForLDC(String methodname, int x){<br>
+ArrayList ret = new ArrayList();<br>
+for(ClassGen cg : classes){<br>
+ConstantPoolGen cpg = cg.getConstantPool();<br>
+if(cpg.lookupInteger(x) != -1){<br>
+for(Method m : cg.getMethods()){<br>
+if(m.getName().equals(methodname) || methodname.equals(“undefined”)){<br>
+InstructionSearcher s = new InstructionSearcher(cg, m);<br>
+if(s.hasLDC(x))<br>
+ret.add(s);<br>
+}<br>
+}<br>
+}<br>
+}<br>
+return ret;<br>
+}<br>
+public ArrayList searchForSIPUSH(String methodname, int x){<br>
+ArrayList ret = new ArrayList();<br>
+for(ClassGen cg : classes){<br>
+for(Method m : cg.getMethods()){<br>
+if(m.getName().equals(methodname) || methodname.equals(“undefined”)){<br>
+try{<br>
+InstructionSearcher s = new InstructionSearcher(cg, m);<br>
+if(s.hasSIPUSH(x))<br>
+ret.add(s);<br>
+}<br>
+catch(Exception e){}<br>
+}<br>
+}<br>
+}<br>
+return ret;<br>
+}<br>
+public ArrayList searchForSequence(String methodname, String sequence){<br>
+ArrayList ret = new ArrayList();<br>
+for(ClassGen cg : classes){<br>
+for(Method m : cg.getMethods()){<br>
+if(m.getName().equals(methodname) || methodname.equals(“undefined”)){<br>
+try{<br>
+InstructionSearcher s = new InstructionSearcher(cg, m);<br>
+if(s.hasSequence(sequence))<br>
+ret.add(s);<br>
+}<br>
+catch(Exception e){}<br>
+}<br>
+}<br>
+}<br>
+return ret;<br>
+}<br>
+public MethodSearcher(ClassGen[] cs){<br>
+classes = new ArrayList();<br>
+for(ClassGen cg : cs)<br>
+classes.add(cg);<br>
+}<br>
+}[/code][code=java]import org.apache.bcel.generic.*;<br>
+import org.apache.bcel.classfile.Method;<br>
+import org.apache.bcel.util.InstructionFinder;</p>
+<p>public class InstructionSearcher {<br>
+private Instruction[] instructions;<br>
+private ConstantPoolGen cpg;<br>
+private String classname;<br>
+private String methodname;<br>
+private String sig;<br>
+private boolean isstatic;<br>
+public InstructionSearcher(ClassGen cg, Method m){<br>
+this.instructions = new MethodGen(m, cg.getClassName(), cg.getConstantPool()).getInstructionList().getInstructions();<br>
+this.cpg = cg.getConstantPool();<br>
+this.methodname = m.getName();<br>
+this.classname = cg.getClassName();<br>
+this.sig = m.getSignature();<br>
+this.isstatic = m.isStatic();<br>
+}<br>
+public boolean hasFieldInstruction(String cname, String name, String sig){<br>
+for(Instruction i : instructions){<br>
+if(i instanceof FieldInstruction){<br>
+FieldInstruction fi = (FieldInstruction)i;<br>
+String cn = fi.getReferenceType(cpg).toString();<br>
+String fn = fi.getFieldName(cpg);<br>
+String s = fi.getSignature(cpg);<br>
+if(s.equals(sig) &amp;&amp; cn.equals(cname) &amp;&amp; fn.equals(name))<br>
+return true;<br>
+}<br>
+}<br>
+return false;<br>
+}<br>
+public boolean hasLDC(int x){<br>
+for(Instruction i : instructions){<br>
+if(i instanceof LDC){<br>
+LDC l = (LDC)i;<br>
+if(l.getValue(cpg) instanceof Integer &amp;&amp; (Integer)l.getValue(cpg) == x)<br>
+return true;<br>
+}<br>
+}<br>
+return false;<br>
+}<br>
+public boolean hasSIPUSH(int x){<br>
+for(Instruction i : instructions){<br>
+if(i instanceof SIPUSH){<br>
+SIPUSH l = (SIPUSH)i;<br>
+if(l.getValue().intValue() == x)<br>
+return true;<br>
+}<br>
+}<br>
+return false;<br>
+}<br>
+public boolean hasSequence(String sequence){<br>
+InstructionList ilist = new InstructionList();<br>
+for(Instruction i : instructions)<br>
+ilist.append(i);<br>
+return new InstructionFinder(ilist).search(sequence).hasNext();<br>
+}<br>
+public String toString(){<br>
+return classname+"."+methodname+":"+sig+":"+instructions.length+":"+isstatic;<br>
+}<br>
+}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068/1</link>
+        <pubDate>Wed, 27 Jun 2007 06:44:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-117068-1</guid>
+        <source url="https://forum.moparisthebest.com/t/very-good-aid-with-hooking-fields/117068.rss">VERY good aid with hooking fields</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,955 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Border/Boundary System + Weather Implementation</title>
+    <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172</link>
+    <description>[CENTER][url=http://i.imgur.com/bADk2FA.jpg][img]http://puu.sh/m4tgi/d9438f48c8.png[/img][/url]
+[SIZE=1]What a bored Arham does when he has no computer but is in the programming mood. &lt;click image for full size&gt;[/SIZE][/CENTER]
+
+So recently I&#39;ve been wanting to add a Boundary system that would allow us to mark some regions and make only members be able to walk on it (rather than the typical &quot;donator island&quot;). Then I figured I&#39;d extend the system to be able to support Weather when I began to re-read the [url=https://www.moparisthebest.com/smf/index.php/topic,666574.msg4457414.html#msg4457414]interesting thread we had here a year back[/url]. Thus, came this.
+
+[hr]
+[B]My request from you...[/B]
+
+Provide some feedback to the code. I know alot of the places where the code is quite bad or uses too much memory, but I simply don&#39;t know how to make it better, so offer your suggestions!
+[hr]
+[B]*Keep note, the base used is Hyperion, so other bases will need a little bit of modifications for this to work.*[/B]
+
+First, lets make the JSON file. Put this in the directory you see fit.
+[code=JSON]
+[
+  {
+    &quot;identification&quot;: &quot;Lumbridge&quot;,
+    &quot;topRightLocation&quot;: {
+      &quot;x&quot;: 3244,
+      &quot;y&quot;: 3308,
+      &quot;z&quot;: 0
+    },
+    &quot;bottomLeftLocation&quot;: {
+      &quot;x&quot;: 3150,
+      &quot;y&quot;: 3197,
+      &quot;z&quot;: 0
+    },
+    &quot;premiumOnly&quot;: false,
+    &quot;staticWeather&quot;: false
+  }
+]
+[/code]
+Name this file [I]borders.json[/I]
+
+This is our data. The data is quite straightforward; you identify the region both as an ease of use to you and also to extend if you&#39;d like to later on. The top right and bottom left locations are the primary &quot;borders&quot; of the area. The premiumOnly boolean is if this is only for donators. And the staticWeather is for our weather system, which basically if set to true will never change the weather of a boundary.
+
+Make a new package called border in wherever the entities are. There, make [I]BorderManager.java[/I] and add this.
+[code=java]
+package org.hyperion.rs2.model.border;
+
+import com.google.gson.*;
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.Player;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.logging.Logger;
+
+/**
+ * Created by Arham on 12/21/2015.
+ */
+public class BorderManager {
+
+    /**
+     * The logger for this class.
+     */
+    private static final Logger logger = Logger.getLogger(BorderManager.class.getName());
+
+    /**
+     * All the borders.
+     */
+    private static List&lt;Border&gt; borderList = new ArrayList&lt;&gt;();
+
+    /**
+     * Loads borders from the borders.json file.
+     */
+    public static void loadBorders() {
+        JsonParser parser = new JsonParser();
+        try {
+            JsonArray array = (JsonArray) parser.parse(new FileReader(new File(&quot;./data/player/borders.json&quot;)));
+            final Gson builder = new GsonBuilder().create();
+
+            for (int i = 0; i &lt; array.size(); i++) {
+                JsonObject reader = (JsonObject) array.get(i);
+
+                String identification = reader.get(&quot;identification&quot;).getAsString();
+                Location topRightLocation = builder.fromJson(reader.get(&quot;topRightLocation&quot;).getAsJsonObject(), Location.class);
+                Location bottomLeftLocation = builder.fromJson(reader.get(&quot;bottomLeftLocation&quot;).getAsJsonObject(), Location.class);
+                boolean premiumOnly = reader.get(&quot;premiumOnly&quot;).getAsBoolean();
+                boolean staticWeather = reader.get(&quot;staticWeather&quot;).getAsBoolean();
+
+                Border border = new Border(identification, topRightLocation, bottomLeftLocation, premiumOnly, staticWeather);
+                borderList.add(border);
+            }
+
+            logger.info(&quot;Successfully loaded &quot; + array.size() + &quot; borders.&quot;);
+        } catch (JsonIOException | JsonSyntaxException | FileNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Handles the actions to be done when walking.
+     *
+     * @param player      The Player who walked.
+     * @param endLocation Where the player is walking to.
+     * @return If the player is allowed to walk.
+     */
+    public static boolean onWalk(Player player, Location endLocation) {
+        for (Border border : borderList)
+            if (border.isInBorder(player.getLocation()))
+                return border.onWalk(player, endLocation);
+        return true;
+    }
+
+    /**
+     * Gets all the borders in the List.
+     *
+     * @return the borders
+     */
+    public static List&lt;Border&gt; getBorderList() {
+        return borderList;
+    }
+
+    /**
+     * Generates a random weather pattern to assign to a border.
+     *
+     * @return A random weather pattern.
+     */
+    public static Weather getRandomWeather() {
+        return Weather.values()[new Random().nextInt(Weather.values().length - 1)];
+    }
+
+    /**
+     * Checks if the location is in the border.
+     *
+     * @param location The location to check.
+     * @return if the location is in the border.
+     */
+    public static boolean isInBorder(Location location) {
+        boolean inBorder = false;
+        for (Border border : borderList)
+            if (border.isInBorder(location))
+                inBorder = true;
+        return inBorder;
+    }
+
+    /**
+     * Handles the measures to take when somebody does soemthing like walk in the border.
+     *
+     * @param player The &quot;somebody&quot;
+     * @param x      What X coordinate are they at, or going to?
+     * @param y      What Y coordinate are they at, or going to?
+     * @return Sent for the walking, to say if the player can walk in the border.
+     */
+    public static boolean handleWorldAction(Player player, int x, int y) {
+        if (!BorderManager.isInBorder(player.getLocation())) {
+            player.getActionSender().sendWalkableInterface(-1);
+        } else {
+            if (!BorderManager.onWalk(player, Location.create(x, y, player.getLocation().getZ()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+[/code]
+
+This right here not only loads our data, but also holds the new borders made from the data and also handles all the reaction within the border. To keep this anonymous, rather than forcing the user to extend every border, a lot of repetition is done.
+
+Next, in the same package, make [I]Border.java[/I] and add this in it.
+[code=java]
+package org.hyperion.rs2.model.border;
+
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.Player;
+import org.hyperion.util.Debugger;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Created by Arham on 12/21/2015.
+ */
+public class Border {
+
+    /**
+     * What identifies the, otherwise, anonymous Border.
+     */
+    private String identification;
+
+    /**
+     * The two primary border locations.
+     */
+    private Location topRightLocation, bottomLeftLocation;
+
+    /**
+     * The configurations for the Border.
+     */
+    private boolean premiumOnly, staticWeather;
+
+    /**
+     * The weather within the Border.
+     */
+    private Weather weather = Weather.SUNNY;
+
+    /**
+     * The players within the Border.
+     */
+    private List&lt;Player&gt; playersInBorder = new ArrayList&lt;&gt;();
+
+    /**
+     * Represents a single Border.
+     */
+    public Border(String identification, Location topRightLocation, Location bottomLeftLocation, boolean premiumOnly, boolean staticWeather) {
+        this.identification = identification;
+        this.topRightLocation = topRightLocation;
+        this.bottomLeftLocation = bottomLeftLocation;
+        this.premiumOnly = premiumOnly;
+        this.staticWeather = staticWeather;
+    }
+
+    /**
+     * What the Border does when somebody walks. This is the actual functionality of the BorderManager.onWalk() boolean.
+     *
+     * @param player      The Player walking.
+     * @param endLocation Where the Player is walking to.
+     * @return If the Player can walk.
+     */
+    public boolean onWalk(Player player, Location endLocation) {
+        boolean inBorderList = false;
+        for (Player playerInBorder : playersInBorder)
+            if (playerInBorder.getClientIndex() == player.getClientIndex())
+                inBorderList = true;
+        if (!inBorderList) {
+            playersInBorder.add(player);
+            Debugger.println(&quot;Added new player, &quot; + player.getName() + &quot;, to &quot; + identification + &quot;.&quot;);
+        }
+        if (!staticWeather) {
+            switch (weather) {
+                case SNOWY:
+                    player.getActionSender().sendWalkableInterface(11877);
+                    Debugger.println(&quot;Snowy walkable interface initiated.&quot;);
+                    break;
+                case RAINY:
+                    //TODO
+                    player.getActionSender().sendWalkableInterface(-1);
+                    Debugger.println(&quot;Rainy walkable interface initiated.&quot;);
+                    break;
+                case SUNNY:
+                    player.getActionSender().sendWalkableInterface(-1);
+                    Debugger.println(&quot;Sunny walkable interface initiated.&quot;);
+                    break;
+            }
+        }
+        if (!isInBorder(endLocation)) {
+            playersInBorder.remove(player);
+            Debugger.println(&quot;Removed player, &quot; + player.getName() + &quot;, from &quot; + identification + &quot;.&quot;);
+        }
+        return !premiumOnly;
+    }
+
+    /**
+     * Checks if the Location is in the Border. This is the actual functionality of the BorderManager.isInBorder() boolean.
+     *
+     * @param compare The location to check.
+     * @return if the Location is in the Border.
+     */
+    public boolean isInBorder(Location compare) {
+        return compare.getX() &gt;= getBottomLeftLocation().getX() &amp;&amp; compare.getX() &lt;= getTopRightLocation().getX() &amp;&amp; compare.getY() &gt;= getBottomLeftLocation().getY() &amp;&amp; compare.getY() &lt;= getTopRightLocation().getY();
+    }
+
+    /**
+     * Sets the Weather of the Border via WeatherTask.
+     *
+     * @param weather The Weather the Border is being set to.
+     */
+    public void setWeather(Weather weather) {
+        this.weather = weather;
+    }
+
+    public Location getTopRightLocation() {
+        return topRightLocation;
+    }
+
+    public Location getBottomLeftLocation() {
+        return bottomLeftLocation;
+    }
+
+    public List&lt;Player&gt; getPlayersInBorder() {
+        return playersInBorder;
+    }
+}
+[/code]
+
+This is one of your data in [I]borders.json[/I] that is constructed to be a fully functional boundary in the game that is configurable. The onWalk boolean is what is the main &quot;action&quot; part of this, as it, based on the randomly assigned weather, sends the appropriate visual affect of the border, as well as marking the player as &quot;in the border&quot; and &quot;out the border.&quot;
+
+[hr]
+[B]Next, the weather system that extends this.[/B]
+
+In the same package, make [I]Weather.java[/I] and add this in it:
+[code=java]
+package org.hyperion.rs2.model.border;
+
+/**
+ * Created by Arham on 12/21/2015.
+ * &lt;p&gt;
+ * The weather patterns.
+ */
+public enum Weather {
+    SNOWY, RAINY, SUNNY
+}
+[/code]
+This is the weather patterns in the server. Remember onWalk in Boundary? Yeah, the switch statement uses the values in this enum.
+
+Now, go to your event manager and make a new event. Name it [I]WeatherEvent.java[/I] and add this in it:
+[code=java]
+package org.hyperion.rs2.event.impl;
+
+import org.hyperion.rs2.Constants;
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.World;
+import org.hyperion.rs2.task.impl.AutoSaveTask;
+import org.hyperion.rs2.task.impl.WeatherTask;
+
+/**
+ * Automatically assigns all the borders a new weather.
+ * @author Arham 4
+ */
+public class WeatherEvent extends Event {
+
+    /**
+     * The delay in milliseconds between save. Currently set at 5 minutes. 1
+     * second = 1,000 milliseconds.
+     */
+    public static final int WEATHER_CYCLE_TIME = Constants.DEBUG ? 30000 : 1800000;
+
+    /**
+     * Creates the auto save event to run every 5 minutes.
+     */
+    public WeatherEvent() {
+        super(WEATHER_CYCLE_TIME);
+    }
+
+    @Override
+    public void execute() {
+        World.getWorld().submit(new WeatherTask());
+    }
+}
+[/code]
+
+This event initializes the task to reassign the world&#39;s weather.
+
+In your task system, make a new file called [I]WeatherTask.java[/I] and add this in it:
+[code=java]
+package org.hyperion.rs2.task.impl;
+
+import org.hyperion.rs2.GameEngine;
+import org.hyperion.rs2.model.Player;
+import org.hyperion.rs2.model.World;
+import org.hyperion.rs2.model.border.Border;
+import org.hyperion.rs2.model.border.BorderManager;
+import org.hyperion.rs2.model.border.Weather;
+import org.hyperion.rs2.task.Task;
+import org.hyperion.util.Debugger;
+
+/**
+ * Changes all the borders&#39; weather.
+ *
+ * @author Arham 4
+ */
+public class WeatherTask implements Task {
+
+    @Override
+    public void execute(GameEngine context) {
+        context.submitWork(() -&gt; {
+            for (Border border : BorderManager.getBorderList()) {
+                Weather weather = BorderManager.getRandomWeather();
+                border.setWeather(weather);
+                for (Player playerInBorder : border.getPlayersInBorder()) {
+                    BorderManager.handleWorldAction(playerInBorder, playerInBorder.getLocation().getX(), playerInBorder.getLocation().getY());
+                }
+                Debugger.println(weather.toString());
+            }
+        });
+    }
+
+}
+[/code]
+This loops through all the borders in the game and reassigns the weather, then fetches the players in the border and initializes the infamous handleWorldAction() method.
+
+[hr]
+[B]Adding functionality to the system.[/B]
+
+Get used to the handleWorldAction() method, you&#39;ll be seeing it a lot. Its function is just as the method comment says:
+[code=java]
+    /**
+     * Handles the measures to take when somebody does soemthing like walk in the border.
+     *
+     * @param player The &quot;somebody&quot;
+     * @param x      What X coordinate are they at, or going to?
+     * @param y      What Y coordinate are they at, or going to?
+     * @return Sent for the walking, to say if the player can walk in the border.
+     */
+[/code]
+
+Wherever you handle logging in and assigning the variables (like sending the map region), add this:
+[code=java]
+			BorderManager.handleWorldAction(player, player.getLocation().getX(), player.getLocation().getY());
+[/code]
+Wherever walking is handled, add this when the data is read, but before it is being used:
+[code=java]
+		if (!BorderManager.handleWorldAction(player, firstX, firstY))
+			return;
+[/code]
+
+Yay for functionality!!
+
+[img]http://puu.sh/m4svZ/9160c1ec08.jpg[/img]
+
+[hr]
+
+[B]TODO:[/B]
+
+[ul][*]Make this &quot;extensible.&quot;
+[*]Make an onLogin() method which transfers the user back to default spawn location if they are in a region that is premium-only.
+[*]Make the premium rank actually corrispond in the onWalk boolean.
+[*]Is there a raining interface at all?
+[*]Make a custom packet send to change the floor terrain of the border.
+[*]Day and Night?
+[*]Make the actions as stated in the original idea for the weather system functional (i.e. more fish on rainy days, less wood on snowy days).
+[*]Decouple the walking from the border system.
+[*]Make each &quot;extenction&quot; of the system independent (as in, not need to assign staticWeather on each entry for borders.json)[/ul]
+
+That&#39;s all I can think of right now.
+
+[hr]
+
+- Arham</description>
+    
+    <lastBuildDate>Sat, 26 Dec 2015 12:29:29 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@lukwes1 lukwes1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lukwes1">@lukwes1</a> wrote:</p>
+          <blockquote>
+              <p>Ye, a quad tree would be perfect for a solution to the “Rectangle” problem.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/7</link>
+        <pubDate>Sat, 26 Dec 2015 12:29:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-7</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>quad trees are good for this</p>
+<p>: &gt;</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/6</link>
+        <pubDate>Tue, 22 Dec 2015 23:20:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-6</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Looks nice (All i did was glance over it), but I don’t like how you’re implementing regions.</p>
+<p>You only identify 2 points for the region: top right, bottom left.<br>
+What if my area is a circle? What if it’s an octagon?<br>
+You should make it more dynamic (With something similar to an Array/ArrayList) where a person can have N amount of points for a region.</p>
+<p>That way, you could properly corner off all of falador:<br>
+<img src="http://vignette2.wikia.nocookie.net/runescape2/images/3/34/Falador_map_old.png/revision/latest?cb=20111120224050" alt width="403" height="275"><br>
+As you see, it’s not a ‘perfect’ square. If you used the system as it stands, you’d get the area with the 3 yew trees to the south. While not a problem here, it could be an issue when cornering off ‘member’ zones.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/5</link>
+        <pubDate>Tue, 22 Dec 2015 21:02:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-5</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <p>you know this is actually a cool idea, I like the idea of weather patterns like other MMOs</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/4</link>
+        <pubDate>Tue, 22 Dec 2015 11:00:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-4</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="554172">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sini/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sini:</div>
+<blockquote>
+<p>Theres no fudgeing thing as rep YOU MONGOLOID</p>
+</blockquote>
+</aside>
+<p>LET ME C&amp;P MY THREAD IN PEACE</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/3</link>
+        <pubDate>Tue, 22 Dec 2015 06:37:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-3</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Theres no fucking thing as rep YOU MONGOLOID</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/2</link>
+        <pubDate>Tue, 22 Dec 2015 06:30:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-2</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+      <item>
+        <title>Border/Boundary System + Weather Implementation</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[CENTER]<a href="http://i.imgur.com/bADk2FA.jpg" data-bbcode="true" rel="nofollow noopener"><img src="http://puu.sh/m4tgi/d9438f48c8.png" alt width="" height=""></a><br>
+[SIZE=1]What a bored Arham does when he has no computer but is in the programming mood. [/SIZE][/CENTER]</p>
+<p>So recently I’ve been wanting to add a Boundary system that would allow us to mark some regions and make only members be able to walk on it (rather than the typical “donator island”). Then I figured I’d extend the system to be able to support Weather when I began to re-read the <a href="https://www.moparisthebest.com/smf/index.php/topic,666574.msg4457414.html#msg4457414" data-bbcode="true" rel="nofollow noopener">interesting thread we had here a year back</a>. Thus, came this.</p>
+<p>[hr]<br>
+<span class="bbcode-b">My request from you…</span></p>
+<p>Provide some feedback to the code. I know alot of the places where the code is quite bad or uses too much memory, but I simply don’t know how to make it better, so offer your suggestions!<br>
+[hr]<br>
+<span class="bbcode-b"><em>Keep note, the base used is Hyperion, so other bases will need a little bit of modifications for this to work.</em></span></p>
+<p>First, lets make the JSON file. Put this in the directory you see fit.</p>
+<pre><code class="lang-auto">[
+  {
+    "identification": "Lumbridge",
+    "topRightLocation": {
+      "x": 3244,
+      "y": 3308,
+      "z": 0
+    },
+    "bottomLeftLocation": {
+      "x": 3150,
+      "y": 3197,
+      "z": 0
+    },
+    "premiumOnly": false,
+    "staticWeather": false
+  }
+]</code></pre>
+<p>Name this file <span class="bbcode-i">borders.json</span></p>
+<p>This is our data. The data is quite straightforward; you identify the region both as an ease of use to you and also to extend if you’d like to later on. The top right and bottom left locations are the primary “borders” of the area. The premiumOnly boolean is if this is only for donators. And the staticWeather is for our weather system, which basically if set to true will never change the weather of a boundary.</p>
+<p>Make a new package called border in wherever the entities are. There, make <span class="bbcode-i">BorderManager.java</span> and add this.</p>
+<pre><code class="lang-auto">package org.hyperion.rs2.model.border;
+
+import com.google.gson.*;
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.Player;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.logging.Logger;
+
+/**
+ * Created by Arham on 12/21/2015.
+ */
+public class BorderManager {
+
+    /**
+     * The logger for this class.
+     */
+    private static final Logger logger = Logger.getLogger(BorderManager.class.getName());
+
+    /**
+     * All the borders.
+     */
+    private static List&lt;Border&gt; borderList = new ArrayList&lt;&gt;();
+
+    /**
+     * Loads borders from the borders.json file.
+     */
+    public static void loadBorders() {
+        JsonParser parser = new JsonParser();
+        try {
+            JsonArray array = (JsonArray) parser.parse(new FileReader(new File("./data/player/borders.json")));
+            final Gson builder = new GsonBuilder().create();
+
+            for (int i = 0; i &lt; array.size(); i++) {
+                JsonObject reader = (JsonObject) array.get(i);
+
+                String identification = reader.get("identification").getAsString();
+                Location topRightLocation = builder.fromJson(reader.get("topRightLocation").getAsJsonObject(), Location.class);
+                Location bottomLeftLocation = builder.fromJson(reader.get("bottomLeftLocation").getAsJsonObject(), Location.class);
+                boolean premiumOnly = reader.get("premiumOnly").getAsBoolean();
+                boolean staticWeather = reader.get("staticWeather").getAsBoolean();
+
+                Border border = new Border(identification, topRightLocation, bottomLeftLocation, premiumOnly, staticWeather);
+                borderList.add(border);
+            }
+
+            logger.info("Successfully loaded " + array.size() + " borders.");
+        } catch (JsonIOException | JsonSyntaxException | FileNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Handles the actions to be done when walking.
+     *
+     * @param player      The Player who walked.
+     * @param endLocation Where the player is walking to.
+     * @return If the player is allowed to walk.
+     */
+    public static boolean onWalk(Player player, Location endLocation) {
+        for (Border border : borderList)
+            if (border.isInBorder(player.getLocation()))
+                return border.onWalk(player, endLocation);
+        return true;
+    }
+
+    /**
+     * Gets all the borders in the List.
+     *
+     * @return the borders
+     */
+    public static List&lt;Border&gt; getBorderList() {
+        return borderList;
+    }
+
+    /**
+     * Generates a random weather pattern to assign to a border.
+     *
+     * @return A random weather pattern.
+     */
+    public static Weather getRandomWeather() {
+        return Weather.values()[new Random().nextInt(Weather.values().length - 1)];
+    }
+
+    /**
+     * Checks if the location is in the border.
+     *
+     * @param location The location to check.
+     * @return if the location is in the border.
+     */
+    public static boolean isInBorder(Location location) {
+        boolean inBorder = false;
+        for (Border border : borderList)
+            if (border.isInBorder(location))
+                inBorder = true;
+        return inBorder;
+    }
+
+    /**
+     * Handles the measures to take when somebody does soemthing like walk in the border.
+     *
+     * @param player The "somebody"
+     * @param x      What X coordinate are they at, or going to?
+     * @param y      What Y coordinate are they at, or going to?
+     * @return Sent for the walking, to say if the player can walk in the border.
+     */
+    public static boolean handleWorldAction(Player player, int x, int y) {
+        if (!BorderManager.isInBorder(player.getLocation())) {
+            player.getActionSender().sendWalkableInterface(-1);
+        } else {
+            if (!BorderManager.onWalk(player, Location.create(x, y, player.getLocation().getZ()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+}</code></pre>
+<p>This right here not only loads our data, but also holds the new borders made from the data and also handles all the reaction within the border. To keep this anonymous, rather than forcing the user to extend every border, a lot of repetition is done.</p>
+<p>Next, in the same package, make <span class="bbcode-i">Border.java</span> and add this in it.</p>
+<pre><code class="lang-auto">package org.hyperion.rs2.model.border;
+
+import org.hyperion.rs2.model.Location;
+import org.hyperion.rs2.model.Player;
+import org.hyperion.util.Debugger;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Created by Arham on 12/21/2015.
+ */
+public class Border {
+
+    /**
+     * What identifies the, otherwise, anonymous Border.
+     */
+    private String identification;
+
+    /**
+     * The two primary border locations.
+     */
+    private Location topRightLocation, bottomLeftLocation;
+
+    /**
+     * The configurations for the Border.
+     */
+    private boolean premiumOnly, staticWeather;
+
+    /**
+     * The weather within the Border.
+     */
+    private Weather weather = Weather.SUNNY;
+
+    /**
+     * The players within the Border.
+     */
+    private List&lt;Player&gt; playersInBorder = new ArrayList&lt;&gt;();
+
+    /**
+     * Represents a single Border.
+     */
+    public Border(String identification, Location topRightLocation, Location bottomLeftLocation, boolean premiumOnly, boolean staticWeather) {
+        this.identification = identification;
+        this.topRightLocation = topRightLocation;
+        this.bottomLeftLocation = bottomLeftLocation;
+        this.premiumOnly = premiumOnly;
+        this.staticWeather = staticWeather;
+    }
+
+    /**
+     * What the Border does when somebody walks. This is the actual functionality of the BorderManager.onWalk() boolean.
+     *
+     * @param player      The Player walking.
+     * @param endLocation Where the Player is walking to.
+     * @return If the Player can walk.
+     */
+    public boolean onWalk(Player player, Location endLocation) {
+        boolean inBorderList = false;
+        for (Player playerInBorder : playersInBorder)
+            if (playerInBorder.getClientIndex() == player.getClientIndex())
+                inBorderList = true;
+        if (!inBorderList) {
+            playersInBorder.add(player);
+            Debugger.println("Added new player, " + player.getName() + ", to " + identification + ".");
+        }
+        if (!staticWeather) {
+            switch (weather) {
+                case SNOWY:
+                    player.getActionSender().sendWalkableInterface(11877);
+                    Debugger.println("Snowy walkable interface initiated.");
+                    break;
+                case RAINY:
+                    //TODO
+                    player.getActionSender().sendWalkableInterface(-1);
+                    Debugger.println("Rainy walkable interface initiated.");
+                    break;
+                case SUNNY:
+                    player.getActionSender().sendWalkableInterface(-1);
+                    Debugger.println("Sunny walkable interface initiated.");
+                    break;
+            }
+        }
+        if (!isInBorder(endLocation)) {
+            playersInBorder.remove(player);
+            Debugger.println("Removed player, " + player.getName() + ", from " + identification + ".");
+        }
+        return !premiumOnly;
+    }
+
+    /**
+     * Checks if the Location is in the Border. This is the actual functionality of the BorderManager.isInBorder() boolean.
+     *
+     * @param compare The location to check.
+     * @return if the Location is in the Border.
+     */
+    public boolean isInBorder(Location compare) {
+        return compare.getX() &gt;= getBottomLeftLocation().getX() &amp;&amp; compare.getX() &lt;= getTopRightLocation().getX() &amp;&amp; compare.getY() &gt;= getBottomLeftLocation().getY() &amp;&amp; compare.getY() &lt;= getTopRightLocation().getY();
+    }
+
+    /**
+     * Sets the Weather of the Border via WeatherTask.
+     *
+     * @param weather The Weather the Border is being set to.
+     */
+    public void setWeather(Weather weather) {
+        this.weather = weather;
+    }
+
+    public Location getTopRightLocation() {
+        return topRightLocation;
+    }
+
+    public Location getBottomLeftLocation() {
+        return bottomLeftLocation;
+    }
+
+    public List&lt;Player&gt; getPlayersInBorder() {
+        return playersInBorder;
+    }
+}</code></pre>
+<p>This is one of your data in <span class="bbcode-i">borders.json</span> that is constructed to be a fully functional boundary in the game that is configurable. The onWalk boolean is what is the main “action” part of this, as it, based on the randomly assigned weather, sends the appropriate visual affect of the border, as well as marking the player as “in the border” and “out the border.”</p>
+<p>[hr]<br>
+<span class="bbcode-b">Next, the weather system that extends this.</span></p>
+<p>In the same package, make <span class="bbcode-i">Weather.java</span> and add this in it:</p>
+<pre><code class="lang-auto">package org.hyperion.rs2.model.border;
+
+/**
+ * Created by Arham on 12/21/2015.
+ * &lt;p&gt;
+ * The weather patterns.
+ */
+public enum Weather {
+    SNOWY, RAINY, SUNNY
+}</code></pre>
+<p>This is the weather patterns in the server. Remember onWalk in Boundary? Yeah, the switch statement uses the values in this enum.</p>
+<p>Now, go to your event manager and make a new event. Name it <span class="bbcode-i">WeatherEvent.java</span> and add this in it:</p>
+<pre><code class="lang-auto">package org.hyperion.rs2.event.impl;
+
+import org.hyperion.rs2.Constants;
+import org.hyperion.rs2.event.Event;
+import org.hyperion.rs2.model.World;
+import org.hyperion.rs2.task.impl.AutoSaveTask;
+import org.hyperion.rs2.task.impl.WeatherTask;
+
+/**
+ * Automatically assigns all the borders a new weather.
+ * @author Arham 4
+ */
+public class WeatherEvent extends Event {
+
+    /**
+     * The delay in milliseconds between save. Currently set at 5 minutes. 1
+     * second = 1,000 milliseconds.
+     */
+    public static final int WEATHER_CYCLE_TIME = Constants.DEBUG ? 30000 : 1800000;
+
+    /**
+     * Creates the auto save event to run every 5 minutes.
+     */
+    public WeatherEvent() {
+        super(WEATHER_CYCLE_TIME);
+    }
+
+    @Override
+    public void execute() {
+        World.getWorld().submit(new WeatherTask());
+    }
+}</code></pre>
+<p>This event initializes the task to reassign the world’s weather.</p>
+<p>In your task system, make a new file called <span class="bbcode-i">WeatherTask.java</span> and add this in it:</p>
+<pre><code class="lang-auto">package org.hyperion.rs2.task.impl;
+
+import org.hyperion.rs2.GameEngine;
+import org.hyperion.rs2.model.Player;
+import org.hyperion.rs2.model.World;
+import org.hyperion.rs2.model.border.Border;
+import org.hyperion.rs2.model.border.BorderManager;
+import org.hyperion.rs2.model.border.Weather;
+import org.hyperion.rs2.task.Task;
+import org.hyperion.util.Debugger;
+
+/**
+ * Changes all the borders' weather.
+ *
+ * @author Arham 4
+ */
+public class WeatherTask implements Task {
+
+    @Override
+    public void execute(GameEngine context) {
+        context.submitWork(() -&gt; {
+            for (Border border : BorderManager.getBorderList()) {
+                Weather weather = BorderManager.getRandomWeather();
+                border.setWeather(weather);
+                for (Player playerInBorder : border.getPlayersInBorder()) {
+                    BorderManager.handleWorldAction(playerInBorder, playerInBorder.getLocation().getX(), playerInBorder.getLocation().getY());
+                }
+                Debugger.println(weather.toString());
+            }
+        });
+    }
+
+}</code></pre>
+<p>This loops through all the borders in the game and reassigns the weather, then fetches the players in the border and initializes the infamous handleWorldAction() method.</p>
+<p>[hr]<br>
+<span class="bbcode-b">Adding functionality to the system.</span></p>
+<p>Get used to the handleWorldAction() method, you’ll be seeing it a lot. Its function is just as the method comment says:</p>
+<pre><code class="lang-auto">    /**
+     * Handles the measures to take when somebody does soemthing like walk in the border.
+     *
+     * @param player The "somebody"
+     * @param x      What X coordinate are they at, or going to?
+     * @param y      What Y coordinate are they at, or going to?
+     * @return Sent for the walking, to say if the player can walk in the border.
+     */</code></pre>
+<p>Wherever you handle logging in and assigning the variables (like sending the map region), add this:</p>
+<pre><code class="lang-auto">			BorderManager.handleWorldAction(player, player.getLocation().getX(), player.getLocation().getY());</code></pre>
+<p>Wherever walking is handled, add this when the data is read, but before it is being used:</p>
+<pre><code class="lang-auto">		if (!BorderManager.handleWorldAction(player, firstX, firstY))
+			return;</code></pre>
+<p>Yay for functionality!!</p>
+<p><img src="http://puu.sh/m4svZ/9160c1ec08.jpg" alt width="" height=""></p>
+<p>[hr]</p>
+<p><span class="bbcode-b">TODO:</span></p>
+<p>[ul][<em>]Make this “extensible.”<br>
+[</em>]Make an onLogin() method which transfers the user back to default spawn location if they are in a region that is premium-only.<br>
+[<em>]Make the premium rank actually corrispond in the onWalk boolean.<br>
+[</em>]Is there a raining interface at all?<br>
+[<em>]Make a custom packet send to change the floor terrain of the border.<br>
+[</em>]Day and Night?<br>
+[<em>]Make the actions as stated in the original idea for the weather system functional (i.e. more fish on rainy days, less wood on snowy days).<br>
+[</em>]Decouple the walking from the border system.<br>
+[*]Make each “extenction” of the system independent (as in, not need to assign staticWeather on each entry for borders.json)[/ul]</p>
+<p>That’s all I can think of right now.</p>
+<p>[hr]</p>
+<ul>
+<li>Arham</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172/1</link>
+        <pubDate>Tue, 22 Dec 2015 06:08:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554172-1</guid>
+        <source url="https://forum.moparisthebest.com/t/border-boundary-system-weather-implementation/554172.rss">Border/Boundary System + Weather Implementation</source>
+      </item>
+  </channel>
+</rss>

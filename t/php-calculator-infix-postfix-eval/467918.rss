@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PHP] Calculator (infix-&gt;postfix-&gt;eval)</title>
+    <link>https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918</link>
+    <description>i was kind of following off of a few different sources trying to solve a bunch of different problems. i didn&#39;t really come across a php implementation so i just wrote one.
+
+thankfully due to the way php works negative numbers work properly without any extra hassle. no support for functions or variables though. variables would be easy. functions would be a bit harder but definitely doable.
+
+i needed to understand how math calculation works for something i&#39;m writing in java and [b]php is easy for testing[/b]. of course if you didn&#39;t really care about parsing then evaluating (eval is just a cheap way of evaluating because i got lazy and didn&#39;t need to elaborate on that) then you could pretty much use eval for any expression. the point is to actually have something that parses the math rather than something that evaluates.
+
+index.php?expr=(32*3)%2B(4/5-(6^9/(4%8)))
+[SIZE=1]%2B = plus sign (+)[/SIZE]
+
+[CODE]Expression: (32*3)+(4/5-(6^9/(4%8)))
+Postfix: 32 3 * 4 5 / 6 9 ^ 4 8 % / - +
+Evaluation: -2519327.2[/CODE]
+
+improved version:
+[CODE]&lt;?php
+define(&#39;ASSOC_NONE&#39;, 0);
+define(&#39;ASSOC_LEFT&#39;, 1);
+define(&#39;ASSOC_RIGHT&#39;, 2);
+
+// array(10, ASSOC_RIGHT, true), // originally needed in c code for unary -
+// operator =&gt; array(precedence, associativity, unary)
+$operators = array(&#39;^&#39; =&gt; array(9, ASSOC_RIGHT, false),
+					&#39;*&#39; =&gt; array(8, ASSOC_LEFT, false),
+					&#39;/&#39; =&gt; array(8, ASSOC_LEFT, false),
+					&#39;%&#39; =&gt; array(8, ASSOC_LEFT, false),
+					&#39;+&#39; =&gt; array(5, ASSOC_LEFT, false),
+					&#39;-&#39; =&gt; array(5, ASSOC_LEFT, false),
+					&#39;(&#39; =&gt; array(0, ASSOC_NONE, false),
+					&#39;)&#39; =&gt; array(0, ASSOC_NONE, false));
+
+function precedence($opchar)
+{
+	global $operators;
+	return $operators[$opchar][0];
+}
+
+function associativity($opchar)
+{
+	global $operators;
+	return $operators[$opchar][1];
+}
+
+function unary($opchar)
+{
+	global $operators;
+	return $operators[$opchar][2];
+}
+
+function is_operator($char)
+{
+	global $operators;
+	return array_key_exists($char, $operators);
+}
+
+function starts_with($haystack, $needle)
+{
+	return !strncmp($haystack, $needle, strlen($needle));
+}
+
+function ends_with($haystack, $needle)
+{
+	return substr($haystack, -strlen($needle)) === $needle;
+}
+
+function array_peek($stack)
+{
+	return $stack[count($stack) - 1];
+}
+
+function postfix($expression)
+{
+	$expression = preg_replace(&#39;/\s+/&#39;, &#39;&#39;, $expression);
+	
+	if (!starts_with($expression, &#39;(&#39;))
+	{
+		$expression = &#39;(&#39;.$expression;
+	}
+	
+	if (!ends_with($expression, &#39;)&#39;))
+	{
+		$expression .= &#39;)&#39;;
+	}
+	
+	$stack = array();
+	$output = array();
+	$numtoken = &#39;&#39;;
+	
+	for ($i = 0; $i &lt; strlen($expression); $i++)
+	{
+		$char = $expression[$i];
+		
+		if (is_operator($char))
+		{
+			if ($numtoken != &#39;&#39;)
+			{
+				$output[] = $numtoken;
+				$numtoken = &#39;&#39;;
+			}
+			
+			if ($char == &#39;(&#39;)
+			{
+				array_push($stack, $char);
+			}
+			else if ($char == &#39;)&#39;)
+			{
+				while (count($stack) &gt; 0 &amp;&amp; ($top = array_peek($stack)) != &#39;(&#39;)
+				{
+					$output[] = array_pop($stack);
+				}
+				
+				array_pop($stack);
+			}
+			else
+			{
+				while (count($stack) &gt; 0)
+				{
+					$peek = array_peek($stack);
+					
+					if (associativity($char) == ASSOC_LEFT &amp;&amp; precedence($char) &lt;= precedence($peek)
+						|| associativity($char) == ASSOC_RIGHT &amp;&amp; precedence($char) &lt; precedence($peek))
+					{
+						$output[] = array_pop($stack);
+					}
+					else
+					{
+						break;
+					}
+				}
+				
+				array_push($stack, $char);
+			}
+		}
+		else
+		{
+			$numtoken .= $char;
+		}
+	}
+	
+	while (count($stack) &gt; 0)
+	{
+		if (array_peek($stack) == &#39;(&#39;)
+		{
+			array_pop($stack);
+		}
+		else
+		{
+			$output[] = array_pop($stack);
+		}
+	}
+	
+	return $output;
+}
+
+function postfix_eval($postfix, $variables = array())
+{
+	$stack = array();
+	
+	foreach ($postfix as $token)
+	{
+		if (is_operator($token))
+		{
+			$second = array_pop($stack);
+			$first = array_pop($stack);
+			
+			if ($second == null || $first == null)
+			{
+				continue; // we need two operands on the stack first
+			}
+			
+			if (!is_numeric($first) &amp;&amp; array_key_exists($first, $variables))
+			{
+				$first = $variables[$first];
+			}
+			
+			if (!is_numeric($second) &amp;&amp; array_key_exists($second, $variables))
+			{
+				$second = $variables[$second];
+			}
+			
+			$result = 0;
+			
+			if ($token == &#39;^&#39;)
+			{
+				$result = pow($first, $second);
+			}
+			else
+			{
+				$result = eval(&quot;return $first $token $second;&quot;);
+			}
+			
+			array_push($stack, $result);
+		}
+		else
+		{
+			if (strlen($token) &gt; 0)
+			{
+				array_push($stack, $token);
+			}
+		}
+	}
+	
+	return array_pop($stack);
+}
+
+if (isset($_GET[&#39;expr&#39;]))
+{
+	$expression = $_GET[&#39;expr&#39;];
+	echo(&#39;Expression: &#39;.$expression.&#39;&lt;br /&gt;&#39;);
+	$postfix = postfix($expression);
+	echo(&#39;Postfix: &#39;.implode(&#39; &#39;, $postfix).&#39;&lt;br /&gt;&#39;);
+	echo(&#39;Evaluation: &#39;.postfix_eval($postfix, array(&#39;size&#39; =&gt; 121)));
+}
+else
+{
+	echo(&#39;:( no expression? fux u&#39;);
+}
+?&gt;[/CODE]</description>
+    
+    <lastBuildDate>Tue, 13 Nov 2012 12:56:18 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PHP] Calculator (infix-&gt;postfix-&gt;eval)</title>
+        <dc:creator><![CDATA[@RSPS_Mirrors RSPS Mirrors]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rsps_mirrors">@RSPS_Mirrors</a> wrote:</p>
+          <blockquote>
+              <p>Heh, and there’s me thinking a page view counter in php is boss… good stuff, can’t really criticise as I’m new to php myself.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918/2</link>
+        <pubDate>Tue, 13 Nov 2012 12:56:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-467918-2</guid>
+        <source url="https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918.rss">[PHP] Calculator (infix-&gt;postfix-&gt;eval)</source>
+      </item>
+      <item>
+        <title>[PHP] Calculator (infix-&gt;postfix-&gt;eval)</title>
+        <dc:creator><![CDATA[@Supah_Flyizzle Supah Flyizzle]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/supah_flyizzle">@Supah_Flyizzle</a> wrote:</p>
+          <blockquote>
+              <p>i was kind of following off of a few different sources trying to solve a bunch of different problems. i didn’t really come across a php implementation so i just wrote one.</p>
+<p>thankfully due to the way php works negative numbers work properly without any extra hassle. no support for functions or variables though. variables would be easy. functions would be a bit harder but definitely doable.</p>
+<p>i needed to understand how math calculation works for something i’m writing in java and <span class="bbcode-b">php is easy for testing</span>. of course if you didn’t really care about parsing then evaluating (eval is just a cheap way of evaluating because i got lazy and didn’t need to elaborate on that) then you could pretty much use eval for any expression. the point is to actually have something that parses the math rather than something that evaluates.</p>
+<p>index.php?expr=(32*3)%2B(4/5-(6^9/(4%8)))<br>
+[SIZE=1]%2B = plus sign (+)[/SIZE]</p>
+<p><code>Expression: (32*3)+(4/5-(6^9/(4%8)))
+Postfix: 32 3 * 4 5 / 6 9 ^ 4 8 % / - +
+Evaluation: -2519327.2</code></p>
+<p>improved version:</p>
+<p>[CODE]&lt;?php<br>
+define(‘ASSOC_NONE’, 0);<br>
+define(‘ASSOC_LEFT’, 1);<br>
+define(‘ASSOC_RIGHT’, 2);</p>
+<p>// array(10, ASSOC_RIGHT, true), // originally needed in c code for unary -<br>
+// operator =&gt; array(precedence, associativity, unary)<br>
+$operators = array(’^’ =&gt; array(9, ASSOC_RIGHT, false),<br>
+‘*’ =&gt; array(8, ASSOC_LEFT, false),<br>
+‘/’ =&gt; array(8, ASSOC_LEFT, false),<br>
+‘%’ =&gt; array(8, ASSOC_LEFT, false),<br>
+‘+’ =&gt; array(5, ASSOC_LEFT, false),<br>
+‘-’ =&gt; array(5, ASSOC_LEFT, false),<br>
+‘(’ =&gt; array(0, ASSOC_NONE, false),<br>
+‘)’ =&gt; array(0, ASSOC_NONE, false));</p>
+<p>function precedence($opchar)<br>
+{<br>
+global $operators;<br>
+return $operators[$opchar][0];<br>
+}</p>
+<p>function associativity($opchar)<br>
+{<br>
+global $operators;<br>
+return $operators[$opchar][1];<br>
+}</p>
+<p>function unary($opchar)<br>
+{<br>
+global $operators;<br>
+return $operators[$opchar][2];<br>
+}</p>
+<p>function is_operator($char)<br>
+{<br>
+global $operators;<br>
+return array_key_exists($char, $operators);<br>
+}</p>
+<p>function starts_with($haystack, $needle)<br>
+{<br>
+return !strncmp($haystack, $needle, strlen($needle));<br>
+}</p>
+<p>function ends_with($haystack, $needle)<br>
+{<br>
+return substr($haystack, -strlen($needle)) === $needle;<br>
+}</p>
+<p>function array_peek($stack)<br>
+{<br>
+return $stack[count($stack) - 1];<br>
+}</p>
+<p>function postfix($expression)<br>
+{<br>
+$expression = preg_replace(’/\s+/’, ‘’, $expression);</p>
+<pre><code>if (!starts_with($expression, '('))
+{
+	$expression = '('.$expression;
+}
+
+if (!ends_with($expression, ')'))
+{
+	$expression .= ')';
+}
+
+$stack = array();
+$output = array();
+$numtoken = '';
+
+for ($i = 0; $i &lt; strlen($expression); $i++)
+{
+	$char = $expression[$i];
+	
+	if (is_operator($char))
+	{
+		if ($numtoken != '')
+		{
+			$output[] = $numtoken;
+			$numtoken = '';
+		}
+		
+		if ($char == '(')
+		{
+			array_push($stack, $char);
+		}
+		else if ($char == ')')
+		{
+			while (count($stack) &gt; 0 &amp;&amp; ($top = array_peek($stack)) != '(')
+			{
+				$output[] = array_pop($stack);
+			}
+			
+			array_pop($stack);
+		}
+		else
+		{
+			while (count($stack) &gt; 0)
+			{
+				$peek = array_peek($stack);
+				
+				if (associativity($char) == ASSOC_LEFT &amp;&amp; precedence($char) &lt;= precedence($peek)
+					|| associativity($char) == ASSOC_RIGHT &amp;&amp; precedence($char) &lt; precedence($peek))
+				{
+					$output[] = array_pop($stack);
+				}
+				else
+				{
+					break;
+				}
+			}
+			
+			array_push($stack, $char);
+		}
+	}
+	else
+	{
+		$numtoken .= $char;
+	}
+}
+
+while (count($stack) &gt; 0)
+{
+	if (array_peek($stack) == '(')
+	{
+		array_pop($stack);
+	}
+	else
+	{
+		$output[] = array_pop($stack);
+	}
+}
+
+return $output;
+</code></pre>
+<p>}</p>
+<p>function postfix_eval($postfix, $variables = array())<br>
+{<br>
+$stack = array();</p>
+<pre><code>foreach ($postfix as $token)
+{
+	if (is_operator($token))
+	{
+		$second = array_pop($stack);
+		$first = array_pop($stack);
+		
+		if ($second == null || $first == null)
+		{
+			continue; // we need two operands on the stack first
+		}
+		
+		if (!is_numeric($first) &amp;&amp; array_key_exists($first, $variables))
+		{
+			$first = $variables[$first];
+		}
+		
+		if (!is_numeric($second) &amp;&amp; array_key_exists($second, $variables))
+		{
+			$second = $variables[$second];
+		}
+		
+		$result = 0;
+		
+		if ($token == '^')
+		{
+			$result = pow($first, $second);
+		}
+		else
+		{
+			$result = eval("return $first $token $second;");
+		}
+		
+		array_push($stack, $result);
+	}
+	else
+	{
+		if (strlen($token) &gt; 0)
+		{
+			array_push($stack, $token);
+		}
+	}
+}
+
+return array_pop($stack);
+</code></pre>
+<p>}</p>
+<p>if (isset($_GET[‘expr’]))<br>
+{<br>
+$expression = $_GET[‘expr’];<br>
+echo(‘Expression: ‘.$expression.’<br>’);<br>
+$postfix = postfix($expression);<br>
+echo(‘Postfix: ‘.implode(’ ‘, $postfix).’<br>’);<br>
+echo(‘Evaluation: ‘.postfix_eval($postfix, array(‘size’ =&gt; 121)));<br>
+}<br>
+else<br>
+{<br>
+echo(’<img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> no expression? fux u’);<br>
+}<br>
+?&gt;[/CODE]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918/1</link>
+        <pubDate>Tue, 13 Nov 2012 12:53:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-467918-1</guid>
+        <source url="https://forum.moparisthebest.com/t/php-calculator-infix-postfix-eval/467918.rss">[PHP] Calculator (infix-&gt;postfix-&gt;eval)</source>
+      </item>
+  </channel>
+</rss>

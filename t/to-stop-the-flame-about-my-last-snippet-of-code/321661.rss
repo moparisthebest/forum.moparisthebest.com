@@ -1,0 +1,961 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>To stop the flame about my last snippet of code</title>
+    <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661</link>
+    <description>[code]package org.peterbjornx.libjs5.net.js5;
+
+import org.peterbjornx.libjs5.io.JagexDataOutputStream;
+import org.peterbjornx.libjs5.io.JagexDataInputStream;
+import org.peterbjornx.libjs5.util.Js5Exception;
+
+import java.net.Socket;
+import java.io.IOException;
+import java.util.Queue;
+import java.util.PriorityQueue;
+import java.util.HashMap;
+import java.nio.ByteBuffer;
+
+/**
+ * User: peterbjornx&lt;br&gt;
+ * Date: Dec 22, 2009&lt;br&gt;
+ * Time: 3:51:56 PM&lt;br&gt;
+ *
+ * @author Peterbjornx
+ */
+public class Js5Connection {
+    private Socket sock;
+    private JagexDataOutputStream out;
+    private JagexDataInputStream in;
+    private Queue&lt;Js5Request&gt; request_queue;
+    private Js5State state;
+    private boolean drop_on_error = false;
+    private HashMap&lt;Integer,Js5Request&gt; incomplete_files;
+    private String server;
+    private int port;
+    private boolean isLoggedIn;
+    private int version;
+    private Js5Request currentrequest;
+    private long lastTime = 0l;
+
+    public Js5Connection() {
+        request_queue    = new PriorityQueue&lt;  Js5Request&gt;();
+        incomplete_files = new HashMap&lt;Integer,Js5Request&gt;();
+    }
+
+    /**
+     * Requests the server to drop the network queues
+     */
+    public void requestServersideDrop(){
+        try {
+            out.writeByte(7);
+            out.writeInt3(0);
+            out.flush();
+        } catch (Exception e) {
+            handleIOException();
+        }
+    }
+
+    /**
+     * Notifys the server of a status change
+     * @param isLoggedIn if the client is logged in.
+     */
+    public void setLoggedIn(boolean isLoggedIn){
+        this.isLoggedIn = isLoggedIn;
+        if (state == Js5State.READY)
+            notifyLoggedIn();
+    }
+
+    /**
+     * Notifys the server of a status change
+     */
+    private void notifyLoggedIn(){
+        try {
+            out.writeByte(isLoggedIn ? 2 : 3);
+            out.writeInt3(0);
+            out.flush();
+        } catch (IOException e) {
+            handleIOException();
+        }
+    }
+
+    /**
+     * Processes the request queues.
+     * @throws Js5Exception when the server sends a non-zero response
+     */
+    @SuppressWarnings({&quot;PointlessBitwiseExpression&quot;})
+    public void process() throws Js5Exception {
+        if (state == Js5State.ERROR){
+            dropconnection();
+            reRequestAllFiles();
+            incomplete_files.clear();
+            if (!drop_on_error)
+                state = Js5State.RECONNECTING;
+        }
+        if (state == Js5State.NOT_CONNECTED)
+            return;
+        if (state == Js5State.RECONNECTING)
+            connect0();
+        try{
+            if (state == Js5State.AWAIT_RESPONSE){
+                if (in.available() == 0)
+                    return;
+                int response = in.read();
+                switch (response){
+                    case 6:
+                        throw Js5Exception.OUTOFDATE;
+                    case 7:
+                    case 9:
+                        throw Js5Exception.FULL;
+                    case 0:
+                        state = Js5State.READY;
+                        //notifyLoggedIn();
+                        break;
+                    case -1:
+                        throw new IOException(&quot;Unable to read js5 response&quot;);
+                    default:
+                        throw Js5Exception.UNSPECIFIED;
+                }
+            }
+            if (state != Js5State.READY)
+                return;
+            long latency = System.currentTimeMillis() - lastTime;
+            if (lastTime != 0 &amp;&amp; latency &gt; 10000){
+                System.out.println(&quot;Dropping - Serverside Timeout&quot;);
+                dropconnection();
+                reRequestAllFiles();
+                incomplete_files.clear();
+                state = Js5State.RECONNECTING;
+                lastTime = System.currentTimeMillis();
+                return;
+            }
+            if (in.available() != 0)
+                lastTime = System.currentTimeMillis();
+            if (!request_queue.isEmpty() &amp;&amp; incomplete_files.size() &lt; 3){
+                for (Js5Request r = request_queue.poll(); r != null; r = request_queue.poll()){
+                    out.writeByte(/*r.isType1   () ? 1 :*/ 0);
+                    out.writeInt3(r.hashCode  ()        );
+                    out.flush();
+                    incomplete_files.put(r.hashCode(), r);
+                }
+            }
+
+            for (int c = 0;c &lt; 100;c++){
+                int avail = in.available();
+                if (avail == 0)
+                    break;
+                if (avail &lt;  0)
+                    throw new IOException(&quot;Error polling data&quot;);
+                int dataNeeded = 0;
+                if (currentrequest == null)
+                    dataNeeded = 8;
+                else if (currentrequest.getBlockPos() == 0)
+                    dataNeeded = 1;
+                if (dataNeeded &gt; 0){
+                    if (in.available() &gt;= dataNeeded){
+                        if (currentrequest == null){
+                            int storeid    = in.readz() &amp; 0xFF;
+                            int fileid     = in.readShort();
+                            System.out.println(&quot;Got file:&quot;+storeid+&quot; &quot;+fileid);
+                            currentrequest = incomplete_files.get((storeid &lt;&lt; 16) | fileid);
+                            currentrequest.setCompression(in.read() &amp; 0x7f);
+                            currentrequest.setSize(in.readInt());
+                            byte data[]    = new byte[currentrequest.getSize() + (currentrequest.getCompression() == 0 ? 5 : 9)];
+                            data[0]        = (byte) (currentrequest.getCompression());
+                            data[1]        = (byte) (currentrequest.getSize() &gt;&gt;&gt; 24);
+                            data[2]        = (byte) (currentrequest.getSize() &gt;&gt;&gt; 16);
+                            data[3]        = (byte) (currentrequest.getSize() &gt;&gt;&gt;  8);
+                            data[4]        = (byte) (currentrequest.getSize() &gt;&gt;&gt;  0);
+                            currentrequest.setData(data);
+                            currentrequest.setBlockPos(8);
+                            currentrequest.setFilePos (5);
+                        } else if (currentrequest.getBlockPos() == 0) {
+                            if ((in.peek() &amp; 0xff) == 255){
+                                currentrequest.setBlockPos(1);
+                            }else
+                                currentrequest = null;
+                        }
+                    }
+                } else {
+                    int dataToRead    = 512 - currentrequest.getBlockPos();
+                    int fileRemaining = currentrequest.getData().length - currentrequest.getFilePos();
+                    int blockpos      = currentrequest.getBlockPos();
+                    if (fileRemaining  &lt; dataToRead)
+                        dataToRead = fileRemaining;
+                    if (in.available() &lt; dataToRead)
+                        dataToRead = in.available();
+                    byte[] data = currentrequest.getData();
+                    int reallyRed = in.read(data,currentrequest.getFilePos(),dataToRead);
+                    currentrequest.setData(data);
+                    currentrequest.setBlockPos(blockpos + reallyRed);
+                    currentrequest.setFilePos (currentrequest.getFilePos() + reallyRed);
+                    if (currentrequest.getFilePos() != currentrequest.getData().length){
+                        if (currentrequest.getBlockPos() == 512)
+                            currentrequest.setBlockPos(0);
+                    } else {
+                        currentrequest.setComplete(true);
+                        currentrequest = null;
+                    }
+                }
+            }
+        } catch(IOException e){
+            handleIOException();
+        } catch(Js5Exception e){
+            dropconnection();
+            throw e;
+        }
+    }
+
+    /**
+     * Requests a file from the connected update server
+     * @param storeid The store to get the file from
+     * @param fileid The number of the file to get
+     * @param type1 If this file should be downloaded with type 1
+     * @return The request for further reference
+     */
+    public Js5Request request(int storeid,int fileid,boolean type1){
+        Js5Request r = new Js5Request(type1,storeid,fileid);
+        if (!request_queue.offer(r))
+            return null;
+        return r;
+    }
+
+    /**
+     * Requests a file from the connected update server
+     * @param storeid The store to get the file from
+     * @param fileid The number of the file to get
+     * @return The request for further reference
+     */
+    public Js5Request request(int storeid,int fileid){
+        Js5Request r = new Js5Request(storeid,fileid);
+        if (!request_queue.offer(r))
+            return null;
+        return r;
+    }
+
+    /**
+     * Drops the connection and destroys the streams
+     */
+    public void dropconnection() {
+        try{
+            sock.close();
+        } catch (IOException ignored){}
+        sock = null;
+        out = null;
+        in = null;
+        currentrequest = null;
+        state = Js5State.NOT_CONNECTED;
+    }
+
+    /**
+     * Connects to the given server.
+     * @param server the server to connect to
+     * @param port the port to use
+     * @param version the current RuneScape version
+     */
+    public void connect(String server, int port, int version){
+        this.server = server;
+        this.port   = port;
+        this.version= version;
+        connect0();
+    }
+
+    /**
+     * Handles the actual process of connecting.
+     */
+    private void connect0() {
+        try{
+            sock = new Socket               (server, port);
+            in   = new JagexDataInputStream (sock.getInputStream() );
+            out  = new JagexDataOutputStream(sock.getOutputStream());
+            out.writeByte(15     );
+            out.writeInt (version);
+            state = Js5State.AWAIT_RESPONSE;
+        } catch (IOException e){
+            state = Js5State.ERROR;
+        }
+    }
+
+    /**
+     * Adds all files not fully downloaded to the request queue
+     */
+    private void reRequestAllFiles() {
+        for (Js5Request r : incomplete_files.values())
+            request_queue.offer(r);
+    }
+
+    /**
+     * Common handler for I/O errors
+     */
+    private void handleIOException() {
+        state = Js5State.ERROR;
+    }
+
+    public Js5State getState() {
+        return state;
+    }
+}
+[/code][code]package org.peterbjornx.libjs5.util.zip;
+
+import org.peterbjornx.libjs5.io.JagexDataInputStream;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.DataInputStream;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.CRC32;
+
+/**
+ * Decompresses JS5 containers (.jcf files)
+ * @author Peterbjornx
+ */
+public class Js5Container {
+    private byte[] payload    ;
+    private int    rawsize    ;
+    private int    zipsize    ;
+    private int    compression;
+    private int    crc32      ;
+
+    /**
+     * Decodes a js5 container
+     * @param raw The raw data to decode
+     * @throws IOException if an error occurs durinc decoding
+     */
+    public Js5Container(byte[] raw) throws IOException {
+        JagexDataInputStream jdis = new JagexDataInputStream(new ByteArrayInputStream(raw));
+        compression = jdis.readByte();
+        zipsize     = jdis.readInt ();
+        if (compression != 0)
+            rawsize = jdis.readInt ();
+        else
+            rawsize = zipsize;
+        payload = new byte[zipsize];
+        jdis.readFully(payload);
+        CRC32 crc = new CRC32();
+        crc.update(raw);
+        crc32 = (int) crc.getValue();
+    }
+
+    /**
+     * Gets the decompressed contents of the container
+     * @return The decompressed contents of the container
+     */
+    public byte[] decompress(){
+        if (compression == 0)
+            return payload;
+        byte[] result = new byte[rawsize];
+        if (compression != 1){
+            try {
+                DataInputStream dis = new DataInputStream(new GZIPInputStream(new ByteArrayInputStream(payload)));
+                dis.readFully(result);
+            } catch (IOException e) {
+                System.out.println(&quot;Error decompressing GZIP compressed containter&quot;);
+                return null;
+            }
+        } else {
+            try {
+                DataInputStream ins = new DataInputStream(new CBZip2InputStream(new ByteArrayInputStream(payload),0));
+                ins.readFully(result);
+                ins.close();
+            } catch (IOException e) {
+                System.out.println(&quot;Error decompressing BZIP2 compressed containter&quot;);
+                return null;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Gets the size of the compressed data
+     * @return the size of the compressed data
+     */
+    public int getZipsize() {
+        return zipsize;
+    }
+
+    /**
+     * Sets the size of the compressed data
+     * @param zipsize the size of the compressed data
+     */
+    public void setZipsize(int zipsize) {
+        this.zipsize = zipsize;
+    }
+
+    /**
+     * Gets the compression type&lt;br&gt;
+     * 0 - No compression&lt;br&gt;
+     * 1 - BZIP2 Compression&lt;BR&gt;
+     * 2 - GZIP Compression
+     * @return the compression type
+     */
+    public int getCompression() {
+        return compression;
+    }
+
+    /**
+     * Sets the compression type&lt;br&gt;
+     * 0 - No compression&lt;br&gt;
+     * 1 - BZIP2 Compression&lt;BR&gt;
+     * 2 - GZIP Compression
+     * @param compression the compression type
+     */
+    public void setCompression(int compression) {
+        this.compression = compression;
+    }
+
+    /**
+     * Gets the size of the decompressed data
+     * @return The size of the decompressed data
+     */
+    public int getRawsize() {
+        return rawsize;
+    }
+
+    /**
+     * Sets the size of the decompressed data
+     * @param rawsize The size of the decompressed data
+     */
+    public void setRawsize(int rawsize) {
+        this.rawsize = rawsize;
+    }
+
+    public int getCRC32() {
+       return crc32;
+    }
+}
+[/code]</description>
+    
+    <lastBuildDate>Wed, 30 Dec 2009 06:25:33 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Killer-99-pkz Killer-99-pkz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/killer-99-pkz">@Killer-99-pkz</a> wrote:</p>
+          <blockquote>
+              <p>read up on networking…dont use exceptions if u can use a return system. no one likes exceptions…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/29</link>
+        <pubDate>Wed, 30 Dec 2009 06:25:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-29</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@DarkXeD DarkXeD]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/darkxed">@DarkXeD</a> wrote:</p>
+          <blockquote>
+              <p>Very nice code peter.<br>
+I like it very much =)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/28</link>
+        <pubDate>Wed, 30 Dec 2009 05:24:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-28</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Killer-99-pkz Killer-99-pkz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/killer-99-pkz">@Killer-99-pkz</a> wrote:</p>
+          <blockquote>
+              <p>use buffers fool</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/27</link>
+        <pubDate>Tue, 29 Dec 2009 02:45:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-27</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>wtf is wrong with hating on hateable people??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/26</link>
+        <pubDate>Tue, 29 Dec 2009 02:44:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-26</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“i_own_pking, post:22, topic:321661”][quote author=eczema3 link=topic=418107.msg3075227#msg3075227 date=1261781254]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Sometimes, as i had a A for all of my english tests, i think you should learn to remember more than the last ten posts of a user before you share your idiotic opinion!</p>
+</blockquote>
+</aside>
+<p>His ‘idiotic opinion’ is mostly correct, your claim about your A in English exams seems very unlikely as even when you <span class="bbcode-i">try</span> to make it seem as if you’re intelligent, you still make mistakes. For example:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>as i had a A</p>
+</blockquote>
+</aside>
+<p>I think you’ll find its “an A”,</p>
+<aside class="quote no-group">
+<blockquote>
+<p>english</p>
+</blockquote>
+</aside>
+<p>It’s “English” not “english”.</p>
+<p>You lack capitals in the correct places, and why would he want to remember the last 10 of your posts? They’re all retarded.<br>
+[/quote]</p>
+<ol>
+<li>Petebjornx is dutch, therefore why should his english grammar be 100%.</li>
+<li>I havn’t seen any of your work here, so im guessing your just one of these kids who tries to follow the crowd?</li>
+<li>Frank_, do you seriously just sit here during the day flaming people who are alot younger than you because they may not be able to program as good as you? Peterbjornx is 15 if i remember correctly, so you flame a kid when your in your 20’s i believe.[/quote]</li>
+</ol>
+<p>peterbjornx is like 12</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/25</link>
+        <pubDate>Tue, 29 Dec 2009 02:41:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-25</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Nerice Nerice]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nerice">@Nerice</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="5" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>i think its time to leave this crap community again</p>
+</blockquote>
+</aside>
+<p>Mopar, this might not be the best place to put it but… You seriously need to crack down on the attacks, name calling, flaming etc… I am sure I am not the only one that would be willing to contribute but its just not worth it currently, nor is there any desire to try to help the people doing it anyway.</p>
+<p>Part of a pm I sent to you on May 01, 2007 when talking about something else… “Seems like everyone around here just wants to degrade, flame etc…” Its now 12/28/2009, 2.5 years later, and its still the same.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/24</link>
+        <pubDate>Tue, 29 Dec 2009 01:50:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-24</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“i_own_pking, post:22, topic:321661”][quote author=eczema3 link=topic=418107.msg3075227#msg3075227 date=1261781254]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Sometimes, as i had a A for all of my english tests, i think you should learn to remember more than the last ten posts of a user before you share your idiotic opinion!</p>
+</blockquote>
+</aside>
+<p>His ‘idiotic opinion’ is mostly correct, your claim about your A in English exams seems very unlikely as even when you <span class="bbcode-i">try</span> to make it seem as if you’re intelligent, you still make mistakes. For example:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>as i had a A</p>
+</blockquote>
+</aside>
+<p>I think you’ll find its “an A”,</p>
+<aside class="quote no-group">
+<blockquote>
+<p>english</p>
+</blockquote>
+</aside>
+<p>It’s “English” not “english”.</p>
+<p>You lack capitals in the correct places, and why would he want to remember the last 10 of your posts? They’re all retarded.<br>
+[/quote]</p>
+<ol>
+<li>Petebjornx is dutch, therefore why should his english grammar be 100%.</li>
+<li>I havn’t seen any of your work here, so im guessing your just one of these kids who tries to follow the crowd?</li>
+<li>Frank_, do you seriously just sit here during the day flaming people who are alot younger than you because they may not be able to program as good as you? Peterbjornx is 15 if i remember correctly, so you flame a kid when your in your 20’s i believe.[/quote]<br>
+English*</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/23</link>
+        <pubDate>Tue, 29 Dec 2009 01:18:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-23</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@i_own_pking i_own_pking]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/i_own_pking">@i_own_pking</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“eczema3, post:17, topic:321661”][quote author=peterbjornx link=topic=418107.msg3075220#msg3075220 date=1261780660]<br>
+Sometimes, as i had a A for all of my english tests, i think you should learn to remember more than the last ten posts of a user before you share your idiotic opinion!<br>
+[/quote]</p>
+<p>His ‘idiotic opinion’ is mostly correct, your claim about your A in English exams seems very unlikely as even when you <span class="bbcode-i">try</span> to make it seem as if you’re intelligent, you still make mistakes. For example:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>as i had a A</p>
+</blockquote>
+</aside>
+<p>I think you’ll find its “an A”,</p>
+<aside class="quote no-group">
+<blockquote>
+<p>english</p>
+</blockquote>
+</aside>
+<p>It’s “English” not “english”.</p>
+<p>You lack capitals in the correct places, and why would he want to remember the last 10 of your posts? They’re all retarded.[/quote]</p>
+<ol>
+<li>Petebjornx is dutch, therefore why should his english grammar be 100%.</li>
+<li>I havn’t seen any of your work here, so im guessing your just one of these kids who tries to follow the crowd?</li>
+<li>Frank_, do you seriously just sit here during the day flaming people who are alot younger than you because they may not be able to program as good as you? Peterbjornx is 15 if i remember correctly, so you flame a kid when your in your 20’s i believe.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/22</link>
+        <pubDate>Tue, 29 Dec 2009 00:56:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-22</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@ownagesbot ownagesbot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ownagesbot">@ownagesbot</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:19, topic:321661”][quote author=Moparisthebest link=topic=418107.msg3075390#msg3075390 date=1261791374]<br>
+if you want to criticize something make it the code.<br>
+[/quote]been there, done that[/quote]I actually laughed out loud. Epic.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/21</link>
+        <pubDate>Sat, 26 Dec 2009 10:51:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-21</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:19, topic:321661”][quote author=Moparisthebest link=topic=418107.msg3075390#msg3075390 date=1261791374]<br>
+if you want to criticize something make it the code.<br>
+[/quote]been there, done that[/quote]</p>
+<p>You have said nothing about the code in this topic.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/20</link>
+        <pubDate>Sat, 26 Dec 2009 02:02:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-20</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Moparisthebest, post:18, topic:321661”]if you want to criticize something make it the code.[/quote]been there, done that</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/19</link>
+        <pubDate>Sat, 26 Dec 2009 01:39:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-19</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>He isn’t a native english speaker, like many people here.  So ignore tiny spelling and grammar errors, and if you want to criticize something make it the code.  Otherwise shut up!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/18</link>
+        <pubDate>Sat, 26 Dec 2009 01:36:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-18</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@eczema3 eczema3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eczema3">@eczema3</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="16" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>Sometimes, as i had a A for all of my english tests, i think you should learn to remember more than the last ten posts of a user before you share your idiotic opinion!</p>
+</blockquote>
+</aside>
+<p>His ‘idiotic opinion’ is mostly correct, your claim about your A in English exams seems very unlikely as even when you <span class="bbcode-i">try</span> to make it seem as if you’re intelligent, you still make mistakes. For example:</p>
+<aside class="quote no-group" data-post="16" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>as i had a A</p>
+</blockquote>
+</aside>
+<p>I think you’ll find its “an A”,</p>
+<aside class="quote no-group" data-post="16" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>english</p>
+</blockquote>
+</aside>
+<p>It’s “English” not “english”.</p>
+<p>You lack capitals in the correct places, and why would he want to remember the last 10 of your posts? They’re all retarded.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/17</link>
+        <pubDate>Fri, 25 Dec 2009 22:47:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-17</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@peterbjornx peterbjornx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peterbjornx">@peterbjornx</a> wrote:</p>
+          <blockquote>
+              <p>Sometimes, as i had a A for all of my english tests, i think you should learn to remember more than the last ten posts of a user before you share your idiotic opinion!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/16</link>
+        <pubDate>Fri, 25 Dec 2009 22:37:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-16</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>your to lazy too use grammer</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/15</link>
+        <pubDate>Fri, 25 Dec 2009 21:51:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-15</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@peterbjornx peterbjornx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peterbjornx">@peterbjornx</a> wrote:</p>
+          <blockquote>
+              <p>i know that 2, just too lazy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/14</link>
+        <pubDate>Fri, 25 Dec 2009 21:24:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-14</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="12" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>yes i said dat,why is that stupid, i was just shocked by how much of an idiot ever1 here is</p>
+</blockquote>
+</aside>
+<p>at least we don’t spell like niggers</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/13</link>
+        <pubDate>Fri, 25 Dec 2009 21:21:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-13</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@peterbjornx peterbjornx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peterbjornx">@peterbjornx</a> wrote:</p>
+          <blockquote>
+              <p>yes i said dat,why is that stupid, i was just shocked by how much of an idiot ever1 here is</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/12</link>
+        <pubDate>Fri, 25 Dec 2009 20:17:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-12</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Holic Holic]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/holic">@Holic</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="10" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+ frank_:</div>
+<blockquote>
+<p>fucksakes i wish i had quoted him so his stupidity would survive forever</p>
+</blockquote>
+</aside>
+<aside class="quote no-group quote-modified" data-post="5" data-topic="321661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>“you’re a fag”?</p>
+</blockquote>
+</aside>
+<p>I believe…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/11</link>
+        <pubDate>Fri, 25 Dec 2009 17:48:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-11</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>fucksakes i wish i had quoted him so his stupidity would survive forever</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/10</link>
+        <pubDate>Fri, 25 Dec 2009 17:24:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-10</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>i love morons who complain about aesthetics (such as aligning symbols with spaces) instead of functionality of code.</p>
+<p>don’t get me wrong though, when people can’t format shit properly it fucking rages me (moparscape…)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/9</link>
+        <pubDate>Fri, 25 Dec 2009 16:51:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-9</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@the_bank the bank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_bank">@the_bank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fat Cookies, post:7, topic:321661”]<code>
+    private byte[] payload    ;
+    private int    rawsize    ;
+    private int    zipsize    ;
+    private int    compression;
+    private int    crc32      ;
+</code></p>
+<p>Why are all these variables lined up like that, imo it makes your code look worse.[/quote]All of his code is formatted like that, but he likes it more, so why the fuck do you care?</p>
+<p>Code formatting is all personal preference.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/8</link>
+        <pubDate>Fri, 25 Dec 2009 16:33:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-8</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@Fat_Cookies Fat Cookies]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fat_cookies">@Fat_Cookies</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">    private byte[] payload    ;
+    private int    rawsize    ;
+    private int    zipsize    ;
+    private int    compression;
+    private int    crc32      ;</code></pre>
+<p>Why are all these variables lined up like that, imo it makes your code look worse.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/7</link>
+        <pubDate>Fri, 25 Dec 2009 13:43:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-7</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>you are a fag</p>
+<p>what the hell is wrong with you</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/6</link>
+        <pubDate>Fri, 25 Dec 2009 00:00:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-6</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+      <item>
+        <title>To stop the flame about my last snippet of code</title>
+        <dc:creator><![CDATA[@peterbjornx peterbjornx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peterbjornx">@peterbjornx</a> wrote:</p>
+          <blockquote>
+              <p>i think its time to leave this crap community again</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661/5</link>
+        <pubDate>Thu, 24 Dec 2009 21:21:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-321661-5</guid>
+        <source url="https://forum.moparisthebest.com/t/to-stop-the-flame-about-my-last-snippet-of-code/321661.rss">To stop the flame about my last snippet of code</source>
+      </item>
+  </channel>
+</rss>

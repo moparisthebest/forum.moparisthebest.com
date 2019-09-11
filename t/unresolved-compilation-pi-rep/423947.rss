@@ -1,0 +1,809 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Unresolved compilation (PI) rep++</title>
+    <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947</link>
+    <description>Every time I run my server I get this error;
+
+[URL=http://imageshack.us/photo/my-images/841/35530963.png/][IMG]http://img841.imageshack.us/img841/7561/35530963.png[/img][/URL]
+
+
+
+
+This is my Server.java;
+
+[code]package server;
+
+import server.event.*;
+import server.model.npcs.*;
+import server.model.players.*;
+import server.model.minigames.FightCaves;
+import server.model.minigames.FightPits;
+import server.model.minigames.PestControl;
+import server.net.*;
+import server.util.*;
+import server.util.log.*;
+import server.world.*;
+import server.world.map.*;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.text.*;
+import java.util.*;
+import java.io.*;
+
+
+import org.apache.mina.common.IoAcceptor;
+import org.apache.mina.transport.socket.nio.SocketAcceptor;
+import org.apache.mina.transport.socket.nio.SocketAcceptorConfig;
+
+/**
+ * Server.java
+ * 
+ * @author Graham
+ * @author Blake
+ * @author Ryan Lmctruck30
+ * @author Ian Core
+ *
+ */
+
+public class Server {
+	
+	public static final int cycleRate;
+	public static boolean UpdateServer = false;
+	private static IoAcceptor acceptor;
+	private static ConnectionHandler connectionHandler;
+	private static ConnectionThrottleFilter throttleFilter;
+	private static SimpleTimer engineTimer, debugTimer;
+	private static long totalCycleTime, cycles, sleepTime;
+	public static long cycleTime;
+	public static long averageCycleTime;
+	public static DecimalFormat debugPercentFormat;
+	public static boolean shutdownServer = false;		
+	public static boolean shutdownClientHandler;			
+	public static int serverlistenerPort; 
+	public static ItemHandler itemHandler = new ItemHandler();
+	public static PlayerHandler playerHandler = new PlayerHandler();
+    	public static NPCHandler npcHandler = new NPCHandler();
+	public static ClanChatHandler clanChat = new ClanChatHandler();
+	public static ShopHandler shopHandler = new ShopHandler();
+	public static ObjectManager objectManager = new ObjectManager();
+	public static DoorHandler doorHandler = new DoorHandler();
+	public static FightCaves fightCaves = new FightCaves();
+	public static FightPits fightPits = new FightPits();
+	public static NPCDrops npcDrops = new NPCDrops();
+	public static PestControl pestControl = new PestControl();
+	public static Gui gui = null;
+	public static HiscoreManager hiscoreManager = null;
+	
+	static {
+		serverlistenerPort = 43594;
+		cycleRate = 600;
+		shutdownServer = false;
+		engineTimer = new SimpleTimer();
+		debugTimer = new SimpleTimer();
+		sleepTime = 0;
+		debugPercentFormat = new DecimalFormat(&quot;0.0#%&quot;);
+	}
+
+	public static void main(java.lang.String args[]) throws NullPointerException, IOException {
+		/**
+		 * Starting Up Server
+		 */
+		System.setOut(new Logger(System.out));
+		System.setErr(new Logger(System.err));
+		System.out.println(&quot;Launching RetroScape...&quot;);
+		
+		/**
+		 * Accepting Connections
+		 */
+		acceptor = new SocketAcceptor();
+		connectionHandler = new ConnectionHandler();
+		
+		SocketAcceptorConfig sac = new SocketAcceptorConfig();
+		sac.getSessionConfig().setTcpNoDelay(false);
+		sac.setReuseAddress(true);
+		sac.setBacklog(100);
+		
+		throttleFilter = new ConnectionThrottleFilter(Config.CONNECTION_DELAY);
+		sac.getFilterChain().addFirst(&quot;throttleFilter&quot;, throttleFilter);
+		acceptor.bind(new InetSocketAddress(serverlistenerPort), connectionHandler, sac);
+
+		/**
+		 * Initialise Handlers
+		 */
+		EventManager.initialise();
+		Connection.initialize();
+		if(Config.HISCORE_MYSQL)
+			hiscoreManager = new HiscoreManager(); 
+		
+		/**
+		 * Shutdown Hook
+		 */
+		 
+		Runtime.getRuntime().addShutdownHook(new Thread() {
+			public void run() {
+				for(Player p : playerHandler.players) {
+					if(p == null) continue;
+					Client c = (Client) playerHandler.players[p.playerId];
+					if(c.duelStatus == 5) {
+						c.getTradeAndDuel().restartDuel();
+					}
+					PlayerSave.saveGame(c);
+				}
+			}
+		});
+		
+		/**
+		 * Server Successfully Loaded 
+		 */
+		System.out.println(&quot;Server listening on port revolutionx.zapto.org:&quot; + serverlistenerPort);
+			
+		/**
+		 * Main Server Tick
+		 */
+		try {
+			while (!Server.shutdownServer) {
+				if (sleepTime &gt;= 0)
+					Thread.sleep(sleepTime);
+				engineTimer.reset();
+				itemHandler.process();
+				playerHandler.process();	
+	            		npcHandler.process();
+				shopHandler.process();
+				objectManager.process();
+				fightPits.process();
+				pestControl.process();
+				cycleTime = engineTimer.elapsed();
+				sleepTime = cycleRate - cycleTime;
+				totalCycleTime += cycleTime;
+				cycles++;
+				debug();
+				uptime();
+			}
+		} catch (Exception ex) {
+			ex.printStackTrace();
+			System.out.println(&quot;A fatal exception has been thrown!&quot;);
+		}
+		
+	}
+	
+	public static double engineLoad = 0.0;
+		
+	private static void debug() {
+		if (debugTimer.elapsed() &gt; 360*1000) {
+			averageCycleTime = (int) totalCycleTime / cycles;
+			engineLoad = ((double) averageCycleTime / (double) cycleRate);
+			totalCycleTime = 0;
+			cycles = 0;
+			System.gc();
+			debugTimer.reset();
+		}
+	}
+	
+	public static int seconds = 0;
+	public static int minutes = 0;
+	public static int hours = 0;
+	public static int days = 0;
+	public static long uptimeCheck = System.currentTimeMillis();
+	
+	public static int topPlayerCount = 0;
+	
+	public static void uptime() {
+		if(System.currentTimeMillis() - uptimeCheck &gt; 1000) {
+			uptimeCheck = System.currentTimeMillis();
+			seconds++;
+			if(seconds == 60) {
+				minutes++;
+				seconds = 0;
+			}
+			if(minutes == 60) {
+				hours++;
+				minutes = 0;
+			}
+			if(hours == 24) {
+				days++;
+				hours = 0;
+			}
+		}
+	}
+	
+}
+[/code]</description>
+    
+    <lastBuildDate>Sat, 03 Dec 2011 23:35:55 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@Agent_Jugz Agent Jugz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/agent_jugz">@Agent_Jugz</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="18" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ Int Bauk:</div>
+<blockquote>
+<p>YOUR .CLASS FILES ARE MISSING - (OF THOSE CLASSES!).</p>
+</blockquote>
+</aside>
+<p>Thanks its fixed!  (they weren’t in /bin)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/19</link>
+        <pubDate>Sat, 03 Dec 2011 23:35:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-19</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>YOUR .CLASS FILES ARE MISSING - (OF THOSE CLASSES!).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/18</link>
+        <pubDate>Sat, 03 Dec 2011 23:34:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-18</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="16" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ The Outsider:</div>
+<blockquote>
+<p>^That makes sense although Google told me different /believeeverythingyouseeontheinternet.</p>
+</blockquote>
+</aside>
+<aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/1124788/java-unresolved-compilation-problem" target="_blank" rel="nofollow noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4>
+  <a href="https://stackoverflow.com/questions/1124788/java-unresolved-compilation-problem" target="_blank" rel="nofollow noopener">Java: Unresolved compilation problem</a>
+</h4>
+
+<div class="tags">
+  <strong>java</strong>
+</div>
+
+<div class="date">
+  asked by
+  
+  <a href="">
+    Frank
+  </a>
+  on <a href="https://stackoverflow.com/questions/1124788/java-unresolved-compilation-problem" target="_blank" rel="nofollow noopener">11:25AM - 14 Jul 09</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/17</link>
+        <pubDate>Sat, 03 Dec 2011 21:45:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-17</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <p>^That makes sense although Google told me different /believeeverythingyouseeontheinternet.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/16</link>
+        <pubDate>Sat, 03 Dec 2011 21:43:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-16</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="1" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ Agent Jugz:</div>
+<blockquote>
+<p><a href="http://imageshack.us/photo/my-images/841/35530963.png/" data-bbcode="true" rel="nofollow noopener"><img src="http://img841.imageshack.us/img841/7561/35530963.png" alt></a></p>
+</blockquote>
+</aside>
+<p>“Unresolved compilation problems:”<br>
+What does that mean?</p>
+<p>“ItemHandler cannot be resolved to a type”</p>
+<p>What does that mean?</p>
+<p>Means it cannot be found.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/15</link>
+        <pubDate>Sat, 03 Dec 2011 21:41:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-15</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:13, topic:423947”][quote author=The Outsider link=topic=526600.msg3836536#msg3836536 date=1322947690]<br>
+A run time error, yes.<br>
+[/quote]<br>
+No you idiot, the errors that were not fixed when compiling(prob used an IDE to compile for him).[/quote]<br>
+Well with very little information it’s kind of hard to evaluate the problem properly. I assume it’s a run time error. If there’s no mention of compiler errors then we are supposed to guess? Fuck sake.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/14</link>
+        <pubDate>Sat, 03 Dec 2011 21:33:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-14</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="12" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ The Outsider:</div>
+<blockquote>
+<p>A run time error, yes.</p>
+</blockquote>
+</aside>
+<p>No you idiot, the errors that were not fixed when compiling(prob used an IDE to compile for him).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/13</link>
+        <pubDate>Sat, 03 Dec 2011 21:29:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-13</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <p>A run time error, yes.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/12</link>
+        <pubDate>Sat, 03 Dec 2011 21:28:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-12</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/imsuperman05/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> imsuperman05:</div>
+<blockquote>
+<p>Those are errors.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/11</link>
+        <pubDate>Sat, 03 Dec 2011 21:07:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-11</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@teh_one teh one]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/teh_one">@teh_one</a> wrote:</p>
+          <blockquote>
+              <p>Maybe so, i’m just saying it fixed my error i had when i changed it from running 1.0.6_26 to 1.0.7</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/10</link>
+        <pubDate>Sat, 03 Dec 2011 19:42:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-10</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="8" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ teh one:</div>
+<blockquote>
+<p>Tyb, hardly restarted, i used to get “Main” errors until i changed my jdk.</p>
+</blockquote>
+</aside>
+<p>I don’t think <span class="bbcode-b">restarting</span> will solve it either. Oh, this is too easy…</p>
+<p>teh one, Google “unresolved compilation problems in Java” and see that it has nothing to do with your JDK version.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/9</link>
+        <pubDate>Sat, 03 Dec 2011 19:40:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-9</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@teh_one teh one]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/teh_one">@teh_one</a> wrote:</p>
+          <blockquote>
+              <p>Tyb, hardly restarted, i used to get “Main” errors until i changed my jdk.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/8</link>
+        <pubDate>Sat, 03 Dec 2011 19:33:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-8</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“tyb97, post:6, topic:423947”][quote author=teh one link=topic=526600.msg3836364#msg3836364 date=1322939664]<br>
+That could be a basic Java error. Make sure your path goes to your latest UPDATED java. If you have like 4 jdk versions on your computer, you’ll get errors like that, try using the updated 1.0.7. jdk.<br>
+[/quote]<br>
+Your retarded.[/quote]<br>
+Sir, <span class="bbcode-b">you’re</span> <span class="bbcode-i">on the way</span> to retarded /insulting joke.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/7</link>
+        <pubDate>Sat, 03 Dec 2011 19:27:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-7</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@tyb97 tyb97]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tyb97">@tyb97</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="4" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ teh one:</div>
+<blockquote>
+<p>That could be a basic Java error. Make sure your path goes to your latest UPDATED java. If you have like 4 jdk versions on your computer, you’ll get errors like that, try using the updated 1.0.7. jdk.</p>
+</blockquote>
+</aside>
+<p>Your retarded.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/6</link>
+        <pubDate>Sat, 03 Dec 2011 19:26:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-6</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="4" data-topic="423947">
+<div class="title">
+<div class="quote-controls"></div>
+ teh one:</div>
+<blockquote>
+<p>That could be a basic Java error. Make sure your path goes to your latest UPDATED java. If you have like 4 jdk versions on your computer, you’ll get errors like that, try using the updated 1.0.7. jdk.</p>
+</blockquote>
+</aside>
+<p>I doubt that is the case.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/5</link>
+        <pubDate>Sat, 03 Dec 2011 19:25:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-5</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@teh_one teh one]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/teh_one">@teh_one</a> wrote:</p>
+          <blockquote>
+              <p>That could be a basic Java error. Make sure your path goes to your latest UPDATED java. If you have like 4 jdk versions on your computer, you’ll get errors like that, try using the updated 1.0.7. jdk.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/4</link>
+        <pubDate>Sat, 03 Dec 2011 19:14:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-4</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@The_Outsider The Outsider]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_outsider">@The_Outsider</a> wrote:</p>
+          <blockquote>
+              <p>Are you missing a try {}/catch{ exception } anywhere? A Google search told me this could be your problem. Not sure I can help you any further.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/3</link>
+        <pubDate>Sat, 03 Dec 2011 16:03:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-3</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>Those are errors.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/2</link>
+        <pubDate>Sat, 03 Dec 2011 16:01:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-2</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+      <item>
+        <title>Unresolved compilation (PI) rep++</title>
+        <dc:creator><![CDATA[@Agent_Jugz Agent Jugz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/agent_jugz">@Agent_Jugz</a> wrote:</p>
+          <blockquote>
+              <p>Every time I run my server I get this error;</p>
+<p><a href="http://imageshack.us/photo/my-images/841/35530963.png/" data-bbcode="true" rel="nofollow noopener"><img src="http://img841.imageshack.us/img841/7561/35530963.png" alt width="" height=""></a></p>
+<p>This is my Server.java;</p>
+<p>[code]package server;</p>
+<p>import server.event.<em>;<br>
+import server.model.npcs.</em>;<br>
+import server.model.players.<em>;<br>
+import server.model.minigames.FightCaves;<br>
+import server.model.minigames.FightPits;<br>
+import server.model.minigames.PestControl;<br>
+import <a href="http://server.net" rel="nofollow noopener">server.net</a>.</em>;<br>
+import server.util.<em>;<br>
+import server.util.log.</em>;<br>
+import server.world.<em>;<br>
+import server.world.map.</em>;</p>
+<p>import java.io.IOException;<br>
+import java.net.InetSocketAddress;<br>
+import java.text.<em>;<br>
+import java.util.</em>;<br>
+import <a href="http://java.io" rel="nofollow noopener">java.io</a>.*;</p>
+<p>import org.apache.mina.common.IoAcceptor;<br>
+import org.apache.mina.transport.socket.nio.SocketAcceptor;<br>
+import org.apache.mina.transport.socket.nio.SocketAcceptorConfig;</p>
+<p>/**</p>
+<ul>
+<li>Server.java</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+<span class="mention">@author</span> Blake</li>
+<li>
+<span class="mention">@author</span> Ryan Lmctruck30</li>
+<li>
+<span class="mention">@author</span> Ian Core</li>
+<li>
+</li>
+</ul>
+<p>*/</p>
+<p>public class Server {</p>
+<pre><code>public static final int cycleRate;
+public static boolean UpdateServer = false;
+private static IoAcceptor acceptor;
+private static ConnectionHandler connectionHandler;
+private static ConnectionThrottleFilter throttleFilter;
+private static SimpleTimer engineTimer, debugTimer;
+private static long totalCycleTime, cycles, sleepTime;
+public static long cycleTime;
+public static long averageCycleTime;
+public static DecimalFormat debugPercentFormat;
+public static boolean shutdownServer = false;		
+public static boolean shutdownClientHandler;			
+public static int serverlistenerPort; 
+public static ItemHandler itemHandler = new ItemHandler();
+public static PlayerHandler playerHandler = new PlayerHandler();
+	public static NPCHandler npcHandler = new NPCHandler();
+public static ClanChatHandler clanChat = new ClanChatHandler();
+public static ShopHandler shopHandler = new ShopHandler();
+public static ObjectManager objectManager = new ObjectManager();
+public static DoorHandler doorHandler = new DoorHandler();
+public static FightCaves fightCaves = new FightCaves();
+public static FightPits fightPits = new FightPits();
+public static NPCDrops npcDrops = new NPCDrops();
+public static PestControl pestControl = new PestControl();
+public static Gui gui = null;
+public static HiscoreManager hiscoreManager = null;
+
+static {
+	serverlistenerPort = 43594;
+	cycleRate = 600;
+	shutdownServer = false;
+	engineTimer = new SimpleTimer();
+	debugTimer = new SimpleTimer();
+	sleepTime = 0;
+	debugPercentFormat = new DecimalFormat("0.0#%");
+}
+
+public static void main(java.lang.String args[]) throws NullPointerException, IOException {
+	/**
+	 * Starting Up Server
+	 */
+	System.setOut(new Logger(System.out));
+	System.setErr(new Logger(System.err));
+	System.out.println("Launching RetroScape...");
+	
+	/**
+	 * Accepting Connections
+	 */
+	acceptor = new SocketAcceptor();
+	connectionHandler = new ConnectionHandler();
+	
+	SocketAcceptorConfig sac = new SocketAcceptorConfig();
+	sac.getSessionConfig().setTcpNoDelay(false);
+	sac.setReuseAddress(true);
+	sac.setBacklog(100);
+	
+	throttleFilter = new ConnectionThrottleFilter(Config.CONNECTION_DELAY);
+	sac.getFilterChain().addFirst("throttleFilter", throttleFilter);
+	acceptor.bind(new InetSocketAddress(serverlistenerPort), connectionHandler, sac);
+
+	/**
+	 * Initialise Handlers
+	 */
+	EventManager.initialise();
+	Connection.initialize();
+	if(Config.HISCORE_MYSQL)
+		hiscoreManager = new HiscoreManager(); 
+	
+	/**
+	 * Shutdown Hook
+	 */
+	 
+	Runtime.getRuntime().addShutdownHook(new Thread() {
+		public void run() {
+			for(Player p : playerHandler.players) {
+				if(p == null) continue;
+				Client c = (Client) playerHandler.players[p.playerId];
+				if(c.duelStatus == 5) {
+					c.getTradeAndDuel().restartDuel();
+				}
+				PlayerSave.saveGame(c);
+			}
+		}
+	});
+	
+	/**
+	 * Server Successfully Loaded 
+	 */
+	System.out.println("Server listening on port revolutionx.zapto.org:" + serverlistenerPort);
+		
+	/**
+	 * Main Server Tick
+	 */
+	try {
+		while (!Server.shutdownServer) {
+			if (sleepTime &gt;= 0)
+				Thread.sleep(sleepTime);
+			engineTimer.reset();
+			itemHandler.process();
+			playerHandler.process();	
+            		npcHandler.process();
+			shopHandler.process();
+			objectManager.process();
+			fightPits.process();
+			pestControl.process();
+			cycleTime = engineTimer.elapsed();
+			sleepTime = cycleRate - cycleTime;
+			totalCycleTime += cycleTime;
+			cycles++;
+			debug();
+			uptime();
+		}
+	} catch (Exception ex) {
+		ex.printStackTrace();
+		System.out.println("A fatal exception has been thrown!");
+	}
+	
+}
+
+public static double engineLoad = 0.0;
+	
+private static void debug() {
+	if (debugTimer.elapsed() &gt; 360*1000) {
+		averageCycleTime = (int) totalCycleTime / cycles;
+		engineLoad = ((double) averageCycleTime / (double) cycleRate);
+		totalCycleTime = 0;
+		cycles = 0;
+		System.gc();
+		debugTimer.reset();
+	}
+}
+
+public static int seconds = 0;
+public static int minutes = 0;
+public static int hours = 0;
+public static int days = 0;
+public static long uptimeCheck = System.currentTimeMillis();
+
+public static int topPlayerCount = 0;
+
+public static void uptime() {
+	if(System.currentTimeMillis() - uptimeCheck &gt; 1000) {
+		uptimeCheck = System.currentTimeMillis();
+		seconds++;
+		if(seconds == 60) {
+			minutes++;
+			seconds = 0;
+		}
+		if(minutes == 60) {
+			hours++;
+			minutes = 0;
+		}
+		if(hours == 24) {
+			days++;
+			hours = 0;
+		}
+	}
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947/1</link>
+        <pubDate>Sat, 03 Dec 2011 15:39:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-423947-1</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-compilation-pi-rep/423947.rss">Unresolved compilation (PI) rep++</source>
+      </item>
+  </channel>
+</rss>

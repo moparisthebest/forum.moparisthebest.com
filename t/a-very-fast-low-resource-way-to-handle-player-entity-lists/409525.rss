@@ -1,0 +1,918 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A very fast, low-resource way to handle player/entity lists</title>
+    <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525</link>
+    <description>[b]Background[/b]:
+I discussed this with s1gma a week or so ago, I liked the idea so much I decided to save it to aid in future projects.
+
+[b]Approach[/b]:
+The idea was to create a way of holding players (or any entity really) which was not CPU intensive (anything beyond a O(1) operation :P ) and not memory intensive. Obviously the first condition removes the possibility of searching for an index to place the new player at since that would be a O(n) worst-case operation whenever a player logs in. The second conditions removes the idea of creating an expensive linked list of all player entities. The solution: create a system in which the server always knows where to put the next incoming entity.
+
+How did we accomplish this? Having a stack of all available indices that are free within the array of entities. If an entity needs to fill a spot, pop the stack (thus removing that position from the available positions and obtaining that index value). Is an entity no longer needs that position (logs out), we can push the entities&#39;s position back on the stack to use again.
+
+
+[b]Application/Testing[/b]:
+
+EntityHandler (should contain all methods pertaining to entity management as a whole):
+[code=java]
+/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+import java.util.Stack;
+
+/**
+ * EntityHandler
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class EntityHandler {
+
+    /** The maximum amount of entities allowed in the game */
+    private static final int MAX_ENTITIES = 2;
+
+    /** The array of entities */
+    private static Entity[] entities = new Entity[MAX_ENTITIES];
+
+    /** The stack of available positions within the entity array */
+    private static Stack&lt;Integer&gt; availablePositions = new Stack&lt;Integer&gt;();
+    static {
+        /*
+          Push all available positions onto the stack (no entities are currently in the game)
+          */
+        for(int i = (MAX_ENTITIES - 1); i &gt; -1; i--)
+            availablePositions.push(i);
+    }
+
+    /**
+     * Adds an entity on the game (ex: login)
+     * @param entity
+     * @return
+     */
+    public static boolean addEntity(Entity entity) {
+        /*
+            Are there no more positions available? If so, unable to add the entity
+         */
+        if(availablePositions.size() == 0)
+            return false;
+
+        /*
+            There is an available position, save the position in the entity instance and
+            pop that position off the stack as it is no longer available
+         */
+        int position = availablePositions.pop();
+        entity.setEntityId(position);
+        entities[entity.getEntityId()] = entity;
+        return true;
+    }
+
+    /**
+     * Removes an entity from the game and frees the entity&#39;s slot
+     * @param entity
+     */
+    public static void removeEntity(Entity entity) {
+        int position = entity.getEntityId();
+        entities[position] = null;
+        availablePositions.push(position);
+    }
+
+}
+[/code]
+
+Entity (this could refer to the player):
+[code=java]
+/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+/**
+ * Entity
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class Entity {
+
+    /** The entity ID (player ID) */
+    private int entityId;
+
+    /** The name of the entity */
+    private String name;
+
+    /**
+     * Creates a new entity
+     * @param name
+     */
+    public Entity(String name) {
+        this.name = name;
+    }
+
+    /**
+     * Gets the entity&#39;s name
+     * @return
+     */
+    public String getName() {
+        return name;
+    }
+
+    /**
+     * Sets the entity ID
+     * @param entityId
+     */
+    public void setEntityId(int entityId) {
+        this.entityId = entityId;
+    }
+
+    /**
+     * Gets the entity ID
+     * @return
+     */
+    public int getEntityId() {
+        return entityId;
+    }
+}
+[/code]
+
+Server (example for testing):
+[code=java]
+/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+/**
+ * Server
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class Server {
+
+    /**
+     * Simulates the functionality of this approach
+     * @param args
+     */
+    public static void main(String[] args) {
+        Entity bob = new Entity(&quot;Bob&quot;);
+        System.out.println(bob.getName() + &quot; wishes to connect.&quot;);
+        if(EntityHandler.addEntity(bob)) {
+            System.out.println(&quot;Position found for entity &quot; + bob.getName() + &quot; at &quot; + bob.getEntityId() + &quot;, connection successful.&quot;);
+        } else {
+            System.out.println(&quot;Position not found for entity &quot; + bob.getName() + &quot;, game is full!&quot;);
+        }
+
+        Entity geoffrey = new Entity(&quot;Geoffrey&quot;);
+        System.out.println(geoffrey.getName() + &quot; wishes to connect.&quot;);
+        if(EntityHandler.addEntity(geoffrey)) {
+            System.out.println(&quot;Position found for entity &quot; + geoffrey.getName() + &quot; at &quot; + geoffrey.getEntityId() + &quot;, connection successful.&quot;);
+        } else {
+            System.out.println(&quot;Position not found for entity &quot; + geoffrey.getName() + &quot;, game is full!&quot;);
+        }
+
+        Entity steve = new Entity(&quot;Steve&quot;);
+        System.out.println(steve.getName() + &quot; wishes to connect.&quot;);
+        if(EntityHandler.addEntity(steve)) {
+            System.out.println(&quot;Position found for entity &quot; + steve.getName() + &quot; at &quot; + steve.getEntityId() + &quot;, connection successful.&quot;);
+        } else {
+            System.out.println(&quot;Position not found for entity &quot; + steve.getName() + &quot;, game is full!&quot;);
+        }
+
+        System.out.println(geoffrey.getName() + &quot; is disconnecting.&quot;);
+        EntityHandler.removeEntity(geoffrey);
+
+        Entity joe = new Entity(&quot;Joe&quot;);
+        System.out.println(joe.getName() + &quot; wishes to connect.&quot;);
+        if(EntityHandler.addEntity(joe)) {
+            System.out.println(&quot;Position found for entity &quot; + joe.getName() + &quot; at &quot; + joe.getEntityId() + &quot;, connection successful.&quot;);
+        } else {
+            System.out.println(&quot;Position not found for entity &quot; + joe.getName() + &quot;, game is full!&quot;);
+        }
+    }
+}
+[/code]
+
+[b]Output[/b]:
+[code]
+Bob wishes to connect.
+Position found for entity Bob at 0, connection successful.
+Geoffrey wishes to connect.
+Position found for entity Geoffrey at 1, connection successful.
+Steve wishes to connect.
+Position not found for entity Steve, game is full!
+Geoffrey is disconnecting.
+Joe wishes to connect.
+Position found for entity Joe at 1, connection successful.
+[/code]
+
+Have fun.</description>
+    
+    <lastBuildDate>Fri, 12 Aug 2011 17:09:53 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="19" data-topic="409525">
+<div class="title">
+<div class="quote-controls"></div>
+ (Anthony):</div>
+<blockquote>
+<p>hey t4 we went over why this is bad on irc, please revise.</p>
+</blockquote>
+</aside>
+<p>Not exactly, we did come to the conclusion that having a second stack would be better.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/20</link>
+        <pubDate>Fri, 12 Aug 2011 17:09:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-20</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>hey t4 we went over why this is bad on irc, please revise.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/19</link>
+        <pubDate>Fri, 12 Aug 2011 09:56:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-19</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@Zach1 Zach.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zach1">@Zach1</a> wrote:</p>
+          <blockquote>
+              <p>In mine when a entity is removed the placement of that entity is store in a list to be later recycled. So when a new entity is connected it uses the first recycled slot and if theres no slots available it just goes to the end of the list</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/18</link>
+        <pubDate>Fri, 12 Aug 2011 06:34:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-18</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zach., post:16, topic:409525”]My version lawl<br>
+uses a array list and 2 integers</p>
+<p><code>
+    if(available.get(0) != -1) {
+        entities[available.get(0)] = new entity();
+    } else {
+        if(numberOfConnections &lt; max) {
+            entities[numberOfConnections++] = new entity();
+            return;
+        }
+        System.out.println("Max connections reached);
+    }
+</code>[/quote]<br>
+whut</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/17</link>
+        <pubDate>Fri, 12 Aug 2011 06:21:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-17</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@Zach1 Zach.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zach1">@Zach1</a> wrote:</p>
+          <blockquote>
+              <p>My version lawl<br>
+uses a array list and 2 integers</p>
+<pre><code class="lang-auto">    if(available.get(0) != -1) {
+        entities[available.get(0)] = new entity();
+    } else {
+        if(numberOfConnections &lt; max) {
+            entities[numberOfConnections++] = new entity();
+            return;
+        }
+        System.out.println("Max connections reached);
+    }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/16</link>
+        <pubDate>Fri, 12 Aug 2011 05:24:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-16</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@fellixombc fellixombc]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fellixombc">@fellixombc</a> wrote:</p>
+          <blockquote>
+              <p>Good fucking read.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/15</link>
+        <pubDate>Fri, 12 Aug 2011 03:17:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-15</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“dain bramage, post:10, topic:409525”]I’ve always used:</p>
+<p><code>private static List&lt;Entity&gt; entities = new ArrayList&lt;Entity&gt;();
+private static int maxEntities = 2;</code></p>
+<p>It always fits to size. Upon connection, you can just refuse the connection if</p>
+<p><code>if (entities.size() &gt;= maxEntities) {
+    //refuse the connection / whatever.
+}</code></p>
+<p>Gj T4.[/quote]<br>
+I made a mistake on how I thought ArrayList was implemented. But my idea still stands in the fact that removing an element from the ArrayList is an O(n) operation - which has to be done when the player logs out.</p>
+<p>However, the correction s1gma made was having a stack of the indexes in use (so you could iterate of the player’s currently online for updates faster) is a good one.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/14</link>
+        <pubDate>Fri, 12 Aug 2011 03:09:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-14</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@m1lkman m1lkman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m1lkman">@m1lkman</a> wrote:</p>
+          <blockquote>
+              <p>Does this werk with PI!!!?! Cus Id liak vuery moch to add this new custom npcs called entity!</p>
+<p>Nice work T4, topics like this make everyone smarter.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/13</link>
+        <pubDate>Thu, 11 Aug 2011 23:22:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-13</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:8, topic:409525"][quote author=Davidi2 link=topic=510805.msg3706909#msg3706909 date=1313096219]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>needs more custom GameFullExceptions</p>
+</blockquote>
+</aside>
+<p>Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…<br>
+[/quote]then just use some TooExpensiveExceptionException’s?</p>
+<p>All kidding/trolling aside, lemme get this straight. The only difference here is that instead of looping through the entity array to find an empty slot, there is an empty slot stack? I don’t know how much faster that is, but I guess that’s something to figure out <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>the speed difference is probably minimal (n33ds m0ar b3nchm4rkZz) but i’m pretty certain that just popping a value off of a stack and using it rather than loop through a sequence of what could be thousands of players would be more preferable and is likely to be a little bit faster.[/quote]Yea, it may be worth seeing the difference in a server that has maybe 99% full capacity <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>[quote="_s, post:11, topic:409525"][quote author=dain bramage link=topic=510805.msg3707012#msg3707012 date=1313099888]<br>
+I’ve always used:</p>
+<p><code>private static List&lt;Entity&gt; entities = new ArrayList&lt;Entity&gt;();
+private static int maxEntities = 2;</code></p>
+<p>It always fits to size. Upon connection, you can just refuse the connection if</p>
+<p><code>if (entities.size() &gt;= maxEntities) {
+    //refuse the connection / whatever.
+}</code></p>
+<p>Gj T4.<br>
+[/quote]<br>
+yeah thats exactly the st00f we were laughing at earlier, using an ArrayList (or a beefed up LinkedList according to T4 :DDD) and checking the bounds.[/quote]Laughing at as in: hahah that’s such a bad method,</p>
+<p>or laughing at as in: hahah we could just use an arraylist</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/12</link>
+        <pubDate>Thu, 11 Aug 2011 23:05:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-12</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“dain bramage, post:10, topic:409525”]I’ve always used:</p>
+<p><code>private static List&lt;Entity&gt; entities = new ArrayList&lt;Entity&gt;();
+private static int maxEntities = 2;</code></p>
+<p>It always fits to size. Upon connection, you can just refuse the connection if</p>
+<p><code>if (entities.size() &gt;= maxEntities) {
+    //refuse the connection / whatever.
+}</code></p>
+<p>Gj T4.[/quote]<br>
+yeah thats exactly the st00f we were laughing at earlier, using an ArrayList (or a beefed up LinkedList according to T4 :DDD) and checking the bounds.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/11</link>
+        <pubDate>Thu, 11 Aug 2011 22:52:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-11</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@dain_bramage dain bramage]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dain_bramage">@dain_bramage</a> wrote:</p>
+          <blockquote>
+              <p>I’ve always used:</p>
+<p><code>private static List&lt;Entity&gt; entities = new ArrayList&lt;Entity&gt;();
+private static int maxEntities = 2;</code></p>
+<p>It always fits to size. Upon connection, you can just refuse the connection if</p>
+<p><code>if (entities.size() &gt;= maxEntities) {
+    //refuse the connection / whatever.
+}</code></p>
+<p>Gj T4.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/10</link>
+        <pubDate>Thu, 11 Aug 2011 21:58:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-10</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:7, topic:409525”][quote author=T4_ link=topic=510805.msg3706908#msg3706908 date=1313096164]</p>
+<aside class="quote">
+<blockquote>
+<p>needs more custom GameFullExceptions</p>
+</blockquote>
+</aside>
+<p>Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…<br>
+[/quote]then just use some TooExpensiveExceptionException’s?</p>
+<p>All kidding/trolling aside, lemme get this straight. The only difference here is that instead of looping through the entity array to find an empty slot, there is an empty slot stack? I don’t know how much faster that is, but I guess that’s something to figure out :P[/quote]<br>
+Most likely a few milliseconds… trollface.png</p>
+<p>But, it’s such an easy optimization that it was worth those milliseconds imo. Feel free to give me suggestions of common-use implementation in RSPS that need optimization, I need something to do. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+<p>[quote="_s, post:8, topic:409525"][quote author=Davidi2 link=topic=510805.msg3706909#msg3706909 date=1313096219]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>needs more custom GameFullExceptions</p>
+</blockquote>
+</aside>
+<p>Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…<br>
+[/quote]then just use some TooExpensiveExceptionException’s?</p>
+<p>All kidding/trolling aside, lemme get this straight. The only difference here is that instead of looping through the entity array to find an empty slot, there is an empty slot stack? I don’t know how much faster that is, but I guess that’s something to figure out <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>the speed difference is probably minimal (n33ds m0ar b3nchm4rkZz) but i’m pretty certain that just popping a value off of a stack and using it rather than loop through a sequence of what could be thousands of players would be more preferable and is likely to be a little bit faster.[/quote]<br>
+You will only notice a difference when there is more stress on the server as above stated.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/9</link>
+        <pubDate>Thu, 11 Aug 2011 21:31:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-9</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:7, topic:409525”][quote author=T4_ link=topic=510805.msg3706908#msg3706908 date=1313096164]</p>
+<aside class="quote">
+<blockquote>
+<p>needs more custom GameFullExceptions</p>
+</blockquote>
+</aside>
+<p>Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…<br>
+[/quote]then just use some TooExpensiveExceptionException’s?</p>
+<p>All kidding/trolling aside, lemme get this straight. The only difference here is that instead of looping through the entity array to find an empty slot, there is an empty slot stack? I don’t know how much faster that is, but I guess that’s something to figure out :P[/quote]</p>
+<p>the speed difference is probably minimal (n33ds m0ar b3nchm4rkZz) but i’m pretty certain that just popping a value off of a stack and using it rather than loop through a sequence of what could be thousands of players would be more preferable and is likely to be a little bit faster.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/8</link>
+        <pubDate>Thu, 11 Aug 2011 21:29:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-8</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“T4_, post:6, topic:409525”][quote author=Davidi2 link=topic=510805.msg3706778#msg3706778 date=1313090187]<br>
+needs more custom GameFullExceptions<br>
+[/quote]<br>
+Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…[/quote]then just use some TooExpensiveExceptionException’s?</p>
+<p>All kidding/trolling aside, lemme get this straight. The only difference here is that instead of looping through the entity array to find an empty slot, there is an empty slot stack? I don’t know how much faster that is, but I guess that’s something to figure out <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/7</link>
+        <pubDate>Thu, 11 Aug 2011 20:56:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-7</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="409525">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>needs more custom GameFullExceptions</p>
+</blockquote>
+</aside>
+<p>Wanted it to be as simplistic as possible, plus exceptions are much more expensive than returning a boolean value…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/6</link>
+        <pubDate>Thu, 11 Aug 2011 20:56:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-6</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>needs more custom GameFullExceptions</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/5</link>
+        <pubDate>Thu, 11 Aug 2011 19:16:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-5</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“T4_, post:3, topic:409525”][quote author=<em>s link=topic=510805.msg3706733#msg3706733 date=1313089049]<br>
+wtf is a s1gma is it an animal<br>
+[/quote]<br>
+[s]* [s1gma] (s1gm@eats.gingers): ~</em>~</p>
+<ul>
+<li>[s1gma] is a registered nick</li>
+<li>[s1gma] <span class="hashtag">#runescape</span> <span class="hashtag">#moparscape</span> <span class="hashtag">#mopar</span>
+</li>
+</ul>
+<p>I don’t know his forum name.[/s]</p>
+<p>Lol.[/quote]</p>
+<p>trold heavy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/4</link>
+        <pubDate>Thu, 11 Aug 2011 19:09:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-4</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="409525">
+<div class="title">
+<div class="quote-controls"></div>
+ _s:</div>
+<blockquote>
+<p>wtf is a s1gma is it an animal</p>
+</blockquote>
+</aside>
+<p>[s]* [s1gma] (s1gm@eats.gingers): ~_~</p>
+<ul>
+<li>[s1gma] is a registered nick</li>
+<li>[s1gma] <span class="hashtag">#runescape</span> <span class="hashtag">#moparscape</span> <span class="hashtag">#mopar</span>
+</li>
+</ul>
+<p>I don’t know his forum name.[/s]</p>
+<p>Lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/3</link>
+        <pubDate>Thu, 11 Aug 2011 18:58:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-3</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>wtf is a s1gma is it an animal</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/2</link>
+        <pubDate>Thu, 11 Aug 2011 18:57:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-2</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+      <item>
+        <title>A very fast, low-resource way to handle player/entity lists</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">Background</span>:<br>
+I discussed this with s1gma a week or so ago, I liked the idea so much I decided to save it to aid in future projects.</p>
+<p><span class="bbcode-b">Approach</span>:<br>
+The idea was to create a way of holding players (or any entity really) which was not CPU intensive (anything beyond a O(1) operation <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> ) and not memory intensive. Obviously the first condition removes the possibility of searching for an index to place the new player at since that would be a O(n) worst-case operation whenever a player logs in. The second conditions removes the idea of creating an expensive linked list of all player entities. The solution: create a system in which the server always knows where to put the next incoming entity.</p>
+<p>How did we accomplish this? Having a stack of all available indices that are free within the array of entities. If an entity needs to fill a spot, pop the stack (thus removing that position from the available positions and obtaining that index value). Is an entity no longer needs that position (logs out), we can push the entities’s position back on the stack to use again.</p>
+<p><span class="bbcode-b">Application/Testing</span>:</p>
+<p>EntityHandler (should contain all methods pertaining to entity management as a whole):</p>
+<pre><code class="lang-auto">/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+import java.util.Stack;
+
+/**
+ * EntityHandler
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class EntityHandler {
+
+    /** The maximum amount of entities allowed in the game */
+    private static final int MAX_ENTITIES = 2;
+
+    /** The array of entities */
+    private static Entity[] entities = new Entity[MAX_ENTITIES];
+
+    /** The stack of available positions within the entity array */
+    private static Stack&lt;Integer&gt; availablePositions = new Stack&lt;Integer&gt;();
+    static {
+        /*
+          Push all available positions onto the stack (no entities are currently in the game)
+          */
+        for(int i = (MAX_ENTITIES - 1); i &gt; -1; i--)
+            availablePositions.push(i);
+    }
+
+    /**
+     * Adds an entity on the game (ex: login)
+     * @param entity
+     * @return
+     */
+    public static boolean addEntity(Entity entity) {
+        /*
+            Are there no more positions available? If so, unable to add the entity
+         */
+        if(availablePositions.size() == 0)
+            return false;
+
+        /*
+            There is an available position, save the position in the entity instance and
+            pop that position off the stack as it is no longer available
+         */
+        int position = availablePositions.pop();
+        entity.setEntityId(position);
+        entities[entity.getEntityId()] = entity;
+        return true;
+    }
+
+    /**
+     * Removes an entity from the game and frees the entity's slot
+     * @param entity
+     */
+    public static void removeEntity(Entity entity) {
+        int position = entity.getEntityId();
+        entities[position] = null;
+        availablePositions.push(position);
+    }
+
+}</code></pre>
+<p>Entity (this could refer to the player):</p>
+<pre><code class="lang-auto">/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+/**
+ * Entity
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class Entity {
+
+    /** The entity ID (player ID) */
+    private int entityId;
+
+    /** The name of the entity */
+    private String name;
+
+    /**
+     * Creates a new entity
+     * @param name
+     */
+    public Entity(String name) {
+        this.name = name;
+    }
+
+    /**
+     * Gets the entity's name
+     * @return
+     */
+    public String getName() {
+        return name;
+    }
+
+    /**
+     * Sets the entity ID
+     * @param entityId
+     */
+    public void setEntityId(int entityId) {
+        this.entityId = entityId;
+    }
+
+    /**
+     * Gets the entity ID
+     * @return
+     */
+    public int getEntityId() {
+        return entityId;
+    }
+}</code></pre>
+<p>Server (example for testing):</p>
+<pre><code class="lang-auto">/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+/**
+ * Server
+ *
+ * @author T4_
+ * @version 1.0
+ */
+public class Server {
+
+    /**
+     * Simulates the functionality of this approach
+     * @param args
+     */
+    public static void main(String[] args) {
+        Entity bob = new Entity("Bob");
+        System.out.println(bob.getName() + " wishes to connect.");
+        if(EntityHandler.addEntity(bob)) {
+            System.out.println("Position found for entity " + bob.getName() + " at " + bob.getEntityId() + ", connection successful.");
+        } else {
+            System.out.println("Position not found for entity " + bob.getName() + ", game is full!");
+        }
+
+        Entity geoffrey = new Entity("Geoffrey");
+        System.out.println(geoffrey.getName() + " wishes to connect.");
+        if(EntityHandler.addEntity(geoffrey)) {
+            System.out.println("Position found for entity " + geoffrey.getName() + " at " + geoffrey.getEntityId() + ", connection successful.");
+        } else {
+            System.out.println("Position not found for entity " + geoffrey.getName() + ", game is full!");
+        }
+
+        Entity steve = new Entity("Steve");
+        System.out.println(steve.getName() + " wishes to connect.");
+        if(EntityHandler.addEntity(steve)) {
+            System.out.println("Position found for entity " + steve.getName() + " at " + steve.getEntityId() + ", connection successful.");
+        } else {
+            System.out.println("Position not found for entity " + steve.getName() + ", game is full!");
+        }
+
+        System.out.println(geoffrey.getName() + " is disconnecting.");
+        EntityHandler.removeEntity(geoffrey);
+
+        Entity joe = new Entity("Joe");
+        System.out.println(joe.getName() + " wishes to connect.");
+        if(EntityHandler.addEntity(joe)) {
+            System.out.println("Position found for entity " + joe.getName() + " at " + joe.getEntityId() + ", connection successful.");
+        } else {
+            System.out.println("Position not found for entity " + joe.getName() + ", game is full!");
+        }
+    }
+}</code></pre>
+<p><span class="bbcode-b">Output</span>:</p>
+<pre><code class="lang-auto">Bob wishes to connect.
+Position found for entity Bob at 0, connection successful.
+Geoffrey wishes to connect.
+Position found for entity Geoffrey at 1, connection successful.
+Steve wishes to connect.
+Position not found for entity Steve, game is full!
+Geoffrey is disconnecting.
+Joe wishes to connect.
+Position found for entity Joe at 1, connection successful.</code></pre>
+<p>Have fun.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525/1</link>
+        <pubDate>Thu, 11 Aug 2011 18:54:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-409525-1</guid>
+        <source url="https://forum.moparisthebest.com/t/a-very-fast-low-resource-way-to-handle-player-entity-lists/409525.rss">A very fast, low-resource way to handle player/entity lists</source>
+      </item>
+  </channel>
+</rss>

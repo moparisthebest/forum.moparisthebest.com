@@ -1,0 +1,1169 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Unfinished G.E [Use as a reference]</title>
+    <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760</link>
+    <description>Not exactly like the g.e, but works offline. there&#39;s a few issues with buying and selling but im putting this up mainly as a reference for people
+
+[code=java]package server.rs2.players.exchange;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+import server.rs2.items.RS2Item;
+import server.rs2.players.Player;
+import server.rs2.players.PlayerHandler;
+
+/**
+ * Handles the grand exchange
+ * 
+ * @author lare96
+ */
+public class GrandExchange {
+
+    /**
+     * The grand exchange offers
+     */
+    public static List&lt;Offer&gt; grandExchange = new ArrayList&lt;Offer&gt;();
+
+    /**
+     * The two options
+     */
+    public enum Option {
+        BUYING, SELLING
+    }
+
+    /**
+     * Any forbidden items, eg: coins
+     */
+    public static int[] forbbidenItems = { 995 };
+
+    /**
+     * Buy an item in the grand exchange
+     */
+    public static void buy(Offer offer) {
+        for (int items : forbbidenItems) {
+            if (items == offer.getItem()) {
+                offer.getPlayer().sendMessage(&quot;You cannot buy &quot; + offer.getPlayer().getItems().getItemName(items) + &quot; in the grand exchange market.&quot;);
+                return;
+            }
+        }
+        if (grandExchange.size() &gt; 50) {
+            offer.getPlayer().sendMessage(&quot;The grand exchange market is currently full.&quot;);
+            return;
+        }
+        if (getAmount(offer.getPlayer().playerName) &gt; 9) {
+            offer.getPlayer().sendMessage(&quot;You&#39;ve reached the maximum amount of offers!&quot;);
+            return;
+        }
+        if (offer.getPrice() &lt; 1 || offer.getAmount() &lt; 1 || offer.getItem() &lt; 1) {
+            offer.getPlayer().sendMessage(&quot;You cannot have a number 0 or lower price, amount, or item!&quot;);
+            return;
+        }
+        if (!offer.getPlayer().getItems().playerHasItem(995, offer.getPrice() * offer.getAmount())) {
+            offer.getPlayer().sendMessage(&quot;You do not have enough coins in your inventory to buy this.&quot;);
+            return;
+        }
+
+        for (Iterator&lt;Offer&gt; iter = grandExchange.iterator(); iter.hasNext();) {
+            Offer all = iter.next();
+
+            if (all.getItem() == offer.getItem() &amp;&amp; all.getPrice() &lt;= offer.getPrice() &amp;&amp; all.getOption() == Option.SELLING &amp;&amp; !all.getPlayer().playerName.equals(offer.getPlayer().playerName)) {
+
+                if ((all.getAmount() - offer.getAmount()) &lt; 0) {
+                    int leftOver = (all.getAmount() - offer.getAmount()) * -1;
+
+                    offer.setAmount(leftOver);
+
+                    offer.getPlayer().collectionBox.add(RS2Item.createItem(all.getItem(), all.getAmount()));
+                    offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, all.getPrice() * all.getAmount()), offer.getPlayer().getItems().getItemSlot(995));
+                    offer.getPlayer().sendMessage(&quot;You have partially bought &quot; + offer.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; from the market!&quot;);
+                    offer.getPlayer().sendMessage(&quot;The remaining stock you requested was added to the list of offers!&quot;);
+
+                    grandExchange.add(offer);
+                    iter.remove();
+
+                    Player holder = getPlayer(all.getPlayer().playerName);
+
+                    if (holder == null) {
+                        writeOffline(all.getPlayer().playerName, all);
+                        continue;
+                    }
+
+                    holder.collectionBox.add(RS2Item.createItem(995, all.getPrice() * all.getAmount()));
+                    holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; completely sold on the market!&quot;);
+                } else if ((all.getAmount() - offer.getAmount()) &gt;= 0) {
+                    int setSelling = all.getAmount() - offer.getAmount();
+
+                    all.setAmount(setSelling);
+
+                    offer.getPlayer().collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));
+                    offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, all.getPrice() * offer.getAmount()), offer.getPlayer().getItems().getItemSlot(995));
+                    offer.getPlayer().sendMessage(&quot;You have successfully bought &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; from the market!&quot;);
+
+                    Player holder = getPlayer(all.getPlayer().playerName);
+
+                    if (holder == null) {
+                        writeOffline(all.getPlayer().playerName, offer);
+                        continue;
+                    }
+
+                    holder.collectionBox.add(RS2Item.createItem(995, all.getPrice() * offer.getAmount()));
+
+                    if (setSelling == 0) {
+                        grandExchange.remove(offer);
+                        holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; completely sold on the market!&quot;);
+                    } else {
+                        holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; partially sold on the market!&quot;);
+                    }
+                }
+            } else {
+                grandExchange.add(offer);
+                offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, offer.getAmount() * offer.getPrice()), offer.getPlayer().getItems().getItemSlot(995));
+                offer.getPlayer().sendMessage(&quot;You have added: &quot; + offer.getOption().name().toLowerCase() + &quot; &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; to the market!&quot;);
+            }
+        }
+    }
+
+    /**
+     * Writes an offer that will be recieved on login
+     */
+    public static void writeOffline(String player, Offer offer) {
+        try {
+            File file = new File(&quot;./src/grand exchange/&quot; + player + &quot;.txt&quot;);
+
+            if (!file.exists()) {
+                file.createNewFile();
+            }
+
+            FileWriter writer = new FileWriter(file, true);
+
+            writer.write(&quot;&quot; + offer.getItem() + &quot;\n&quot;);
+            writer.write(&quot;&quot; + offer.getAmount() + &quot;\n&quot;);
+            writer.write(&quot;&quot; + offer.getPrice() + &quot;\n&quot;);
+            writer.write(&quot;&quot; + offer.getOption().name());
+            writer.close();
+            System.out.println(&quot;wrote data&quot;);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Deletes an offer that was recieved on login
+     */
+    public static void eraseOffline(String name) {
+        try {
+            File file = new File(&quot;./src/grand exchange/&quot; + name + &quot;.txt&quot;);
+
+            if (file.exists()) {
+                file.delete();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Sell an item in the grand exchange
+     */
+    public static void sell(Offer offer) {
+        for (int items : forbbidenItems) {
+            if (items == offer.getItem()) {
+                offer.getPlayer().sendMessage(&quot;You cannot sell &quot; + offer.getPlayer().getItems().getItemName(items) + &quot; in the grand exchange market.&quot;);
+                return;
+            }
+        }
+        if (grandExchange.size() &gt; 50) {
+            offer.getPlayer().sendMessage(&quot;The grand exchange market is currently full.&quot;);
+            return;
+        }
+        if (getAmount(offer.getPlayer().playerName) &gt; 9) {
+            offer.getPlayer().sendMessage(&quot;You&#39;ve reached the maximum amount of offers!&quot;);
+            return;
+        }
+        if (offer.getPrice() &lt; 1 || offer.getAmount() &lt; 1 || offer.getItem() &lt; 1) {
+            offer.getPlayer().sendMessage(&quot;You cannot have a number 0 or lower price, amount, or item!&quot;);
+            return;
+        }
+        if (!offer.getPlayer().getItems().playerHasItem(offer.getItem(), offer.getAmount())) {
+            offer.getPlayer().sendMessage(&quot;You do not have enough &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;(s) to sell.&quot;);
+            return;
+        }
+
+        for (Offer all : grandExchange) {
+            if (all.getItem() == offer.getItem() &amp;&amp; all.getPrice() &lt;= offer.getPrice() &amp;&amp; all.getOption() == Option.BUYING &amp;&amp; !all.getPlayer().playerName.equals(offer.getPlayer().playerName)) {
+
+                if ((all.getAmount() - offer.getAmount()) &lt; 0) {
+                    int leftOver = (all.getAmount() - offer.getAmount()) * -1;
+
+                    offer.setAmount(leftOver);
+                    offer.getPlayer().collectionBox.add(RS2Item.createItem(995, all.getAmount() * all.getPrice()));
+                    offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+                    offer.getPlayer().sendMessage(&quot;You have partially sold &quot; + offer.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; on the market!&quot;);
+                    offer.getPlayer().sendMessage(&quot;The remaining stock you requested was added to the list of offers!&quot;);
+
+                    grandExchange.add(offer);
+                    grandExchange.remove(all);
+
+                    Player holder = getPlayer(all.getPlayer().playerName);
+
+                    if (holder == null) {
+                        writeOffline(all.getPlayer().playerName, all);
+                        continue;
+                    }
+
+                    holder.collectionBox.add(RS2Item.createItem(all.getItem(), all.getAmount()));
+                    holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; completely bought from the market!&quot;);
+                } else if ((all.getAmount() - offer.getAmount()) &gt;= 0) {
+                    int setSelling = all.getAmount() - offer.getAmount();
+
+                    all.setAmount(setSelling);
+
+                    offer.getPlayer().collectionBox.add(RS2Item.createItem(995, offer.getPrice() * offer.getAmount()));
+                    offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+                    offer.getPlayer().sendMessage(&quot;You have successfully sold &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; on the market!&quot;);
+
+                    Player holder = getPlayer(all.getPlayer().playerName);
+
+                    if (holder == null) {
+                        writeOffline(all.getPlayer().playerName, offer);
+                        continue;
+                    }
+
+                    holder.collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));
+
+                    if (setSelling == 0) {
+                        grandExchange.remove(all);
+                        holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + all.getAmount() + &quot; completely bought from the market!&quot;);
+                    } else {
+                        holder.sendMessage(&quot;Your offer: &quot; + all.getPlayer().getItems().getItemName(all.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; partially bought from the market!&quot;);
+                    }
+                }
+            } else {
+                grandExchange.add(offer);
+                offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+                offer.getPlayer().sendMessage(&quot;You have added: &quot; + offer.getOption().name().toLowerCase() + &quot; &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; to the market!&quot;);
+            }
+        }
+    }
+
+    /**
+     * Formats the price
+     */
+    public static String formatPrice(int price) {
+        if (price &gt;= 1000 &amp;&amp; price &lt; 1000000) {
+            return &quot;&quot; + (price / 1000) + &quot;K each&quot;;
+        } else if (price &gt;= 1000000) {
+            return &quot;&quot; + (price / 1000000) + &quot; million each&quot;;
+        }
+        return &quot;&quot; + price + &quot;gp each&quot;;
+    }
+
+    /**
+     * Your item was sold while you were offline
+     */
+    public static void buyOffline(Player p, Offer offer) {
+        p.collectionBox.add(RS2Item.createItem(995, offer.getPrice() * offer.getAmount()));
+        p.sendMessage(&quot;Your offer: &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; was sold while you were offline!&quot;);
+    }
+
+    /**
+     * Your item was bought while you were offline
+     */
+    public static void sellOffline(Player p, Offer offer) {
+        p.collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));
+        p.sendMessage(&quot;Your offer: &quot; + offer.getPlayer().getItems().getItemName(offer.getItem()) + &quot;x&quot; + offer.getAmount() + &quot; was bought while you were offline!&quot;);
+    }
+
+    /**
+     * Displays the grand exchange market interface
+     */
+    public static void displayInterface(Player player) {
+        int line = 8147;
+
+        player.getPA().sendFrame126(&quot;Grand Exchange&quot;, 8144);
+        player.getPA().clearQuestInterface();
+
+        for (int i = 0; i &lt; grandExchange.size(); i++) {
+            player.getPA().sendFrame126(&quot;@red@[&quot; + grandExchange.get(i).getOption().name() + &quot;] &quot; + grandExchange.get(i).getPlayer().playerName + &quot;: &quot; + grandExchange.get(i).getPlayer().getItems().getItemName(grandExchange.get(i).getItem()) + &quot;x&quot; + grandExchange.get(i).getAmount() + &quot; @ &quot; + formatPrice(grandExchange.get(i).getPrice()), ++line);
+        }
+
+        player.getPA().sendQuestSomething(8143);
+        player.getPA().showInterface(8134);
+    }
+
+    /**
+     * Takes down all offers by a player
+     */
+    public static void removeOffers(String player) {
+        if (getAmount(player) == 0) {
+            getPlayer(player).sendMessage(&quot;You have no offers to remove!&quot;);
+            return;
+        }
+
+        for (Iterator&lt;Offer&gt; iter = grandExchange.iterator(); iter.hasNext();) {
+            Offer offers = iter.next();
+
+            if (offers.getPlayer().playerName.equals(player)) {
+
+                if (offers.getOption() == Option.BUYING) {
+                    offers.getPlayer().collectionBox.add(RS2Item.createItem(995, offers.getAmount() * offers.getPrice()));
+                } else {
+                    offers.getPlayer().collectionBox.add(RS2Item.createItem(offers.getItem(), offers.getAmount()));
+                }
+
+                iter.remove();
+            }
+        }
+    }
+
+    /**
+     * Gets the amount of offers you have
+     */
+    public static int getAmount(String player) {
+        int i = 0;
+
+        for (Offer all : grandExchange) {
+            if (all.getPlayer().playerName.equals(player)) {
+                i++;
+            }
+        }
+
+        return i;
+    }
+
+    /**
+     * Gets a player by their name since we can&#39;t use instances
+     */
+    public static Player getPlayer(String i) {
+        for (Player p : PlayerHandler.players) {
+            if (p == null) {
+                continue;
+            }
+
+            if (p.playerName.equals(i)) {
+                return p;
+            }
+        }
+        return null;
+    }
+}
+[/code]
+
+
+[code=java]package server.rs2.players.exchange;
+
+import server.rs2.players.Player;
+import server.rs2.players.exchange.GrandExchange.Option;
+
+/**
+ * Represents an offer by a player
+ * 
+ * @author lare96
+ */
+public class Offer {
+
+    /**
+     * The item id
+     */
+    private int item;
+
+    /**
+     * The amount
+     */
+    private int amount;
+
+    /**
+     * The price
+     */
+    private int price;
+
+    /**
+     * The option
+     */
+    private Option option;
+
+    /**
+     * The player
+     */
+    private Player player;
+
+    /**
+     * The offer
+     */
+    public Offer(int item, int amount, int price, Option option, Player player) {
+        this.setItem(item);
+        this.setAmount(amount);
+        this.setPrice(price);
+        this.setOption(option);
+        this.setPlayer(player);
+    }
+
+    /**
+     * @return the item
+     */
+    public int getItem() {
+        return item;
+    }
+
+    /**
+     * @param item
+     *            the item to set
+     */
+    public void setItem(int item) {
+        this.item = item;
+    }
+
+    /**
+     * @return the amount
+     */
+    public int getAmount() {
+        return amount;
+    }
+
+    /**
+     * @param amount
+     *            the amount to set
+     */
+    public void setAmount(int amount) {
+        this.amount = amount;
+    }
+
+    /**
+     * @return the player
+     */
+    public Player getPlayer() {
+        return player;
+    }
+
+    /**
+     * @param player
+     *            the player to set
+     */
+    public void setPlayer(Player player) {
+        this.player = player;
+    }
+
+    /**
+     * @return the option
+     */
+    public Option getOption() {
+        return option;
+    }
+
+    /**
+     * @param option
+     *            the option to set
+     */
+    public void setOption(Option option) {
+        this.option = option;
+    }
+
+    /**
+     * @return the price
+     */
+    public int getPrice() {
+        return price;
+    }
+
+    /**
+     * @param price
+     *            the price to set
+     */
+    public void setPrice(int price) {
+        this.price = price;
+    }
+}
+[/code]</description>
+    
+    <lastBuildDate>Mon, 01 Jul 2013 19:37:10 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="519760">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/timers3/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> TimeRS3:</div>
+<blockquote>
+<p>were you going for player to player here or just regular buying w/e you want ?</p>
+</blockquote>
+</aside>
+<p>player 2 player</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/7</link>
+        <pubDate>Mon, 01 Jul 2013 19:37:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-7</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@TimeRS3 TimeRS3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/timers3">@TimeRS3</a> wrote:</p>
+          <blockquote>
+              <p>were you going for player to player here or just regular buying w/e you want ?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/6</link>
+        <pubDate>Fri, 14 Jun 2013 01:32:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-6</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="519760">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/hcojustin/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> HcoJustin:</div>
+<blockquote>
+<p>You do realize that the limit opposed on buying is stupid? What happens if a bug occurs and the GE gets 51 items? No one can buy anything anymore, and no one can sell either. Limiting the amount of offers is fine, but imposing that limit in the case I noted is kinda silly</p>
+</blockquote>
+</aside>
+<p>yeah i understand, idk why he wanted it that way tbh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/5</link>
+        <pubDate>Sun, 26 May 2013 21:39:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-5</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>You do realize that the limit opposed on buying is stupid? What happens if a bug occurs and the GE gets 51 items? No one can buy anything anymore, and no one can sell either. Limiting the amount of offers is fine, but imposing that limit in the case I noted is kinda silly</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/4</link>
+        <pubDate>Sat, 25 May 2013 05:30:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-4</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“HcoJustin, post:2, topic:519760”]<code>    public static void buy(Offer offer) {
+        ...
+        if (grandExchange.size() &gt; 50) {
+            offer.getPlayer().sendMessage("The grand exchange market is currently full.");
+            return;
+        }
+        ...</code><br>
+Why would you limit buying of items? It also doesn’t find the best item price, it just picks the first one available.[/quote]<br>
+i was making this for a friend, that’s how he wanted it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/3</link>
+        <pubDate>Sat, 25 May 2013 03:19:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-3</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p><code>    public static void buy(Offer offer) {
+        ...
+        if (grandExchange.size() &gt; 50) {
+            offer.getPlayer().sendMessage("The grand exchange market is currently full.");
+            return;
+        }
+        ...</code><br>
+Why would you limit buying of items? It also doesn’t find the best item price, it just picks the first one available.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/2</link>
+        <pubDate>Tue, 21 May 2013 05:00:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-2</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+      <item>
+        <title>Unfinished G.E [Use as a reference]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Not exactly like the g.e, but works offline. there’s a few issues with buying and selling but im putting this up mainly as a reference for people</p>
+<p>[code=java]package server.rs2.players.exchange;</p>
+<p>import java.io.File;<br>
+import java.io.FileWriter;<br>
+import java.io.IOException;<br>
+import java.util.ArrayList;<br>
+import java.util.Iterator;<br>
+import java.util.List;</p>
+<p>import server.rs2.items.RS2Item;<br>
+import server.rs2.players.Player;<br>
+import server.rs2.players.PlayerHandler;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Handles the grand exchange</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public class GrandExchange {</p>
+<p>/**</p>
+<ul>
+<li>The grand exchange offers<br>
+*/<br>
+public static List grandExchange = new ArrayList();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The two options<br>
+*/<br>
+public enum Option {<br>
+BUYING, SELLING<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Any forbidden items, eg: coins<br>
+*/<br>
+public static int[] forbbidenItems = { 995 };</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Buy an item in the grand exchange<br>
+*/<br>
+public static void buy(Offer offer) {<br>
+for (int items : forbbidenItems) {<br>
+if (items == offer.getItem()) {<br>
+offer.getPlayer().sendMessage(“You cannot buy " + offer.getPlayer().getItems().getItemName(items) + " in the grand exchange market.”);<br>
+return;<br>
+}<br>
+}<br>
+if (grandExchange.size() &gt; 50) {<br>
+offer.getPlayer().sendMessage(“The grand exchange market is currently full.”);<br>
+return;<br>
+}<br>
+if (getAmount(offer.getPlayer().playerName) &gt; 9) {<br>
+offer.getPlayer().sendMessage(“You’ve reached the maximum amount of offers!”);<br>
+return;<br>
+}<br>
+if (offer.getPrice() &lt; 1 || offer.getAmount() &lt; 1 || offer.getItem() &lt; 1) {<br>
+offer.getPlayer().sendMessage(“You cannot have a number 0 or lower price, amount, or item!”);<br>
+return;<br>
+}<br>
+if (!offer.getPlayer().getItems().playerHasItem(995, offer.getPrice() * offer.getAmount())) {<br>
+offer.getPlayer().sendMessage(“You do not have enough coins in your inventory to buy this.”);<br>
+return;<br>
+}</p>
+<p>for (Iterator iter = grandExchange.iterator(); iter.hasNext()<img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"> {<br>
+Offer all = iter.next();</p>
+<pre><code> if (all.getItem() == offer.getItem() &amp;&amp; all.getPrice() &lt;= offer.getPrice() &amp;&amp; all.getOption() == Option.SELLING &amp;&amp; !all.getPlayer().playerName.equals(offer.getPlayer().playerName)) {
+
+     if ((all.getAmount() - offer.getAmount()) &lt; 0) {
+         int leftOver = (all.getAmount() - offer.getAmount()) * -1;
+
+         offer.setAmount(leftOver);
+
+         offer.getPlayer().collectionBox.add(RS2Item.createItem(all.getItem(), all.getAmount()));
+         offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, all.getPrice() * all.getAmount()), offer.getPlayer().getItems().getItemSlot(995));
+         offer.getPlayer().sendMessage("You have partially bought " + offer.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " from the market!");
+         offer.getPlayer().sendMessage("The remaining stock you requested was added to the list of offers!");
+
+         grandExchange.add(offer);
+         iter.remove();
+
+         Player holder = getPlayer(all.getPlayer().playerName);
+
+         if (holder == null) {
+             writeOffline(all.getPlayer().playerName, all);
+             continue;
+         }
+
+         holder.collectionBox.add(RS2Item.createItem(995, all.getPrice() * all.getAmount()));
+         holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " completely sold on the market!");
+     } else if ((all.getAmount() - offer.getAmount()) &gt;= 0) {
+         int setSelling = all.getAmount() - offer.getAmount();
+
+         all.setAmount(setSelling);
+
+         offer.getPlayer().collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));
+         offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, all.getPrice() * offer.getAmount()), offer.getPlayer().getItems().getItemSlot(995));
+         offer.getPlayer().sendMessage("You have successfully bought " + offer.getPlayer().getItems().getItemName(offer.getItem()) + "x" + offer.getAmount() + " from the market!");
+
+         Player holder = getPlayer(all.getPlayer().playerName);
+
+         if (holder == null) {
+             writeOffline(all.getPlayer().playerName, offer);
+             continue;
+         }
+
+         holder.collectionBox.add(RS2Item.createItem(995, all.getPrice() * offer.getAmount()));
+
+         if (setSelling == 0) {
+             grandExchange.remove(offer);
+             holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " completely sold on the market!");
+         } else {
+             holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + offer.getAmount() + " partially sold on the market!");
+         }
+     }
+ } else {
+     grandExchange.add(offer);
+     offer.getPlayer().getItems().deleteItem(RS2Item.createItem(995, offer.getAmount() * offer.getPrice()), offer.getPlayer().getItems().getItemSlot(995));
+     offer.getPlayer().sendMessage("You have added: " + offer.getOption().name().toLowerCase() + " " + offer.getPlayer().getItems().getItemName(offer.getItem()) + "x" + offer.getAmount() + " to the market!");
+ }
+</code></pre>
+<p>}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Writes an offer that will be recieved on login<br>
+*/<br>
+public static void writeOffline(String player, Offer offer) {<br>
+try {<br>
+File file = new File("./src/grand exchange/" + player + “.txt”);</p>
+<pre><code> if (!file.exists()) {
+     file.createNewFile();
+ }
+
+ FileWriter writer = new FileWriter(file, true);
+
+ writer.write("" + offer.getItem() + "\n");
+ writer.write("" + offer.getAmount() + "\n");
+ writer.write("" + offer.getPrice() + "\n");
+ writer.write("" + offer.getOption().name());
+ writer.close();
+ System.out.println("wrote data");
+</code></pre>
+<p>} catch (IOException e) {<br>
+e.printStackTrace();<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Deletes an offer that was recieved on login<br>
+*/<br>
+public static void eraseOffline(String name) {<br>
+try {<br>
+File file = new File("./src/grand exchange/" + name + “.txt”);</p>
+<pre><code> if (file.exists()) {
+     file.delete();
+ }
+</code></pre>
+<p>} catch (Exception e) {<br>
+e.printStackTrace();<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Sell an item in the grand exchange<br>
+*/<br>
+public static void sell(Offer offer) {<br>
+for (int items : forbbidenItems) {<br>
+if (items == offer.getItem()) {<br>
+offer.getPlayer().sendMessage(“You cannot sell " + offer.getPlayer().getItems().getItemName(items) + " in the grand exchange market.”);<br>
+return;<br>
+}<br>
+}<br>
+if (grandExchange.size() &gt; 50) {<br>
+offer.getPlayer().sendMessage(“The grand exchange market is currently full.”);<br>
+return;<br>
+}<br>
+if (getAmount(offer.getPlayer().playerName) &gt; 9) {<br>
+offer.getPlayer().sendMessage(“You’ve reached the maximum amount of offers!”);<br>
+return;<br>
+}<br>
+if (offer.getPrice() &lt; 1 || offer.getAmount() &lt; 1 || offer.getItem() &lt; 1) {<br>
+offer.getPlayer().sendMessage(“You cannot have a number 0 or lower price, amount, or item!”);<br>
+return;<br>
+}<br>
+if (!offer.getPlayer().getItems().playerHasItem(offer.getItem(), offer.getAmount())) {<br>
+offer.getPlayer().sendMessage("You do not have enough " + offer.getPlayer().getItems().getItemName(offer.getItem()) + “(s) to sell.”);<br>
+return;<br>
+}</p>
+<p>for (Offer all : grandExchange) {<br>
+if (all.getItem() == offer.getItem() &amp;&amp; all.getPrice() &lt;= offer.getPrice() &amp;&amp; all.getOption() == Option.BUYING &amp;&amp; !all.getPlayer().playerName.equals(offer.getPlayer().playerName)) {</p>
+<pre><code>     if ((all.getAmount() - offer.getAmount()) &lt; 0) {
+         int leftOver = (all.getAmount() - offer.getAmount()) * -1;
+
+         offer.setAmount(leftOver);
+         offer.getPlayer().collectionBox.add(RS2Item.createItem(995, all.getAmount() * all.getPrice()));
+         offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+         offer.getPlayer().sendMessage("You have partially sold " + offer.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " on the market!");
+         offer.getPlayer().sendMessage("The remaining stock you requested was added to the list of offers!");
+
+         grandExchange.add(offer);
+         grandExchange.remove(all);
+
+         Player holder = getPlayer(all.getPlayer().playerName);
+
+         if (holder == null) {
+             writeOffline(all.getPlayer().playerName, all);
+             continue;
+         }
+
+         holder.collectionBox.add(RS2Item.createItem(all.getItem(), all.getAmount()));
+         holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " completely bought from the market!");
+     } else if ((all.getAmount() - offer.getAmount()) &gt;= 0) {
+         int setSelling = all.getAmount() - offer.getAmount();
+
+         all.setAmount(setSelling);
+
+         offer.getPlayer().collectionBox.add(RS2Item.createItem(995, offer.getPrice() * offer.getAmount()));
+         offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+         offer.getPlayer().sendMessage("You have successfully sold " + offer.getPlayer().getItems().getItemName(offer.getItem()) + "x" + offer.getAmount() + " on the market!");
+
+         Player holder = getPlayer(all.getPlayer().playerName);
+
+         if (holder == null) {
+             writeOffline(all.getPlayer().playerName, offer);
+             continue;
+         }
+
+         holder.collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));
+
+         if (setSelling == 0) {
+             grandExchange.remove(all);
+             holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + all.getAmount() + " completely bought from the market!");
+         } else {
+             holder.sendMessage("Your offer: " + all.getPlayer().getItems().getItemName(all.getItem()) + "x" + offer.getAmount() + " partially bought from the market!");
+         }
+     }
+ } else {
+     grandExchange.add(offer);
+     offer.getPlayer().getItems().deleteItem(RS2Item.createItem(offer.getItem(), offer.getAmount()), offer.getPlayer().getItems().getItemSlot(offer.getItem()));
+     offer.getPlayer().sendMessage("You have added: " + offer.getOption().name().toLowerCase() + " " + offer.getPlayer().getItems().getItemName(offer.getItem()) + "x" + offer.getAmount() + " to the market!");
+ }
+</code></pre>
+<p>}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Formats the price<br>
+*/<br>
+public static String formatPrice(int price) {<br>
+if (price &gt;= 1000 &amp;&amp; price &lt; 1000000) {<br>
+return “” + (price / 1000) + “K each”;<br>
+} else if (price &gt;= 1000000) {<br>
+return “” + (price / 1000000) + " million each";<br>
+}<br>
+return “” + price + “gp each”;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Your item was sold while you were offline<br>
+*/<br>
+public static void buyOffline(Player p, Offer offer) {<br>
+p.collectionBox.add(RS2Item.createItem(995, offer.getPrice() * offer.getAmount()));<br>
+p.sendMessage(“Your offer: " + offer.getPlayer().getItems().getItemName(offer.getItem()) + “x” + offer.getAmount() + " was sold while you were offline!”);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Your item was bought while you were offline<br>
+*/<br>
+public static void sellOffline(Player p, Offer offer) {<br>
+p.collectionBox.add(RS2Item.createItem(offer.getItem(), offer.getAmount()));<br>
+p.sendMessage(“Your offer: " + offer.getPlayer().getItems().getItemName(offer.getItem()) + “x” + offer.getAmount() + " was bought while you were offline!”);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Displays the grand exchange market interface<br>
+*/<br>
+public static void displayInterface(Player player) {<br>
+int line = 8147;</p>
+<p>player.getPA().sendFrame126(“Grand Exchange”, 8144);<br>
+player.getPA().clearQuestInterface();</p>
+<p>for (int i = 0; i &lt; grandExchange.size(); i++) {<br>
+player.getPA().sendFrame126("<a class="mention" href="/u/red">@red</a>@[" + grandExchange.get(i).getOption().name() + "] " + grandExchange.get(i).getPlayer().playerName + ": " + grandExchange.get(i).getPlayer().getItems().getItemName(grandExchange.get(i).getItem()) + “x” + grandExchange.get(i).getAmount() + " @ " + formatPrice(grandExchange.get(i).getPrice()), ++line);<br>
+}</p>
+<p>player.getPA().sendQuestSomething(8143);<br>
+player.getPA().showInterface(8134);<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Takes down all offers by a player<br>
+*/<br>
+public static void removeOffers(String player) {<br>
+if (getAmount(player) == 0) {<br>
+getPlayer(player).sendMessage(“You have no offers to remove!”);<br>
+return;<br>
+}</p>
+<p>for (Iterator iter = grandExchange.iterator(); iter.hasNext()<img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"> {<br>
+Offer offers = iter.next();</p>
+<pre><code> if (offers.getPlayer().playerName.equals(player)) {
+
+     if (offers.getOption() == Option.BUYING) {
+         offers.getPlayer().collectionBox.add(RS2Item.createItem(995, offers.getAmount() * offers.getPrice()));
+     } else {
+         offers.getPlayer().collectionBox.add(RS2Item.createItem(offers.getItem(), offers.getAmount()));
+     }
+
+     iter.remove();
+ }
+</code></pre>
+<p>}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Gets the amount of offers you have<br>
+*/<br>
+public static int getAmount(String player) {<br>
+int i = 0;</p>
+<p>for (Offer all : grandExchange) {<br>
+if (all.getPlayer().playerName.equals(player)) {<br>
+i++;<br>
+}<br>
+}</p>
+<p>return i;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Gets a player by their name since we can’t use instances<br>
+*/<br>
+public static Player getPlayer(String i) {<br>
+for (Player p : PlayerHandler.players) {<br>
+if (p == null) {<br>
+continue;<br>
+}</p>
+<pre><code> if (p.playerName.equals(i)) {
+     return p;
+ }
+</code></pre>
+<p>}<br>
+return null;<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>[code=java]package server.rs2.players.exchange;</p>
+<p>import server.rs2.players.Player;<br>
+import server.rs2.players.exchange.GrandExchange.Option;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Represents an offer by a player</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public class Offer {</p>
+<p>/**</p>
+<ul>
+<li>The item id<br>
+*/<br>
+private int item;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The amount<br>
+*/<br>
+private int amount;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The price<br>
+*/<br>
+private int price;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The option<br>
+*/<br>
+private Option option;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The player<br>
+*/<br>
+private Player player;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The offer<br>
+*/<br>
+public Offer(int item, int amount, int price, Option option, Player player) {<br>
+this.setItem(item);<br>
+this.setAmount(amount);<br>
+this.setPrice(price);<br>
+this.setOption(option);<br>
+this.setPlayer(player);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the item<br>
+*/<br>
+public int getItem() {<br>
+return item;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> item</li>
+<li>
+<pre><code>       the item to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setItem(int item) {<br>
+this.item = item;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the amount<br>
+*/<br>
+public int getAmount() {<br>
+return amount;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> amount</li>
+<li>
+<pre><code>       the amount to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setAmount(int amount) {<br>
+this.amount = amount;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the player<br>
+*/<br>
+public Player getPlayer() {<br>
+return player;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> player</li>
+<li>
+<pre><code>       the player to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setPlayer(Player player) {<br>
+this.player = player;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the option<br>
+*/<br>
+public Option getOption() {<br>
+return option;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> option</li>
+<li>
+<pre><code>       the option to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setOption(Option option) {<br>
+this.option = option;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the price<br>
+*/<br>
+public int getPrice() {<br>
+return price;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> price</li>
+<li>
+<pre><code>       the price to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setPrice(int price) {<br>
+this.price = price;<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760/1</link>
+        <pubDate>Tue, 21 May 2013 04:07:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-519760-1</guid>
+        <source url="https://forum.moparisthebest.com/t/unfinished-g-e-use-as-a-reference/519760.rss">Unfinished G.E [Use as a reference]</source>
+      </item>
+  </channel>
+</rss>

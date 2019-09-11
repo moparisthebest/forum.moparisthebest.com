@@ -1,0 +1,631 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Paypal 10$] [PI] Private messaging bug</title>
+    <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504</link>
+    <description>I recently switched caches in my client to load a 508 client cache
+[b]
+When sending someone a private message it spams them with nulled messaging constantly until you have to relog[/b]
+
+
+Here is recieve message is my &quot;Client&#39;s&quot; client.java
+
+[CODE]case 196:
+					long l5 = inStream.readQWord();
+					int j18 = inStream.readDWord();
+					int l21 = inStream.readUnsignedByte();
+					boolean flag5 = false;
+					if(l21 &lt;= 1) {
+						for(int l29 = 0; l29 &lt; ignoreCount; l29++) {
+							if(ignoreListAsLongs[l29] != l5)
+								continue;
+							flag5 = true;
+							
+						}
+					}
+					if(!flag5 &amp;&amp; anInt1251 == 0)
+						try {
+							String s9 = TextInput.method525(pktSize - 13, inStream);
+							//if(l21 != 3)
+								//s9 = Censor.doCensor(s9);
+							if(l21 == 2 || l21 == 3)
+								pushMessage(s9, 7, &quot;@cr2@&quot; + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+							if(l21 == 1)
+								pushMessage(s9, 7, &quot;@cr1@&quot; + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+								pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+						} catch(Exception exception1) {
+							signlink.reporterror(&quot;cde1&quot;);
+						}
+					pktType = -1;
+					return true;[/CODE]
+
+Here is my privatemessaging class in the &quot;Packet&#39;s&quot; folder server sided ofc
+
+[CODE]
+
+package server.model.players.packets;
+
+import server.Config;
+import server.Server;
+import server.Connection;
+import server.model.players.Client;
+import server.model.players.PacketType;
+import server.util.Misc;
+
+/**
+ * Private messaging, friends etc
+ **/
+public class PrivateMessaging implements PacketType {
+
+	public final int ADD_FRIEND = 188, SEND_PM = 126, REMOVE_FRIEND = 215, CHANGE_PM_STATUS = 95, ADD_IGNORE = 133;
+	@Override
+	public void processPacket(Client c, int packetType, int packetSize) {
+		switch(packetType) {
+		
+			case ADD_FRIEND:
+			c.friendUpdate = true;
+			long friendToAdd = c.getInStream().readQWord();
+			boolean canAdd = true;
+
+			for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+				if (c.friends[i1] != 0 &amp;&amp; c.friends[i1] == friendToAdd) {
+					canAdd = false;
+					c.sendMessage(friendToAdd + &quot; is already on your friends list.&quot;);
+				}
+			}
+			if (canAdd == true) {
+				for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+					if (c.friends[i1] == 0) {
+						c.friends[i1] = friendToAdd;
+						for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+							if (Server.playerHandler.players[i2] != null &amp;&amp; Server.playerHandler.players[i2].isActive &amp;&amp; Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)== friendToAdd) {
+								Client o = (Client)Server.playerHandler.players[i2];
+								if(o != null) {
+									if (Server.playerHandler.players[i2].privateChat == 0 || (Server.playerHandler.players[i2].privateChat == 1 &amp;&amp; o.getPA().isInPM(Misc.playerNameToInt64(c.playerName)))) {
+										c.getPA().loadPM(friendToAdd, 1);
+										break;
+									}
+								}
+							}
+						}
+						break;
+					}
+				}
+			}
+			break;
+			
+			case SEND_PM:
+			long sendMessageToFriendId = c.getInStream().readQWord();
+            byte pmchatText[] = new byte[100];
+            int pmchatTextSize = (byte) (packetSize - 8);
+			c.getInStream().readBytes(pmchatText, pmchatTextSize, 0);
+			if (Connection.isMuted(c))
+				break;
+            for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+                if (c.friends[i1] == sendMessageToFriendId) {
+                    boolean pmSent = false;
+
+                    for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+                        if (Server.playerHandler.players[i2] != null &amp;&amp; Server.playerHandler.players[i2].isActive &amp;&amp; Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)== sendMessageToFriendId) {
+                            Client o = (Client)Server.playerHandler.players[i2];
+							if(o != null) {
+								if (Server.playerHandler.players[i2].privateChat == 0 || (Server.playerHandler.players[i2].privateChat == 1 &amp;&amp; o.getPA().isInPM(Misc.playerNameToInt64(c.playerName)))) {
+									o.getPA().sendPM(Misc.playerNameToInt64(c.playerName), c.playerRights, pmchatText, pmchatTextSize);
+	                                pmSent = true;
+	                            }
+							}
+                            break;
+                        }
+                    }
+                    if (!pmSent) {
+						c.sendMessage(&quot;That player is currently offline.&quot;);
+						break;
+                    }
+                }
+            }
+            break;	
+			
+			case REMOVE_FRIEND:
+			c.friendUpdate = true;
+            long friendToRemove = c.getInStream().readQWord();
+
+            for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+                if (c.friends[i1] == friendToRemove) {
+					for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+						Client o = (Client)Server.playerHandler.players[i2];		
+						if(o != null) {
+							if(c.friends[i1] == Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)){
+								o.getPA().updatePM(c.playerId, 0);
+								break;
+							}
+						}
+					}
+					c.friends[i1] = 0;
+                    break;
+                }
+            }
+            break;
+			
+			
+			case CHANGE_PM_STATUS:
+            int tradeAndCompete = c.getInStream().readUnsignedByte();
+            c.privateChat = c.getInStream().readUnsignedByte();
+            int publicChat = c.getInStream().readUnsignedByte();
+            for (int i1 = 1; i1 &lt; Config.MAX_PLAYERS; i1++) {
+			   if (Server.playerHandler.players[i1] != null &amp;&amp; Server.playerHandler.players[i1].isActive == true) {
+                    Client o = (Client)Server.playerHandler.players[i1];
+					if(o != null) {
+						o.getPA().updatePM(c.playerId, 1);
+					}
+                }
+            }
+            break;
+			
+			case ADD_IGNORE:
+				//TODO: fix this so it works :)
+				break;
+            
+		}
+		
+	}	
+}[/CODE]
+
+[IMG]http://i47.tinypic.com/2rr0v4p.jpg[/img]
+
+Leave your paypal email</description>
+    
+    <lastBuildDate>Wed, 06 Feb 2013 04:41:13 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@loved loved]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loved">@loved</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Host Gushers, post:8, topic:481504”]What doesn’t work about it? If you get any error’s post them here.[/quote]<a href="http://i47.tinypic.com/2rr0v4p.jpg" rel="nofollow noopener">http://i47.tinypic.com/2rr0v4p.jpg</a></p>
+<p>That’s the bug/issue</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/9</link>
+        <pubDate>Wed, 06 Feb 2013 04:41:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-9</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@Host_Gushers Host Gushers]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/host_gushers">@Host_Gushers</a> wrote:</p>
+          <blockquote>
+              <p>What doesn’t work about it? If you get any error’s post them here.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/8</link>
+        <pubDate>Tue, 05 Feb 2013 18:39:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-8</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@loved loved]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loved">@loved</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Christmas_tree, post:6, topic:481504”]Ok try this - CLIENT sided.</p>
+<p>Client class: Replace case 196 with this</p>
+<p>This is the original:</p>
+<pre><code class="lang-auto">				case 196:
+					long l5 = inStream.readQWord();
+					int j18 = inStream.readDWord();
+					int l21 = inStream.readUnsignedByte();
+					boolean flag5 = false;
+					for(int i28 = 0; i28 &lt; 100; i28++) {
+						if(anIntArray1240[i28] != j18)
+							continue;
+						flag5 = true;
+						
+					}
+					if(l21 &lt;= 1) {
+						for(int l29 = 0; l29 &lt; ignoreCount; l29++) {
+							if(ignoreListAsLongs[l29] != l5)
+								continue;
+							flag5 = true;
+							
+						}
+					}
+					if(!flag5 &amp;&amp; anInt1251 == 0)
+						try {
+							anIntArray1240[anInt1169] = j18;
+							anInt1169 = (anInt1169 + 1) % 100;
+							String s9 = TextInput.method525(pktSize - 13, inStream);
+							//if(l21 != 3)
+								//s9 = Censor.doCensor(s9);
+							if(l21 == 2 || l21 == 3)
+								pushMessage(s9, 7, "@cr2@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+							if(l21 == 1)
+								pushMessage(s9, 7, "@cr1@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+								pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+						} catch(Exception exception1) {
+							signlink.reporterror("cde1");
+						}
+					pktType = -1;
+					return true;</code></pre>
+<p>Replace it with this</p>
+<pre><code class="lang-auto">				case 196:
+					long l5 = inStream.readQWord();
+					int j18 = inStream.readDWord();
+					int l21 = inStream.readUnsignedByte();
+					boolean flag5 = false;
+					if(l21 &lt;= 1) {
+						for(int l29 = 0; l29 &lt; ignoreCount; l29++) {
+							if(ignoreListAsLongs[l29] != l5)
+								continue;
+							flag5 = true;
+							
+						}
+					}
+					if(!flag5 &amp;&amp; anInt1251 == 0)
+						try {
+							String s9 = TextInput.method525(pktSize - 13, inStream);
+							//if(l21 != 3)
+								//s9 = Censor.doCensor(s9);
+							if(l21 == 2 || l21 == 3)
+								pushMessage(s9, 7, "@cr2@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+							if(l21 == 1)
+								pushMessage(s9, 7, "@cr1@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+								pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+						} catch(Exception exception1) {
+							signlink.reporterror("cde1");
+						}
+					pktType = -1;
+					return true;</code></pre>
+<p>You can email me at <a href="mailto:livealittlespendalot@googlemail.com">livealittlespendalot@googlemail.com</a> in regards to my payment. Or you could just run along and stop trying to buy RSPS services and instead use the search button or wait for help.[/quote]Don’t work</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/7</link>
+        <pubDate>Tue, 05 Feb 2013 08:20:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-7</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@Christmas_tree Christmas_tree]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/christmas_tree">@Christmas_tree</a> wrote:</p>
+          <blockquote>
+              <p>Ok try this - CLIENT sided.</p>
+<p>Client class: Replace case 196 with this</p>
+<p>This is the original:</p>
+<pre><code class="lang-auto">				case 196:
+					long l5 = inStream.readQWord();
+					int j18 = inStream.readDWord();
+					int l21 = inStream.readUnsignedByte();
+					boolean flag5 = false;
+					for(int i28 = 0; i28 &lt; 100; i28++) {
+						if(anIntArray1240[i28] != j18)
+							continue;
+						flag5 = true;
+						
+					}
+					if(l21 &lt;= 1) {
+						for(int l29 = 0; l29 &lt; ignoreCount; l29++) {
+							if(ignoreListAsLongs[l29] != l5)
+								continue;
+							flag5 = true;
+							
+						}
+					}
+					if(!flag5 &amp;&amp; anInt1251 == 0)
+						try {
+							anIntArray1240[anInt1169] = j18;
+							anInt1169 = (anInt1169 + 1) % 100;
+							String s9 = TextInput.method525(pktSize - 13, inStream);
+							//if(l21 != 3)
+								//s9 = Censor.doCensor(s9);
+							if(l21 == 2 || l21 == 3)
+								pushMessage(s9, 7, "@cr2@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+							if(l21 == 1)
+								pushMessage(s9, 7, "@cr1@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+								pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+						} catch(Exception exception1) {
+							signlink.reporterror("cde1");
+						}
+					pktType = -1;
+					return true;</code></pre>
+<p>Replace it with this</p>
+<pre><code class="lang-auto">				case 196:
+					long l5 = inStream.readQWord();
+					int j18 = inStream.readDWord();
+					int l21 = inStream.readUnsignedByte();
+					boolean flag5 = false;
+					if(l21 &lt;= 1) {
+						for(int l29 = 0; l29 &lt; ignoreCount; l29++) {
+							if(ignoreListAsLongs[l29] != l5)
+								continue;
+							flag5 = true;
+							
+						}
+					}
+					if(!flag5 &amp;&amp; anInt1251 == 0)
+						try {
+							String s9 = TextInput.method525(pktSize - 13, inStream);
+							//if(l21 != 3)
+								//s9 = Censor.doCensor(s9);
+							if(l21 == 2 || l21 == 3)
+								pushMessage(s9, 7, "@cr2@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+							if(l21 == 1)
+								pushMessage(s9, 7, "@cr1@" + TextClass.fixName(TextClass.nameForLong(l5)));
+							else
+								pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+						} catch(Exception exception1) {
+							signlink.reporterror("cde1");
+						}
+					pktType = -1;
+					return true;</code></pre>
+<p>You can email me at <a href="mailto:livealittlespendalot@googlemail.com">livealittlespendalot@googlemail.com</a> in regards to my payment. Or you could just run along and stop trying to buy RSPS services and instead use the search button or wait for help.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/6</link>
+        <pubDate>Mon, 04 Feb 2013 21:55:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-6</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@loved loved]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loved">@loved</a> wrote:</p>
+          <blockquote>
+              <p>Bump still needed, if you have skype add mine, kemi.lu1</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/5</link>
+        <pubDate>Mon, 04 Feb 2013 12:52:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-5</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“loved, post:3, topic:481504”][quote author=sk8rdude461 link=topic=599739.msg4213873#msg4213873 date=1359943129]<br>
+Can’t offer rewards/payments of any sort.</p>
+<p>[/quote]Ahh can someone remove the paypal offer then… i just need this done =-([/quote]<br>
+You can modify your message.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/4</link>
+        <pubDate>Mon, 04 Feb 2013 02:09:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-4</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@loved loved]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loved">@loved</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:2, topic:481504”]Can’t offer rewards/payments of any sort.[/quote]Ahh can someone remove the paypal offer then… i just need this done =-(</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/3</link>
+        <pubDate>Mon, 04 Feb 2013 02:06:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-3</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Can’t offer rewards/payments of any sort.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/2</link>
+        <pubDate>Mon, 04 Feb 2013 01:58:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-2</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+      <item>
+        <title>[Paypal 10$] [PI] Private messaging bug</title>
+        <dc:creator><![CDATA[@loved loved]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loved">@loved</a> wrote:</p>
+          <blockquote>
+              <p>I recently switched caches in my client to load a 508 client cache<br>
+<span class="bbcode-b"><br>
+When sending someone a private message it spams them with nulled messaging constantly until you have to relog</span></p>
+<p>Here is recieve message is my “Client’s” client.java</p>
+<p>[CODE]case 196:<br>
+long l5 = inStream.readQWord();<br>
+int j18 = inStream.readDWord();<br>
+int l21 = inStream.readUnsignedByte();<br>
+boolean flag5 = false;<br>
+if(l21 &lt;= 1) {<br>
+for(int l29 = 0; l29 &lt; ignoreCount; l29++) {<br>
+if(ignoreListAsLongs[l29] != l5)<br>
+continue;<br>
+flag5 = true;</p>
+<pre><code>					}
+				}
+				if(!flag5 &amp;&amp; anInt1251 == 0)
+					try {
+						String s9 = TextInput.method525(pktSize - 13, inStream);
+						//if(l21 != 3)
+							//s9 = Censor.doCensor(s9);
+						if(l21 == 2 || l21 == 3)
+							pushMessage(s9, 7, "@cr2@" + TextClass.fixName(TextClass.nameForLong(l5)));
+						else
+						if(l21 == 1)
+							pushMessage(s9, 7, "@cr1@" + TextClass.fixName(TextClass.nameForLong(l5)));
+						else
+							pushMessage(s9, 3, TextClass.fixName(TextClass.nameForLong(l5)));
+					} catch(Exception exception1) {
+						signlink.reporterror("cde1");
+					}
+				pktType = -1;
+				return true;[/CODE]
+</code></pre>
+<p>Here is my privatemessaging class in the “Packet’s” folder server sided ofc</p>
+<p>[CODE]</p>
+<p>package server.model.players.packets;</p>
+<p>import server.Config;<br>
+import server.Server;<br>
+import server.Connection;<br>
+import server.model.players.Client;<br>
+import server.model.players.PacketType;<br>
+import server.util.Misc;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Private messaging, friends etc<br>
+**/<br>
+public class PrivateMessaging implements PacketType {</p>
+<p>public final int ADD_FRIEND = 188, SEND_PM = 126, REMOVE_FRIEND = 215, CHANGE_PM_STATUS = 95, ADD_IGNORE = 133;<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void processPacket(Client c, int packetType, int packetSize) {<br>
+switch(packetType) {</p>
+<pre><code> 	case ADD_FRIEND:
+ 	c.friendUpdate = true;
+ 	long friendToAdd = c.getInStream().readQWord();
+ 	boolean canAdd = true;
+
+ 	for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+ 		if (c.friends[i1] != 0 &amp;&amp; c.friends[i1] == friendToAdd) {
+ 			canAdd = false;
+ 			c.sendMessage(friendToAdd + " is already on your friends list.");
+ 		}
+ 	}
+ 	if (canAdd == true) {
+ 		for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+ 			if (c.friends[i1] == 0) {
+ 				c.friends[i1] = friendToAdd;
+ 				for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+ 					if (Server.playerHandler.players[i2] != null &amp;&amp; Server.playerHandler.players[i2].isActive &amp;&amp; Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)== friendToAdd) {
+ 						Client o = (Client)Server.playerHandler.players[i2];
+ 						if(o != null) {
+ 							if (Server.playerHandler.players[i2].privateChat == 0 || (Server.playerHandler.players[i2].privateChat == 1 &amp;&amp; o.getPA().isInPM(Misc.playerNameToInt64(c.playerName)))) {
+ 								c.getPA().loadPM(friendToAdd, 1);
+ 								break;
+ 							}
+ 						}
+ 					}
+ 				}
+ 				break;
+ 			}
+ 		}
+ 	}
+ 	break;
+ 	
+ 	case SEND_PM:
+ 	long sendMessageToFriendId = c.getInStream().readQWord();
+     byte pmchatText[] = new byte[100];
+     int pmchatTextSize = (byte) (packetSize - 8);
+ 	c.getInStream().readBytes(pmchatText, pmchatTextSize, 0);
+ 	if (Connection.isMuted(c))
+ 		break;
+     for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+         if (c.friends[i1] == sendMessageToFriendId) {
+             boolean pmSent = false;
+
+             for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+                 if (Server.playerHandler.players[i2] != null &amp;&amp; Server.playerHandler.players[i2].isActive &amp;&amp; Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)== sendMessageToFriendId) {
+                     Client o = (Client)Server.playerHandler.players[i2];
+ 					if(o != null) {
+ 						if (Server.playerHandler.players[i2].privateChat == 0 || (Server.playerHandler.players[i2].privateChat == 1 &amp;&amp; o.getPA().isInPM(Misc.playerNameToInt64(c.playerName)))) {
+ 							o.getPA().sendPM(Misc.playerNameToInt64(c.playerName), c.playerRights, pmchatText, pmchatTextSize);
+                             pmSent = true;
+                         }
+ 					}
+                     break;
+                 }
+             }
+             if (!pmSent) {
+ 				c.sendMessage("That player is currently offline.");
+ 				break;
+             }
+         }
+     }
+     break;	
+ 	
+ 	case REMOVE_FRIEND:
+ 	c.friendUpdate = true;
+     long friendToRemove = c.getInStream().readQWord();
+
+     for (int i1 = 0; i1 &lt; c.friends.length; i1++) {
+         if (c.friends[i1] == friendToRemove) {
+ 			for (int i2 = 1; i2 &lt; Config.MAX_PLAYERS; i2++) {
+ 				Client o = (Client)Server.playerHandler.players[i2];		
+ 				if(o != null) {
+ 					if(c.friends[i1] == Misc.playerNameToInt64(Server.playerHandler.players[i2].playerName)){
+ 						o.getPA().updatePM(c.playerId, 0);
+ 						break;
+ 					}
+ 				}
+ 			}
+ 			c.friends[i1] = 0;
+             break;
+         }
+     }
+     break;
+ 	
+ 	
+ 	case CHANGE_PM_STATUS:
+     int tradeAndCompete = c.getInStream().readUnsignedByte();
+     c.privateChat = c.getInStream().readUnsignedByte();
+     int publicChat = c.getInStream().readUnsignedByte();
+     for (int i1 = 1; i1 &lt; Config.MAX_PLAYERS; i1++) {
+ 	   if (Server.playerHandler.players[i1] != null &amp;&amp; Server.playerHandler.players[i1].isActive == true) {
+             Client o = (Client)Server.playerHandler.players[i1];
+ 			if(o != null) {
+ 				o.getPA().updatePM(c.playerId, 1);
+ 			}
+         }
+     }
+     break;
+ 	
+ 	case ADD_IGNORE:
+ 		//TODO: fix this so it works :)
+ 		break;
+     
+ }
+</code></pre>
+<p>}	<br>
+}[/CODE]</p>
+</li>
+</ul>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="http://i47.tinypic.com/2rr0v4p.jpg" title="2rr0v4p.jpg" rel="nofollow noopener"><img src="http://i47.tinypic.com/2rr0v4p.jpg" alt width="690" height="285"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">2rr0v4p.jpg</span><span class="informations">1343×556</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>Leave your paypal email</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504/1</link>
+        <pubDate>Mon, 04 Feb 2013 01:56:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-481504-1</guid>
+        <source url="https://forum.moparisthebest.com/t/paypal-10-pi-private-messaging-bug/481504.rss">[Paypal 10$] [PI] Private messaging bug</source>
+      </item>
+  </channel>
+</rss>

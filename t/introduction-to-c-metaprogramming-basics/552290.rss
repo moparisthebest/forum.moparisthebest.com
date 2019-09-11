@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Introduction to C++ Metaprogramming: Basics</title>
+    <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290</link>
+    <description>This article will discuss metaprogramming in C++11 using templates, otherwise known as [b]template metaprogramming[/b]. These examples were compiled using the latest clang C++ compiler.
+
+[size=12pt][b]What is metaprogramming?[/b][/size]
+
+Metaprogramming isn&#39;t specific to C++ only, as a matter of fact, C++&#39;s metaprogramming facilities came as a result of a [url=https://en.wikibooks.org/wiki/C%2B%2B_Programming/Templates/Template_Meta-Programming#History_of_TMP]mistake[/url] due to templates being Turing-complete. Putting it simply: a language is [b]Turing-complete[/b] if any algorithm that can be expressed as a computer program can be written in that language; C++&#39;s templates are such a language.
+
+A [b]metaprogram[/b] is a program that operates on other programs, including itself. In the context of C++, template metaprograms generally operate on types and compile-time expressions. Template metaprograms share some important features of purely functional programming:
+
+[ul][li][b]Call-by-need[/b], otherwise known as [b]lazy evaluation[/b]. Templates are instantiated when they need to be by the compiler.[/li]
+[li]No side-effects. Applying functions don&#39;t produce side-effects.[/li]
+[li]Variable bindings are immutable.[/li][/ul]
+
+Let&#39;s write a metaprogram.
+
+[size=12pt][b]Computing factorials[/b][/size]
+
+A major advantage of template metaprogramming is the fact that your metaprograms will be executed during compile-time as opposed to run-time. Essentially, your compiler is executing the metaprogram and embedding its values in the source code then compiling the rest of the program. An immediate advantage is that less code execution is taking place at run-time, but as a cost of such a feature this means it takes longer for the compiler to compile the program as a whole.
+
+A pretty common implementation for a program that computes a factorial looks like:
+[code=cpp]#include &lt;iostream&gt;
+
+unsigned int factorial(unsigned int n) {
+  return n == 0 ? 1 : n * factorial(n - 1);
+}
+
+int main() {
+  std::cout &lt;&lt; factorial(5) &lt;&lt; std::endl;
+  return 0;
+}[/code]
+As you might expect, running the program outputs 120.
+
+Notice that I implemented the factorial function as a recursive one, other than being easier to write, it is also how we are going to write our factorial metafunction, since it&#39;s also easier to write ion this way.
+
+A [b]template metafunction[/b] is a class template that returns a type or compile-time expression. This isn&#39;t a strict definition, but I find Boost&#39;s implementations of metafunctions to be quite well-defined and concise. A template metafunction is called as such: `metafunction&lt;args...&gt;::type`. For now, we will be defining a numeric metafunction that doesn&#39;t exactly conform to this convention.
+[code=cpp]template &lt;unsigned int n&gt;
+struct factorial {
+  static constexpr unsigned int value = n * factorial&lt;n - 1&gt;::value;
+};[/code]
+First, it&#39;s worth noting that this is a regular class-template except I&#39;m using a struct here. You could just as easily use a class but recall that in C++ structs only differ from classes in visibility; by default its struct members are public, so we can avoid an extra line by using structs as our template-classes.
+
+Since metafunctions are executed at compile-time, the compiler needs to know that the `value` member is a compile-time expression. C++11 introduced the `constexpr` type-qualifier, but `const` could also be used (see [url=http://stackoverflow.com/questions/14116003/difference-between-constexpr-and-const]here[/url] for differences). Also, we use the `static` qualifier so the compiler can store its value in the data segment of the program (this means we don&#39;t need to instantiate a class in order to get access to its value -- a run-time operation).
+
+However, there is one more thing we need to deal with: the base case. The base case for our recursive factorial metafunction is the same for its non-metafunction: when N = 1, the function should return 1. Using template specialization, this is simple:
+[code=cpp]template &lt;&gt;
+struct factorial&lt;0&gt; {
+  static constexpr unsigned int value = 1;
+};[/code]
+Thus, our complete factorial metaprogram looks like:
+[code=cpp]#include &lt;iostream&gt;
+
+template &lt;unsigned int n&gt;
+struct factorial {
+  static constexpr unsigned int value = n * factorial&lt;n - 1&gt;::value;
+};
+
+template &lt;&gt;
+struct factorial&lt;0&gt; {
+  static constexpr unsigned int value = 1;
+};
+
+int main() {
+  std::cout &lt;&lt; factorial&lt;5&gt;::value &lt;&lt; std::endl; // 120
+  return 0;
+}[/code]
+
+[size=12pt][b]Integral constant wrappers[/b][/size]
+
+Since our metafunction will be returning a type in our next example, we need some way of encapsulating the properties of a compile-time expression such as: type, value, next/previous values, and itself. It turns out this isn&#39;t very difficult to do using `typedef`s or C++11&#39;s new `using` keyword:
+[code=cpp]template &lt;int N&gt;
+struct _int {
+  using type = _int&lt;N&gt;;
+  using value_type = int;
+  static constexpr int value = N;
+  using next = _int&lt;N + 1&gt;;
+  using prev = _int&lt;N - 1&gt;;
+};[/code]
+If you look closely you will notice `_int&lt;N&gt;` in the code, which means it must instantiate itself... right? Right!? Actually, no. :) This is one of the features of template metaprogramming; `_int&lt;5&gt;` isn&#39;t instantiated until we need it, so the compiler doesn&#39;t instantiate it at all! Recall this is known as call-by-need or lazy evaluation.
+
+You can also spend some time implementing basic mathematical operations on integral constants like so:
+[code=cpp]template &lt;typename T, typename N&gt;
+struct plus : _int&lt;T::value + N::value&gt; {};
+
+template &lt;typename T, typename N&gt;
+struct minus : _int&lt;T::value - N::value&gt; {};[/code]
+Use as:
+[code=cpp]plus&lt;_int&lt;1&gt;, _int&lt;1&gt;&gt;::value // 2 [/code]
+We didn&#39;t need to re-implement all of `_int`&#39;s fields since we are [i]forwarding[/i] them via instantiation. Another way to look at it is as if we are inheriting `_int`&#39;s properties into its child classes (`plus` and `minus`). This technique is known as [b]template metafunction forwarding[/b].
+
+[size=12pt][b]Computing binary to decimal[/b][/size]
+
+This example will look at computing a metafunction that converts a binary string to its base-10 value. In this example, we will also follow Boost&#39;s convention of a metafunction.
+
+Following the previous section on integral constant wrappers and taking advantage of metafunction forwarding, our metaprogram looks like:
+[code=cpp]#include &lt;iostream&gt;
+
+template &lt;unsigned int N&gt;
+struct _uint {
+  using type = _uint&lt;N&gt;;
+  using value_type = unsigned int;
+  static constexpr unsigned int value = N;
+  using next = _uint&lt;N + 1&gt;;
+  using prev = _uint&lt;N - 1&gt;;
+};
+
+template &lt;&gt;
+struct _uint&lt;0&gt; {
+  using type = _uint&lt;0&gt;;
+  using value_type = unsigned int;
+  static constexpr unsigned int value = 0;
+  using next = _uint&lt;1&gt;;
+  using prev = _uint&lt;0&gt;;
+};
+
+template &lt;unsigned int N&gt;
+struct binary : _uint&lt;binary&lt;N / 10&gt;::type::value * 2 + (N % 10)&gt; {};
+
+template &lt;&gt;
+struct binary&lt;0&gt; : _uint&lt;0&gt; {};
+
+int main() {
+  std::cout &lt;&lt; binary&lt;101&gt;::type::value &lt;&lt; std::endl; // 5
+  return 0;
+}[/code]</description>
+    
+    <lastBuildDate>Sat, 11 Jul 2015 03:47:32 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:5, topic:552290”]justaguy… no</p>
+<p>justa GREAT guy[/quote]</p>
+<p>Haha thanks dude.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/6</link>
+        <pubDate>Sat, 11 Jul 2015 03:47:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-6</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>justaguy… no</p>
+<p>justa GREAT guy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/5</link>
+        <pubDate>Sat, 11 Jul 2015 01:44:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-5</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Taharok, post:2, topic:552290”]Cool! I’m glad to see TMP making its way to this community. I really love the topics.</p>
+<p>You might want to go into more detail on the factorial example, though. It’d be handy to explain how looping and branching constructs work in the context of metaprogramming. Also, there are some amazing applications for this, up to and including C++ type introspection. See type_traits for more on that.</p>
+<p>Are you planning on covering SFINAE by any chance? Also, when dealing with C++11 code, it’s helpful to mention which compilers you’ve used for it, since all mainstream compilers are still not yet fully C++11 compliant. <em>cough</em> MSVC <em>cough</em>.</p>
+<p>Good work though![/quote]</p>
+<p>Thanks! type_traits is fantastic and comes with alot of goodies that have features similar to what comes with Boost’s MPL. I’ll be working on another post about TMP eventually, but the goal of this one was just to provide some basic information on TMP and what it does. I’ll be sure to have the next one include some of your suggestions, including SFINAE.</p>
+<aside class="quote" data-post="3" data-topic="552290">
+<div class="title">
+<div class="quote-controls"></div>
+ t4:</div>
+<blockquote>
+<p>Making the compiler evaluate factorials, priceless.</p>
+</blockquote>
+</aside>
+<p><img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> Next one will be more practical.</p>
+<p>[hr]</p>
+<p>Just realized today that the binary to decimal metaprogram was using a signed integral constant wrapper instead of an unsigned one, fixed the last code snippet to account for that.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/4</link>
+        <pubDate>Sat, 04 Jul 2015 03:05:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-4</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>Making the compiler evaluate factorials, priceless.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/3</link>
+        <pubDate>Sat, 04 Jul 2015 03:00:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-3</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>Cool! I’m glad to see TMP making its way to this community. I really love the topics.</p>
+<p>You might want to go into more detail on the factorial example, though. It’d be handy to explain how looping and branching constructs work in the context of metaprogramming. Also, there are some amazing applications for this, up to and including C++ type introspection. See type_traits for more on that.</p>
+<p>Are you planning on covering SFINAE by any chance? Also, when dealing with C++11 code, it’s helpful to mention which compilers you’ve used for it, since all mainstream compilers are still not yet fully C++11 compliant. <em>cough</em> MSVC <em>cough</em>.</p>
+<p>Good work though!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/2</link>
+        <pubDate>Sat, 04 Jul 2015 02:56:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-2</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Basics</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>This article will discuss metaprogramming in C++11 using templates, otherwise known as <span class="bbcode-b">template metaprogramming</span>. These examples were compiled using the latest clang C++ compiler.</p>
+<p>[size=12pt]<span class="bbcode-b">What is metaprogramming?</span>[/size]</p>
+<p>Metaprogramming isn’t specific to C++ only, as a matter of fact, C++'s metaprogramming facilities came as a result of a <a href="https://en.wikibooks.org/wiki/C%2B%2B_Programming/Templates/Template_Meta-Programming#History_of_TMP" data-bbcode="true" rel="nofollow noopener">mistake</a> due to templates being Turing-complete. Putting it simply: a language is <span class="bbcode-b">Turing-complete</span> if any algorithm that can be expressed as a computer program can be written in that language; C++'s templates are such a language.</p>
+<p>A <span class="bbcode-b">metaprogram</span> is a program that operates on other programs, including itself. In the context of C++, template metaprograms generally operate on types and compile-time expressions. Template metaprograms share some important features of purely functional programming:</p>
+<p>[ul][li]<span class="bbcode-b">Call-by-need</span>, otherwise known as <span class="bbcode-b">lazy evaluation</span>. Templates are instantiated when they need to be by the compiler.[/li]<br>
+[li]No side-effects. Applying functions don’t produce side-effects.[/li]<br>
+[li]Variable bindings are immutable.[/li][/ul]</p>
+<p>Let’s write a metaprogram.</p>
+<p>[size=12pt]<span class="bbcode-b">Computing factorials</span>[/size]</p>
+<p>A major advantage of template metaprogramming is the fact that your metaprograms will be executed during compile-time as opposed to run-time. Essentially, your compiler is executing the metaprogram and embedding its values in the source code then compiling the rest of the program. An immediate advantage is that less code execution is taking place at run-time, but as a cost of such a feature this means it takes longer for the compiler to compile the program as a whole.</p>
+<p>A pretty common implementation for a program that computes a factorial looks like:</p>
+<p>[code=cpp]<span class="hashtag">#include</span> </p>
+<p>unsigned int factorial(unsigned int n) {<br>
+return n == 0 ? 1 : n * factorial(n - 1);<br>
+}</p>
+<p>int main() {<br>
+std::cout &lt;&lt; factorial(5) &lt;&lt; std::endl;<br>
+return 0;<br>
+}[/code]<br>
+As you might expect, running the program outputs 120.</p>
+<p>Notice that I implemented the factorial function as a recursive one, other than being easier to write, it is also how we are going to write our factorial metafunction, since it’s also easier to write ion this way.</p>
+<p>A <span class="bbcode-b">template metafunction</span> is a class template that returns a type or compile-time expression. This isn’t a strict definition, but I find Boost’s implementations of metafunctions to be quite well-defined and concise. A template metafunction is called as such: <code>metafunction&lt;args...&gt;::type</code>. For now, we will be defining a numeric metafunction that doesn’t exactly conform to this convention.</p>
+<p><code>template &lt;unsigned int n&gt;
+struct factorial {
+  static constexpr unsigned int value = n * factorial&lt;n - 1&gt;::value;
+};</code><br>
+First, it’s worth noting that this is a regular class-template except I’m using a struct here. You could just as easily use a class but recall that in C++ structs only differ from classes in visibility; by default its struct members are public, so we can avoid an extra line by using structs as our template-classes.</p>
+<p>Since metafunctions are executed at compile-time, the compiler needs to know that the <code>value</code> member is a compile-time expression. C++11 introduced the <code>constexpr</code> type-qualifier, but <code>const</code> could also be used (see <a href="http://stackoverflow.com/questions/14116003/difference-between-constexpr-and-const" data-bbcode="true" rel="nofollow noopener">here</a> for differences). Also, we use the <code>static</code> qualifier so the compiler can store its value in the data segment of the program (this means we don’t need to instantiate a class in order to get access to its value – a run-time operation).</p>
+<p>However, there is one more thing we need to deal with: the base case. The base case for our recursive factorial metafunction is the same for its non-metafunction: when N = 1, the function should return 1. Using template specialization, this is simple:</p>
+<p><code>template &lt;&gt;
+struct factorial&lt;0&gt; {
+  static constexpr unsigned int value = 1;
+};</code><br>
+Thus, our complete factorial metaprogram looks like:</p>
+<p>[code=cpp]<span class="hashtag">#include</span> </p>
+<p>template <br>
+struct factorial {<br>
+static constexpr unsigned int value = n * factorial&lt;n - 1&gt;::value;<br>
+};</p>
+<p>template &lt;&gt;<br>
+struct factorial&lt;0&gt; {<br>
+static constexpr unsigned int value = 1;<br>
+};</p>
+<p>int main() {<br>
+std::cout &lt;&lt; factorial&lt;5&gt;::value &lt;&lt; std::endl; // 120<br>
+return 0;<br>
+}[/code]</p>
+<p>[size=12pt]<span class="bbcode-b">Integral constant wrappers</span>[/size]</p>
+<p>Since our metafunction will be returning a type in our next example, we need some way of encapsulating the properties of a compile-time expression such as: type, value, next/previous values, and itself. It turns out this isn’t very difficult to do using <code>typedef</code>s or C++11’s new <code>using</code> keyword:</p>
+<p><code>template &lt;int N&gt;
+struct _int {
+  using type = _int&lt;N&gt;;
+  using value_type = int;
+  static constexpr int value = N;
+  using next = _int&lt;N + 1&gt;;
+  using prev = _int&lt;N - 1&gt;;
+};</code><br>
+If you look closely you will notice <code>_int&lt;N&gt;</code> in the code, which means it must instantiate itself… right? Right!? Actually, no. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> This is one of the features of template metaprogramming; <code>_int&lt;5&gt;</code> isn’t instantiated until we need it, so the compiler doesn’t instantiate it at all! Recall this is known as call-by-need or lazy evaluation.</p>
+<p>You can also spend some time implementing basic mathematical operations on integral constants like so:</p>
+<p>[code=cpp]template &lt;typename T, typename N&gt;<br>
+struct plus : _int&lt;T::value + N::value&gt; {};</p>
+<p>template &lt;typename T, typename N&gt;<br>
+struct minus : _int&lt;T::value - N::value&gt; {};[/code]<br>
+Use as:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>We didn’t need to re-implement all of <code>_int</code>'s fields since we are <span class="bbcode-i">forwarding</span> them via instantiation. Another way to look at it is as if we are inheriting <code>_int</code>'s properties into its child classes (<code>plus</code> and <code>minus</code>). This technique is known as <span class="bbcode-b">template metafunction forwarding</span>.</p>
+<p>[size=12pt]<span class="bbcode-b">Computing binary to decimal</span>[/size]</p>
+<p>This example will look at computing a metafunction that converts a binary string to its base-10 value. In this example, we will also follow Boost’s convention of a metafunction.</p>
+<p>Following the previous section on integral constant wrappers and taking advantage of metafunction forwarding, our metaprogram looks like:</p>
+<p>[code=cpp]<span class="hashtag">#include</span> </p>
+<p>template <br>
+struct _uint {<br>
+using type = _uint;<br>
+using value_type = unsigned int;<br>
+static constexpr unsigned int value = N;<br>
+using next = _uint&lt;N + 1&gt;;<br>
+using prev = _uint&lt;N - 1&gt;;<br>
+};</p>
+<p>template &lt;&gt;<br>
+struct _uint&lt;0&gt; {<br>
+using type = _uint&lt;0&gt;;<br>
+using value_type = unsigned int;<br>
+static constexpr unsigned int value = 0;<br>
+using next = _uint&lt;1&gt;;<br>
+using prev = _uint&lt;0&gt;;<br>
+};</p>
+<p>template <br>
+struct binary : _uint&lt;binary&lt;N / 10&gt;::type::value * 2 + (N % 10)&gt; {};</p>
+<p>template &lt;&gt;<br>
+struct binary&lt;0&gt; : _uint&lt;0&gt; {};</p>
+<p>int main() {<br>
+std::cout &lt;&lt; binary&lt;101&gt;::type::value &lt;&lt; std::endl; // 5<br>
+return 0;<br>
+}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290/1</link>
+        <pubDate>Sat, 04 Jul 2015 02:41:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552290-1</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-basics/552290.rss">Introduction to C++ Metaprogramming: Basics</source>
+      </item>
+  </channel>
+</rss>

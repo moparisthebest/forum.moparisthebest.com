@@ -1,0 +1,678 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A decent packet handling system</title>
+    <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404</link>
+    <description>Current packet handling systems seem to work like this: you have a org.myserver.packet package filled with various classes that implement some PacketListener interface, and some config file that describes which org.myserver.packet.SomeListener binds to whichever packet IDs.
+
+Problems I see with this approach:
+1) Not very dynamic. org.myserver.packet is on the classpath, so you can&#39;t reload it at run time.
+2) Redundancy. You can write packet IDs in both the config file (for binding) and, where more than one id is bound to one listener, the PacketListener itself.
+3) Inflexible. If say I want to add a muting system to my server, I&#39;d make changes to both PrivateMessageListener and ChatListener, maybe even DuelListener too. Now the muting system is a part of my PacketListener system, they should both be seperate.
+
+Flexibility is the main issue I&#39;d like to address.
+
+My solution is as follows:
+1) Use the service provider system (http://java.sun.com/javase/6/docs/api/java/util/ServiceLoader.html) to load listeners dynamically. This means packet listeners can be reloaded while the server is still live.
+[b]Crucially now, instead of a single PacketListener per packet ID, there&#39;s a whole chain of them[/b]. The chain will be executed from top to bottom, with each link (packetlistener) able to break the chain at any point. This makes it easy to seperate game logic from server logic, and to add/modify game logic on the fly. [i]I bet you&#39;re thinking &#39;how is the packet information going to be passed down the chain? are they all just going to share a reference to some Packet and call packet.reset() a lot?&#39; and I&#39;ll address this later on.[/i]
+2) Store packet ids in some PacketIDs java file. All your packetlisteners will refer to this file, and no IDs will be hardcoded except here. IF nothing else this offers some basic bot protection.
+3) Let&#39;s say I&#39;ve decided in my server I want to make a certain door only open if your character has a certain quality. A moparscape coder would probably hard code this into WallObjectActionListener (or whatever), but for us that wouldn&#39;t fly. We just create a new PacketListener, add it to the end of the PacketIds.WALL_OBJECT_ACTION chain, and then if the case isn&#39;t met, we break the chain. Adding new game content is now a breeze.
+
+
+Limitation:
+If we just pass around Packet objects everywhere, that means each PacketListener that listens on PacketIds.WHATEVER is going to have to have it&#39;s own method for extracting data from that packet, right? That means [b]redundancy[/b]! If I need to change the packet structure for whatever reason, I&#39;d have to change it in ALL of the relevant listeners! What a bitch.
+One possible solution for this is some kind of packet descriptor file, maybe something like this.
+[code]&lt;PacketDescriptors&gt;
+&lt;packet id=&quot;73&quot; name=&quot;CAST_ON_PLAYER&quot;&gt;
+  &lt;entry type=&quot;ushort&quot; name=&quot;spellId&quot;/&gt;
+  &lt;entry type=&quot;ushort&quot; name=&quot;targetIndex&quot;/&gt;
+&lt;/packet&gt;
+...[/code]
+([i]I know I mentioned earlier about PacketIds being the only place to read packets, maybe PacketIds will load the numbers from this descriptor file[/i].)
+So you call packetDecoder.decode(Packet) and get some DecodedPacket that has a Map&lt;String,Object&gt; that maps, for example, &quot;spellID&quot; to some Integer value, and then your DecodedPacket is passed down the chain. It&#39;s a neat idea, but a lot of calls to HashMaps might be a performance worry.
+On the plus side, it&#39;s now fucking easy to create new packets, or change packet structures without having to rewrite much (any?) code.
+
+
+
+
+
+Go easy on me, I was lying in bed thinking about serverz and this idea came to me. As I&#39;m typing this, on my laptop, in the dark, it all makes sense like I&#39;ve gotten a reach-around from God. Hopefully one of you cunts can bring me back down to earth my detailing limitations, failures, and problems. If this isn&#39;t clear it&#39;s probably because God hasn&#39;t explained it that well to me either. Lemme know if I can clear anything up.
+
+CRITIQUE.[br][br][size=1]Posted on: October 13, 2009, 05:41:05 pm[/size][hr]To clarify, here&#39;s an example of what PacketListener might look like:
+[code]interface PacketListener {
+	/**
+	 * Called when the listener is instantiated.
+	 * Used to add an instance of this object to the chain(s)
+	 * in PacketHandler.
+	 */
+	void init(PacketHandler ph);
+	
+	/**
+	 * Notified that a given packet has been recieved.
+	 * @param w the game world instance
+	 * @param dp the decoded packet
+	 * @param ctx the context of the listener in the chain
+	 */
+	void processPacket(World w, DecodedPacket dp, PacketListenerContext ctx);
+}[/code]
+PacketListenerContext will have in it references to the Player that owns the packet, the position of this current listener in the chain, perhaps methods for examining the chain or altering position in the chain.[br][br][size=1]Posted on: October 13, 2009, 05:48:30 pm[/size][hr]An example for how this might be used...
+
+On a server I play, they have a system where p2p items aren&#39;t allowed in the wilderness, so wildy is f2p only. A possible PacketListener could work like this...
+
+[code]init():
+bind to player moving, item actions, spell casting, ranging
+
+processPacket():
+if player moving and new position is in the wilderness, un-equip their p2p armour/weps, remove levels gained from p2p potions.
+if player using and item and it&#39;s a p2p item, stop it.*
+if player casting and it&#39;s p2p spells, stop it.*
+if player ranging with p2p arrows, stop it.*
+[/code]
+*Stopping it means terminating the execution down the chain, so if I add my F2PWildy PacketListener at the top of my PacketListenerChain, that means it gets executed first, which means I can easily call stopExecution() on my PacketListenerContext event.
+
+As you can see, now my logic for this particular aspect of the game is totally seperate from everything else. No more copying and pasting code, now I can just share this java file on moparscape and (as long as the chain positions are right) it&#39;s all hunky dory.
+
+Makes sense?[br][br][size=1]Posted on: October 13, 2009, 05:49:36 pm[/size][hr]On reading back, this system ain&#39;t exactly the simplest for java noobs, but for those that do know what they are doing it&#39;ll be a [b]whole lot easier[/b] to add new content and modify existing content.</description>
+    
+    <lastBuildDate>Fri, 27 Nov 2009 10:39:42 +0000</lastBuildDate>
+    <category>Community Inside Talk</category>
+    <atom:link href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="30" data-topic="308404">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>isnt this called ASPECT ORIENTED PROGRAMMING ??</p>
+</blockquote>
+</aside>
+<p>Sounds like it. Is that bad? It seems to make sense to me. The game should really be as seperate as possible from the server code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/31</link>
+        <pubDate>Fri, 27 Nov 2009 10:39:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-31</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>isnt this called ASPECT ORIENTED PROGRAMMING ??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/30</link>
+        <pubDate>Sat, 21 Nov 2009 18:48:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-30</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I honestly think a scripting system that has a Script interface and a field for the script name would be best.  (I think Lothy originally suggested such a system)  The reason for this, for example, would be a PythonScript class, since there may be multiple PythonScript instances pointing to different python scripts, the name would be used to differentiate them.</p>
+<p>The other main thing that needs to be done for this scripting system, is to have the packet ‘decoding’ and ‘encoding’ done separately from the scripts so that the actual content (and scripts) become and stay version independent.  Stork’s original idea of some type of map (so things can be accessed by packet.get(“atk_lvl”) or similar) is good, as well as the automatically generated classes (accessed like packet.atk_lvl) idea.  I tend to like the map idea better, it is simpler, cleaner, and not inherently slower or anything than the other idea.  To avoid the problem I believe Taharok pointed out to endlessly creating and destroying countless of these map containers, a better idea would be to keep a pool of them around and just reset the pertinent values.  (you have to call packet.set(“atk_lvl”) anyway, and it will overwrite the previous value at the same speed as if there was no previous value to overwrite)</p>
+<p>I would love for someone to come out with a server like this, a simple, version independent design has great potential to be the last server anyone will ever have to make.  Since a new version would only require a new packet encoder/decoder to work, as someone stated in this or another thread recently you could even support multiple client versions at the same time.  And scripting with languages more script-friendly than java would be icing on top of the cake, python support might even make me want to write some scripts. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>What I am trying to say is a server such as this would be well suited for payment from the server fund, which currently over $5000 US. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+<p>[size=3pt]I might even consider doing it for that kind of money, is that ethical?..[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/29</link>
+        <pubDate>Sun, 25 Oct 2009 01:51:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-29</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:27, topic:308404”]There isn’t a class for everything. It just involves many instances of Script being instantiated, each wrapping the name of their associated script and executing it when the fire method is invoked.<br>
+I just suggested it because it makes execution of all scripts really neat.[/quote]<br>
+i wasnt really talking about what you said, just what stork was suggesting initially</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/28</link>
+        <pubDate>Sun, 25 Oct 2009 01:14:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-28</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>There isn’t a class for everything. It just involves many instances of Script being instantiated, each wrapping the name of their associated script and executing it when the fire method is invoked.<br>
+I just suggested it because it makes execution of all scripts really neat.</p>
+<p><a class="mention" href="/u/lawl">@lawl</a>: It would be a FSM, yeah.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/27</link>
+        <pubDate>Sun, 25 Oct 2009 00:37:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-27</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>having a class for every little thing doesn’t seem elegant to me. scripts do though, because you can put all related content in a single script. like an entire quest, etc. i suppose you could do that in a class too, but its still not as elegant.</p>
+<p>semi related idea ive had for a while:</p>
+<p>to make the scripting simpler and less redundant, a lot of work should be done by the engine, for example if you wanted to script dialog, the script would look something like:</p>
+<pre><code class="lang-auto">npc says penis
+[script automatically paused until continue pressed, no need to wait() or synchronize or anything]
+give options x x x
+[waits till user selects an option]
+if (opt = a) {...}
+...</code></pre>
+<p>basically, the engine keeps the state of dialog etc. dunno if thats what you’d call a state machine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/26</link>
+        <pubDate>Sat, 24 Oct 2009 22:24:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-26</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[code]        world.hookOnto(Message.Type.LOGIN, new MessageListener() {</p>
+<pre><code>        private final Logger logger = Logger.getLogger(this.getClass().getPackage().getName());
+
+        public Result messageReceived(Message message, MessageListenerChain chain) {
+            logger.info("logging in: " + message.getField("username")
+                    + " (" + message.getField("password") + ") (" + message.getPlayer() + ")");
+            Message response = new Message(Message.Type.LOGIN, message.getPlayer());
+            response.setField("username", "jimbo");
+            response.send();
+            return Result.CONTINUE;
+        }
+    });[/code]
+</code></pre>
+<p>i implemented a system similar for the lulz… MessageListeners build MessageListenerChains <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+ps my naming sucks (hence ‘hookOnto’)… suggest a new name for that method??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/25</link>
+        <pubDate>Sat, 24 Oct 2009 14:19:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-25</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Stork, post:19, topic:308404”][quote author=Lothy link=topic=404851.msg3001562#msg3001562 date=1256040937]<br>
+If you wanted a chain of Events that could be triggered by any given packet opcode, you could use the Event class as a wrapper which merely invokes an external script.<br>
+That way you have the chain of Event objects as I described, with each being light-weight and delegating all functionality to the script – a middle-man of sorts.</p>
+<p>The only difference between each instance of Event would be the name of the script it invokes (ie, one field). You could have a hierarchy of Events too; one type of Event might trigger a script written in Lua, another type may trigger a script written in Python. In this case the difference between each instance would be the way that it invokes the external script and the name of the script it will invoke.</p>
+<p>Hopefully that’s understandable enough.<br>
+[/quote]<br>
+So each packethandler has an Event chain, which are just a list of scripts to be executed?</p>
+<p>Is Event just some arbitrary one-size-fits-all interface with say a:</p>
+<p><code>void run(EventContext c);</code> method that gets called, or do you have custom events like say PlayerWieldEvent with, for example:</p>
+<p><code>void wield(Player p, InvItem i);
+void unWield(...);</code></p>
+<p>If not, then it’s basically the system I described, except PacketListener is called Event, and you have to write custom PacketListeners (more work for no gain?)</p>
+<p>If so, then it’s a lot of work - although I’d admit, it would be a much better system.[/quote]<br>
+It’s just an arbitrary class. The only intent of the chain I suggested is to execute a given script with the supplied arguments. I don’t know why I said Event above, but here’s the idea again.</p>
+<pre><code class="lang-auto">public abstract class Script {
+
+  protected String scriptName;
+  protected Script next;
+
+  protected Script(String scriptName) {
+    this.scriptName = scriptName;
+  }
+
+  public final void setNextScript(Script script) {
+    script.setNextScript(next);
+    next = script;
+  }
+
+  public final String getName() {
+    return scriptName;
+  }
+
+  public abstract void fire(IoSession session /*Other appropriate arguments here*/);
+}
+
+public final class LuaScript extends Script {
+
+  public LuaScript(String scriptName) {
+    super(scriptName);
+  }
+
+  public void fire(IoSession session) {
+    boolean breakChain = LuaScriptExecutor.execute(scriptName);
+
+    if (!breakChain) {
+      next.fire();
+    }
+  }
+}</code></pre>
+<p>I don’t know how wise it would be to have the execute method that I’ve made use of only return a boolean type; more granular values could prove useful in other areas of the server.<br>
+The general gist though is that my approach allows the implementation of scripting using multiple scripting languages.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/24</link>
+        <pubDate>Sat, 24 Oct 2009 11:11:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-24</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“blakeman8192, post:22, topic:308404”]You could use MINA and it’s own filters for content etc.</p>
+<p>Here’s a link to how MINA IO filters work: <a href="http://mina.apache.org/iofilter.html" rel="nofollow noopener">http://mina.apache.org/iofilter.html</a></p>
+<p>You could use the filters for many reasons: applying encryption/decryption (removing the need to do that while preparing/parsing your packets, respectively) to data, but you could also implement it in a way like this:</p>
+<p><code>
+on-read
+    1. get packet data from buffer (read opcode etc)
+    2. get opcode handler and the filters for the handler (example: equipping a dragon long sword)
+    3. go through filters before applying player state changes:
+        a. check if player has 60 attack - if not, "break" this chained procedure, otherwise continue
+        b. check if player has done lost city quest - if not, "break" this chained procedure, otherwise continue
+    4. equip the item on the player
+</code>[/quote]<br>
+I think that’s pretty much what I described, a chain of filters/handlers.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/23</link>
+        <pubDate>Sat, 24 Oct 2009 11:00:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-23</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>You could use MINA and it’s own filters for content etc.</p>
+<p>Here’s a link to how MINA IO filters work: <a href="http://mina.apache.org/iofilter.html">http://mina.apache.org/iofilter.html</a></p>
+<p>You could use the filters for many reasons: applying encryption/decryption (removing the need to do that while preparing/parsing your packets, respectively) to data, but you could also implement it in a way like this:</p>
+<pre><code class="lang-auto">on-read
+    1. get packet data from buffer (read opcode etc)
+    2. get opcode handler and the filters for the handler (example: equipping a dragon long sword)
+    3. go through filters before applying player state changes:
+        a. check if player has 60 attack - if not, "break" this chained procedure, otherwise continue
+        b. check if player has done lost city quest - if not, "break" this chained procedure, otherwise continue
+    4. equip the item on the player</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/22</link>
+        <pubDate>Fri, 23 Oct 2009 19:56:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-22</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="20" data-topic="308404">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/blakeman8192/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> blakeman8192:</div>
+<blockquote>
+<p>Multiple handlers (that form a chain) for one action could get incredibly complicated and hard for outsiders to understand - that’s why I suggested a “filter” system. Either way will work fine though.</p>
+</blockquote>
+</aside>
+<p>link to filter system?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/21</link>
+        <pubDate>Fri, 23 Oct 2009 17:25:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-21</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>Multiple handlers (that form a chain) for one action could get incredibly complicated and hard for outsiders to understand - that’s why I suggested a “filter” system. Either way will work fine though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/20</link>
+        <pubDate>Fri, 23 Oct 2009 13:42:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-20</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:16, topic:308404”]If you wanted a chain of Events that could be triggered by any given packet opcode, you could use the Event class as a wrapper which merely invokes an external script.<br>
+That way you have the chain of Event objects as I described, with each being light-weight and delegating all functionality to the script – a middle-man of sorts.</p>
+<p>The only difference between each instance of Event would be the name of the script it invokes (ie, one field). You could have a hierarchy of Events too; one type of Event might trigger a script written in Lua, another type may trigger a script written in Python. In this case the difference between each instance would be the way that it invokes the external script and the name of the script it will invoke.</p>
+<p>Hopefully that’s understandable enough.[/quote]<br>
+So each packethandler has an Event chain, which are just a list of scripts to be executed?</p>
+<p>Is Event just some arbitrary one-size-fits-all interface with say a:</p>
+<p><code>void run(EventContext c);</code> method that gets called, or do you have custom events like say PlayerWieldEvent with, for example:</p>
+<p><code>void wield(Player p, InvItem i);
+void unWield(...);</code></p>
+<p>If not, then it’s basically the system I described, except PacketListener is called Event, and you have to write custom PacketListeners (more work for no gain?)</p>
+<p>If so, then it’s a lot of work - although I’d admit, it would be a much better system.[br][br][size=1]Posted on: October 21, 2009, 02:27:19 am[/size][hr][quote=“blakeman8192, post:17, topic:308404”]I like this idea - it’s sort of like the filter chains in apache MINA.<br>
+However, I think you would have to apply the “logic filters” (or something of that matter) in-between the actual data reading and the modification of the player. It could look something like this:</p>
+<pre><code class="lang-auto">1. read item equip packet
+2. go through various filters:
+    * check if player has required level X to equip it, otherwise break the chain
+    * check if player has required level Y to equip it, otherwise break the chain
+3. equip item</code></pre>
+<p>And an entire system could be structured like so (the filters could be hot-plugged on the fly).<br>
+On the subject of scalability, with proper design pattern implementations you should be able to pull this off without much worrying about performance.[/quote]<br>
+So are you suggesting three separate filters there? I’m not sure what that would gain, unless I misunderstood.</p>
+<p>Sticking with the example of wielding, I was thinking something more like this:</p>
+<p>You could have one handler named WieldLevelRequirement, which might look something like this:</p>
+<p>[code]package org.stork.gameserver.extras.wield;</p>
+<p>class WieldLevelRequirements implements PacketHandler {</p>
+<pre><code>/**
+ * Maybe my args aren't spot on, it's just an idea.
+ */
+void handle(Player p, TokenizedPacket tp, PacketHandlerContext c) {
+	//look up requirements for some item from some arbitrary source
+	WieldRequirements wr = lookupRequirements(tp.getInt("itemId"));
+	
+	if(wr.satisfiedBy(p)) {
+		/* we don't need to do anything here, the actual wielding
+			is done in a different class at the end of the chain. */
+	} else {
+		sendServerMessage(p, "NO U CAN NOT WEAR");
+		
+		/* Next bit is important, it tells the packet handler to
+			ignore the rest of the chain, bear in mind if we don't
+			do this then the item will still be wielded */
+		c.breakHandlerChain();
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>Then at the end of the chain, some UnconditionedWielder that will wield the item without checking any requirements or anything.</p>
+<p>Obv not the only way to do things, but it seems pretty sensible (until someone points out a massive flaw). Only problem I see is that if someone implements a design system like I detailed (the wielding one), they’d need it to be consistent.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/19</link>
+        <pubDate>Wed, 21 Oct 2009 08:08:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-19</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>I believe the logic shouldn’t be split into filters as you’ve demonstrated, simply because the code becomes too fragmented to manage in that case.<br>
+There’s no reason that the script that equips the item can’t perform the checks and either equip the item (if the checks succeed) or do nothing (if the checks fail).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/18</link>
+        <pubDate>Tue, 20 Oct 2009 23:08:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-18</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>I like this idea - it’s sort of like the filter chains in apache MINA.<br>
+However, I think you would have to apply the “logic filters” (or something of that matter) in-between the actual data reading and the modification of the player. It could look something like this:</p>
+<pre><code class="lang-auto">1. read item equip packet
+2. go through various filters:
+    * check if player has required level X to equip it, otherwise break the chain
+    * check if player has required level Y to equip it, otherwise break the chain
+3. equip item</code></pre>
+<p>And an entire system could be structured like so (the filters could be hot-plugged on the fly).<br>
+On the subject of scalability, with proper design pattern implementations you should be able to pull this off without much worrying about performance.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/17</link>
+        <pubDate>Tue, 20 Oct 2009 13:43:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-17</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>If you wanted a chain of Events that could be triggered by any given packet opcode, you could use the Event class as a wrapper which merely invokes an external script.<br>
+That way you have the chain of Event objects as I described, with each being light-weight and delegating all functionality to the script – a middle-man of sorts.</p>
+<p>The only difference between each instance of Event would be the name of the script it invokes (ie, one field). You could have a hierarchy of Events too; one type of Event might trigger a script written in Lua, another type may trigger a script written in Python. In this case the difference between each instance would be the way that it invokes the external script and the name of the script it will invoke.</p>
+<p>Hopefully that’s understandable enough.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/16</link>
+        <pubDate>Tue, 20 Oct 2009 12:15:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-16</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:14, topic:308404”][quote author=la­wl link=topic=404851.msg3000105#msg3000105 date=1255902023]<br>
+find a way to incorporate scripting graciously in that system and it will be perfect<br>
+[/quote]<br>
+I suppose you could have the chain of packet handlers, with each of those packet handlers having their own chain of associated scripts. In such a system all scripts would have the chance to do something when required.[/quote]<br>
+That would be a great system, but can you imagine writing a separate handling/loading system for every single event? I considered it but decided to go for the easier method.</p>
+<p>In this system, it is possible to use any language you want to generate handlers, as long as they satisfy the following criteria:</p>
+<ol>
+<li>must implement the PacketHandler interface, or extend some AbstractPacketHandler</li>
+<li>must compile to java bytecode (obviously)</li>
+<li>must be declared in META-INF/services/foo.bar.PackerHandler*</li>
+</ol>
+<ul>
+<li>there is a system using annotations that will do this for you automatically, but that only works with the java compiler.</li>
+</ul>
+<p>Ideal solution is, someone writes a custom compiler to translate some proprietary language (like runescript) into these packethandler classes and adds them to the service list automagically.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/15</link>
+        <pubDate>Mon, 19 Oct 2009 18:21:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-15</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="13" data-topic="308404">
+<div class="title">
+<div class="quote-controls"></div>
+ la­wl:</div>
+<blockquote>
+<p>find a way to incorporate scripting graciously in that system and it will be perfect</p>
+</blockquote>
+</aside>
+<p>I suppose you could have the chain of packet handlers, with each of those packet handlers having their own chain of associated scripts. In such a system all scripts would have the chance to do something when required.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/14</link>
+        <pubDate>Mon, 19 Oct 2009 14:09:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-14</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>find a way to incorporate scripting graciously in that system and it will be perfect</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/13</link>
+        <pubDate>Sun, 18 Oct 2009 21:40:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-13</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>I usually dynamically load packet handler classes by keeping them in a second source directory (a directory named something like Plugins).</p>
+<p>As for going with a channels/subscriber approach (which is what you’ve essentially suggested), it’s ok but for most of the components its unnecessary.<br>
+Sure, muting involves modification of a handful of packet handling plugins. I can’t think of many other cases that involve such a scenario though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/12</link>
+        <pubDate>Thu, 15 Oct 2009 04:51:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-12</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I don’t see anything inherently inefficient about this idea, you might have to end up changing some things in the end for performance sake, like the type of Map used or even going with the automatic generation of classes, but the idea itself is sound.</p>
+<p>As to stork’s last idea, I would take it a tiny (and simple) step further and instead of automatically generating java source files, I would automatically generate class files (since it is easier, generate source files and immediately compile them) because then idiots won’t be tempted to edit the files after generation.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/11</link>
+        <pubDate>Thu, 15 Oct 2009 04:29:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-11</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Stork, post:8, topic:308404”][quote author=Cowie` link=topic=404851.msg2995124#msg2995124 date=1255539911]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>There can’t be anything particular efficient about doing this idea. It just makes life easier for someone who knows the server like the back of their hand. In my opinion, we should be putting speed and performance above flexibility and design. I would probably die if I knew Jagex was creating a whole new packet object for every incoming back they received, or if they had entire listener chains to process one type of packet.</p>
+</blockquote>
+</aside>
+<p>I would have thought this would have come as a part of performance, but hey. Lets stick everything into one file and see how it performs.<br>
+[/quote]<br>
+My other idea was to use the packet structure information to auto-generate java source files with the right data in them, so you’d run some program on your PacketDescriptions.xml and it’d give you a whole bunch of .java files, one for each packet. Each one would subclass Packet. That way you could just pass one of those down the chain…[/quote]</p>
+<p>Great idea is great. Automation of a task that is so repetitive would in my opinion make people definately switch to your system if created.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/10</link>
+        <pubDate>Wed, 14 Oct 2009 21:30:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-10</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>I like that idea. It creates flexibility while adding new entries.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/9</link>
+        <pubDate>Wed, 14 Oct 2009 21:11:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-9</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@Stork Stork]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stork">@Stork</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Cowie`, post:7, topic:308404”][quote author=Taharok link=topic=404851.msg2994998#msg2994998 date=1255532102]<br>
+There can’t be anything particular efficient about doing this idea. It just makes life easier for someone who knows the server like the back of their hand. In my opinion, we should be putting speed and performance above flexibility and design. I would probably die if I knew Jagex was creating a whole new packet object for every incoming back they received, or if they had entire listener chains to process one type of packet.<br>
+[/quote]</p>
+<p>I would have thought this would have come as a part of performance, but hey. Lets stick everything into one file and see how it performs.[/quote]<br>
+My other idea was to use the packet structure information to auto-generate java source files with the right data in them, so you’d run some program on your PacketDescriptions.xml and it’d give you a whole bunch of .java files, one for each packet. Each one would subclass Packet. That way you could just pass one of those down the chain…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/8</link>
+        <pubDate>Wed, 14 Oct 2009 20:08:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-8</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+      <item>
+        <title>A decent packet handling system</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="5" data-topic="308404">
+<div class="title">
+<div class="quote-controls"></div>
+ Taharok:</div>
+<blockquote>
+<p>There can’t be anything particular efficient about doing this idea. It just makes life easier for someone who knows the server like the back of their hand. In my opinion, we should be putting speed and performance above flexibility and design. I would probably die if I knew Jagex was creating a whole new packet object for every incoming back they received, or if they had entire listener chains to process one type of packet.</p>
+</blockquote>
+</aside>
+<p>I would have thought this would have come as a part of performance, but hey. Lets stick everything into one file and see how it performs.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404/7</link>
+        <pubDate>Wed, 14 Oct 2009 17:05:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-308404-7</guid>
+        <source url="https://forum.moparisthebest.com/t/a-decent-packet-handling-system/308404.rss">A decent packet handling system</source>
+      </item>
+  </channel>
+</rss>

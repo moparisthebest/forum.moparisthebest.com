@@ -1,0 +1,504 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Client connecting instantly</title>
+    <link>https://forum.moparisthebest.com/t/client-connecting-instantly/535557</link>
+    <description>What causes the client&#39;s connection to delay when logging in? I&#39;m just looking to remove the delay/error messages if you&#39;re logging in multiple times.
+
+Sometimes it will display the message &quot;No reponse from server&quot;, and when I tried to get around this, it will keep saying &quot;Connecting to server...&quot; for like 40 seconds and then finally give me a response?
+
+[code=java]
+		if (k == -1) {
+				i1 = k;
+				if (i1 == 0 || i1 != 0) {
+					if (loginFailures &lt; 5) {
+						try {
+							Thread.sleep(1000L);
+						} catch (Exception _ex) {
+						}
+						//loginFailures++;
+						loginFailures = 0;
+						login(s, s1, flag);
+						//Thread.sleep(1000L);
+						return;
+					} else {
+						loginMessage1 = &quot;No response from loginserver&quot;;
+						loginMessage2 = &quot;Please wait 1 minute and try again.&quot;;
+						return;
+					}
+				} else {
+					loginMessage1 = &quot;No response from server&quot;;
+					loginMessage2 = &quot;Please wait 1 minute and try again.&quot;;
+					return;
+				}
+			} else {
+				System.out.println(&quot;response:&quot; + k);
+				loginMessage1 = &quot;Unexpected server response&quot;;
+				loginMessage2 = &quot;Please try using a different world.&quot;;
+				return;
+			}
+		} catch (IOException _ex) {
+			loginMessage1 = &quot;&quot;;
+		}
+		loginMessage2 = &quot;Error connecting to server.&quot;;
+	}
+[/code]
+
+I&#39;ve removed the loginFailures.
+
+With this line
+[code=java]
+if (i1 == 0) {
+[/code]
+
+I get &quot;No response from server&quot; after multiple login attempts, and when it&#39;s changed to
+[code=java]
+if (i1 == 0 || i1 != 0) {
+[/code]
+
+It stays on &quot;Connecting to server&quot; for about 30-40 seconds, then finally I get my response. What should I be looking at to sort this?</description>
+    
+    <lastBuildDate>Wed, 13 Nov 2013 13:58:58 +0000</lastBuildDate>
+    <category>Game Development</category>
+    <atom:link href="https://forum.moparisthebest.com/t/client-connecting-instantly/535557.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Client connecting instantly</title>
+        <dc:creator><![CDATA[@ohokay ohokay]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ohokay">@ohokay</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:2, topic:535557”]The client specifies a 30,000 millisecond timeout in its socket class (commonly named RSSocket)</p>
+<pre><code class="lang-auto">package org.astrect.net;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+
+import org.astrect.awt.GameStub;
+
+public final class BufferedConnection implements Runnable {
+
+    private byte[] buffer;
+    private int buffIndex;
+    private boolean closed;
+    private boolean hasIOError;
+    private final InputStream inputStream;
+    private boolean isWriter;
+    private final OutputStream outputStream;
+    private final GameStub rsApplet;
+    private final Socket socket;
+    private int writeIndex;
+
+    public BufferedConnection(GameStub RSApplet_, Socket socket1) throws IOException {
+        closed = false;
+        isWriter = false;
+        hasIOError = false;
+        rsApplet = RSApplet_;
+        socket = socket1;
+        socket.setSoTimeout(30000);
+        socket.setTcpNoDelay(true);
+        inputStream = socket.getInputStream();
+        outputStream = socket.getOutputStream();
+    }
+
+    public int available() throws IOException {
+        if (closed) {
+            return 0;
+        } else {
+            return inputStream.available();
+        }
+    }
+
+    public void close() {
+        closed = true;
+        try {
+            if (inputStream != null) {
+                inputStream.close();
+            }
+            if (outputStream != null) {
+                outputStream.close();
+            }
+            if (socket != null) {
+                socket.close();
+            }
+        } catch (IOException _ex) {
+            System.out.println("Error closing stream");
+        }
+        isWriter = false;
+        synchronized (this) {
+            notify();
+        }
+        buffer = null;
+    }
+
+    public void flushInputStream(byte abyte0[], int j) throws IOException {
+        int i = 0;
+        if (closed) {
+            return;
+        }
+        int k;
+        for (; j &gt; 0; j -= k) {
+            k = inputStream.read(abyte0, i, j);
+            if (k &lt;= 0) {
+                throw new IOException("EOF");
+            }
+            i += k;
+        }
+
+    }
+
+    public void printDebug() {
+        System.out.println("dummy:" + closed);
+        System.out.println("tcycl:" + writeIndex);
+        System.out.println("tnum:" + buffIndex);
+        System.out.println("writer:" + isWriter);
+        System.out.println("ioerror:" + hasIOError);
+        try {
+            System.out.println("available:" + available());
+        } catch (IOException _ex) {
+        }
+    }
+
+    public void queueBytes(int i, byte abyte0[]) throws IOException {
+        if (closed) {
+            return;
+        }
+        if (hasIOError) {
+            hasIOError = false;
+            throw new IOException("Error in writer thread");
+        }
+        if (buffer == null) {
+            buffer = new byte[5000];
+        }
+        synchronized (this) {
+            for (int l = 0; l &lt; i; l++) {
+                buffer[buffIndex] = abyte0[l];
+                buffIndex = (buffIndex + 1) % 5000;
+                if (buffIndex == ((writeIndex + 4900) % 5000)) {
+                    throw new IOException("buffer overflow");
+                }
+            }
+
+            if (!isWriter) {
+                isWriter = true;
+                rsApplet.startRunnable(this, 3);
+            }
+            notify();
+        }
+    }
+
+    public int read() throws IOException {
+        if (closed) {
+            return 0;
+        } else {
+            return inputStream.read();
+        }
+    }
+
+    @Override
+    public void run() {
+        while (isWriter) {
+            int i;
+            int j;
+            synchronized (this) {
+                if (buffIndex == writeIndex) {
+                    try {
+                        wait();
+                    } catch (InterruptedException _ex) {
+                    }
+                }
+                if (!isWriter) {
+                    return;
+                }
+                j = writeIndex;
+                if (buffIndex &gt;= writeIndex) {
+                    i = buffIndex - writeIndex;
+                } else {
+                    i = 5000 - writeIndex;
+                }
+            }
+            if (i &gt; 0) {
+                try {
+                    outputStream.write(buffer, j, i);
+                } catch (IOException _ex) {
+                    hasIOError = true;
+                }
+                writeIndex = (writeIndex + i) % 5000;
+                try {
+                    if (buffIndex == writeIndex) {
+                        outputStream.flush();
+                    }
+                } catch (IOException _ex) {
+                    hasIOError = true;
+                }
+            }
+        }
+    }
+}</code></pre>
+<p>specifically:</p>
+<p><code>
+    public BufferedConnection(GameStub RSApplet_, Socket socket1) throws IOException {
+        ....
+        socket.setSoTimeout(30000);
+        ....
+    }</code></p>
+<p>These classes are from my client which is based off of MITB’s client.[/quote]</p>
+<p>I had a thought it was to do with this. Even after changing the timeout, the duration is still the same and I’m still not able to log in after 2 attempts, for about 40 seconds.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/client-connecting-instantly/535557/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/client-connecting-instantly/535557/3</link>
+        <pubDate>Wed, 13 Nov 2013 13:58:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535557-3</guid>
+        <source url="https://forum.moparisthebest.com/t/client-connecting-instantly/535557.rss">Client connecting instantly</source>
+      </item>
+      <item>
+        <title>Client connecting instantly</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>The client specifies a 30,000 millisecond timeout in its socket class (commonly named RSSocket)</p>
+<pre><code class="lang-auto">package org.astrect.net;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+
+import org.astrect.awt.GameStub;
+
+public final class BufferedConnection implements Runnable {
+
+    private byte[] buffer;
+    private int buffIndex;
+    private boolean closed;
+    private boolean hasIOError;
+    private final InputStream inputStream;
+    private boolean isWriter;
+    private final OutputStream outputStream;
+    private final GameStub rsApplet;
+    private final Socket socket;
+    private int writeIndex;
+
+    public BufferedConnection(GameStub RSApplet_, Socket socket1) throws IOException {
+        closed = false;
+        isWriter = false;
+        hasIOError = false;
+        rsApplet = RSApplet_;
+        socket = socket1;
+        socket.setSoTimeout(30000);
+        socket.setTcpNoDelay(true);
+        inputStream = socket.getInputStream();
+        outputStream = socket.getOutputStream();
+    }
+
+    public int available() throws IOException {
+        if (closed) {
+            return 0;
+        } else {
+            return inputStream.available();
+        }
+    }
+
+    public void close() {
+        closed = true;
+        try {
+            if (inputStream != null) {
+                inputStream.close();
+            }
+            if (outputStream != null) {
+                outputStream.close();
+            }
+            if (socket != null) {
+                socket.close();
+            }
+        } catch (IOException _ex) {
+            System.out.println("Error closing stream");
+        }
+        isWriter = false;
+        synchronized (this) {
+            notify();
+        }
+        buffer = null;
+    }
+
+    public void flushInputStream(byte abyte0[], int j) throws IOException {
+        int i = 0;
+        if (closed) {
+            return;
+        }
+        int k;
+        for (; j &gt; 0; j -= k) {
+            k = inputStream.read(abyte0, i, j);
+            if (k &lt;= 0) {
+                throw new IOException("EOF");
+            }
+            i += k;
+        }
+
+    }
+
+    public void printDebug() {
+        System.out.println("dummy:" + closed);
+        System.out.println("tcycl:" + writeIndex);
+        System.out.println("tnum:" + buffIndex);
+        System.out.println("writer:" + isWriter);
+        System.out.println("ioerror:" + hasIOError);
+        try {
+            System.out.println("available:" + available());
+        } catch (IOException _ex) {
+        }
+    }
+
+    public void queueBytes(int i, byte abyte0[]) throws IOException {
+        if (closed) {
+            return;
+        }
+        if (hasIOError) {
+            hasIOError = false;
+            throw new IOException("Error in writer thread");
+        }
+        if (buffer == null) {
+            buffer = new byte[5000];
+        }
+        synchronized (this) {
+            for (int l = 0; l &lt; i; l++) {
+                buffer[buffIndex] = abyte0[l];
+                buffIndex = (buffIndex + 1) % 5000;
+                if (buffIndex == ((writeIndex + 4900) % 5000)) {
+                    throw new IOException("buffer overflow");
+                }
+            }
+
+            if (!isWriter) {
+                isWriter = true;
+                rsApplet.startRunnable(this, 3);
+            }
+            notify();
+        }
+    }
+
+    public int read() throws IOException {
+        if (closed) {
+            return 0;
+        } else {
+            return inputStream.read();
+        }
+    }
+
+    @Override
+    public void run() {
+        while (isWriter) {
+            int i;
+            int j;
+            synchronized (this) {
+                if (buffIndex == writeIndex) {
+                    try {
+                        wait();
+                    } catch (InterruptedException _ex) {
+                    }
+                }
+                if (!isWriter) {
+                    return;
+                }
+                j = writeIndex;
+                if (buffIndex &gt;= writeIndex) {
+                    i = buffIndex - writeIndex;
+                } else {
+                    i = 5000 - writeIndex;
+                }
+            }
+            if (i &gt; 0) {
+                try {
+                    outputStream.write(buffer, j, i);
+                } catch (IOException _ex) {
+                    hasIOError = true;
+                }
+                writeIndex = (writeIndex + i) % 5000;
+                try {
+                    if (buffIndex == writeIndex) {
+                        outputStream.flush();
+                    }
+                } catch (IOException _ex) {
+                    hasIOError = true;
+                }
+            }
+        }
+    }
+}</code></pre>
+<p>specifically:</p>
+<p><code>
+    public BufferedConnection(GameStub RSApplet_, Socket socket1) throws IOException {
+        ....
+        socket.setSoTimeout(30000);
+        ....
+    }</code></p>
+<p>These classes are from my client which is based off of MITB’s client.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/client-connecting-instantly/535557/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/client-connecting-instantly/535557/2</link>
+        <pubDate>Wed, 13 Nov 2013 02:19:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535557-2</guid>
+        <source url="https://forum.moparisthebest.com/t/client-connecting-instantly/535557.rss">Client connecting instantly</source>
+      </item>
+      <item>
+        <title>Client connecting instantly</title>
+        <dc:creator><![CDATA[@ohokay ohokay]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ohokay">@ohokay</a> wrote:</p>
+          <blockquote>
+              <p>What causes the client’s connection to delay when logging in? I’m just looking to remove the delay/error messages if you’re logging in multiple times.</p>
+<p>Sometimes it will display the message “No reponse from server”, and when I tried to get around this, it will keep saying “Connecting to server…” for like 40 seconds and then finally give me a response?</p>
+<pre><code class="lang-auto">		if (k == -1) {
+				i1 = k;
+				if (i1 == 0 || i1 != 0) {
+					if (loginFailures &lt; 5) {
+						try {
+							Thread.sleep(1000L);
+						} catch (Exception _ex) {
+						}
+						//loginFailures++;
+						loginFailures = 0;
+						login(s, s1, flag);
+						//Thread.sleep(1000L);
+						return;
+					} else {
+						loginMessage1 = "No response from loginserver";
+						loginMessage2 = "Please wait 1 minute and try again.";
+						return;
+					}
+				} else {
+					loginMessage1 = "No response from server";
+					loginMessage2 = "Please wait 1 minute and try again.";
+					return;
+				}
+			} else {
+				System.out.println("response:" + k);
+				loginMessage1 = "Unexpected server response";
+				loginMessage2 = "Please try using a different world.";
+				return;
+			}
+		} catch (IOException _ex) {
+			loginMessage1 = "";
+		}
+		loginMessage2 = "Error connecting to server.";
+	}</code></pre>
+<p>I’ve removed the loginFailures.</p>
+<p>With this line</p>
+<pre><code class="lang-auto">if (i1 == 0) {</code></pre>
+<p>I get “No response from server” after multiple login attempts, and when it’s changed to</p>
+<pre><code class="lang-auto">if (i1 == 0 || i1 != 0) {</code></pre>
+<p>It stays on “Connecting to server” for about 30-40 seconds, then finally I get my response. What should I be looking at to sort this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/client-connecting-instantly/535557/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/client-connecting-instantly/535557/1</link>
+        <pubDate>Wed, 13 Nov 2013 00:52:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-535557-1</guid>
+        <source url="https://forum.moparisthebest.com/t/client-connecting-instantly/535557.rss">Client connecting instantly</source>
+      </item>
+  </channel>
+</rss>

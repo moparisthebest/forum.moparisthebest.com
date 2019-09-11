@@ -1,0 +1,773 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI] Reduce lag by caching update blocks!</title>
+    <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914</link>
+    <description>[b][u]What is a [i]cached update block[/i]?[/u][/b]
+
+[B]Definition of the word [i]cache[/i]: store away in hiding or for future use.[/B]
+
+That means when we [i]cache[/i] update blocks we are storing the data constructed from the update blocks in memory somewhere, so we can use it later on.
+
+
+
+
+[B][U]So how does caching update blocks improve performance?[/U][/B]
+
+Building the update blocks in player updating is what eats up a mass majority of the cycle time. If you look at player updating in a traditional project insanity server it first updates the player like so:
+
+[CODE]        plr.updateThisPlayerMovement(str);
+        boolean saveChatTextUpdate = plr.chatTextUpdateRequired;
+        plr.chatTextUpdateRequired = false;
+        plr.appendPlayerUpdateBlock(updateBlock);
+        plr.chatTextUpdateRequired = saveChatTextUpdate;
+        str.writeBits(8, plr.playerListSize);[/CODE]
+        
+        
+and then goes on to update for players around you...
+ 
+[CODE]         int size = plr.playerListSize;
+        if (size &gt; 255)
+            size = 255;
+        plr.playerListSize = 0;
+        for (int i = 0; i &lt; size; i++) {
+            if (!plr.didTeleport &amp;&amp; !plr.playerList[i].didTeleport &amp;&amp; plr.withinDistance(plr.playerList[i])) {
+                plr.playerList[i].updatePlayerMovement(str);
+                plr.playerList[i].appendPlayerUpdateBlock(updateBlock);
+                plr.playerList[plr.playerListSize++] = plr.playerList[i];
+            } else {
+                int id = plr.playerList[i].slot;
+                plr.playerInListBitmap[id &gt;&gt; 3] &amp;= ~(1 &lt;&lt; (id &amp; 7));
+                str.writeBits(1, 1);
+                str.writeBits(2, 3);
+            }
+        }[/CODE]
+      
+      
+The problem here is that when updating for players around you, you are unnecessarily rebuilding the update blocks for all of those players. Remember what I said in the beginning about how building the update blocks eats up a majority of the cycle time (the longer a cycle takes = the more stress the server is on). When we cache update blocks we are essentially &#39;reusing&#39; previously constructed blocks instead of taking out the time to construct new ones (building less update blocks = less cycle time = less lag).
+
+You&#39;re only really going to see a noticeable difference in performance when there are lots of players in the same region, especially if those players are doing things like talking, walking, fighting, equipping armor, etc.
+
+
+
+
+[b][u]Caching update blocks[/u][/b]
+
+If you&#39;re using any project insanity derivative you shouldn&#39;t have a problem getting this working. Make sure you follow the instructions carefully, it wouldn&#39;t hurt to backup your files as well.
+
+
+
+Open up the &#39;Player&#39; class and declare this:
+
+[CODE]    private Stream cachedBlock;
+
+    public Stream getCachedBlock() {
+        return cachedBlock;
+    }
+
+    public void setCachedBlock(Stream cachedBlock) {
+        this.cachedBlock = cachedBlock;
+    }[/CODE]
+    
+    
+Replace your &#39;appendPlayerUpdateBlock&#39; method with this one
+
+[code]    public void appendPlayerUpdateBlock(Stream str, Player thisPlayer, boolean needsBlock) {
+        if (!updateRequired &amp;&amp; !chatTextUpdateRequired)
+            return; // nothing required
+
+        if (getCachedBlock() != null &amp;&amp; !this.playerName.equals(thisPlayer.playerName) &amp;&amp; !needsBlock) {
+            str.writeBytes(getCachedBlock().buffer, getCachedBlock().currentOffset, 0);
+            return;
+        }
+
+        // XXX: For people who don&#39;t have resizable buffers the size might need
+        // to be increased!
+        Stream cacheStream = new Stream(new byte[300]);
+
+        int updateMask = 0;
+        if (graphicsUpdateRequired) {
+            updateMask |= 0x100;
+        }
+        if (animationUpdateRequired) {
+            updateMask |= 8;
+        }
+        if (forcedChatUpdateRequired) {
+            updateMask |= 4;
+        }
+        if (chatTextUpdateRequired) {
+            updateMask |= 0x80;
+        }
+        if (appearanceUpdateRequired) {
+            updateMask |= 0x10;
+        }
+        if (faceEntityUpdateRequired) {
+            updateMask |= 1;
+        }
+        if (facePositionUpdateRequired) {
+            updateMask |= 2;
+        }
+        if (hitUpdateRequired) {
+            updateMask |= 0x20;
+        }
+
+        if (secondaryHitUpdateRequired) {
+            updateMask |= 0x200;
+        }
+
+        if (updateMask &gt;= 0x100) {
+            updateMask |= 0x40;
+            cacheStream.writeByte(updateMask &amp; 0xFF);
+            cacheStream.writeByte(updateMask &gt;&gt; 8);
+        } else {
+            cacheStream.writeByte(updateMask);
+        }
+
+        // now writing the various update blocks itself - note that their
+        // order crucial
+        if (graphicsUpdateRequired) {
+            appendMask100Update(cacheStream);
+        }
+        if (animationUpdateRequired) {
+            appendAnimationRequest(cacheStream);
+        }
+        if (forcedChatUpdateRequired) {
+            appendForcedChat(cacheStream);
+        }
+        if (chatTextUpdateRequired) {
+            appendPlayerChatText(cacheStream);
+        }
+        if (faceEntityUpdateRequired) {
+            appendFaceUpdate(cacheStream);
+        }
+        if (appearanceUpdateRequired) {
+            appendPlayerAppearance(cacheStream);
+        }
+        if (facePositionUpdateRequired) {
+            appendSetFocusDestination(cacheStream);
+        }
+        if (hitUpdateRequired) {
+            appendHitUpdate(cacheStream);
+        }
+        if (secondaryHitUpdateRequired) {
+            appendHitUpdate2(cacheStream);
+        }
+
+        if (!this.playerName.equals(thisPlayer.playerName) &amp;&amp; !needsBlock) {
+            setCachedBlock(cacheStream);
+        }
+
+        /** Add the cached block to the update block. */
+        str.writeBytes(cacheStream.buffer, cacheStream.currentOffset, 0);
+    }[/code]
+
+
+Look for this inside of the &#39;addNewPlayer&#39; method
+
+[code]       plr.appendPlayerUpdateBlock(updateBlock);[/code]
+
+and replace it with this
+
+[code]	plr.appendPlayerUpdateBlock(updateBlock, plr, true);[/code]
+	
+
+Then open &#39;PlayerHandler&#39; and search for 
+
+[code]       players[i].reset();[/code]
+
+and add this under it
+
+[code]	players[i].setCachedBlock(null);[/code]
+	
+
+Then find this inside of the &#39;updatePlayer&#39; method
+
+[code]	plr.appendPlayerUpdateBlock(updateBlock);[/code]
+
+ and replace it with
+
+[code]	plr.appendPlayerUpdateBlock(updateBlock, plr, true);[/code]
+
+
+Find this inside of the same method 
+
+[code]	plr.playerList[i].appendPlayerUpdateBlock(updateBlock);[/code]
+
+and replace it with
+
+[code]	plr.playerList[i].appendPlayerUpdateBlock(updateBlock, plr, false);[/code]
+
+
+And we&#39;re done! If you can login with multiple players online you did everything right.
+
+
+
+
+[b][u]Credits[/u][/b]
+
+Graham</description>
+    
+    <lastBuildDate>Sun, 10 Aug 2014 05:33:26 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:35, topic:543914”][quote author=lare69 link=topic=662795.msg4430296#msg4430296 date=1402960560]</p>
+<aside class="quote">
+<blockquote>
+<p>I’ll re follow the tutorial and see if I do it correctly. This is my error.</p>
+<p><code>Error: Error packet size mismatch in getplayer pos:268 psize:58
+Error: T2 - 81,126,71 - 58,0,0 - -128,31,-4,-53,0,-1,-1,0,0,0,0,6,91,6,-89,1,31,6,43,1,1,1,33,1,42,1,16,3,1,2,3,0,3,40,3,55,3,51,3,52,3,53,3,54,3,56,0,0,0,0,</code></p>
+</blockquote>
+</aside>
+<p>message me on skype I’ll try and help out<br>
+[/quote]<br>
+did you ever figure out his issue? perhaps post the solution?[/quote]</p>
+<p>I’m having the same problem <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<pre><code class="lang-auto">Error: Error packet size mismatch in getplayer pos:63 psize:67
+Error: T2 - 81,65,81 - 67,3088,3506 - 0,0,31,95,-1,-19,16,-55,0,-1,-1,6,26,57,44
+,38,-2,21,-104,40,-60,0,0,40,-61,1,1,31,38,40,-63,1,14,1,14,11,3,0,3,40,3,55,3,5
+1,3,52,3,53,3,54,
+Error: T1 - 123,0 - 36,36
+Error: T2 - 81,73,171 - 127,3088,3506 - -26,-55,-128,0,1,-11,-1,-1,16,-52,0,-1,-
+1,0,0,0,0,1,18,0,1,26,1,36,1,0,1,33,1,42,1,10,0,0,0,0,0,3,40,3,55,3,51,3,52,3,53
+,3,54,3,
+Exception in thread "Thread-5" java.lang.ArrayIndexOutOfBoundsException: 50216
+        at client.method101(client.java:8582)
+        at client.method96(client.java:8325)
+        at client.method114(client.java:9618)
+        at client.mainGameProcessor(client.java:3457)
+        at client.processGameLoop(client.java:2567)
+        at RSApplet.run(RSApplet.java:103)
+        at client.run(client.java:5053)
+        at java.lang.Thread.run(Unknown Source)</code></pre>
+<p>and</p>
+<pre><code class="lang-auto">Error: T1 - 123,0 - 36,36
+Error: T2 - 81,73,171 - 127,3088,3506 - -26,-55,-128,0,1,-8,15,-1,16,-52,0,-1,-1
+,0,0,0,0,1,18,0,1,26,1,36,1,0,1,33,1,42,1,10,0,0,0,0,0,3,40,3,55,3,51,3,52,3,53,
+3,54,3,
+Exception in thread "Thread-5" java.lang.ArrayIndexOutOfBoundsException: 50216
+        at client.method101(client.java:8582)
+        at client.method96(client.java:8325)
+        at client.method114(client.java:9618)
+        at client.mainGameProcessor(client.java:3457)
+        at client.processGameLoop(client.java:2567)
+        at RSApplet.run(RSApplet.java:103)
+        at client.run(client.java:5053)
+        at java.lang.Thread.run(Unknown Source)</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/36</link>
+        <pubDate>Sun, 10 Aug 2014 05:33:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-36</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:28, topic:543914”][quote author=jummppy link=topic=662795.msg4430204#msg4430204 date=1402935871]<br>
+I’ll re follow the tutorial and see if I do it correctly. This is my error.</p>
+<p><code>Error: Error packet size mismatch in getplayer pos:268 psize:58
+Error: T2 - 81,126,71 - 58,0,0 - -128,31,-4,-53,0,-1,-1,0,0,0,0,6,91,6,-89,1,31,6,43,1,1,1,33,1,42,1,16,3,1,2,3,0,3,40,3,55,3,51,3,52,3,53,3,54,3,56,0,0,0,0,</code><br>
+[/quote]<br>
+message me on skype I’ll try and help out[/quote]<br>
+did you ever figure out his issue? perhaps post the solution?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/35</link>
+        <pubDate>Thu, 07 Aug 2014 13:37:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-35</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@SmdScape SmdScape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/smdscape">@SmdScape</a> wrote:</p>
+          <blockquote>
+              <p>It’s really dumb to argue against performance improvements…</p>
+<p>“dumb optimization, not worth it” - 158ms<br>
+"also dumb optimization" - 130ms<br>
+"pointless thread" - 112ms<br>
+"insignificant gains" - 99ms</p>
+<p>Why not aim for a better server compared to calling every optimization insignificant and unnecessary?</p>
+<p>I’ll personally be using this. Thanks, lare.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/34</link>
+        <pubDate>Mon, 04 Aug 2014 07:10:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-34</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@whattehp406 whattehp406]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whattehp406">@whattehp406</a> wrote:</p>
+          <blockquote>
+              <p>A lot of small improvements make a big improvement. If we had more people doing small improvements rather than saying “it’s a small improvement not worth it”  then it would run a lot better. 10ms is a lot server wise btw. If you can shave that off then that’s a good thing. Thanks for writing this tutorial.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/33</link>
+        <pubDate>Sun, 13 Jul 2014 15:11:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-33</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>Good job, apparently some people don’t, but I love micro improvements like this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/32</link>
+        <pubDate>Sat, 05 Jul 2014 23:24:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-32</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Terraforming Terraforming]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/terraforming">@Terraforming</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:15, topic:543914”][quote author=Graham link=topic=381494.msg2866591#msg2866591 date=1247502807]<br>
+<span class="bbcode-b">Caching update blocks</span></p>
+<p>Say you had 100 players in a region, and then a new one logs in. In a traditional server, each 100 players will reconstruct the new player’s appearance update block when they login. This server will cache update blocks for the duration of the cycle, so it only happens once, at the expense of slightly more memory usage.</p>
+<p>This should give some improvements when there are a lot of players in an area, especially if the updates are large (like appearance blocks).<br>
+[/quote]</p>
+<p>Key word: “some”. This should give <span class="bbcode-i">some</span> improvements.</p>
+<p>Lare never said, “this will fix every single lag problem in PI.”[/quote]</p>
+<p>Yeah no way? How could 1 thing fix the hundreds Sanity did wrong? :fp:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/31</link>
+        <pubDate>Mon, 30 Jun 2014 22:24:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-31</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>That’s hardly a performance gain Lin. Sure the little things matter but I wouldn’t have bothered.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/30</link>
+        <pubDate>Sat, 21 Jun 2014 23:33:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-30</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Lin Lin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lin">@Lin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ashi, post:4, topic:543914”]It’ll increase performance sure but not significantly. It does not matter.[/quote]Nonsense. In my 5000 player test, I gained several milliseconds by caching every type of update block. I would construct a chat packet when the packet was parsed, for example, and then when the player was updated, write that block to the main cached update block, and then write the main cached update block. You say these things are insignificant, but I achieved a ~10ms 2000 active player update loop simply by doing tons of these kinds of micro-optimizations.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/29</link>
+        <pubDate>Sat, 21 Jun 2014 23:08:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-29</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“jummppy, post:27, topic:543914”]I’ll re follow the tutorial and see if I do it correctly. This is my error.</p>
+<p><code>Error: Error packet size mismatch in getplayer pos:268 psize:58
+Error: T2 - 81,126,71 - 58,0,0 - -128,31,-4,-53,0,-1,-1,0,0,0,0,6,91,6,-89,1,31,6,43,1,1,1,33,1,42,1,16,3,1,2,3,0,3,40,3,55,3,51,3,52,3,53,3,54,3,56,0,0,0,0,</code>[/quote]<br>
+message me on skype I’ll try and help out</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/28</link>
+        <pubDate>Mon, 16 Jun 2014 23:16:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-28</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@jummppy jummppy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jummppy">@jummppy</a> wrote:</p>
+          <blockquote>
+              <p>I’ll re follow the tutorial and see if I do it correctly. This is my error.</p>
+<p><code>Error: Error packet size mismatch in getplayer pos:268 psize:58
+Error: T2 - 81,126,71 - 58,0,0 - -128,31,-4,-53,0,-1,-1,0,0,0,0,6,91,6,-89,1,31,6,43,1,1,1,33,1,42,1,16,3,1,2,3,0,3,40,3,55,3,51,3,52,3,53,3,54,3,56,0,0,0,0,</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/27</link>
+        <pubDate>Mon, 16 Jun 2014 16:24:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-27</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="25" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jummppy/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> jummppy:</div>
+<blockquote>
+<p>I get an error when i try to logout with another player in the same region. It will log me out and in. Anything I may need to do to fix this?</p>
+</blockquote>
+</aside>
+<p>you sure you followed the tutorial correctly?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/26</link>
+        <pubDate>Mon, 16 Jun 2014 13:01:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-26</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@jummppy jummppy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jummppy">@jummppy</a> wrote:</p>
+          <blockquote>
+              <p>I get an error when i try to logout with another player in the same region. It will log me out and in. Anything I may need to do to fix this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/25</link>
+        <pubDate>Sun, 15 Jun 2014 23:16:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-25</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="23" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jummppy/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> jummppy:</div>
+<blockquote>
+<p>time to convert over to delta :’(</p>
+</blockquote>
+</aside>
+<p>It is just an extra byte array in your client class. and Then a boolean flag to tell it to update the cached block or not.<br>
+Just look at the format i posted <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/24</link>
+        <pubDate>Sun, 15 Jun 2014 22:40:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-24</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@jummppy jummppy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jummppy">@jummppy</a> wrote:</p>
+          <blockquote>
+              <p>time to convert over to delta :’(</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/23</link>
+        <pubDate>Sun, 15 Jun 2014 16:20:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-23</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@IfearI IfearI]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ifeari">@IfearI</a> wrote:</p>
+          <blockquote>
+              <p>I believe you should always improve performance whenever you can whenever it is just slightly or huge, just go with it. A lot of small improvements make a big one anyway. So thank you lare69. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/22</link>
+        <pubDate>Sun, 15 Jun 2014 07:05:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-22</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="20" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ashi/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ashi:</div>
+<blockquote>
+<p>Okay lets do it because Graham did it!</p>
+</blockquote>
+</aside>
+<p>He wrote one of the best performing and most widely used open source runescape servers to date… so yeah actually, lets do it because Graham did it.</p>
+<p>and you’re a complete moron if you think Graham is the only one that caches update blocks :palm: just please go away</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/21</link>
+        <pubDate>Sun, 15 Jun 2014 00:39:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-21</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>Okay lets do it because Graham did it!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/20</link>
+        <pubDate>Sat, 14 Jun 2014 21:34:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-20</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:15, topic:543914”][quote author=Graham link=topic=381494.msg2866591#msg2866591 date=1247502807]<br>
+<span class="bbcode-b">Caching update blocks</span></p>
+<p>Say you had 100 players in a region, and then a new one logs in. In a traditional server, each 100 players will reconstruct the new player’s appearance update block when they login. This server will cache update blocks for the duration of the cycle, so it only happens once, at the expense of slightly more memory usage.</p>
+<p>This should give some improvements when there are a lot of players in an area, especially if the updates are large (like appearance blocks).<br>
+[/quote]</p>
+<p>Key word: “some”. This should give <span class="bbcode-i">some</span> improvements.</p>
+<p>Lare never said, “this will fix every single lag problem in PI.”[/quote]<br>
+^^ this is why i hate releasing stuff on here lol i get attacked almost every time i release a tutorial or something of this nature. im cool with constructive criticism but blatant stupidity is really irritating</p>
+<aside class="quote" data-post="18" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ashi/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ashi:</div>
+<blockquote>
+<p>My server isn’t crap that requires every little bit of performance gain it can get. That’s why I don’t care about “some” lol.</p>
+</blockquote>
+</aside>
+<p>ok its official you are an IDIOT, just leave</p>
+<p>if it wasn’t important then graham wouldn’t have added it to hyperion/apollo</p>
+<p>/discussion</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/19</link>
+        <pubDate>Sat, 14 Jun 2014 20:39:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-19</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>My server isn’t crap that requires every little bit of performance gain it can get. That’s why I don’t care about “some” lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/18</link>
+        <pubDate>Sat, 14 Jun 2014 20:03:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-18</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ashi, post:16, topic:543914”][quote author=arham 4 link=topic=662795.msg4429956#msg4429956 date=1402773438]</p>
+<aside class="quote">
+<blockquote>
+<p><span class="bbcode-b">Caching update blocks</span></p>
+<p>Say you had 100 players in a region, and then a new one logs in. In a traditional server, each 100 players will reconstruct the new player’s appearance update block when they login. This server will cache update blocks for the duration of the cycle, so it only happens once, at the expense of slightly more memory usage.</p>
+<p>This should give some improvements when there are a lot of players in an area, especially if the updates are large (like appearance blocks).</p>
+</blockquote>
+</aside>
+<p>Key word: “some”. This should give <span class="bbcode-i">some</span> improvements.<br>
+[/quote]<br>
+Nobody is saying that it does not give any improvements you derp. But some is not a lot.[/quote]<br>
+Why not reside to <span class="bbcode-i">some</span>?</p>
+<p>It doesn’t hurt.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/17</link>
+        <pubDate>Sat, 14 Jun 2014 19:18:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-17</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:15, topic:543914”][quote author=Graham link=topic=381494.msg2866591#msg2866591 date=1247502807]<br>
+<span class="bbcode-b">Caching update blocks</span></p>
+<p>Say you had 100 players in a region, and then a new one logs in. In a traditional server, each 100 players will reconstruct the new player’s appearance update block when they login. This server will cache update blocks for the duration of the cycle, so it only happens once, at the expense of slightly more memory usage.</p>
+<p>This should give some improvements when there are a lot of players in an area, especially if the updates are large (like appearance blocks).<br>
+[/quote]</p>
+<p>Key word: “some”. This should give <span class="bbcode-i">some</span> improvements.[/quote]<br>
+Nobody is saying that it does not give any improvements you derp. But some is not a lot.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/16</link>
+        <pubDate>Sat, 14 Jun 2014 19:18:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-16</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Graham, post:1, topic:288551”]<span class="bbcode-b">Caching update blocks</span></p>
+<p>Say you had 100 players in a region, and then a new one logs in. In a traditional server, each 100 players will reconstruct the new player’s appearance update block when they login. This server will cache update blocks for the duration of the cycle, so it only happens once, at the expense of slightly more memory usage.</p>
+<p>This should give some improvements when there are a lot of players in an area, especially if the updates are large (like appearance blocks).[/quote]</p>
+<p>Key word: “some”. This should give <span class="bbcode-i">some</span> improvements.</p>
+<p>Lare never said, “this will fix every single lag problem in PI.”</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/15</link>
+        <pubDate>Sat, 14 Jun 2014 19:17:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-15</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p><a class="mention" href="/u/people">@people</a> complaining about performance, did you even bother to read the thread?</p>
+<aside class="quote" data-post="1" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+ lare69:</div>
+<blockquote>
+<p>You’re only really going to see a noticeable difference in performance when there are lots of players in the same region, especially if those players are doing things like talking, walking, fighting, equipping armor, etc.</p>
+</blockquote>
+</aside>
+<p>I never once stated something like this was going to fix the ‘lag’ problem that project insanity has so I don’t see why I’m being attacked. It does reduce lag and increase performance, so what’s the issue?</p>
+<aside class="quote" data-post="9" data-topic="543914">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ashi/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ashi:</div>
+<blockquote>
+<p>How “well” did your “benchmarking” turn out for this? Post results.</p>
+</blockquote>
+</aside>
+<p>I didn’t do benchmarks for project insanity so I wouldn’t know. I did do benchmarks that showed improvement for Asteria though but that was after a lot of optimizations including this one. It honestly doesn’t matter what you say or think though because my point still remains true that player updating (along with network events) <span class="bbcode-b">is</span> what eats up a majority of the cycle… so “stop” being "a " (see what I did there?) pretentious bit<span class="bbcode-b"></span>ch and just accept the fact that you aren’t right for once</p>
+<p>Alright alright I’ll give you the benefit of the doubt. Since player updating isn’t what eats up the majority of the cycle, prove me wrong?</p>
+<p>[quote=“sk8rdude461, post:11, topic:543914”]I’m not going to say whether this is an improvement or not, because more than likely it is.<br>
+I just want to see how much of an improvement it is before adding it, because it may not be worth it…[/quote]<br>
+Explain the logic behind that? If its an improvement, why wouldn’t you add it? It takes two seconds to add <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>If you have a major lag problem, this isn’t going to magically to fix it. It is an improvement though <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>[quote=“matzie, post:13, topic:543914”]It sounds like a good concept to me. I think there might be a some room for improvement though.<br>
+It seems this would make a better structure to me.<br>
+Update Block Manager:<br>
+-Told of an update(any of the mask updates)<br>
+-Write those values to memory.<br>
+-Set that flag to “needed”<br>
+-Sets stream state as modified<br>
+-pack<br>
+if modified<br>
+-Compiles all “needed” values to a byte-stream<br>
+-Sets stream state as recent<br>
+return byte stream<br>
+-flush<br>
+clear all flags and byte stream[/quote]<br>
+The cached block is already only caching the updates that are needed so you wouldn’t need an update block manager. The second part of the concept is already being done in the code, although this a lazy way to go about it <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/14</link>
+        <pubDate>Sat, 14 Jun 2014 19:05:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-14</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>It sounds like a good concept to me. I think there might be a some room for improvement though.<br>
+It seems this would make a better structure to me.<br>
+Update Block Manager:<br>
+-Told of an update(any of the mask updates)<br>
+-Write those values to memory.<br>
+-Set that flag to “needed”<br>
+-Sets stream state as modified<br>
+-pack<br>
+if modified<br>
+-Compiles all “needed” values to a byte-stream<br>
+-Sets stream state as recent<br>
+return byte stream<br>
+-flush<br>
+clear all flags and byte stream</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/13</link>
+        <pubDate>Sat, 14 Jun 2014 17:02:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-13</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+      <item>
+        <title>[PI] Reduce lag by caching update blocks!</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:11, topic:543914”]I’m not going to say whether this is an improvement or not, because more than likely it is.<br>
+I just want to see how much of an improvement it is before adding it, because it may not be worth it…[/quote]I doubt it’s significant, unless if you uncap regional updates/use an increased server cap.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914/12</link>
+        <pubDate>Sat, 14 Jun 2014 16:54:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543914-12</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-reduce-lag-by-caching-update-blocks/543914.rss">[PI] Reduce lag by caching update blocks!</source>
+      </item>
+  </channel>
+</rss>

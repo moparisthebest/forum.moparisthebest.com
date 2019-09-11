@@ -1,0 +1,636 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Java] SQL Database Connection Pool</title>
+    <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278</link>
+    <description>Well, I while ago I remembered arguing with some guy about what the purpose of a connection pool was and I just realized it, if you want to submit multiple query at the same time from different threads you don&#39;t want to wait for each one to finish executing because well it&#39;s slow. This implementation isn&#39;t asynchronous as it still blocks until the query is complete but you can do multiple at a time. If anyone wants it I will do an asynchronous implementation.
+
+EDIT: updated with asynchronous capabilities.
+[code]/*
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+package com.anthony.mscp.dbconnpool;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * 
+ * @author Anthony Snavely &lt;anthony.snavely@gmail.com&gt;
+ */
+public class SqlConnectionPool {
+
+    public static final int POOL_SIZE = 10;
+    private static final int PORT = 3306;
+    private static final String HOST = &quot;HOST&quot;;
+    private static final String USER = &quot;USER&quot;;
+    private static final String PASS = &quot;PASS&quot;;
+    private static final String DATABASE = &quot;DATABASE&quot;;
+    private static ArrayBlockingQueue&lt;Statement&gt; dbStatements = new ArrayBlockingQueue&lt;Statement&gt;(POOL_SIZE);
+    private static ExecutorService queryExecutor = Executors.newFixedThreadPool(POOL_SIZE / 5);
+
+    public static void executeStatement(SqlStatement statement) {
+        queryExecutor.submit(statement);
+    }
+
+    public static Statement getNextStatement() {
+        return dbStatements.poll();
+    }
+
+    public static void returnStatement(Statement statement) {
+        dbStatements.offer(statement);
+    }
+
+    public static void closeConnection(Statement statement) {
+        try {
+            dbStatements.remove(statement);
+            statement.close();
+            statement.getConnection().close();
+        } catch (SQLException ex) {
+            Logger.getLogger(SqlConnectionPool.class.getName()).log(Level.SEVERE, null, ex);
+        }
+
+    }
+
+    static class SqlSafeConnectionCloser extends Thread {
+        @Override
+        public void run() {
+            Statement s = null;
+            while((s = getNextStatement()) != null) {
+                closeConnection(s);
+            }
+        }
+    }
+
+    static {
+        try {
+            Class.forName(&quot;com.mysql.jdbc.Driver&quot;).newInstance();
+        } catch (InstantiationException ex) {
+            Logger.getLogger(SqlConnectionPool.class.getName()).info(&quot;Couldn&#39;t load JDBC driver.&quot;);
+        } catch (IllegalAccessException ex) {
+            Logger.getLogger(SqlConnectionPool.class.getName()).info(&quot;Couldn&#39;t load JDBC driver.&quot;);
+        } catch (ClassNotFoundException ex) {
+            Logger.getLogger(SqlConnectionPool.class.getName()).info(&quot;Couldn&#39;t load JDBC driver.&quot;);
+        }
+        for (int i = 0; i &lt; POOL_SIZE; i++) {
+            try {
+                Connection conn = DriverManager.getConnection(&quot;jdbc:mysql://&quot; + HOST + &quot;:&quot; + PORT + &quot;/&quot; + DATABASE, USER, PASS);
+                Statement statement = conn.createStatement();
+                statement.setEscapeProcessing(true);
+                if (!dbStatements.offer(statement)) {
+                    System.out.println(&quot;Coulnd&#39;t add statement to the queue.&quot;);
+                }
+            } catch (SQLException ex) {
+                Logger.getLogger(SqlConnectionPool.class.getName()).info(&quot;Cannot connect to database &quot; + i);
+            }
+            Runtime.getRuntime().addShutdownHook(new SqlSafeConnectionCloser());
+        }
+    }
+}[/code]
+
+[code]/*
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+package com.anthony.mscp.dbconnpool;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+/**
+ * 
+ * @author Anthony Snavely &lt;anthony.snavely@gmail.com&gt;
+ */
+public class SqlStatement implements Runnable {
+
+    public enum SqlStatementType {
+
+        UPDATE,
+        RESULT
+    }
+    private String query;
+    private SqlStatementListener listener;
+    private SqlStatementType type;
+
+    public SqlStatement(SqlStatementType type, String query) {
+        this.type = type;
+        this.query = query;
+    }
+
+    public void setListener(SqlStatementListener listener) {
+        this.listener = listener;
+    }
+
+    @Override
+    public void run() {
+        Statement statement = SqlConnectionPool.getNextStatement();
+        if (statement != null) {
+            try {
+                Object results = type == SqlStatementType.RESULT ? statement.executeQuery(query) : statement.executeUpdate(query);
+                if (listener != null) {
+                    if (SqlStatementType.RESULT == type) {
+                        listener.queryComplete((ResultSet) results);
+                    } else {
+                        listener.updateComplete((Integer) results);
+                    }
+                    SqlConnectionPool.returnStatement(statement);
+                }
+            } catch (SQLException ex) {
+                if (listener != null) {
+                    listener.statementException(ex);
+                }
+            }
+        }
+    }
+}[/code]
+
+[code]/*
+ *  Copyright (C) 2010 Anthony Snavely
+ * 
+ *  This program is free software. It comes without any warranty, to
+ *  the extent permitted by applicable law. You can redistribute it
+ *  and/or modify it under the terms of the Do What The Fuck You Want
+ *  To Public License, Version 2, as published by Sam Hocevar. See
+ *  http://sam.zoy.org/wtfpl/COPYING for more details.
+ */
+
+package com.anthony.mscp.dbconnpool;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+/**
+ * 
+ * @author Anthony Snavely &lt;anthony.snavely@gmail.com&gt;
+ */
+public interface SqlStatementListener {
+
+    public void queryComplete(ResultSet results);
+
+    public void updateComplete(int val);
+
+    public void statementException(SQLException exception);
+
+}[/code]</description>
+    
+    <lastBuildDate>Tue, 18 May 2010 03:51:22 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, it’s all static and no initialization needed(The static block does that as soon as the JVM loads the class.)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/15</link>
+        <pubDate>Tue, 18 May 2010 03:51:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-15</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@Project_Evolution Project Evolution]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/project_evolution">@Project_Evolution</a> wrote:</p>
+          <blockquote>
+              <p>I see you used the idea of making dem classes static. <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/14</link>
+        <pubDate>Tue, 18 May 2010 02:25:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-14</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>There, did an asynchronous one. I don’t know if it works as I haven’t tested it.<br>
+edit: no asynchronous but updated now you can do fire queries off to a separate executor, so it doesn’t block your main thread.<br>
+edit2: there is an asynchronous impl.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/13</link>
+        <pubDate>Sun, 16 May 2010 06:17:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-13</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“The Soul, post:11, topic:340278”][quote author=krackkid link=topic=436640.msg3208162#msg3208162 date=1273987153]<br>
+Good, maybe this board will not end up like the tutorial section…<br>
+[/quote]</p>
+<p>Tutorials aren’t allowed to be posted here, so, of course it won’t. :P[/quote]<br>
+Shhh I haven’t read any rules yet <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/12</link>
+        <pubDate>Sun, 16 May 2010 05:27:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-12</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@the_soul The Soul]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_soul">@the_soul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="9" data-topic="340278">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/krackkid/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> krackkid:</div>
+<blockquote>
+<p>Good, maybe this board will not end up like the tutorial section…</p>
+</blockquote>
+</aside>
+<p>Tutorials aren’t allowed to be posted here, so, of course it won’t. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/11</link>
+        <pubDate>Sun, 16 May 2010 05:22:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-11</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Frell, post:8, topic:340278”][quote author=krackkid link=topic=436640.msg3208153#msg3208153 date=1273986833]<br>
+I got this feeling that (Anthony) is going to own this <span class="bbcode-b">board</span> <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But very nice man.<br>
+[/quote]<br>
+We’re trying to give the capable a place to post and the willing to learn a place for help.[/quote]<br>
+It was a good idea considering if people from here started spilling over to mitb they would get scared off my raging assholes.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/10</link>
+        <pubDate>Sun, 16 May 2010 05:19:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-10</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <p>Good, maybe this board will not end up like the tutorial section…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/9</link>
+        <pubDate>Sun, 16 May 2010 05:19:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-9</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@Frell Frell]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frell">@Frell</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“krackkid, post:5, topic:340278”]I got this feeling that (Anthony) is going to own this <span class="bbcode-b">board</span> <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But very nice man.[/quote]<br>
+We’re trying to give the capable a place to post and the willing to learn a place for help.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/8</link>
+        <pubDate>Sun, 16 May 2010 05:18:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-8</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“ChaosPkers, post:6, topic:340278”][quote author=krackkid link=topic=436640.msg3208153#msg3208153 date=1273986833]<br>
+I got this feeling that (Anthony) is going to own this <span class="bbcode-b">board</span> <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But very nice man.<br>
+[/quote][/quote]<br>
+FUCK ME AND BEING HALF A SLEEP.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/7</link>
+        <pubDate>Sun, 16 May 2010 05:17:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-7</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@ChaosPkers ChaosPkers]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chaospkers">@ChaosPkers</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“krackkid, post:5, topic:340278”]I got this feeling that (Anthony) is going to own this <span class="bbcode-b">board</span> <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But very nice man.[/quote]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/6</link>
+        <pubDate>Sun, 16 May 2010 05:15:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-6</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <p>I got this feeling that (Anthony) is going to own this <span class="bbcode-b">board</span> <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But very nice man.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/5</link>
+        <pubDate>Sun, 16 May 2010 05:13:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-5</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@doom_j doom_j]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/doom_j">@doom_j</a> wrote:</p>
+          <blockquote>
+              <p>Nice job mate. <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/4</link>
+        <pubDate>Sun, 16 May 2010 05:12:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-4</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>No problem dude. Anytime.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/3</link>
+        <pubDate>Sun, 16 May 2010 05:10:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-3</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@Project_Evolution Project Evolution]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/project_evolution">@Project_Evolution</a> wrote:</p>
+          <blockquote>
+              <p>I might as well use this for my SQL Integration tutorial, thanks for helping me with this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/2</link>
+        <pubDate>Sun, 16 May 2010 05:09:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-2</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+      <item>
+        <title>[Java] SQL Database Connection Pool</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>Well, I while ago I remembered arguing with some guy about what the purpose of a connection pool was and I just realized it, if you want to submit multiple query at the same time from different threads you don’t want to wait for each one to finish executing because well it’s slow. This implementation isn’t asynchronous as it still blocks until the query is complete but you can do multiple at a time. If anyone wants it I will do an asynchronous implementation.</p>
+<p>EDIT: updated with asynchronous capabilities.</p>
+<p>[code]/*</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/<br>
+package com.anthony.mscp.dbconnpool;</li>
+</ul>
+<p>import java.sql.Connection;<br>
+import java.sql.DriverManager;<br>
+import java.sql.SQLException;<br>
+import java.sql.Statement;<br>
+import java.util.concurrent.ArrayBlockingQueue;<br>
+import java.util.concurrent.ExecutorService;<br>
+import java.util.concurrent.Executors;<br>
+import java.util.logging.Level;<br>
+import java.util.logging.Logger;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Anthony Snavely <a href="mailto:anthony.snavely@gmail.com">anthony.snavely@gmail.com</a><br>
+*/<br>
+public class SqlConnectionPool {</p>
+<p>public static final int POOL_SIZE = 10;<br>
+private static final int PORT = 3306;<br>
+private static final String HOST = “HOST”;<br>
+private static final String USER = “USER”;<br>
+private static final String PASS = “PASS”;<br>
+private static final String DATABASE = “DATABASE”;<br>
+private static ArrayBlockingQueue dbStatements = new ArrayBlockingQueue(POOL_SIZE);<br>
+private static ExecutorService queryExecutor = Executors.newFixedThreadPool(POOL_SIZE / 5);</p>
+<p>public static void executeStatement(SqlStatement statement) {<br>
+queryExecutor.submit(statement);<br>
+}</p>
+<p>public static Statement getNextStatement() {<br>
+return dbStatements.poll();<br>
+}</p>
+<p>public static void returnStatement(Statement statement) {<br>
+dbStatements.offer(statement);<br>
+}</p>
+<p>public static void closeConnection(Statement statement) {<br>
+try {<br>
+dbStatements.remove(statement);<br>
+statement.close();<br>
+statement.getConnection().close();<br>
+} catch (SQLException ex) {<br>
+Logger.getLogger(SqlConnectionPool.class.getName()).log(Level.SEVERE, null, ex);<br>
+}</p>
+<p>}</p>
+<p>static class SqlSafeConnectionCloser extends Thread {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void run() {<br>
+Statement s = null;<br>
+while((s = getNextStatement()) != null) {<br>
+closeConnection(s);<br>
+}<br>
+}<br>
+}</p>
+<p>static {<br>
+try {<br>
+Class.forName(“com.mysql.jdbc.Driver”).newInstance();<br>
+} catch (InstantiationException ex) {<br>
+Logger.getLogger(SqlConnectionPool.class.getName()).info(“Couldn’t load JDBC driver.”);<br>
+} catch (IllegalAccessException ex) {<br>
+Logger.getLogger(SqlConnectionPool.class.getName()).info(“Couldn’t load JDBC driver.”);<br>
+} catch (ClassNotFoundException ex) {<br>
+Logger.getLogger(SqlConnectionPool.class.getName()).info(“Couldn’t load JDBC driver.”);<br>
+}<br>
+for (int i = 0; i &lt; POOL_SIZE; i++) {<br>
+try {<br>
+Connection conn = DriverManager.getConnection(“jdbc:mysql://” + HOST + “:” + PORT + “/” + DATABASE, USER, PASS);<br>
+Statement statement = conn.createStatement();<br>
+statement.setEscapeProcessing(true);<br>
+if (!dbStatements.offer(statement)) {<br>
+System.out.println(“Coulnd’t add statement to the queue.”);<br>
+}<br>
+} catch (SQLException ex) {<br>
+Logger.getLogger(SqlConnectionPool.class.getName()).info("Cannot connect to database " + i);<br>
+}<br>
+Runtime.getRuntime().addShutdownHook(new SqlSafeConnectionCloser());<br>
+}<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>[code]/*</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/<br>
+package com.anthony.mscp.dbconnpool;</li>
+</ul>
+<p>import java.sql.ResultSet;<br>
+import java.sql.SQLException;<br>
+import java.sql.Statement;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Anthony Snavely <a href="mailto:anthony.snavely@gmail.com">anthony.snavely@gmail.com</a><br>
+*/<br>
+public class SqlStatement implements Runnable {</p>
+<p>public enum SqlStatementType {</p>
+<pre><code> UPDATE,
+ RESULT
+</code></pre>
+<p>}<br>
+private String query;<br>
+private SqlStatementListener listener;<br>
+private SqlStatementType type;</p>
+<p>public SqlStatement(SqlStatementType type, String query) {<br>
+this.type = type;<br>
+this.query = query;<br>
+}</p>
+<p>public void setListener(SqlStatementListener listener) {<br>
+this.listener = listener;<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void run() {<br>
+Statement statement = SqlConnectionPool.getNextStatement();<br>
+if (statement != null) {<br>
+try {<br>
+Object results = type == SqlStatementType.RESULT ? statement.executeQuery(query) : statement.executeUpdate(query);<br>
+if (listener != null) {<br>
+if (SqlStatementType.RESULT == type) {<br>
+listener.queryComplete((ResultSet) results);<br>
+} else {<br>
+listener.updateComplete((Integer) results);<br>
+}<br>
+SqlConnectionPool.returnStatement(statement);<br>
+}<br>
+} catch (SQLException ex) {<br>
+if (listener != null) {<br>
+listener.statementException(ex);<br>
+}<br>
+}<br>
+}<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>[code]/*</p>
+<ul>
+<li>Copyright © 2010 Anthony Snavely</li>
+<li>
+</li>
+<li>This program is free software. It comes without any warranty, to</li>
+<li>the extent permitted by applicable law. You can redistribute it</li>
+<li>and/or modify it under the terms of the Do What The Fuck You Want</li>
+<li>To Public License, Version 2, as published by Sam Hocevar. See</li>
+<li>
+<a href="http://sam.zoy.org/wtfpl/COPYING" rel="nofollow noopener">http://sam.zoy.org/wtfpl/COPYING</a> for more details.<br>
+*/</li>
+</ul>
+<p>package com.anthony.mscp.dbconnpool;</p>
+<p>import java.sql.ResultSet;<br>
+import java.sql.SQLException;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Anthony Snavely <a href="mailto:anthony.snavely@gmail.com">anthony.snavely@gmail.com</a><br>
+*/<br>
+public interface SqlStatementListener {</p>
+<p>public void queryComplete(ResultSet results);</p>
+<p>public void updateComplete(int val);</p>
+<p>public void statementException(SQLException exception);</p>
+</li>
+</ul>
+<p>}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278/1</link>
+        <pubDate>Sun, 16 May 2010 05:08:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340278-1</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sql-database-connection-pool/340278.rss">[Java] SQL Database Connection Pool</source>
+      </item>
+  </channel>
+</rss>

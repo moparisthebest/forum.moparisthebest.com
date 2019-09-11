@@ -1,0 +1,436 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PHP] Template Release, Integration to SMF [PHP]</title>
+    <link>https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224</link>
+    <description>Hello, MoparScape.
+
+So we meet again, eh? Well, as I said in the last tutorial on Arrays I think it was, I would give you a php to mysql tutorial and what not, I&#39;m just generally too lazy and swamped with university shit right now, so I thought I&#39;d release something.
+
+If you remember a while back, I posted about the software for websites by Twitter, called Bootstrap. This is such an easy product, or template if you will to work with it&#39;s unreal, I love it. So I thought I&#39;d release a template on this, but following on from my PHP tutorials I just echoed everything out and added in some variables so that all you need to do is edit config.php to your server name, owners name and revision and then change the banner logo and there you go, that&#39;s the site totally made yours. I don&#39;t think I got round to adding the PHP automatic donations, I&#39;m pretty sure I was too lazy. Oh well, add them if you wish.
+
+As for the integration side of things, it isn&#39;t integrations as such. It&#39;s use of the SSI.php script that SMF offers. More or less editing pre-made functions and using them to suit the site better. For example, this will display 5 of the latest news posts from your news board on the forums on your homepage. You can also edit ssi_latestPosts or ssi_recentPosts to fit in there too, along the bottom but I just never got round to it.
+
+I won&#39;t actually be posting a screenshot of the template, I&#39;ll give you a link to a live demo which you can find [url=http://www.xythax.org/]here.[/url] I should&#39;ve also added in that this template loads all it&#39;s pages from a switch statement, so beware of that also. Remember your breaks!
+
+Replace your ssi_newsBoard function (I think that&#39;s the name, it&#39;s something similar if it isn&#39;t that) with mines, this will give you the buttons and stuff showing up.
+[code=php]
+// Show the latest news, with a template... by board.
+function ssi_boardNews($board = null, $limit = null, $start = null, $length = null, $output_method = &#39;echo&#39;)
+{
+	global $scripturl, $db_prefix, $txt, $settings, $modSettings, $context;
+	global $smcFunc;
+
+	loadLanguage(&#39;Stats&#39;);
+
+	// Must be integers....
+	if ($limit === null)
+		$limit = isset($_GET[&#39;limit&#39;]) ? (int) $_GET[&#39;limit&#39;] : 5;
+	else
+		$limit = (int) $limit;
+
+	if ($start === null)
+		$start = isset($_GET[&#39;start&#39;]) ? (int) $_GET[&#39;start&#39;] : 0;
+	else
+		$start = (int) $start;
+
+	if ($board !== null)
+		$board = (int) $board;
+	elseif (isset($_GET[&#39;board&#39;]))
+		$board = (int) $_GET[&#39;board&#39;];
+
+	if ($length === null)
+		$length = isset($_GET[&#39;length&#39;]) ? (int) $_GET[&#39;length&#39;] : 0;
+	else
+		$length = (int) $length;
+
+	$limit = max(0, $limit);
+	$start = max(0, $start);
+
+	// Make sure guests can see this board.
+	$request = $smcFunc[&#39;db_query&#39;](&#39;&#39;, &#39;
+		SELECT id_board
+		FROM {db_prefix}boards
+		WHERE &#39; . ($board === null ? &#39;&#39; : &#39;id_board = {int:current_board}
+			AND &#39;) . &#39;FIND_IN_SET(-1, member_groups)
+		LIMIT 1&#39;,
+		array(
+			&#39;current_board&#39; =&gt; $board,
+		)
+	);
+	if ($smcFunc[&#39;db_num_rows&#39;]($request) == 0)
+	{
+		if ($output_method == &#39;echo&#39;)
+			die($txt[&#39;ssi_no_guests&#39;]);
+		else
+			return array();
+	}
+	list ($board) = $smcFunc[&#39;db_fetch_row&#39;]($request);
+	$smcFunc[&#39;db_free_result&#39;]($request);
+
+	// Load the message icons - the usual suspects.
+	$stable_icons = array(&#39;xx&#39;, &#39;thumbup&#39;, &#39;thumbdown&#39;, &#39;exclamation&#39;, &#39;question&#39;, &#39;lamp&#39;, &#39;smiley&#39;, &#39;angry&#39;, &#39;cheesy&#39;, &#39;grin&#39;, &#39;sad&#39;, &#39;wink&#39;, &#39;moved&#39;, &#39;recycled&#39;, &#39;wireless&#39;);
+	$icon_sources = array();
+	foreach ($stable_icons as $icon)
+		$icon_sources[$icon] = &#39;images_url&#39;;
+
+	// Find the post ids.
+	$request = $smcFunc[&#39;db_query&#39;](&#39;&#39;, &#39;
+		SELECT id_first_msg
+		FROM {db_prefix}topics
+		WHERE id_board = {int:current_board}&#39; . ($modSettings[&#39;postmod_active&#39;] ? &#39;
+			AND approved = {int:is_approved}&#39; : &#39;&#39;) . &#39;
+		ORDER BY id_first_msg DESC
+		LIMIT &#39; . $start . &#39;, &#39; . $limit,
+		array(
+			&#39;current_board&#39; =&gt; $board,
+			&#39;is_approved&#39; =&gt; 1,
+		)
+	);
+	$posts = array();
+	while ($row = $smcFunc[&#39;db_fetch_assoc&#39;]($request))
+		$posts[] = $row[&#39;id_first_msg&#39;];
+	$smcFunc[&#39;db_free_result&#39;]($request);
+
+	if (empty($posts))
+		return array();
+
+	// Find the posts.
+	$request = $smcFunc[&#39;db_query&#39;](&#39;&#39;, &#39;
+		SELECT
+			m.icon, m.subject, m.body, IFNULL(mem.real_name, m.poster_name) AS poster_name, m.poster_time,
+			t.num_replies, t.id_topic, m.id_member, m.smileys_enabled, m.id_msg, t.locked, t.id_last_msg
+		FROM {db_prefix}topics AS t
+			INNER JOIN {db_prefix}messages AS m ON (m.id_msg = t.id_first_msg)
+			LEFT JOIN {db_prefix}members AS mem ON (mem.id_member = m.id_member)
+		WHERE t.id_first_msg IN ({array_int:post_list})
+		ORDER BY t.id_first_msg DESC
+		LIMIT &#39; . count($posts),
+		array(
+			&#39;post_list&#39; =&gt; $posts,
+		)
+	);
+	$return = array();
+	while ($row = $smcFunc[&#39;db_fetch_assoc&#39;]($request))
+	{
+		// If we want to limit the length of the post.
+		if (!empty($length) &amp;&amp; $smcFunc[&#39;strlen&#39;]($row[&#39;body&#39;]) &gt; $length)
+		{
+			$row[&#39;body&#39;] = $smcFunc[&#39;substr&#39;]($row[&#39;body&#39;], 0, $length);
+
+			// The first space or line break. (&lt;br /&gt;, etc.)
+			$cutoff = max(strrpos($row[&#39;body&#39;], &#39; &#39;), strrpos($row[&#39;body&#39;], &#39;&lt;&#39;));
+
+			if ($cutoff !== false)
+				$row[&#39;body&#39;] = $smcFunc[&#39;substr&#39;]($row[&#39;body&#39;], 0, $cutoff);
+			$row[&#39;body&#39;] .= &#39;...&#39;;
+		}
+
+		$row[&#39;body&#39;] = parse_bbc($row[&#39;body&#39;], $row[&#39;smileys_enabled&#39;], $row[&#39;id_msg&#39;]);
+
+		// Check that this message icon is there...
+		if (empty($modSettings[&#39;messageIconChecks_disable&#39;]) &amp;&amp; !isset($icon_sources[$row[&#39;icon&#39;]]))
+			$icon_sources[$row[&#39;icon&#39;]] = file_exists($settings[&#39;theme_dir&#39;] . &#39;/images/post/&#39; . $row[&#39;icon&#39;] . &#39;.gif&#39;) ? &#39;images_url&#39; : &#39;default_images_url&#39;;
+
+		censorText($row[&#39;subject&#39;]);
+		censorText($row[&#39;body&#39;]);
+
+		$return[] = array(
+			&#39;id&#39; =&gt; $row[&#39;id_topic&#39;],
+			&#39;message_id&#39; =&gt; $row[&#39;id_msg&#39;],
+			&#39;icon&#39; =&gt; &#39;&lt;img src=&quot;&#39; . $settings[$icon_sources[$row[&#39;icon&#39;]]] . &#39;/post/&#39; . $row[&#39;icon&#39;] . &#39;.gif&quot; alt=&quot;&#39; . $row[&#39;icon&#39;] . &#39;&quot; /&gt;&#39;,
+			&#39;subject&#39; =&gt; $row[&#39;subject&#39;],
+			&#39;time&#39; =&gt; timeformat($row[&#39;poster_time&#39;]),
+			&#39;timestamp&#39; =&gt; forum_time(true, $row[&#39;poster_time&#39;]),
+			&#39;body&#39; =&gt; $row[&#39;body&#39;],
+			&#39;href&#39; =&gt; $scripturl . &#39;?topic=&#39; . $row[&#39;id_topic&#39;] . &#39;.0&#39;,
+			&#39;link&#39; =&gt; &#39;&lt;a href=&quot;&#39; . $scripturl . &#39;?topic=&#39; . $row[&#39;id_topic&#39;] . &#39;.0&quot;&gt;&#39; . $row[&#39;num_replies&#39;] . &#39; &#39; . ($row[&#39;num_replies&#39;] == 1 ? $txt[&#39;ssi_comment&#39;] : $txt[&#39;ssi_comments&#39;]) . &#39;&lt;/a&gt;&#39;,
+			&#39;replies&#39; =&gt; $row[&#39;num_replies&#39;],
+			&#39;comment_href&#39; =&gt; !empty($row[&#39;locked&#39;]) ? &#39;&#39; : $scripturl . &#39;?action=post;topic=&#39; . $row[&#39;id_topic&#39;] . &#39;.&#39; . $row[&#39;num_replies&#39;] . &#39;;last_msg=&#39; . $row[&#39;id_last_msg&#39;],
+			&#39;comment_link&#39; =&gt; !empty($row[&#39;locked&#39;]) ? &#39;&#39; : &#39;&lt;a href=&quot;&#39; . $scripturl . &#39;?action=post;topic=&#39; . $row[&#39;id_topic&#39;] . &#39;.&#39; . $row[&#39;num_replies&#39;] . &#39;;last_msg=&#39; . $row[&#39;id_last_msg&#39;] . &#39;&quot;&gt;&#39; . $txt[&#39;ssi_write_comment&#39;] . &#39;&lt;/a&gt;&#39;,
+			&#39;new_comment&#39; =&gt; !empty($row[&#39;locked&#39;]) ? &#39;&#39; : &#39;&lt;a href=&quot;&#39; . $scripturl . &#39;?action=post;topic=&#39; . $row[&#39;id_topic&#39;] . &#39;.&#39; . $row[&#39;num_replies&#39;] . &#39;&quot;&gt;&#39; . $txt[&#39;ssi_write_comment&#39;] . &#39;&lt;/a&gt;&#39;,
+			&#39;poster&#39; =&gt; array(
+				&#39;id&#39; =&gt; $row[&#39;id_member&#39;],
+				&#39;name&#39; =&gt; $row[&#39;poster_name&#39;],
+				&#39;href&#39; =&gt; !empty($row[&#39;id_member&#39;]) ? $scripturl . &#39;?action=profile;u=&#39; . $row[&#39;id_member&#39;] : &#39;&#39;,
+				&#39;link&#39; =&gt; !empty($row[&#39;id_member&#39;]) ? &#39;&lt;a href=&quot;&#39; . $scripturl . &#39;?action=profile;u=&#39; . $row[&#39;id_member&#39;] . &#39;&quot;&gt;&#39; . $row[&#39;poster_name&#39;] . &#39;&lt;/a&gt;&#39; : $row[&#39;poster_name&#39;]
+			),
+			&#39;locked&#39; =&gt; !empty($row[&#39;locked&#39;]),
+			&#39;is_last&#39; =&gt; false
+		);
+	}
+	$smcFunc[&#39;db_free_result&#39;]($request);
+
+	if (empty($return))
+		return $return;
+
+	$return[count($return) - 1][&#39;is_last&#39;] = true;
+
+	if ($output_method != &#39;echo&#39;)
+		return $return;
+
+	foreach ($return as $news)
+	{
+		echo &#39;&lt;center&gt;
+			&lt;div class=&quot;news_item&quot;&gt;
+				&lt;h3 class=&quot;news_header&quot;&gt;
+					
+					&lt;a href=&quot;&#39;, $news[&#39;href&#39;], &#39;&quot;&gt;&#39;, $news[&#39;subject&#39;], &#39;&lt;/a&gt;
+				&lt;/h3&gt;
+				&lt;div class=&quot;news_timestamp&quot;&gt;&#39;, $news[&#39;time&#39;], &#39; &#39;, $txt[&#39;by&#39;], &#39; &#39;, $news[&#39;poster&#39;][&#39;link&#39;], &#39;&lt;/div&gt;&lt;/center&gt;
+				&lt;div class=&quot;news_body&quot; style=&quot;padding: 2ex 0;&quot;&gt;&#39;, $news[&#39;body&#39;], &#39;&lt;/div&gt;&lt;center&gt;
+				&lt;span class=&quot;btn btn-large&quot;&gt;&#39;, $news[&#39;link&#39;], $news[&#39;locked&#39;] ? &#39;&#39; : &#39;&lt;/span&gt; &lt;span class=&quot;btn btn-large&quot;&gt;&#39; . $news[&#39;comment_link&#39;], &#39;&lt;/span&gt;
+			&lt;/div&gt;&lt;/center&gt;&#39;;
+
+		if (!$news[&#39;is_last&#39;])
+			echo &#39;
+			&lt;hr /&gt;&#39;;
+	}
+}
+[/code]
+
+As a final footnote to everything above before I give you the link, I have covered everything I used in here while doing tutorials, so go take a look back if you don&#39;t understand something.
+
+Without any further talking; [url=http://www.xythax.org/mscpbootstrap.zip]here is the link.[/url]
+
+Any problems, post them below.
+
+Regards,
+Ruby.</description>
+    
+    <lastBuildDate>Thu, 30 Aug 2012 07:14:23 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PHP] Template Release, Integration to SMF [PHP]</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“The Web Guy, post:2, topic:457224”]Wonderful tutorial my friend. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>EDIT: I just so happened to be doing some things with the SMF SSI, and it’s actually ssi_boardNews[/quote]<br>
+Thanks for the feedback AJ <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>Ahh, I thought I was wrong haha. I’ll change it right now, thanks <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/3</link>
+        <pubDate>Thu, 30 Aug 2012 07:14:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-457224-3</guid>
+        <source url="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224.rss">[PHP] Template Release, Integration to SMF [PHP]</source>
+      </item>
+      <item>
+        <title>[PHP] Template Release, Integration to SMF [PHP]</title>
+        <dc:creator><![CDATA[@The_Web_Guy The Web Guy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_web_guy">@The_Web_Guy</a> wrote:</p>
+          <blockquote>
+              <p>Wonderful tutorial my friend. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>EDIT: I just so happened to be doing some things with the SMF SSI, and it’s actually ssi_boardNews</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/2</link>
+        <pubDate>Thu, 30 Aug 2012 00:44:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-457224-2</guid>
+        <source url="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224.rss">[PHP] Template Release, Integration to SMF [PHP]</source>
+      </item>
+      <item>
+        <title>[PHP] Template Release, Integration to SMF [PHP]</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>Hello, MoparScape.</p>
+<p>So we meet again, eh? Well, as I said in the last tutorial on Arrays I think it was, I would give you a php to mysql tutorial and what not, I’m just generally too lazy and swamped with university shit right now, so I thought I’d release something.</p>
+<p>If you remember a while back, I posted about the software for websites by Twitter, called Bootstrap. This is such an easy product, or template if you will to work with it’s unreal, I love it. So I thought I’d release a template on this, but following on from my PHP tutorials I just echoed everything out and added in some variables so that all you need to do is edit config.php to your server name, owners name and revision and then change the banner logo and there you go, that’s the site totally made yours. I don’t think I got round to adding the PHP automatic donations, I’m pretty sure I was too lazy. Oh well, add them if you wish.</p>
+<p>As for the integration side of things, it isn’t integrations as such. It’s use of the SSI.php script that SMF offers. More or less editing pre-made functions and using them to suit the site better. For example, this will display 5 of the latest news posts from your news board on the forums on your homepage. You can also edit ssi_latestPosts or ssi_recentPosts to fit in there too, along the bottom but I just never got round to it.</p>
+<p>I won’t actually be posting a screenshot of the template, I’ll give you a link to a live demo which you can find <a href="http://www.xythax.org/" data-bbcode="true" rel="nofollow noopener">here.</a> I should’ve also added in that this template loads all it’s pages from a switch statement, so beware of that also. Remember your breaks!</p>
+<p>Replace your ssi_newsBoard function (I think that’s the name, it’s something similar if it isn’t that) with mines, this will give you the buttons and stuff showing up.</p>
+<pre><code class="lang-auto">// Show the latest news, with a template... by board.
+function ssi_boardNews($board = null, $limit = null, $start = null, $length = null, $output_method = 'echo')
+{
+	global $scripturl, $db_prefix, $txt, $settings, $modSettings, $context;
+	global $smcFunc;
+
+	loadLanguage('Stats');
+
+	// Must be integers....
+	if ($limit === null)
+		$limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 5;
+	else
+		$limit = (int) $limit;
+
+	if ($start === null)
+		$start = isset($_GET['start']) ? (int) $_GET['start'] : 0;
+	else
+		$start = (int) $start;
+
+	if ($board !== null)
+		$board = (int) $board;
+	elseif (isset($_GET['board']))
+		$board = (int) $_GET['board'];
+
+	if ($length === null)
+		$length = isset($_GET['length']) ? (int) $_GET['length'] : 0;
+	else
+		$length = (int) $length;
+
+	$limit = max(0, $limit);
+	$start = max(0, $start);
+
+	// Make sure guests can see this board.
+	$request = $smcFunc['db_query']('', '
+		SELECT id_board
+		FROM {db_prefix}boards
+		WHERE ' . ($board === null ? '' : 'id_board = {int:current_board}
+			AND ') . 'FIND_IN_SET(-1, member_groups)
+		LIMIT 1',
+		array(
+			'current_board' =&gt; $board,
+		)
+	);
+	if ($smcFunc['db_num_rows']($request) == 0)
+	{
+		if ($output_method == 'echo')
+			die($txt['ssi_no_guests']);
+		else
+			return array();
+	}
+	list ($board) = $smcFunc['db_fetch_row']($request);
+	$smcFunc['db_free_result']($request);
+
+	// Load the message icons - the usual suspects.
+	$stable_icons = array('xx', 'thumbup', 'thumbdown', 'exclamation', 'question', 'lamp', 'smiley', 'angry', 'cheesy', 'grin', 'sad', 'wink', 'moved', 'recycled', 'wireless');
+	$icon_sources = array();
+	foreach ($stable_icons as $icon)
+		$icon_sources[$icon] = 'images_url';
+
+	// Find the post ids.
+	$request = $smcFunc['db_query']('', '
+		SELECT id_first_msg
+		FROM {db_prefix}topics
+		WHERE id_board = {int:current_board}' . ($modSettings['postmod_active'] ? '
+			AND approved = {int:is_approved}' : '') . '
+		ORDER BY id_first_msg DESC
+		LIMIT ' . $start . ', ' . $limit,
+		array(
+			'current_board' =&gt; $board,
+			'is_approved' =&gt; 1,
+		)
+	);
+	$posts = array();
+	while ($row = $smcFunc['db_fetch_assoc']($request))
+		$posts[] = $row['id_first_msg'];
+	$smcFunc['db_free_result']($request);
+
+	if (empty($posts))
+		return array();
+
+	// Find the posts.
+	$request = $smcFunc['db_query']('', '
+		SELECT
+			m.icon, m.subject, m.body, IFNULL(mem.real_name, m.poster_name) AS poster_name, m.poster_time,
+			t.num_replies, t.id_topic, m.id_member, m.smileys_enabled, m.id_msg, t.locked, t.id_last_msg
+		FROM {db_prefix}topics AS t
+			INNER JOIN {db_prefix}messages AS m ON (m.id_msg = t.id_first_msg)
+			LEFT JOIN {db_prefix}members AS mem ON (mem.id_member = m.id_member)
+		WHERE t.id_first_msg IN ({array_int:post_list})
+		ORDER BY t.id_first_msg DESC
+		LIMIT ' . count($posts),
+		array(
+			'post_list' =&gt; $posts,
+		)
+	);
+	$return = array();
+	while ($row = $smcFunc['db_fetch_assoc']($request))
+	{
+		// If we want to limit the length of the post.
+		if (!empty($length) &amp;&amp; $smcFunc['strlen']($row['body']) &gt; $length)
+		{
+			$row['body'] = $smcFunc['substr']($row['body'], 0, $length);
+
+			// The first space or line break. (&lt;br /&gt;, etc.)
+			$cutoff = max(strrpos($row['body'], ' '), strrpos($row['body'], '&lt;'));
+
+			if ($cutoff !== false)
+				$row['body'] = $smcFunc['substr']($row['body'], 0, $cutoff);
+			$row['body'] .= '...';
+		}
+
+		$row['body'] = parse_bbc($row['body'], $row['smileys_enabled'], $row['id_msg']);
+
+		// Check that this message icon is there...
+		if (empty($modSettings['messageIconChecks_disable']) &amp;&amp; !isset($icon_sources[$row['icon']]))
+			$icon_sources[$row['icon']] = file_exists($settings['theme_dir'] . '/images/post/' . $row['icon'] . '.gif') ? 'images_url' : 'default_images_url';
+
+		censorText($row['subject']);
+		censorText($row['body']);
+
+		$return[] = array(
+			'id' =&gt; $row['id_topic'],
+			'message_id' =&gt; $row['id_msg'],
+			'icon' =&gt; '&lt;img src="' . $settings[$icon_sources[$row['icon']]] . '/post/' . $row['icon'] . '.gif" alt="' . $row['icon'] . '" /&gt;',
+			'subject' =&gt; $row['subject'],
+			'time' =&gt; timeformat($row['poster_time']),
+			'timestamp' =&gt; forum_time(true, $row['poster_time']),
+			'body' =&gt; $row['body'],
+			'href' =&gt; $scripturl . '?topic=' . $row['id_topic'] . '.0',
+			'link' =&gt; '&lt;a href="' . $scripturl . '?topic=' . $row['id_topic'] . '.0"&gt;' . $row['num_replies'] . ' ' . ($row['num_replies'] == 1 ? $txt['ssi_comment'] : $txt['ssi_comments']) . '&lt;/a&gt;',
+			'replies' =&gt; $row['num_replies'],
+			'comment_href' =&gt; !empty($row['locked']) ? '' : $scripturl . '?action=post;topic=' . $row['id_topic'] . '.' . $row['num_replies'] . ';last_msg=' . $row['id_last_msg'],
+			'comment_link' =&gt; !empty($row['locked']) ? '' : '&lt;a href="' . $scripturl . '?action=post;topic=' . $row['id_topic'] . '.' . $row['num_replies'] . ';last_msg=' . $row['id_last_msg'] . '"&gt;' . $txt['ssi_write_comment'] . '&lt;/a&gt;',
+			'new_comment' =&gt; !empty($row['locked']) ? '' : '&lt;a href="' . $scripturl . '?action=post;topic=' . $row['id_topic'] . '.' . $row['num_replies'] . '"&gt;' . $txt['ssi_write_comment'] . '&lt;/a&gt;',
+			'poster' =&gt; array(
+				'id' =&gt; $row['id_member'],
+				'name' =&gt; $row['poster_name'],
+				'href' =&gt; !empty($row['id_member']) ? $scripturl . '?action=profile;u=' . $row['id_member'] : '',
+				'link' =&gt; !empty($row['id_member']) ? '&lt;a href="' . $scripturl . '?action=profile;u=' . $row['id_member'] . '"&gt;' . $row['poster_name'] . '&lt;/a&gt;' : $row['poster_name']
+			),
+			'locked' =&gt; !empty($row['locked']),
+			'is_last' =&gt; false
+		);
+	}
+	$smcFunc['db_free_result']($request);
+
+	if (empty($return))
+		return $return;
+
+	$return[count($return) - 1]['is_last'] = true;
+
+	if ($output_method != 'echo')
+		return $return;
+
+	foreach ($return as $news)
+	{
+		echo '&lt;center&gt;
+			&lt;div class="news_item"&gt;
+				&lt;h3 class="news_header"&gt;
+					
+					&lt;a href="', $news['href'], '"&gt;', $news['subject'], '&lt;/a&gt;
+				&lt;/h3&gt;
+				&lt;div class="news_timestamp"&gt;', $news['time'], ' ', $txt['by'], ' ', $news['poster']['link'], '&lt;/div&gt;&lt;/center&gt;
+				&lt;div class="news_body" style="padding: 2ex 0;"&gt;', $news['body'], '&lt;/div&gt;&lt;center&gt;
+				&lt;span class="btn btn-large"&gt;', $news['link'], $news['locked'] ? '' : '&lt;/span&gt; &lt;span class="btn btn-large"&gt;' . $news['comment_link'], '&lt;/span&gt;
+			&lt;/div&gt;&lt;/center&gt;';
+
+		if (!$news['is_last'])
+			echo '
+			&lt;hr /&gt;';
+	}
+}</code></pre>
+<p>As a final footnote to everything above before I give you the link, I have covered everything I used in here while doing tutorials, so go take a look back if you don’t understand something.</p>
+<p>Without any further talking; <a href="http://www.xythax.org/mscpbootstrap.zip" data-bbcode="true" rel="nofollow noopener">here is the link.</a></p>
+<p>Any problems, post them below.</p>
+<p>Regards,<br>
+Ruby.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224/1</link>
+        <pubDate>Wed, 29 Aug 2012 23:51:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-457224-1</guid>
+        <source url="https://forum.moparisthebest.com/t/php-template-release-integration-to-smf-php/457224.rss">[PHP] Template Release, Integration to SMF [PHP]</source>
+      </item>
+  </channel>
+</rss>

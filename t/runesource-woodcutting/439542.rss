@@ -1,0 +1,1046 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[RuneSource] Woodcutting</title>
+    <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542</link>
+    <description>[center][img]http://s3.amazonaws.com/readers/2009/10/06/runescapeskillswoodcuttingmagictrees_1.gif[/img]
+
+[shadow=cyan,left][size=24pt][b]Woodcutting for RuneSource[/b][/size][/shadow]
+
+
+[b]Contains:[/b]
+- All regular trees
+- Checking axe for required level
+- Cutting timer influenced by type of tree, woodcutting level and used axe.
+
+[b]Read before criticism:[/b]
+- Yesterday was the first time ever I looked into runesource.
+  I come from delta, so it would be highly unlikely is everything was already perfectly done to &quot;runesource norms&quot;
+- This has no stumps, since this is just for a private server and not for a remake. It should be that way.
+- Criticism is highly appreciated since I want to learn to do it better.[/center]
+
+
+
+[size=18pt][b]Step 1:[/b][/size]
+[b]Open up your ObjectPacketHandler class and locate to you 1-click-object method.
+
+Here we will add a check, to see if the clicked object is a tree.
+If it is it will check for the object&#39;s(tree) data, and start cutting.
+
+So, add this to it:[/b]
+[code=java]for (int tree : player.getWoodcutting().allTrees) {
+			if (player.getClickId() == tree) {
+				player.getWoodcutting().getTreeData(player.getClickId());
+			}
+		}[/code]
+
+
+[b]Your method should now look like this:[/b]
+[code=java]
+	private void handleFirstClick(Player player, Packet packet) {
+		player.setClickX(packet.getIn().readShort(true, StreamBuffer.ValueType.A, StreamBuffer.ByteOrder.LITTLE));
+		player.setClickId(packet.getIn().readShort());
+		player.setClickY(packet.getIn().readShort(StreamBuffer.ValueType.A));
+		WalkToActions.setActions(Actions.OBJECT_FIRST_CLICK);
+		WalkToActions.doActions(player);
+		System.out.println(player.getClickId());
+		for (int tree : player.getWoodcutting().allTrees) {
+			if (player.getClickId() == tree) {
+				player.getWoodcutting().getTreeData(player.getClickId());
+			}
+		}
+		
+	}
+[/code]
+
+
+
+[size=18pt][b]Step 2:[/b][/size]
+[b]Open up your player class and add this instance.[/b]
+[code=java]
+private Woodcutting woodcutting = new Woodcutting(this);
+[/code]
+
+and add this return
+[code=java]
+public Woodcutting getWoodcutting() {
+        return woodcutting;
+	}
+[/code]
+
+
+[size=18pt][b]Step 3:[/b][/size]
+[b]Now we will make, that when our player walks away, the woodcutting process doesn&#39;t continue.
+
+So open up your MovementHandler class and locate to your &quot;resetOnWalkPacket&quot; method,
+and add this to it:[/b]
+[code=java]
+player.getWoodcutting().isCutting = false;
+player.getWoodcutting().receivedData = false;
+[/code]
+
+[b]Your method should now look like this:[/b]
+[code=java]
+	public void resetOnWalkPacket() {
+		player.getWoodcutting().isCutting = false;
+		player.getWoodcutting().receivedData = false;
+		player.getAttributes().put(&quot;isBanking&quot;, Boolean.FALSE);
+		player.getAttributes().put(&quot;isShopping&quot;, Boolean.FALSE);
+		player.getActionSender().removeInterfaces();
+		player.getUpdateFlags().faceEntity(65535);
+		TradeManager.handleWalkAway(player);
+		player.getAttackHandler().resetAttackOnMove();
+		player.setFollowingCombat(null);
+	}
+[/code]
+
+
+
+[size=18pt][b]Step 4:[/b][/size]
+[b]Now we can add our woodcutting base.
+
+Create a new class preferably called &quot;Woodcutting.java&quot; to wherever your skills are located.
+(You might have to change the package declaration to yours.)
+and add this to it: [size=7pt]explanation in code[/size][/b]
+
+[code=java]
+package com.rs2.model.content.skills;
+
+import com.rs2.model.World;
+import com.rs2.model.players.Item;
+import com.rs2.model.players.Player;
+import com.rs2.model.players.Skill;
+import com.rs2.model.players.container.Container;
+import com.rs2.model.tick.Tick;
+
+public class Woodcutting {
+	
+	/**
+	 * @Author: RandQm
+	 * @Date: 12 April 2012
+	 * @Info: Woodcutting base
+	 */
+	
+	final Player player;
+	
+	public Woodcutting (Player player) {
+		this.player = player;
+	}
+
+	/*
+	 * This boolean will check if the player is currently cutting.
+	 */
+	public boolean isCutting = false;
+	
+	/*
+	 * Checking if the player has received the data of a tree before cutting.
+	 */
+	public boolean receivedData = false;
+	
+	/*
+	 * Controlling how much woodcutting experience will be added when cut 1 log.
+	 */
+	private double expAdded;
+	
+	/*
+	 * Handling the time to cut a log according to the tree type.
+	 */
+	private double defaultTimer;
+	
+	/*
+	 * Handling the influence by the used axe on the woodcutting timer.
+	 */
+	private double axeInfluence;
+	
+	/*
+	 * The type of log gained from the tree. (the log id)
+	 */
+	private int logType;
+	
+	/*
+	 * An array of all cutable trees.
+	 */
+	public int[] allTrees = {1276, 1277, 1278, 1280, 1330, 1332, 3033, 3034, 3035, 3036, 3879, 3881, 3882, 3883
+		, 1315, 1316, 1318, 1319, 1282, 1283, 1284, 1285, 1286, 1287, 1289, 1290, 1291, 1365, 1383, 1384, 5902, 5903, 5904
+		, 3037, 1281, 1308, 5551, 5552, 5553, 1307, 4674, 1309, 1306};
+	
+	
+	/*
+	 * Controlling the data for our trees.
+	 * Checking the array for the type of tree and if the player has
+	 * the required level to cut it. If he does, setting the data for the type of tree.
+	 */
+	public void getTreeData(int treeId) {	
+		if (receivedData == false) {
+			
+			int[] normalTrees = {
+					1276, 1277, 1278, 1280, 1330, 1332, 3033, 3034, 3035, 3036, 3879, 3881, 3882, 3883 //Normal tree
+					, 1315, 1316, 1318, 1319 //Evergreen
+					, 1282, 1283, 1284, 1285, 1286, 1287, 1289, 1290, 1291, 1365, 1383, 1384, 5902, 5903, 5904 //Dead tree
+					};
+			for (int normal : normalTrees) {
+				if (treeId == normal) {
+					if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 1)
+						player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 1 to cut this tree.&quot;);
+					else
+						expAdded = 25;
+					logType = 1511;
+					defaultTimer = 6;
+				}
+			}	
+			
+			int[] oakTrees = {3037, 1281};
+			for (int oak : oakTrees) {
+				if (treeId == oak) {
+					if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 15)
+						player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 15 to cut oak.&quot;);
+					else
+						expAdded = 37.5;
+					logType = 1521;
+					defaultTimer = 7;
+				}
+			}
+			
+			int[] willowTrees = {1308, 5551, 5552, 5553};
+			for (int willow : willowTrees) {
+				if (treeId == willow) {
+					if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 30)
+						player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 30 to cut this willow.&quot;);
+					else
+						expAdded = 67.5;
+					logType = 1519;
+					defaultTimer = 8;
+				}
+			}
+			
+			int[] mapleTrees = {1307, 4674};
+			for (int maple : mapleTrees) {
+				if (treeId == maple) {
+					if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 45)
+						player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 45 to cut this maple.&quot;);
+					else
+						expAdded = 100;
+					logType = 1517;
+					defaultTimer = 9;
+				}
+			}
+			
+			if (treeId == 1309) { //Yew
+				if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 60)
+					player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 60 to cut yew&quot;);
+				else
+					expAdded = 175;
+				logType = 1515;
+				defaultTimer = 10;
+			}
+
+			if (treeId == 1306) { //Magic
+				if (player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]) &lt; 75)
+					player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 75 to cut magic.&quot;);
+				else
+					expAdded = 250;
+				logType = 1513;
+				defaultTimer = 11.5;
+			}
+			receivedData = true;
+		}
+		startWoodcutting();
+	}
+	
+	
+	/*
+	 * Checking if we got the data for the tree, if we do, start cutting the tree.
+	 * Every random amount of ticks logs and woodcutting experience get added, as long the player is cutting.
+	 */
+	private void startWoodcutting() {
+		if (receivedData == true) {	
+			if (!hasAxeEquipped()) {
+				receivedData = false;
+				return;
+			} else {
+				final double totalTimer = defaultTimer - levelInfluence() - axeInfluence;
+				isCutting = true;
+				player.getActionSender().sendMessage(&quot;You swing your axe at the tree...&quot;);
+				player.getUpdateFlags().sendAnimation(875, 0);
+				World.submit(new Tick( (int)totalTimer ) {
+					@Override
+					public void execute() {
+						if (isCutting == true) {
+							if (player.getInventory().getItemContainer().freeSlot() == -1) {
+								player.getActionSender().sendMessage(&quot;Not enough space in your inventory.&quot;);
+								receivedData = false;
+								isCutting = false;
+								this.stop();
+							} else {
+								player.getUpdateFlags().sendAnimation(875, 0);
+								player.getActionSender().sendMessage(&quot;You get some logs.&quot;);
+								player.getSkill().addExp(Skill.WOODCUTTING, expAdded);
+								player.getInventory().addItem(new Item(logType, 1));
+							}
+						} else {
+							player.getUpdateFlags().reset();
+							receivedData = false;
+							isCutting = false;
+							this.stop();
+						}
+					}
+				});
+			}
+		}
+	}
+	
+	
+	/*
+	 * Checking for the used axe, required level and
+	 * setting the influence on the timer for the equipped axe.
+	 */
+	private boolean hasAxeEquipped() {
+		int wcLvl = player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]);
+		Container equip = player.getEquipment().getItemContainer();
+
+		if (equip.contains(6739)) {
+			if (wcLvl &lt; 61) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 61 to use a dragon axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 3.05;
+			return true;
+		}
+		else if (equip.contains(1359)) {
+			if (wcLvl &lt; 41) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 41 to use a rune axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 2.2;
+			return true;
+		}
+		else if (equip.contains(1357)) {
+			if (wcLvl &lt; 31) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 31 to use an adamant axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 1.65;
+			return true;
+		}
+		else if (equip.contains(1355)) {
+			if (wcLvl &lt; 21) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 21 to use a mithril axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 1.2;
+			return true;
+		}
+		else if (equip.contains(1361)) {
+			if (wcLvl &lt; 11) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 11 to use a black axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 0.75;
+			return true;
+		}
+		else if (equip.contains(1353)) {
+			if (wcLvl &lt; 6) {
+				player.getActionSender().sendMessage(&quot;You need a woodcutting level of at least 6 to use a steel axe.&quot;);
+				return false;
+			} else
+				axeInfluence = 0.4;
+			return true;
+		}
+		else if (equip.contains(1351)) {
+			axeInfluence = 0.15;
+			return true;
+		}
+		else if (equip.contains(1349)) {
+			axeInfluence = 0;
+			return true;
+		} else {
+			player.getActionSender().sendMessage(&quot;You need to equip an axe to cut trees.&quot;);
+			return false;
+		}
+	}
+	
+	
+	/*
+	 * Calculating the influence on the woodcutting timer according to the players woodcutting level.
+	 */
+	double levelInfluence() {
+		int wcLvl = player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]);
+		if (wcLvl &lt; 5)
+			return 0;
+		else if (wcLvl &lt; 10 &amp;&amp; wcLvl &gt;= 5)
+			return 0.04;
+		else if (wcLvl &lt; 15 &amp;&amp; wcLvl &gt;= 10)
+			return 0.09;
+		else if (wcLvl &lt; 20 &amp;&amp; wcLvl &gt;= 15)
+			return 0.15;
+		else if (wcLvl &lt; 25 &amp;&amp; wcLvl &gt;= 20)
+			return 0.22;
+		else if (wcLvl &lt; 30 &amp;&amp; wcLvl &gt;= 25)
+			return 0.3;
+		else if (wcLvl &lt; 35 &amp;&amp; wcLvl &gt;= 30)
+			return 0.39;
+		else if (wcLvl &lt; 40 &amp;&amp; wcLvl &gt;= 35)
+			return 0.49;
+		else if (wcLvl &lt; 45 &amp;&amp; wcLvl &gt;= 40)
+			return 0.6;
+		else if (wcLvl &lt; 50 &amp;&amp; wcLvl &gt;= 45)
+			return 0.72;
+		else if (wcLvl &lt; 55 &amp;&amp; wcLvl &gt;= 50)
+			return 0.85;
+		else if (wcLvl &lt; 60 &amp;&amp; wcLvl &gt;= 55)
+			return 0.99;
+		else if (wcLvl &lt; 65 &amp;&amp; wcLvl &gt;= 60)
+			return 1.14;
+		else if (wcLvl &lt; 70 &amp;&amp; wcLvl &gt;= 65)
+			return 1.3;
+		else if (wcLvl &lt; 75 &amp;&amp; wcLvl &gt;= 70)
+			return 1.47;
+		else if (wcLvl &lt; 80 &amp;&amp; wcLvl &gt;= 75)
+			return 1.65;
+		else if (wcLvl &lt; 85 &amp;&amp; wcLvl &gt;= 80)
+			return 1.84;
+		else if (wcLvl &lt; 90 &amp;&amp; wcLvl &gt;= 85)
+			return 2.04;
+		else if (wcLvl &lt; 95 &amp;&amp; wcLvl &gt;= 90)
+			return 2.25;
+		else if (wcLvl &lt; 99 &amp;&amp; wcLvl &gt;= 95)
+			return 2.47;
+		else if (wcLvl &gt;= 99)
+			return 2.72;
+		else
+			return 0;
+	}
+
+}
+[/code]
+
+
+
+
+[b]That should be it :D
+Questions? Don&#39;t hesitate to ask![/b]
+
+
+
+[img]http://img41.imageshack.us/img41/7638/thistree.png[/img]</description>
+    
+    <lastBuildDate>Fri, 25 May 2012 20:11:46 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@pitchblac23 pitchblac23]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pitchblac23">@pitchblac23</a> wrote:</p>
+          <blockquote>
+              <p>i kinda knew they type of reply was coming so i took time out yesterday and reworked it so <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> sorry for not editing the comment and once again thanks your your tuts its working out fine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/29</link>
+        <pubDate>Fri, 25 May 2012 20:11:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-29</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="27" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/pitchblac23/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> pitchblac23:</div>
+<blockquote>
+<p>i have read the before txt the the top and about doesn’t leave stumps well i was wondering if any one could incorporate this with stumps im wanting to make a remake with just my friends <span class="bbcode-b"><span class="bbcode-i"><span class="bbcode-u">Only</span></span></span> and wondered about having stumps</p>
+</blockquote>
+</aside>
+<p>If YOU are making a remake then YOU should be able to add stumps, now one is going to program something just for you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/28</link>
+        <pubDate>Fri, 25 May 2012 19:29:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-28</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@pitchblac23 pitchblac23]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pitchblac23">@pitchblac23</a> wrote:</p>
+          <blockquote>
+              <p>i have read the before txt the the top and about doesn’t leave stumps well i was wondering if any one could incorporate this with stumps im wanting to make a remake with just my friends <span class="bbcode-b"><span class="bbcode-i"><span class="bbcode-u">Only</span></span></span> and wondered about having stumps</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/27</link>
+        <pubDate>Thu, 24 May 2012 22:38:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-27</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:20, topic:439542”][quote author=imsuperman05 link=topic=542235.msg3988975#msg3988975 date=1336317274]<br>
+you still need to learn how to use arrays…<br>
+[/quote]<br>
+What’s wrong with em[/quote]<br>
+Instead of making tiny arrays for each tree, you could have made the “allTrees” array 3-dimensional or above, and stored the data concerning the levels there…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/26</link>
+        <pubDate>Mon, 07 May 2012 03:07:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-26</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="24" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/skyro/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Skyro:</div>
+<blockquote>
+<p>Your Racist RandQm; Your have a black axe with white writing.</p>
+</blockquote>
+</aside>
+<p>I have a steel axe with black writing.<br>
+I’m racists against humanity, close enough</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/25</link>
+        <pubDate>Mon, 07 May 2012 00:33:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-25</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Skyro Arbe]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/skyro">@Skyro</a> wrote:</p>
+          <blockquote>
+              <p>Your Racist RandQm; Your have a black axe with white writing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/24</link>
+        <pubDate>Sun, 06 May 2012 21:29:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-24</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>some of your naming could be done better. instance -&gt; :yuck:</p>
+<p>other then that, good effort</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/23</link>
+        <pubDate>Sun, 06 May 2012 20:31:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-23</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="21" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/lostmyphat/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> lostmyphat:</div>
+<blockquote>
+<p>Go back to allstar/pimpscape</p>
+</blockquote>
+</aside>
+<p>I’m working on a phonescape from 05 <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/22</link>
+        <pubDate>Sun, 06 May 2012 20:19:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-22</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@lostmyphat lostmyphat]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lostmyphat">@lostmyphat</a> wrote:</p>
+          <blockquote>
+              <p>Go back to allstar/pimpscape</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/21</link>
+        <pubDate>Sun, 06 May 2012 19:23:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-21</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="19" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/imsuperman05/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> imsuperman05:</div>
+<blockquote>
+<p>you still need to learn how to use arrays…</p>
+</blockquote>
+</aside>
+<p>What’s wrong with em</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/20</link>
+        <pubDate>Sun, 06 May 2012 18:16:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-20</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>you still need to learn how to use arrays…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/19</link>
+        <pubDate>Sun, 06 May 2012 15:14:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-19</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Level_120_Dungeoneer Level 120 Dungeoneering]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/level_120_dungeoneer">@Level_120_Dungeoneer</a> wrote:</p>
+          <blockquote>
+              <p>Vault used this exact tutorial for RS2OO6.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/18</link>
+        <pubDate>Sun, 06 May 2012 06:41:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-18</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Loveandpower, post:16, topic:439542”]I swear every  skill you release reminds me of  PI &lt;3</p>
+<p>either way this   is nice to get some  runesource tuts out there. I’ve been tempted for a while to start a runesource dev but meh[/quote]<br>
+Good thing Ive never worked with pi  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"><br>
+delta all the way, and a bit runesource now  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/17</link>
+        <pubDate>Sun, 15 Apr 2012 19:57:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-17</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>I swear every  skill you release reminds me of  PI &lt;3</p>
+<p>either way this   is nice to get some  runesource tuts out there. I’ve been tempted for a while to start a runesource dev but meh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/16</link>
+        <pubDate>Sun, 15 Apr 2012 18:18:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-16</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Fridder, post:14, topic:439542”]If you want the proper animations for woodcutting, you can replace your hasAxeEquipped with this:</p>
+<p>[code]	private boolean hasAxeEquipped() {<br>
+int wcLvl = player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]);<br>
+Container equip = player.getEquipment().getItemContainer();</p>
+<pre><code>	if (equip.contains(6739)) {
+		if (wcLvl &lt; 61) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 61 to use a dragon axe.");
+			return false;
+		} else
+			axeInfluence = 3.05;
+			animType = 2846;
+		return true;
+	}
+	else if (equip.contains(1359)) {
+		if (wcLvl &lt; 41) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 41 to use a rune axe.");
+			return false;
+		} else
+			axeInfluence = 2.2;
+			animType = 867;
+		return true;
+	}
+	else if (equip.contains(1357)) {
+		if (wcLvl &lt; 31) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 31 to use an adamant axe.");
+			return false;
+		} else
+			axeInfluence = 1.65;
+			animType = 869;
+		return true;
+	}
+	else if (equip.contains(1355)) {
+		if (wcLvl &lt; 21) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 21 to use a mithril axe.");
+			return false;
+		} else
+			axeInfluence = 1.2;
+			animType = 871;
+		return true;
+	}
+	else if (equip.contains(1361)) {
+		if (wcLvl &lt; 11) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 11 to use a black axe.");
+			return false;
+		} else
+			axeInfluence = 0.75;
+			animType = 873;
+		return true;
+	}
+	else if (equip.contains(1353)) {
+		if (wcLvl &lt; 6) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 6 to use a steel axe.");
+			return false;
+		} else
+			axeInfluence = 0.4;
+			animType = 875;
+		return true;
+	}
+	else if (equip.contains(1349)) { //iron axe
+		axeInfluence = 0.15;
+		animType = 877;
+		return true;
+	}
+	else if (equip.contains(1351)) { //bronze axe
+		axeInfluence = 0;
+		animType = 879;
+		return true;
+	} else {
+		player.getActionSender().sendMessage("You must equip an axe to cut trees.");
+		return false;
+	}
+}[/code]
+</code></pre>
+<p>Also add:<br>
+private int animType;<br>
+Right under<br>
+private int logType;</p>
+<p>Then under startWoodcutting replace:<br>
+player.getUpdateFlags().sendAnimation(875, 0);<br>
+with<br>
+player.getUpdateFlags().sendAnimation((animType), 0);</p>
+<p>And do the same thing for public void execute()</p>
+<p><img src="http://img256.imageshack.us/img256/8639/woodcuttings.png" alt width="" height="">[/quote]</p>
+<p>Oh thanks, I was already wondering why my axe was looking steel all the time <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+<span class="bbcode-i">“used to pEmote in Delta”</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/15</link>
+        <pubDate>Sun, 15 Apr 2012 17:33:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-15</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <p>If you want the proper animations for woodcutting, you can replace your hasAxeEquipped with this:</p>
+<p>[code]	private boolean hasAxeEquipped() {<br>
+int wcLvl = player.getSkill().getLevelForXP(player.getSkill().getExp()[Skill.WOODCUTTING]);<br>
+Container equip = player.getEquipment().getItemContainer();</p>
+<pre><code>	if (equip.contains(6739)) {
+		if (wcLvl &lt; 61) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 61 to use a dragon axe.");
+			return false;
+		} else
+			axeInfluence = 3.05;
+			animType = 2846;
+		return true;
+	}
+	else if (equip.contains(1359)) {
+		if (wcLvl &lt; 41) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 41 to use a rune axe.");
+			return false;
+		} else
+			axeInfluence = 2.2;
+			animType = 867;
+		return true;
+	}
+	else if (equip.contains(1357)) {
+		if (wcLvl &lt; 31) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 31 to use an adamant axe.");
+			return false;
+		} else
+			axeInfluence = 1.65;
+			animType = 869;
+		return true;
+	}
+	else if (equip.contains(1355)) {
+		if (wcLvl &lt; 21) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 21 to use a mithril axe.");
+			return false;
+		} else
+			axeInfluence = 1.2;
+			animType = 871;
+		return true;
+	}
+	else if (equip.contains(1361)) {
+		if (wcLvl &lt; 11) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 11 to use a black axe.");
+			return false;
+		} else
+			axeInfluence = 0.75;
+			animType = 873;
+		return true;
+	}
+	else if (equip.contains(1353)) {
+		if (wcLvl &lt; 6) {
+			player.getActionSender().sendMessage("You need a woodcutting level of at least 6 to use a steel axe.");
+			return false;
+		} else
+			axeInfluence = 0.4;
+			animType = 875;
+		return true;
+	}
+	else if (equip.contains(1349)) { //iron axe
+		axeInfluence = 0.15;
+		animType = 877;
+		return true;
+	}
+	else if (equip.contains(1351)) { //bronze axe
+		axeInfluence = 0;
+		animType = 879;
+		return true;
+	} else {
+		player.getActionSender().sendMessage("You must equip an axe to cut trees.");
+		return false;
+	}
+}[/code]
+</code></pre>
+<p>Also add:<br>
+private int animType;<br>
+Right under<br>
+private int logType;</p>
+<p>Then under startWoodcutting replace:<br>
+player.getUpdateFlags().sendAnimation(875, 0);<br>
+with<br>
+player.getUpdateFlags().sendAnimation((animType), 0);</p>
+<p>And do the same thing for public void execute()</p>
+<p><img src="http://img256.imageshack.us/img256/8639/woodcuttings.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/14</link>
+        <pubDate>Sun, 15 Apr 2012 13:18:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-14</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@neroxx neroxx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/neroxx">@neroxx</a> wrote:</p>
+          <blockquote>
+              <p>Nice! Good job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/13</link>
+        <pubDate>Sun, 15 Apr 2012 06:34:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-13</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@classic mopmans little slave]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/classic">@classic</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="11" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+ dain bramage:</div>
+<blockquote>
+<p>No no no no no! Use an event like system and why are you declaring constants IN methods? Not to mention, you’re hardcoding a lot. I know RuneSource is simplistic and was created to <span class="bbcode-i">look</span> like PI, but it should not be treated the same. Perhaps an enumeration would help out a bit… It’s nice to see people working on RuneSource though, and simply for that, I’d rep the hell out of you.</p>
+</blockquote>
+</aside>
+<p>Still, he said he just started yesterday with Rune-Source, i think he deserves a little bit of credit <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/12</link>
+        <pubDate>Sat, 14 Apr 2012 17:20:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-12</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@dain_bramage dain bramage]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dain_bramage">@dain_bramage</a> wrote:</p>
+          <blockquote>
+              <p>No no no no no! Use an event like system and why are you declaring constants IN methods? Not to mention, you’re hardcoding a lot. I know RuneSource is simplistic and was created to <span class="bbcode-i">look</span> like PI, but it should not be treated the same. Perhaps an enumeration would help out a bit… It’s nice to see people working on RuneSource though, and simply for that, I’d rep the hell out of you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/11</link>
+        <pubDate>Sat, 14 Apr 2012 17:14:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-11</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Fridder Fridder]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fridder">@Fridder</a> wrote:</p>
+          <blockquote>
+              <p>&lt;3 RandQm.<br>
+Thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/10</link>
+        <pubDate>Sat, 14 Apr 2012 16:33:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-10</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@Xellium Xellium]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xellium">@Xellium</a> wrote:</p>
+          <blockquote>
+              <p>You are so awesome.</p>
+<p>Good Jub. Haha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/9</link>
+        <pubDate>Sat, 14 Apr 2012 02:19:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-9</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="7" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/bestofpvm/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> bestofpvm:</div>
+<blockquote>
+<p>i don’t get it…</p>
+</blockquote>
+</aside>
+<p>Where it says on rune source:<br>
+player.getActionSender().sendMessage<br>
+it says on pi<br>
+c.sendMessage<br>
+or on delta<br>
+c.sM</p>
+<p>you have to change everything to what you are using.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/8</link>
+        <pubDate>Fri, 13 Apr 2012 23:57:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-8</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@bestofpvm bestofpvm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bestofpvm">@bestofpvm</a> wrote:</p>
+          <blockquote>
+              <p>i don’t get it…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/7</link>
+        <pubDate>Fri, 13 Apr 2012 23:39:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-7</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@kronixz kronikz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kronixz">@kronixz</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="439542">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/bestofpvm/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> bestofpvm:</div>
+<blockquote>
+<p>how would i do that :o?</p>
+</blockquote>
+</aside>
+<p>Its a magical thing called Java <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/6</link>
+        <pubDate>Fri, 13 Apr 2012 23:24:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-6</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+      <item>
+        <title>[RuneSource] Woodcutting</title>
+        <dc:creator><![CDATA[@bestofpvm bestofpvm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bestofpvm">@bestofpvm</a> wrote:</p>
+          <blockquote>
+              <p>how would i do that :o?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/runesource-woodcutting/439542/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/runesource-woodcutting/439542/5</link>
+        <pubDate>Fri, 13 Apr 2012 23:08:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-439542-5</guid>
+        <source url="https://forum.moparisthebest.com/t/runesource-woodcutting/439542.rss">[RuneSource] Woodcutting</source>
+      </item>
+  </channel>
+</rss>

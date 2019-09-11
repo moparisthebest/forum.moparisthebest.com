@@ -1,0 +1,402 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>667 Packing Drops</title>
+    <link>https://forum.moparisthebest.com/t/667-packing-drops/447655</link>
+    <description>I need help with NPC drops, they can&#39;t be packed or unpacked. I would like to edit them, I&#39;ve tried quite a bit but I&#39;m thinking there is more than just changing some file names.
+
+If you can help me pack the drops, or edit the drops in some other way that would be great.
+
+NPCDrops.java
+[CODE]package com.rs.utils;
+
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+import java.util.HashMap;
+
+import com.rs.game.item.Item;
+import com.rs.game.player.Player;
+import com.rs.game.player.content.Shop;
+
+public class ShopsHandler {
+
+	private static final HashMap&lt;Integer, Shop&gt; handledShops = new HashMap&lt;Integer, Shop&gt;();
+
+	private static final String PACKED_PATH = &quot;data/items/packedShops.s&quot;;
+	private static final String UNPACKED_PATH = &quot;data/items/unpackedShops.txt&quot;;
+
+	public static void init() {
+		if (new File(PACKED_PATH).exists())
+			loadPackedShops();
+		else
+			loadUnpackedShops();
+	}
+
+	private static void loadUnpackedShops() {
+		Logger.log(&quot;ShopsHandler&quot;, &quot;Packing shops...&quot;);
+		try {
+			BufferedReader in = new BufferedReader(
+					new FileReader(UNPACKED_PATH));
+			DataOutputStream out = new DataOutputStream(new FileOutputStream(
+					PACKED_PATH));
+			while (true) {
+				String line = in.readLine();
+				if (line == null)
+					break;
+				if (line.startsWith(&quot;//&quot;))
+					continue;
+				String[] splitedLine = line.split(&quot; - &quot;, 3);
+				if (splitedLine.length != 3)
+					throw new RuntimeException(&quot;Invalid list for shop line: &quot;
+							+ line);
+				String[] splitedInform = splitedLine[0].split(&quot; &quot;, 3);
+				if (splitedInform.length != 3)
+					throw new RuntimeException(&quot;Invalid list for shop line: &quot;
+							+ line);
+				String[] splitedItems = splitedLine[2].split(&quot; &quot;);
+				int key = Integer.valueOf(splitedInform[0]);
+				int money = Integer.valueOf(splitedInform[1]);
+				boolean generalStore = Boolean.valueOf(splitedInform[2]);
+				Item[] items = new Item[splitedItems.length / 2];
+				int count = 0;
+				for (int i = 0; i &lt; items.length; i++)
+					items[i] = new Item(Integer.valueOf(splitedItems[count++]),
+							Integer.valueOf(splitedItems[count++]));
+				out.writeInt(key);
+				writeAlexString(out, splitedLine[1]);
+				out.writeShort(money);
+				out.writeBoolean(generalStore);
+				out.writeByte(items.length);
+				for (Item item : items) {
+					out.writeShort(item.getId());
+					out.writeInt(item.getAmount());
+				}
+				addShop(key, new Shop(splitedLine[1], money, items,
+						generalStore));
+			}
+			in.close();
+			out.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	private static void loadPackedShops() {
+		try {
+			RandomAccessFile in = new RandomAccessFile(PACKED_PATH, &quot;r&quot;);
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			while (buffer.hasRemaining()) {
+				int key = buffer.getInt();
+				String name = readAlexString(buffer);
+				int money = buffer.getShort() &amp; 0xffff;
+				boolean generalStore = buffer.get() == 1;
+				Item[] items = new Item[buffer.get() &amp; 0xff];
+				for (int i = 0; i &lt; items.length; i++)
+					items[i] = new Item(buffer.getShort() &amp; 0xffff,
+							buffer.getInt());
+				addShop(key, new Shop(name, money, items, generalStore));
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public static String readAlexString(ByteBuffer buffer) {
+		int count = buffer.get() &amp; 0xfff;
+		byte[] bytes = new byte[count];
+		buffer.get(bytes, 0, count);
+		return new String(bytes);
+	}
+
+	public static void writeAlexString(DataOutputStream out, String string)
+			throws IOException {
+		byte[] bytes = string.getBytes();
+		out.writeByte(bytes.length);
+		out.write(bytes);
+	}
+
+	public static void restoreShops() {
+		for (Shop shop : handledShops.values())
+			shop.restoreItems();
+	}
+
+	public static boolean openShop(Player player, int key) {
+		Shop shop = getShop(key);
+		if (shop == null)
+			return false;
+		shop.addPlayer(player);
+		return true;
+	}
+
+	public static Shop getShop(int key) {
+		return handledShops.get(key);
+	}
+
+	public static void addShop(int key, Shop shop) {
+		handledShops.put(key, shop);
+	}
+}
+[/CODE]
+
+
+Here&#39;s NPCDropLoader.java not sure if there&#39;s anything wrong with it. (There&#39;s 2 of them, I think identical, not sure though.)
+[CODE]
+
+   public NPCDropLoader() {
+        try {
+            dropFile = new RandomAccessFile(&quot;data/npcs/packedDrops.s&quot;, &quot;r&quot;);
+        } catch (FileNotFoundException e) {
+            Logger.log(&quot;NPCDropLoader&quot;,&quot;No drop file!&quot;);
+        }
+    }
+
+    public void load() {
+        Logger.log(&quot;NPCDropLoader&quot;,&quot;Loading drops...&quot;);
+        try {
+            FileChannel channel = dropFile.getChannel();
+            if (channel.size() &gt; 0) {
+                ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0, channel.size());
+                ArrayList&lt;Drop&gt; drops = null;
+                int dropSize = buffer.getShort();
+                for (int i = 0; i &lt; dropSize; i++) {
+                    int npcId = buffer.getShort();
+                    short dropAmt = buffer.getShort();
+                    drops = new ArrayList&lt;Drop&gt;(dropAmt);
+                    for (int x = 0; x &lt; dropAmt; x++) {
+                        drops.add(new Drop(buffer.getShort(), buffer.getDouble(), buffer.getInt()));
+                    }
+                    dropMap.put(npcId, drops);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        Logger.log(&quot;NPCDropLoader&quot;,&quot;Loaded &quot; + dropMap.size() + &quot; drops&quot;);
+    }[/CODE]
+
+And finally the error. This goes away if I put back the original drops.bin, but I can&#39;t edit the drops in that so I don&#39;t know what to do about that.
+
+[CODE]
+[NPCDropLoader] No drop file!
+[NPCDropLoader] Loading drops...
+Exception in thread &quot;main&quot; java.lang.NullPointerException
+        at com.rs.game.npc.NPCDropLoader.load(NPCDropLoader.java:35)
+        at com.rs.game.World.init(World.java:87)
+        at com.rs.Launcher.main(Launcher.java:111)
+[/CODE]
+
+Any help is appreciated.</description>
+    
+    <lastBuildDate>Sun, 01 Jul 2012 07:04:12 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/667-packing-drops/447655.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>667 Packing Drops</title>
+        <dc:creator><![CDATA[@USKO USKO]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/usko">@USKO</a> wrote:</p>
+          <blockquote>
+              <p>I need help with NPC drops, they can’t be packed or unpacked. I would like to edit them, I’ve tried quite a bit but I’m thinking there is more than just changing some file names.</p>
+<p>If you can help me pack the drops, or edit the drops in some other way that would be great.</p>
+<p>NPCDrops.java</p>
+<p>[CODE]package com.rs.utils;</p>
+<p>import java.io.BufferedReader;<br>
+import java.io.DataOutputStream;<br>
+import java.io.File;<br>
+import java.io.FileOutputStream;<br>
+import java.io.FileReader;<br>
+import java.io.IOException;<br>
+import java.io.RandomAccessFile;<br>
+import java.nio.ByteBuffer;<br>
+import java.nio.channels.FileChannel;<br>
+import java.nio.channels.FileChannel.MapMode;<br>
+import java.util.HashMap;</p>
+<p>import com.rs.game.item.Item;<br>
+import com.rs.game.player.Player;<br>
+import com.rs.game.player.content.Shop;</p>
+<p>public class ShopsHandler {</p>
+<pre><code>private static final HashMap&lt;Integer, Shop&gt; handledShops = new HashMap&lt;Integer, Shop&gt;();
+
+private static final String PACKED_PATH = "data/items/packedShops.s";
+private static final String UNPACKED_PATH = "data/items/unpackedShops.txt";
+
+public static void init() {
+	if (new File(PACKED_PATH).exists())
+		loadPackedShops();
+	else
+		loadUnpackedShops();
+}
+
+private static void loadUnpackedShops() {
+	Logger.log("ShopsHandler", "Packing shops...");
+	try {
+		BufferedReader in = new BufferedReader(
+				new FileReader(UNPACKED_PATH));
+		DataOutputStream out = new DataOutputStream(new FileOutputStream(
+				PACKED_PATH));
+		while (true) {
+			String line = in.readLine();
+			if (line == null)
+				break;
+			if (line.startsWith("//"))
+				continue;
+			String[] splitedLine = line.split(" - ", 3);
+			if (splitedLine.length != 3)
+				throw new RuntimeException("Invalid list for shop line: "
+						+ line);
+			String[] splitedInform = splitedLine[0].split(" ", 3);
+			if (splitedInform.length != 3)
+				throw new RuntimeException("Invalid list for shop line: "
+						+ line);
+			String[] splitedItems = splitedLine[2].split(" ");
+			int key = Integer.valueOf(splitedInform[0]);
+			int money = Integer.valueOf(splitedInform[1]);
+			boolean generalStore = Boolean.valueOf(splitedInform[2]);
+			Item[] items = new Item[splitedItems.length / 2];
+			int count = 0;
+			for (int i = 0; i &lt; items.length; i++)
+				items[i] = new Item(Integer.valueOf(splitedItems[count++]),
+						Integer.valueOf(splitedItems[count++]));
+			out.writeInt(key);
+			writeAlexString(out, splitedLine[1]);
+			out.writeShort(money);
+			out.writeBoolean(generalStore);
+			out.writeByte(items.length);
+			for (Item item : items) {
+				out.writeShort(item.getId());
+				out.writeInt(item.getAmount());
+			}
+			addShop(key, new Shop(splitedLine[1], money, items,
+					generalStore));
+		}
+		in.close();
+		out.close();
+	} catch (Throwable e) {
+		Logger.handle(e);
+	}
+}
+
+private static void loadPackedShops() {
+	try {
+		RandomAccessFile in = new RandomAccessFile(PACKED_PATH, "r");
+		FileChannel channel = in.getChannel();
+		ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+				channel.size());
+		while (buffer.hasRemaining()) {
+			int key = buffer.getInt();
+			String name = readAlexString(buffer);
+			int money = buffer.getShort() &amp; 0xffff;
+			boolean generalStore = buffer.get() == 1;
+			Item[] items = new Item[buffer.get() &amp; 0xff];
+			for (int i = 0; i &lt; items.length; i++)
+				items[i] = new Item(buffer.getShort() &amp; 0xffff,
+						buffer.getInt());
+			addShop(key, new Shop(name, money, items, generalStore));
+		}
+		channel.close();
+		in.close();
+	} catch (Throwable e) {
+		Logger.handle(e);
+	}
+}
+
+public static String readAlexString(ByteBuffer buffer) {
+	int count = buffer.get() &amp; 0xfff;
+	byte[] bytes = new byte[count];
+	buffer.get(bytes, 0, count);
+	return new String(bytes);
+}
+
+public static void writeAlexString(DataOutputStream out, String string)
+		throws IOException {
+	byte[] bytes = string.getBytes();
+	out.writeByte(bytes.length);
+	out.write(bytes);
+}
+
+public static void restoreShops() {
+	for (Shop shop : handledShops.values())
+		shop.restoreItems();
+}
+
+public static boolean openShop(Player player, int key) {
+	Shop shop = getShop(key);
+	if (shop == null)
+		return false;
+	shop.addPlayer(player);
+	return true;
+}
+
+public static Shop getShop(int key) {
+	return handledShops.get(key);
+}
+
+public static void addShop(int key, Shop shop) {
+	handledShops.put(key, shop);
+}
+</code></pre>
+<p>}<br>
+[/CODE]</p>
+<p>Here’s NPCDropLoader.java not sure if there’s anything wrong with it. (There’s 2 of them, I think identical, not sure though.)</p>
+<p>[CODE]</p>
+<p>public NPCDropLoader() {<br>
+try {<br>
+dropFile = new RandomAccessFile(“data/npcs/packedDrops.s”, “r”);<br>
+} catch (FileNotFoundException e) {<br>
+Logger.log(“NPCDropLoader”,“No drop file!”);<br>
+}<br>
+}</p>
+<pre><code>public void load() {
+    Logger.log("NPCDropLoader","Loading drops...");
+    try {
+        FileChannel channel = dropFile.getChannel();
+        if (channel.size() &gt; 0) {
+            ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0, channel.size());
+            ArrayList&lt;Drop&gt; drops = null;
+            int dropSize = buffer.getShort();
+            for (int i = 0; i &lt; dropSize; i++) {
+                int npcId = buffer.getShort();
+                short dropAmt = buffer.getShort();
+                drops = new ArrayList&lt;Drop&gt;(dropAmt);
+                for (int x = 0; x &lt; dropAmt; x++) {
+                    drops.add(new Drop(buffer.getShort(), buffer.getDouble(), buffer.getInt()));
+                }
+                dropMap.put(npcId, drops);
+            }
+        }
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    Logger.log("NPCDropLoader","Loaded " + dropMap.size() + " drops");
+}[/CODE]
+</code></pre>
+<p>And finally the error. This goes away if I put back the original drops.bin, but I can’t edit the drops in that so I don’t know what to do about that.</p>
+<pre><code class="lang-auto">[NPCDropLoader] No drop file!
+[NPCDropLoader] Loading drops...
+Exception in thread "main" java.lang.NullPointerException
+        at com.rs.game.npc.NPCDropLoader.load(NPCDropLoader.java:35)
+        at com.rs.game.World.init(World.java:87)
+        at com.rs.Launcher.main(Launcher.java:111)</code></pre>
+<p>Any help is appreciated.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/667-packing-drops/447655/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/667-packing-drops/447655/1</link>
+        <pubDate>Sun, 01 Jul 2012 07:04:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-447655-1</guid>
+        <source url="https://forum.moparisthebest.com/t/667-packing-drops/447655.rss">667 Packing Drops</source>
+      </item>
+  </channel>
+</rss>

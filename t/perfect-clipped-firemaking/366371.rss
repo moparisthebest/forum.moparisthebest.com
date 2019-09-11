@@ -1,0 +1,757 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Perfect Clipped Firemaking</title>
+    <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371</link>
+    <description>Everything is explained in the comments.
+
+http://pastebin.com/BBeBMP9B
+
+[code]package org.rs2server.rs2.model.skills;
+
+import java.util.ArrayList;
+import java.util.Random;
+
+import org.rs2server.rs2.event.Event;
+import org.rs2server.rs2.model.Animation;
+import org.rs2server.rs2.model.GameObject;
+import org.rs2server.rs2.model.Graphic;
+import org.rs2server.rs2.model.GroundItem;
+import org.rs2server.rs2.model.Item;
+import org.rs2server.rs2.model.Location;
+import org.rs2server.rs2.model.Player;
+import org.rs2server.rs2.model.Skills;
+import org.rs2server.rs2.model.World;
+import org.rs2server.rs2.tickable.Tickable;
+
+/**
+ * For the firemaking skill.
+ * @author Canownueasy
+ */
+public class Firemaking {
+	
+	private Player player;
+	
+	/**
+	 * The player who is firemaking.
+	 * @return player
+	 */
+	public Player getPlayer() {
+		return player;
+	}
+	
+	public Firemaking(Player player) {
+		this.player = player;
+	}
+	
+	private enum Log {
+		
+		NORMAL(1511, 1, 30),
+		OAK(1521, 15, 60),
+		WILLOW(1519, 30, 90),
+		TEAK(6333, 35, 105),
+		MAPLE(1517, 45, 135),
+		MAHOGANY(6332, 50, 157.5),
+		YEW(1515, 60, 202.5),
+		MAGIC(1513, 75, 303.8);
+		
+		private int id, reqLevel;
+		private double exp;
+		
+		/**
+		 * The log item.
+		 * @return new Item(id)
+		 */
+		public Item getItem() {
+			return new Item(id);
+		}
+		
+		/**
+		 * The required level to light the log.
+		 * @return reqLevel
+		 */
+		public int getRequiredLevel() {
+			return reqLevel;
+		}
+		
+		/**
+		 * The experience one gains from lighting the log.
+		 * @return exp
+		 */
+		public double getExperience() {
+			return exp;
+		}
+		
+		/**
+		 * Constructs a new log.
+		 * @param id The item id of the log.
+		 * @param reqLevel The required level to light the log.
+		 * @param exp The experience one gains from lighting the log.
+		 */
+		Log(int id, int reqLevel, double exp) {
+			this.id = id;
+			this.reqLevel = reqLevel;
+			this.exp = exp;
+		}
+
+	}
+	
+	/**
+	 * Lights a log.
+	 * @param log The log to light.
+	 */
+	public void light(final Log log) {
+		//First off, we grab the item from the log type.
+		Item item = log.getItem();
+		//Next we check the log&#39;s lighting requirements.
+		if(log.getRequiredLevel() &gt; player.getSkills().getLevel(Skills.FIREMAKING)) {
+			String vowels[] = { &quot;a&quot;, &quot;e&quot;, &quot;i&quot;, &quot;o&quot;, &quot;u&quot; };
+			for(String vowel : vowels) {
+				String itemName = item.getDefinition().getName().trim().replaceAll(&quot;_&quot;, &quot; &quot;);
+				player.getActionSender().sendMessage(&quot;You must have a Firemaking level of &quot; + log.getRequiredLevel() + &quot; to light &quot; + (itemName.startsWith(vowel) ? &quot;an&quot; : &quot;a&quot;) + &quot; &quot; + itemName + &quot;.&quot;);
+			}
+			return;
+		}
+		for(GameObject obj : player.getRegion().getGameObjects()) {
+			//We loop through all the objects in the player&#39;s region.
+			if(obj != null &amp;&amp; obj.getType() != 22 &amp;&amp; obj.getLocation().equals(player.getLocation())) {
+				//Here we make sure that the user is not on an object.
+				//We exclude the objects in the type group 22 because they are decorations (grass, flowers, ect.)
+				player.getActionSender().sendMessage(&quot;You cannot light a fire here.&quot;);
+				//If the player is on top of an object, we send a server message to notify them.
+				//Then we return back to stop any other code in the method from executing.
+				return;
+			}
+		}
+		//We remove the item from the player&#39;s inventory first.
+		//This is done to prevent adding items without space.
+		player.getInventory().remove(item);
+		//Then the player does the lighting logs animation.
+		player.playAnimation(Animation.create(733));
+		//We construct a new ground item of the player&#39;s log, belonging to the player, at the player&#39;s location.
+		final GroundItem groundItem = new GroundItem(player.getName(), item, player.getLocation());
+		//We then register the ground item to the world for the player.
+		World.getWorld().createGroundItem(groundItem, player);
+		//To notify the player that he/she is attempting to light a fire, we send a server message.
+		player.getActionSender().sendMessage(&quot;You attempt to light the logs.&quot;);
+		//Now, we create a new event with the amount of time it takes to light the log as it&#39;s wait.
+		World.getWorld().submit(new Event(lightDelay(log)) {
+			@Override
+			public void execute() {
+				//First of all, we reset the player&#39;s animation.
+				//This is done to stop the player from doing the firemaking emote.
+				player.playAnimation(Animation.create(-1));
+				//We check if the ground item is null.
+				//If it is null, then that means the player has picked up the log.
+				if(groundItem.equals(null)) {
+					//We stop the event and return back to stop other code in the method from executing.
+					this.stop();
+					return;
+				}
+				//We unregister the ground item.
+				World.getWorld().unregister(groundItem);
+				//We construct a game object for the fire.
+				final GameObject fire = new GameObject(player.getLocation(), 2732, 10, 0, false);
+				//We now register the fire object to the world.
+				World.getWorld().register(fire);
+				//Because the fire is lit, we notify the player in a server message.
+				player.getActionSender().sendMessage(&quot;The fire catches and the logs begin to burn.&quot;);
+				//Next, we add the experience to the player.
+				//We use an if statement that declares the method addExperience.
+				//It will return back true (and code inside our if statement will execute) if the player gains a level.
+				if(addExperience(log)) {
+					//Since the player gained a level, we play the &quot;fireworks&quot; graphic.
+					player.playGraphics(Graphic.create(199));
+					//We then congratulate them via a server message.
+					player.getActionSender().sendMessage(&quot;Congratulations! You have advanced a level in Firemaking to &quot; 
+							+ player.getSkills().getLevelForExperience(Skills.FIREMAKING) + &quot;.&quot;);
+				}
+				//Now, we create a new tickable of 120 (which is near a minute &amp; a half)
+				//We do this to remove the fire, and add ashes.
+				World.getWorld().submit(new Tickable(180) {
+					@Override
+					public void execute() {
+						//We loop through all the players in the world because we want to register an ash for every player.
+						for(Player players : World.getWorld().getPlayers()) {
+							//We make sure the players of the world aren&#39;t disconnected or are facing other problems.
+							if(players != null) {
+								//We register an ash ground item, in the same location as the fire.
+								World.getWorld().register(new GroundItem(players.getName(), new Item(592), fire.getLocation()), players);	
+							}
+						}
+						//We unregister the fire from the world.
+						World.getWorld().unregister(fire, true);
+						this.stop();
+					}
+				});
+				//We create a new arraylist to hold the bad direction names.
+				ArrayList&lt;String&gt; badDirections = new ArrayList&lt;String&gt;();
+				//We loop through all the objects in the player&#39;s region.
+				for(GameObject obj : player.getRegion().getGameObjects()) {
+					//We now make sure the object isn&#39;t type 22 (decorations) or type 0 (walls, ect)
+					if(obj != null &amp;&amp; obj.getType() != 22 &amp;&amp; obj.getType() != 0) { 
+						if(obj.getLocation().equals(Location.create(player.getLocation().getX() - 1, player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {
+							//We can&#39;t walk West, so we add the location to the list.
+							badDirections.add(&quot;West&quot;);
+						} else
+						if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {
+							//We can&#39;t walk North, so we add the location to the list.
+							badDirections.add(&quot;North&quot;);
+						} else
+						if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {
+							//We can&#39;t walk South, so we add the location to the list.
+							badDirections.add(&quot;South&quot;);
+						} else
+						if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {
+							//We can&#39;t walk East, so we add the location to the list.
+							badDirections.add(&quot;East&quot;);
+						}
+					}
+					//We create a new location and set it&#39;s value to null (which we will check later).
+					Location newLocation = null;
+					//If the bad directions list doesn&#39;t contain West, we set the location to one step West of the player&#39;s location.
+					//We do this because West is the first location we want to walk to.
+					if(!badDirections.contains(&quot;West&quot;)) {
+						newLocation = Location.create(player.getLocation().getX() - 1, player.getLocation().getY());
+					} else
+					//If the bad directions list doesn&#39;t contain North, we set the location to one step North of the player&#39;s location.
+					//We do this because North is the second location we want to walk to.
+					if(!badDirections.contains(&quot;North&quot;)) {
+						newLocation = Location.create(player.getLocation().getX(), player.getLocation().getY() + 1);
+					} else
+					//If the bad directions list doesn&#39;t contain South, we set the location to one step South of the player&#39;s location.
+					//We do this because South is the third location we want to walk to.
+					if(!badDirections.contains(&quot;South&quot;)) {
+						newLocation = Location.create(player.getLocation().getX(), player.getLocation().getY() - 1);
+					} else
+					//If the bad directions list doesn&#39;t contain East, we set the location to one step East of the player&#39;s location.
+					//We do this because East is the last location we want to walk to.
+					if(!badDirections.contains(&quot;East&quot;)) {
+						newLocation = Location.create(player.getLocation().getX() + 1, player.getLocation().getY());
+					}
+					//We clear the bad directions arraylist, why not?
+					badDirections.clear();
+					//We cannot walk anywhere. We know this because the newLocation location was not set.
+					//We stop the event and return back to prevent other code in this method from executing.
+					if(newLocation.equals(null)) {
+						this.stop();
+						return;
+					}
+					//We now walk the player to the new location&#39;s coordinates.
+					player.getWalkingQueue().addStep(newLocation.getX(), newLocation.getY());
+					player.getWalkingQueue().finish();
+				}
+				//We end the event, finishing the light task.
+				this.stop();
+			}
+		});
+		
+	}
+	
+	/**
+	 * Adds experience to the player for a specific log.
+	 * @param log The log we will add experience for.
+	 * @return true if the player has gained a level.
+	 */
+	private boolean addExperience(Log log) {
+		int beforeLevel = player.getSkills().getLevelForExperience(Skills.FIREMAKING);
+		player.getSkills().addExperience(Skills.FIREMAKING, log.getExperience());
+		int afterLevel = player.getSkills().getLevelForExperience(Skills.FIREMAKING);
+		if(afterLevel &gt; beforeLevel) {
+			return true;
+		}
+		return false;
+	}
+	
+	/**
+	 * Light delay for a specific log.
+	 * @param log The log.
+	 * @return The light delay.
+	 */
+	private int lightDelay(Log log) {
+		return random(400, (int) ((Math.sqrt(log.getRequiredLevel() * 1000) * (99 - player.getSkills().getLevel(Skills.FIREMAKING)))));
+	}
+	
+	/**
+	 * Finds the log for an item.
+	 * @param item The log item.
+	 * @return The log for the item.
+	 */
+	public Log findLog(Item item) {
+		switch(item.getDefinition().getId()) {
+		case 1511:
+			return Log.NORMAL;
+		case 1521:
+			return Log.OAK;
+		case 1519:
+			return Log.WILLOW;
+		case 6333:
+			return Log.TEAK;
+		case 1517:
+			return Log.MAPLE;
+		case 6332:
+			return Log.MAHOGANY;
+		case 1515:
+			return Log.YEW;
+		case 1513:
+			return Log.MAGIC;
+		}
+		return null;
+	}
+	
+	/**
+         * Returns a random integer with min as the inclusive
+         * lower bound and max as the exclusive upper bound.
+         *
+         * @param min The inclusive lower bound.
+         * @param max The exclusive upper bound.
+         * @return Random integer min &lt;= n &lt; max.
+         */
+	private int random(int min, int max) {
+		Random random = new Random();
+		int n = Math.abs(max - min);
+		return Math.min(min, max) + (n == 0 ? 0 : random.nextInt(n));
+	}
+
+}[/code]</description>
+    
+    <lastBuildDate>Thu, 28 Oct 2010 22:47:55 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@Scape-JAVA Scape-JAVA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/scape-java">@Scape-JAVA</a> wrote:</p>
+          <blockquote>
+              <p>This is more of a snippet, please use the snippets thread.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/7</link>
+        <pubDate>Thu, 28 Oct 2010 22:47:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-7</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@eesti_pk3r eesti_pk3r]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eesti_pk3r">@eesti_pk3r</a> wrote:</p>
+          <blockquote>
+              <p>Err, i tried to fit it to my server (since this code is for hyperion), but i got this error, which i cannot fix :/.</p>
+<p>Pic:<br>
+<img src="http://i337.photobucket.com/albums/n364/myrang3r/compilererror.png" alt width="" height=""></p>
+<p>Server soruce: Creativescape (Shard revolution)</p>
+<p>Please help, thanks  :).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/6</link>
+        <pubDate>Thu, 28 Oct 2010 22:30:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-6</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Canownueazy, post:4, topic:366371”][quote author=Davidi2 link=topic=462566.msg3384008#msg3384008 date=1288296012]</p>
+<p>[quote author=Dastan_ link=topic=462566.msg3384002#msg3384002 date=1288295701]<br>
+It would be a lot easier to read and unserstand this if the codes and explanation wouldn’t be mashed together.<br>
+[/quote]I agree</p>
+<p>One line of code then two lines of comments is kinda hard to read<br>
+[/quote]How?[/quote]Looks messy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/5</link>
+        <pubDate>Thu, 28 Oct 2010 20:08:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-5</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:3, topic:366371”][quote author=Dastan_ link=topic=462566.msg3384002#msg3384002 date=1288295701]<br>
+It would be a lot easier to read and unserstand this if the codes and explanation wouldn’t be mashed together.<br>
+[/quote]I agree</p>
+<p>One line of code then two lines of comments is kinda hard to read[/quote]How?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/4</link>
+        <pubDate>Thu, 28 Oct 2010 20:06:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-4</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Dastan_, post:2, topic:366371”]It would be a lot easier to read and unserstand this if the codes and explanation wouldn’t be mashed together.[/quote]I agree</p>
+<p>One line of code then two lines of comments is kinda hard to read</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/3</link>
+        <pubDate>Thu, 28 Oct 2010 20:00:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-3</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@Dastan1 Dastan_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dastan1">@Dastan1</a> wrote:</p>
+          <blockquote>
+              <p>It would be a lot easier to read and unserstand this if the codes and explanation wouldn’t be mashed together.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/2</link>
+        <pubDate>Thu, 28 Oct 2010 19:55:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-2</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+      <item>
+        <title>Perfect Clipped Firemaking</title>
+        <dc:creator><![CDATA[@Canownueazy Canownueazy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/canownueazy">@Canownueazy</a> wrote:</p>
+          <blockquote>
+              <p>Everything is explained in the comments.</p>
+<p><a href="http://pastebin.com/BBeBMP9B" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/BBeBMP9B</a></p>
+<p>[code]package org.rs2server.rs2.model.skills;</p>
+<p>import java.util.ArrayList;<br>
+import java.util.Random;</p>
+<p>import org.rs2server.rs2.event.Event;<br>
+import org.rs2server.rs2.model.Animation;<br>
+import org.rs2server.rs2.model.GameObject;<br>
+import org.rs2server.rs2.model.Graphic;<br>
+import org.rs2server.rs2.model.GroundItem;<br>
+import org.rs2server.rs2.model.Item;<br>
+import org.rs2server.rs2.model.Location;<br>
+import org.rs2server.rs2.model.Player;<br>
+import org.rs2server.rs2.model.Skills;<br>
+import org.rs2server.rs2.model.World;<br>
+import org.rs2server.rs2.tickable.Tickable;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>For the firemaking skill.</p>
+</li>
+<li>
+<p><span class="mention">@author</span> Canownueasy<br>
+*/<br>
+public class Firemaking {</p>
+<p>private Player player;</p>
+<p>/**</p>
+<ul>
+<li>The player who is firemaking.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> player<br>
+*/<br>
+public Player getPlayer() {<br>
+return player;<br>
+}</li>
+</ul>
+<p>public Firemaking(Player player) {<br>
+this.player = player;<br>
+}</p>
+<p>private enum Log {</p>
+<pre><code> NORMAL(1511, 1, 30),
+ OAK(1521, 15, 60),
+ WILLOW(1519, 30, 90),
+ TEAK(6333, 35, 105),
+ MAPLE(1517, 45, 135),
+ MAHOGANY(6332, 50, 157.5),
+ YEW(1515, 60, 202.5),
+ MAGIC(1513, 75, 303.8);
+ 
+ private int id, reqLevel;
+ private double exp;
+ 
+ /**
+  * The log item.
+  * @return new Item(id)
+  */
+ public Item getItem() {
+ 	return new Item(id);
+ }
+ 
+ /**
+  * The required level to light the log.
+  * @return reqLevel
+  */
+ public int getRequiredLevel() {
+ 	return reqLevel;
+ }
+ 
+ /**
+  * The experience one gains from lighting the log.
+  * @return exp
+  */
+ public double getExperience() {
+ 	return exp;
+ }
+ 
+ /**
+  * Constructs a new log.
+  * @param id The item id of the log.
+  * @param reqLevel The required level to light the log.
+  * @param exp The experience one gains from lighting the log.
+  */
+ Log(int id, int reqLevel, double exp) {
+ 	this.id = id;
+ 	this.reqLevel = reqLevel;
+ 	this.exp = exp;
+ }
+</code></pre>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>Lights a log.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> log The log to light.<br>
+*/<br>
+public void light(final Log log) {<br>
+//First off, we grab the item from the log type.<br>
+Item item = log.getItem();<br>
+//Next we check the log’s lighting requirements.<br>
+if(log.getRequiredLevel() &gt; player.getSkills().getLevel(Skills.FIREMAKING)) {<br>
+String vowels[] = { “a”, “e”, “i”, “o”, “u” };<br>
+for(String vowel : vowels) {<br>
+String itemName = item.getDefinition().getName().trim().replaceAll("_", " ");<br>
+player.getActionSender().sendMessage("You must have a Firemaking level of " + log.getRequiredLevel() + " to light " + (itemName.startsWith(vowel) ? “an” : “a”) + " " + itemName + “.”);<br>
+}<br>
+return;<br>
+}<br>
+for(GameObject obj : player.getRegion().getGameObjects()) {<br>
+//We loop through all the objects in the player’s region.<br>
+if(obj != null &amp;&amp; obj.getType() != 22 &amp;&amp; obj.getLocation().equals(player.getLocation())) {<br>
+//Here we make sure that the user is not on an object.<br>
+//We exclude the objects in the type group 22 because they are decorations (grass, flowers, ect.)<br>
+player.getActionSender().sendMessage(“You cannot light a fire here.”);<br>
+//If the player is on top of an object, we send a server message to notify them.<br>
+//Then we return back to stop any other code in the method from executing.<br>
+return;<br>
+}<br>
+}<br>
+//We remove the item from the player’s inventory first.<br>
+//This is done to prevent adding items without space.<br>
+player.getInventory().remove(item);<br>
+//Then the player does the lighting logs animation.<br>
+player.playAnimation(Animation.create(733));<br>
+//We construct a new ground item of the player’s log, belonging to the player, at the player’s location.<br>
+final GroundItem groundItem = new GroundItem(player.getName(), item, player.getLocation());<br>
+//We then register the ground item to the world for the player.<br>
+World.getWorld().createGroundItem(groundItem, player);<br>
+//To notify the player that he/she is attempting to light a fire, we send a server message.<br>
+player.getActionSender().sendMessage(“You attempt to light the logs.”);<br>
+//Now, we create a new event with the amount of time it takes to light the log as it’s wait.<br>
+World.getWorld().submit(new Event(lightDelay(log)) {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void execute() {<br>
+//First of all, we reset the player’s animation.<br>
+//This is done to stop the player from doing the firemaking emote.<br>
+player.playAnimation(Animation.create(-1));<br>
+//We check if the ground item is null.<br>
+//If it is null, then that means the player has picked up the log.<br>
+if(groundItem.equals(null)) {<br>
+//We stop the event and return back to stop other code in the method from executing.<br>
+this.stop();<br>
+return;<br>
+}<br>
+//We unregister the ground item.<br>
+World.getWorld().unregister(groundItem);<br>
+//We construct a game object for the fire.<br>
+final GameObject fire = new GameObject(player.getLocation(), 2732, 10, 0, false);<br>
+//We now register the fire object to the world.<br>
+World.getWorld().register(fire);<br>
+//Because the fire is lit, we notify the player in a server message.<br>
+player.getActionSender().sendMessage(“The fire catches and the logs begin to burn.”);<br>
+//Next, we add the experience to the player.<br>
+//We use an if statement that declares the method addExperience.<br>
+//It will return back true (and code inside our if statement will execute) if the player gains a level.<br>
+if(addExperience(log)) {<br>
+//Since the player gained a level, we play the “fireworks” graphic.<br>
+player.playGraphics(Graphic.create(199));<br>
+//We then congratulate them via a server message.<br>
+player.getActionSender().sendMessage("Congratulations! You have advanced a level in Firemaking to "<br>
++ player.getSkills().getLevelForExperience(Skills.FIREMAKING) + “.”);<br>
+}<br>
+//Now, we create a new tickable of 120 (which is near a minute &amp; a half)<br>
+//We do this to remove the fire, and add ashes.<br>
+World.getWorld().submit(new Tickable(180) {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void execute() {<br>
+//We loop through all the players in the world because we want to register an ash for every player.<br>
+for(Player players : World.getWorld().getPlayers()) {<br>
+//We make sure the players of the world aren’t disconnected or are facing other problems.<br>
+if(players != null) {<br>
+//We register an ash ground item, in the same location as the fire.<br>
+World.getWorld().register(new GroundItem(players.getName(), new Item(592), fire.getLocation()), players);	<br>
+}<br>
+}<br>
+//We unregister the fire from the world.<br>
+World.getWorld().unregister(fire, true);<br>
+this.stop();<br>
+}<br>
+});<br>
+//We create a new arraylist to hold the bad direction names.<br>
+ArrayList badDirections = new ArrayList();<br>
+//We loop through all the objects in the player’s region.<br>
+for(GameObject obj : player.getRegion().getGameObjects()) {<br>
+//We now make sure the object isn’t type 22 (decorations) or type 0 (walls, ect)<br>
+if(obj != null &amp;&amp; obj.getType() != 22 &amp;&amp; obj.getType() != 0) {<br>
+if(obj.getLocation().equals(Location.create(player.getLocation().getX() - 1, player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {<br>
+//We can’t walk West, so we add the location to the list.<br>
+badDirections.add(“West”);<br>
+} else<br>
+if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {<br>
+//We can’t walk North, so we add the location to the list.<br>
+badDirections.add(“North”);<br>
+} else<br>
+if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {<br>
+//We can’t walk South, so we add the location to the list.<br>
+badDirections.add(“South”);<br>
+} else<br>
+if(obj.getLocation().equals(Location.create(player.getLocation().getX(), player.getLocation().getY())) &amp;&amp; obj.getHeight() == player.getHeight()) {<br>
+//We can’t walk East, so we add the location to the list.<br>
+badDirections.add(“East”);<br>
+}<br>
+}<br>
+//We create a new location and set it’s value to null (which we will check later).<br>
+Location newLocation = null;<br>
+//If the bad directions list doesn’t contain West, we set the location to one step West of the player’s location.<br>
+//We do this because West is the first location we want to walk to.<br>
+if(!badDirections.contains(“West”)) {<br>
+newLocation = Location.create(player.getLocation().getX() - 1, player.getLocation().getY());<br>
+} else<br>
+//If the bad directions list doesn’t contain North, we set the location to one step North of the player’s location.<br>
+//We do this because North is the second location we want to walk to.<br>
+if(!badDirections.contains(“North”)) {<br>
+newLocation = Location.create(player.getLocation().getX(), player.getLocation().getY() + 1);<br>
+} else<br>
+//If the bad directions list doesn’t contain South, we set the location to one step South of the player’s location.<br>
+//We do this because South is the third location we want to walk to.<br>
+if(!badDirections.contains(“South”)) {<br>
+newLocation = Location.create(player.getLocation().getX(), player.getLocation().getY() - 1);<br>
+} else<br>
+//If the bad directions list doesn’t contain East, we set the location to one step East of the player’s location.<br>
+//We do this because East is the last location we want to walk to.<br>
+if(!badDirections.contains(“East”)) {<br>
+newLocation = Location.create(player.getLocation().getX() + 1, player.getLocation().getY());<br>
+}<br>
+//We clear the bad directions arraylist, why not?<br>
+badDirections.clear();<br>
+//We cannot walk anywhere. We know this because the newLocation location was not set.<br>
+//We stop the event and return back to prevent other code in this method from executing.<br>
+if(newLocation.equals(null)) {<br>
+this.stop();<br>
+return;<br>
+}<br>
+//We now walk the player to the new location’s coordinates.<br>
+player.getWalkingQueue().addStep(newLocation.getX(), newLocation.getY());<br>
+player.getWalkingQueue().finish();<br>
+}<br>
+//We end the event, finishing the light task.<br>
+this.stop();<br>
+}<br>
+});</li>
+</ul>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>Adds experience to the player for a specific log.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> log The log we will add experience for.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> true if the player has gained a level.<br>
+*/<br>
+private boolean addExperience(Log log) {<br>
+int beforeLevel = player.getSkills().getLevelForExperience(Skills.FIREMAKING);<br>
+player.getSkills().addExperience(Skills.FIREMAKING, log.getExperience());<br>
+int afterLevel = player.getSkills().getLevelForExperience(Skills.FIREMAKING);<br>
+if(afterLevel &gt; beforeLevel) {<br>
+return true;<br>
+}<br>
+return false;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Light delay for a specific log.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> log The log.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The light delay.<br>
+*/<br>
+private int lightDelay(Log log) {<br>
+return random(400, (int) ((Math.sqrt(log.getRequiredLevel() * 1000) * (99 - player.getSkills().getLevel(Skills.FIREMAKING)))));<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Finds the log for an item.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> item The log item.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> The log for the item.<br>
+*/<br>
+public Log findLog(Item item) {<br>
+switch(item.getDefinition().getId()) {<br>
+case 1511:<br>
+return Log.NORMAL;<br>
+case 1521:<br>
+return Log.OAK;<br>
+case 1519:<br>
+return Log.WILLOW;<br>
+case 6333:<br>
+return Log.TEAK;<br>
+case 1517:<br>
+return Log.MAPLE;<br>
+case 6332:<br>
+return Log.MAHOGANY;<br>
+case 1515:<br>
+return Log.YEW;<br>
+case 1513:<br>
+return Log.MAGIC;<br>
+}<br>
+return null;<br>
+}</li>
+</ul>
+<p>/**<br>
+* Returns a random integer with min as the inclusive<br>
+* lower bound and max as the exclusive upper bound.<br>
+*<br>
+* <a class="mention" href="/u/param">@param</a> min The inclusive lower bound.<br>
+* <a class="mention" href="/u/param">@param</a> max The exclusive upper bound.<br>
+* <a class="mention" href="/u/return">@return</a> Random integer min &lt;= n &lt; max.<br>
+*/<br>
+private int random(int min, int max) {<br>
+Random random = new Random();<br>
+int n = Math.abs(max - min);<br>
+return Math.min(min, max) + (n == 0 ? 0 : random.nextInt(n));<br>
+}</p>
+</li>
+</ul>
+<p>}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371/1</link>
+        <pubDate>Thu, 28 Oct 2010 19:04:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366371-1</guid>
+        <source url="https://forum.moparisthebest.com/t/perfect-clipped-firemaking/366371.rss">Perfect Clipped Firemaking</source>
+      </item>
+  </channel>
+</rss>

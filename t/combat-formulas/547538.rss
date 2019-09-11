@@ -1,0 +1,1054 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Combat Formulas</title>
+    <link>https://forum.moparisthebest.com/t/combat-formulas/547538</link>
+    <description>Assumption: If T1 and T2 have same equipment, attack level, defense level, they should EACH hit each other equally.
+
+Note: Scaling in block can be tweaked and modifier for base % of chance can be changed to create *exciting* non stop whacking or slower low hitting combat.
+
+[code=java]
+package com.nyphrex.rs2;
+
+/**
+ * Created by sini on 10/30/14.
+ */
+public final class PhysicalStatCalculator {
+
+    private double equipmentRatio;
+    private double baseModifier;
+    private double equipmentModifier;
+
+    private double scale;
+
+    public PhysicalStatCalculator() {
+
+        // Ratio of equipment points per base point. Just assume its 1.0,
+        // the higher you set this the worse you make equipment points
+        // worth in value.
+        equipmentRatio = 1.0D;
+
+        // Base modifier which adds base points. Changing this scales the
+        // base linearly, higher base modifier for accuracy equals more hits
+        // if baseModifier[accuracy] &gt; baseModifier[blocking]. Essentially
+        // gives free skill points!
+        baseModifier = 0.0D;
+
+        // Modifier which adds to the raw score after the ratio of equipment to skill is calculated.
+        // Pretty much this defines an imaginary score for not having equipment and its effect.
+        equipmentModifier = 0.0D;
+
+        // Scaling for the end result.
+        scale = 1.0D;
+    }
+
+    public void equipmentRatio(double equipmentRatio) {
+        this.equipmentRatio = equipmentRatio;
+    }
+
+    public void baseModifier(double baseModifier) {
+        this.baseModifier = baseModifier;
+    }
+
+    public void equipmentModifier(double equipmentModifier) {
+        this.equipmentModifier = equipmentModifier;
+    }
+
+    public void scale(double scale) {
+        this.scale = scale;
+    }
+
+    public int calculate(int base, int equipment, double baseMultiplier, double multiplier, double styleModifier) {
+        double a = (double) base;
+        double b = Math.floor(a * baseMultiplier + baseModifier) + styleModifier;
+        double c = Math.floor(equipmentModifier + b * (equipment + equipmentRatio) / equipmentRatio) * multiplier;
+        c /= scale;
+        return (int) c;
+    }
+}
+
+[/code]
+
+[code=java]
+package com.nyphrex.rs2;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.nyphrex.rs2.PhysicalCombatStyle.*;
+
+/**
+ * Created by sini on 10/29/14.
+ */
+public final class PhysicalCombatHelper {
+
+    private static final PhysicalStatCalculator defaultAccuracyCalc =
+            PhysicalStatCalculatorBuilder.create()
+            .equipmentRatio(48D)
+            .baseModifier(10.0D)
+            .equipmentModifier(5.0D)
+            .calculator();
+
+    private static final PhysicalStatCalculator defaultBlockingCalc =
+            PhysicalStatCalculatorBuilder.create()
+                    .equipmentRatio(48D)
+                    .baseModifier(11.0D)
+                    .equipmentModifier(8.0D)
+                    .calculator();
+
+    private static final PhysicalStatCalculator defaultStrengthCalc =
+            PhysicalStatCalculatorBuilder.create()
+                    .equipmentRatio(64D)
+                    .baseModifier(8.0D)
+                    .equipmentModifier(5.0D)
+                    .scale(10D)
+                    .calculator();
+
+    private final PhysicalStatCalculator accuracyCalc;
+    private final PhysicalStatCalculator blockingCalc;
+    private final PhysicalStatCalculator strengthCalc;
+
+    private final List&lt;Double&gt; baseAccuracyMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; baseBlockingMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; baseStrengthMultipliers = new ArrayList&lt;&gt;();
+
+    private final List&lt;Double&gt; accuracyMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; blockingMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; strengthMultipliers = new ArrayList&lt;&gt;();
+
+    private int baseAccuracy = 1;
+    private int baseBlocking = 1;
+    private int baseStrength = 1;
+
+    private int equipmentAccuracy;
+    private int equipmentBlocking;
+    private int equipmentStrength;
+
+    public PhysicalCombatHelper() {
+        this(defaultAccuracyCalc, defaultBlockingCalc, defaultStrengthCalc);
+    }
+
+    public PhysicalCombatHelper(PhysicalStatCalculator accuracyCalc,
+                                PhysicalStatCalculator blockingCalc,
+                                PhysicalStatCalculator strengthCalc) {
+        this.accuracyCalc = accuracyCalc;
+        this.blockingCalc = blockingCalc;
+        this.strengthCalc = strengthCalc;
+    }
+
+    public void setBaseAccuracy(int baseAccuracy) {
+        if(baseAccuracy &lt; 1) {
+            throw new IllegalArgumentException(&quot;Base accuracy cannot be less than 1&quot;);
+        }
+        this.baseAccuracy = baseAccuracy;
+    }
+
+    public void setBaseBlocking(int baseBlocking) {
+        if(baseBlocking &lt; 1) {
+            throw new IllegalArgumentException(&quot;Base blocking cannot be less than 1&quot;);
+        }
+        this.baseBlocking = baseBlocking;
+    }
+
+    public void setBaseStrength(int baseStrength) {
+        if(baseStrength &lt; 1) {
+            throw new IllegalArgumentException(&quot;Base strength cannot be less than 1&quot;);
+        }
+        this.baseStrength = baseStrength;
+    }
+
+    public double block(int combatStyle, int accuracy) {
+        double blocking = blocking(combatStyle);
+        double delta = accuracy - blocking;
+        double ratio = (blocking &lt; accuracy ? Math.abs((delta + 1.0D) / blocking) : Math.abs((delta + 1.0D) / accuracy)) / 1.5D;
+        double modifier = 0.5D - (1.0D / Math.pow(2.0D, ratio + 1.0D));
+        double chance = 0.5D + (delta &gt; 0 ? modifier : -modifier);
+        return chance;
+    }
+
+    public int accuracy(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_ACCURATE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseAccuracyMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = accuracyMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return accuracyCalc.calculate(baseAccuracy, equipmentAccuracy, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public int blocking(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_DEFENSIVE_STYLE:
+            case RANGED_DEFENSIVE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseBlockingMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = blockingMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return blockingCalc.calculate(baseBlocking, equipmentBlocking, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public int maximumHit(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_AGGRESSIVE_STYLE:
+            case RANGED_ACCURATE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseStrengthMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = strengthMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return strengthCalc.calculate(baseStrength, equipmentStrength, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public void reset() {
+        // Reset all of the base and equipment values
+        baseStrength      = baseAccuracy      = baseBlocking      = 1;
+        equipmentStrength = equipmentAccuracy = equipmentBlocking = 0;
+
+        // Clear all the base multiplier lists
+        baseAccuracyMultipliers.clear();
+        baseBlockingMultipliers.clear();
+        baseStrengthMultipliers.clear();
+
+        // Clear all the multiplier lists
+        accuracyMultipliers.clear();
+        blockingMultipliers.clear();
+        strengthMultipliers.clear();
+    }
+}
+[/code]
+
+Case 1: 99 Attack (No equipment, no bonuses) attacking increasing defense
+Case 2: 99 Defense (No equipment, no bonuses) being attacked by increasing attack
+
+[code]
+level def 1 - hit perc 0.92
+level def 2 - hit perc 0.91
+level def 3 - hit perc 0.91
+level def 4 - hit perc 0.9
+level def 5 - hit perc 0.89
+level def 6 - hit perc 0.88
+level def 7 - hit perc 0.87
+level def 8 - hit perc 0.86
+level def 9 - hit perc 0.86
+level def 10 - hit perc 0.85
+level def 11 - hit perc 0.84
+level def 12 - hit perc 0.83
+level def 13 - hit perc 0.83
+level def 14 - hit perc 0.82
+level def 15 - hit perc 0.81
+level def 16 - hit perc 0.8
+level def 17 - hit perc 0.8
+level def 18 - hit perc 0.79
+level def 19 - hit perc 0.78
+level def 20 - hit perc 0.78
+level def 21 - hit perc 0.77
+level def 22 - hit perc 0.76
+level def 23 - hit perc 0.76
+level def 24 - hit perc 0.75
+level def 25 - hit perc 0.74
+level def 26 - hit perc 0.74
+level def 27 - hit perc 0.73
+level def 28 - hit perc 0.73
+level def 29 - hit perc 0.72
+level def 30 - hit perc 0.71
+level def 31 - hit perc 0.71
+level def 32 - hit perc 0.7
+level def 33 - hit perc 0.7
+level def 34 - hit perc 0.69
+level def 35 - hit perc 0.69
+level def 36 - hit perc 0.68
+level def 37 - hit perc 0.68
+level def 38 - hit perc 0.67
+level def 39 - hit perc 0.67
+level def 40 - hit perc 0.66
+level def 41 - hit perc 0.66
+level def 42 - hit perc 0.65
+level def 43 - hit perc 0.65
+level def 44 - hit perc 0.65
+level def 45 - hit perc 0.64
+level def 46 - hit perc 0.64
+level def 47 - hit perc 0.63
+level def 48 - hit perc 0.63
+level def 49 - hit perc 0.62
+level def 50 - hit perc 0.62
+level def 51 - hit perc 0.62
+level def 52 - hit perc 0.61
+level def 53 - hit perc 0.61
+level def 54 - hit perc 0.61
+level def 55 - hit perc 0.6
+level def 56 - hit perc 0.6
+level def 57 - hit perc 0.59
+level def 58 - hit perc 0.59
+level def 59 - hit perc 0.59
+level def 60 - hit perc 0.58
+level def 61 - hit perc 0.58
+level def 62 - hit perc 0.58
+level def 63 - hit perc 0.58
+level def 64 - hit perc 0.57
+level def 65 - hit perc 0.57
+level def 66 - hit perc 0.57
+level def 67 - hit perc 0.56
+level def 68 - hit perc 0.56
+level def 69 - hit perc 0.56
+level def 70 - hit perc 0.55
+level def 71 - hit perc 0.55
+level def 72 - hit perc 0.55
+level def 73 - hit perc 0.55
+level def 74 - hit perc 0.54
+level def 75 - hit perc 0.54
+level def 76 - hit perc 0.54
+level def 77 - hit perc 0.54
+level def 78 - hit perc 0.53
+level def 79 - hit perc 0.53
+level def 80 - hit perc 0.53
+level def 81 - hit perc 0.53
+level def 82 - hit perc 0.52
+level def 83 - hit perc 0.52
+level def 84 - hit perc 0.52
+level def 85 - hit perc 0.52
+level def 86 - hit perc 0.51
+level def 87 - hit perc 0.51
+level def 88 - hit perc 0.51
+level def 89 - hit perc 0.51
+level def 90 - hit perc 0.51
+level def 91 - hit perc 0.5
+level def 92 - hit perc 0.5
+level def 93 - hit perc 0.5
+level def 94 - hit perc 0.5
+level def 95 - hit perc 0.5
+level def 96 - hit perc 0.49
+level def 97 - hit perc 0.49
+level def 98 - hit perc 0.49
+level def 99 - hit perc 0.49
+level att 1 - hit perc 0.02
+level att 2 - hit perc 0.03
+level att 3 - hit perc 0.04
+level att 4 - hit perc 0.04
+level att 5 - hit perc 0.05
+level att 6 - hit perc 0.06
+level att 7 - hit perc 0.06
+level att 8 - hit perc 0.07
+level att 9 - hit perc 0.08
+level att 10 - hit perc 0.09
+level att 11 - hit perc 0.09
+level att 12 - hit perc 0.1
+level att 13 - hit perc 0.11
+level att 14 - hit perc 0.12
+level att 15 - hit perc 0.12
+level att 16 - hit perc 0.13
+level att 17 - hit perc 0.14
+level att 18 - hit perc 0.15
+level att 19 - hit perc 0.16
+level att 20 - hit perc 0.16
+level att 21 - hit perc 0.17
+level att 22 - hit perc 0.18
+level att 23 - hit perc 0.18
+level att 24 - hit perc 0.19
+level att 25 - hit perc 0.2
+level att 26 - hit perc 0.21
+level att 27 - hit perc 0.21
+level att 28 - hit perc 0.22
+level att 29 - hit perc 0.23
+level att 30 - hit perc 0.23
+level att 31 - hit perc 0.24
+level att 32 - hit perc 0.24
+level att 33 - hit perc 0.25
+level att 34 - hit perc 0.26
+level att 35 - hit perc 0.26
+level att 36 - hit perc 0.27
+level att 37 - hit perc 0.27
+level att 38 - hit perc 0.28
+level att 39 - hit perc 0.28
+level att 40 - hit perc 0.29
+level att 41 - hit perc 0.29
+level att 42 - hit perc 0.3
+level att 43 - hit perc 0.31
+level att 44 - hit perc 0.31
+level att 45 - hit perc 0.31
+level att 46 - hit perc 0.32
+level att 47 - hit perc 0.32
+level att 48 - hit perc 0.33
+level att 49 - hit perc 0.33
+level att 50 - hit perc 0.34
+level att 51 - hit perc 0.34
+level att 52 - hit perc 0.35
+level att 53 - hit perc 0.35
+level att 54 - hit perc 0.36
+level att 55 - hit perc 0.36
+level att 56 - hit perc 0.36
+level att 57 - hit perc 0.37
+level att 58 - hit perc 0.37
+level att 59 - hit perc 0.38
+level att 60 - hit perc 0.38
+level att 61 - hit perc 0.38
+level att 62 - hit perc 0.39
+level att 63 - hit perc 0.39
+level att 64 - hit perc 0.39
+level att 65 - hit perc 0.4
+level att 66 - hit perc 0.4
+level att 67 - hit perc 0.4
+level att 68 - hit perc 0.41
+level att 69 - hit perc 0.41
+level att 70 - hit perc 0.41
+level att 71 - hit perc 0.42
+level att 72 - hit perc 0.42
+level att 73 - hit perc 0.42
+level att 74 - hit perc 0.43
+level att 75 - hit perc 0.43
+level att 76 - hit perc 0.43
+level att 77 - hit perc 0.43
+level att 78 - hit perc 0.44
+level att 79 - hit perc 0.44
+level att 80 - hit perc 0.44
+level att 81 - hit perc 0.45
+level att 82 - hit perc 0.45
+level att 83 - hit perc 0.45
+level att 84 - hit perc 0.45
+level att 85 - hit perc 0.46
+level att 86 - hit perc 0.46
+level att 87 - hit perc 0.46
+level att 88 - hit perc 0.46
+level att 89 - hit perc 0.47
+level att 90 - hit perc 0.47
+level att 91 - hit perc 0.47
+level att 92 - hit perc 0.47
+level att 93 - hit perc 0.47
+level att 94 - hit perc 0.48
+level att 95 - hit perc 0.48
+level att 96 - hit perc 0.48
+level att 97 - hit perc 0.48
+level att 98 - hit perc 0.49
+level att 99 - hit perc 0.49
+[/code]</description>
+    
+    <lastBuildDate>Thu, 06 Nov 2014 01:37:30 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/combat-formulas/547538.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@Elrick Elrick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/elrick">@Elrick</a> wrote:</p>
+          <blockquote>
+              <p>Interesting. Good luck with that, it would be awesome to see mechanics changed like that. Keep us updated please <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/12</link>
+        <pubDate>Thu, 06 Nov 2014 01:37:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-12</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Weapons obviously have DPS or DPT (Damage per tick) which each tier should be relatively the same. The difference of weapons however is their potential damage over periods of time IE sustained versus burst damage from slow heavy hitting weapons and fast low hitting weapons. I agree, these numbers scale for each weapon type in a relatively linear fashion but with your level factored in the numbers exponentially increase. I have test rigs now where I setup combat scenarios of EvE (Entity versus Entity) with different base stats and the % chance of the outcomes of either entity 1 or 2 winning. Im hoping to move this to boss fights to tweak complexity (Base number of people with base armor and base stats attacking a boss have X % chance of defeating it while taking Y damage).</p>
+<p>Yaay testing rigs</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/11</link>
+        <pubDate>Sat, 01 Nov 2014 17:17:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-11</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@Elrick Elrick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/elrick">@Elrick</a> wrote:</p>
+          <blockquote>
+              <p>Someone should tweak combat weapon formulas so they all do equal amounts of damage when used properly… Cool stuff though Sini.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/10</link>
+        <pubDate>Sat, 01 Nov 2014 15:51:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-10</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lothy, post:8, topic:547538”]I’m talking accuracy more than max damage.[/quote]…</p>
+<p>Needs some number tweaking</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/9</link>
+        <pubDate>Sat, 01 Nov 2014 02:26:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-9</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>I’m talking accuracy more than max damage.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/8</link>
+        <pubDate>Fri, 31 Oct 2014 23:49:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-8</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="547538">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/lothy/40/51_1.png" class="avatar"> Lothy:</div>
+<blockquote>
+<p>I know it’s probably not meant to be identical to the Runescape formula, but I feel it’s a bit of a rort to have levels stop mattering at level 96. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>Max hit formula is copied from their wiki (which I presume to be close). Just note that your base max hit scale multiplicative with your equipment. 11 = max hit at level 96/97, * equipment strength /64 + 1, so if you have 200 strength points thats a base hit of 33 * your multipliers, it can get pretty damn high (50 for godswords).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/7</link>
+        <pubDate>Fri, 31 Oct 2014 06:35:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-7</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>I know it’s probably not meant to be identical to the Runescape formula, but I feel it’s a bit of a rort to have levels stop mattering at level 96. <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/6</link>
+        <pubDate>Fri, 31 Oct 2014 06:04:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-6</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>I’ll just adjust the scaling factor.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/5</link>
+        <pubDate>Fri, 31 Oct 2014 02:23:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-5</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>I always liked implementing min/max percents to help fringe cases not feel completely useless</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/4</link>
+        <pubDate>Thu, 30 Oct 2014 22:34:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-4</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Rodgerwilco, post:2, topic:547538”]level att 1 - hit perc 0.02</p>
+<p>Isn’t that extremely low?  :|[/quote]</p>
+<p>Against 99 def? Not really</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/3</link>
+        <pubDate>Thu, 30 Oct 2014 21:16:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-3</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>level att 1 - hit perc 0.02</p>
+<p>Isn’t that extremely low?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/2</link>
+        <pubDate>Thu, 30 Oct 2014 19:31:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-2</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+      <item>
+        <title>Combat Formulas</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Assumption: If T1 and T2 have same equipment, attack level, defense level, they should EACH hit each other equally.</p>
+<p>Note: Scaling in block can be tweaked and modifier for base % of chance can be changed to create <em>exciting</em> non stop whacking or slower low hitting combat.</p>
+<pre><code class="lang-auto">package com.nyphrex.rs2;
+
+/**
+ * Created by sini on 10/30/14.
+ */
+public final class PhysicalStatCalculator {
+
+    private double equipmentRatio;
+    private double baseModifier;
+    private double equipmentModifier;
+
+    private double scale;
+
+    public PhysicalStatCalculator() {
+
+        // Ratio of equipment points per base point. Just assume its 1.0,
+        // the higher you set this the worse you make equipment points
+        // worth in value.
+        equipmentRatio = 1.0D;
+
+        // Base modifier which adds base points. Changing this scales the
+        // base linearly, higher base modifier for accuracy equals more hits
+        // if baseModifier[accuracy] &gt; baseModifier[blocking]. Essentially
+        // gives free skill points!
+        baseModifier = 0.0D;
+
+        // Modifier which adds to the raw score after the ratio of equipment to skill is calculated.
+        // Pretty much this defines an imaginary score for not having equipment and its effect.
+        equipmentModifier = 0.0D;
+
+        // Scaling for the end result.
+        scale = 1.0D;
+    }
+
+    public void equipmentRatio(double equipmentRatio) {
+        this.equipmentRatio = equipmentRatio;
+    }
+
+    public void baseModifier(double baseModifier) {
+        this.baseModifier = baseModifier;
+    }
+
+    public void equipmentModifier(double equipmentModifier) {
+        this.equipmentModifier = equipmentModifier;
+    }
+
+    public void scale(double scale) {
+        this.scale = scale;
+    }
+
+    public int calculate(int base, int equipment, double baseMultiplier, double multiplier, double styleModifier) {
+        double a = (double) base;
+        double b = Math.floor(a * baseMultiplier + baseModifier) + styleModifier;
+        double c = Math.floor(equipmentModifier + b * (equipment + equipmentRatio) / equipmentRatio) * multiplier;
+        c /= scale;
+        return (int) c;
+    }
+}
+</code></pre>
+<pre><code class="lang-auto">package com.nyphrex.rs2;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.nyphrex.rs2.PhysicalCombatStyle.*;
+
+/**
+ * Created by sini on 10/29/14.
+ */
+public final class PhysicalCombatHelper {
+
+    private static final PhysicalStatCalculator defaultAccuracyCalc =
+            PhysicalStatCalculatorBuilder.create()
+            .equipmentRatio(48D)
+            .baseModifier(10.0D)
+            .equipmentModifier(5.0D)
+            .calculator();
+
+    private static final PhysicalStatCalculator defaultBlockingCalc =
+            PhysicalStatCalculatorBuilder.create()
+                    .equipmentRatio(48D)
+                    .baseModifier(11.0D)
+                    .equipmentModifier(8.0D)
+                    .calculator();
+
+    private static final PhysicalStatCalculator defaultStrengthCalc =
+            PhysicalStatCalculatorBuilder.create()
+                    .equipmentRatio(64D)
+                    .baseModifier(8.0D)
+                    .equipmentModifier(5.0D)
+                    .scale(10D)
+                    .calculator();
+
+    private final PhysicalStatCalculator accuracyCalc;
+    private final PhysicalStatCalculator blockingCalc;
+    private final PhysicalStatCalculator strengthCalc;
+
+    private final List&lt;Double&gt; baseAccuracyMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; baseBlockingMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; baseStrengthMultipliers = new ArrayList&lt;&gt;();
+
+    private final List&lt;Double&gt; accuracyMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; blockingMultipliers = new ArrayList&lt;&gt;();
+    private final List&lt;Double&gt; strengthMultipliers = new ArrayList&lt;&gt;();
+
+    private int baseAccuracy = 1;
+    private int baseBlocking = 1;
+    private int baseStrength = 1;
+
+    private int equipmentAccuracy;
+    private int equipmentBlocking;
+    private int equipmentStrength;
+
+    public PhysicalCombatHelper() {
+        this(defaultAccuracyCalc, defaultBlockingCalc, defaultStrengthCalc);
+    }
+
+    public PhysicalCombatHelper(PhysicalStatCalculator accuracyCalc,
+                                PhysicalStatCalculator blockingCalc,
+                                PhysicalStatCalculator strengthCalc) {
+        this.accuracyCalc = accuracyCalc;
+        this.blockingCalc = blockingCalc;
+        this.strengthCalc = strengthCalc;
+    }
+
+    public void setBaseAccuracy(int baseAccuracy) {
+        if(baseAccuracy &lt; 1) {
+            throw new IllegalArgumentException("Base accuracy cannot be less than 1");
+        }
+        this.baseAccuracy = baseAccuracy;
+    }
+
+    public void setBaseBlocking(int baseBlocking) {
+        if(baseBlocking &lt; 1) {
+            throw new IllegalArgumentException("Base blocking cannot be less than 1");
+        }
+        this.baseBlocking = baseBlocking;
+    }
+
+    public void setBaseStrength(int baseStrength) {
+        if(baseStrength &lt; 1) {
+            throw new IllegalArgumentException("Base strength cannot be less than 1");
+        }
+        this.baseStrength = baseStrength;
+    }
+
+    public double block(int combatStyle, int accuracy) {
+        double blocking = blocking(combatStyle);
+        double delta = accuracy - blocking;
+        double ratio = (blocking &lt; accuracy ? Math.abs((delta + 1.0D) / blocking) : Math.abs((delta + 1.0D) / accuracy)) / 1.5D;
+        double modifier = 0.5D - (1.0D / Math.pow(2.0D, ratio + 1.0D));
+        double chance = 0.5D + (delta &gt; 0 ? modifier : -modifier);
+        return chance;
+    }
+
+    public int accuracy(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_ACCURATE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseAccuracyMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = accuracyMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return accuracyCalc.calculate(baseAccuracy, equipmentAccuracy, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public int blocking(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_DEFENSIVE_STYLE:
+            case RANGED_DEFENSIVE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseBlockingMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = blockingMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return blockingCalc.calculate(baseBlocking, equipmentBlocking, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public int maximumHit(int combatStyle) {
+        double styleModifier = 0.0D;
+        switch (combatStyle) {
+            case MELEE_AGGRESSIVE_STYLE:
+            case RANGED_ACCURATE_STYLE:
+                styleModifier = 3.0D;
+                break;
+            case MELEE_CONTROLLED_STYLE:
+                styleModifier = 1.0D;
+                break;
+        }
+        double baseMultiplier = baseStrengthMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        double multiplier = strengthMultipliers.stream().reduce(1.0D, (l, r) -&gt; l + r);
+        return strengthCalc.calculate(baseStrength, equipmentStrength, baseMultiplier, multiplier, styleModifier);
+    }
+
+    public void reset() {
+        // Reset all of the base and equipment values
+        baseStrength      = baseAccuracy      = baseBlocking      = 1;
+        equipmentStrength = equipmentAccuracy = equipmentBlocking = 0;
+
+        // Clear all the base multiplier lists
+        baseAccuracyMultipliers.clear();
+        baseBlockingMultipliers.clear();
+        baseStrengthMultipliers.clear();
+
+        // Clear all the multiplier lists
+        accuracyMultipliers.clear();
+        blockingMultipliers.clear();
+        strengthMultipliers.clear();
+    }
+}</code></pre>
+<p>Case 1: 99 Attack (No equipment, no bonuses) attacking increasing defense<br>
+Case 2: 99 Defense (No equipment, no bonuses) being attacked by increasing attack</p>
+<pre><code class="lang-auto">level def 1 - hit perc 0.92
+level def 2 - hit perc 0.91
+level def 3 - hit perc 0.91
+level def 4 - hit perc 0.9
+level def 5 - hit perc 0.89
+level def 6 - hit perc 0.88
+level def 7 - hit perc 0.87
+level def 8 - hit perc 0.86
+level def 9 - hit perc 0.86
+level def 10 - hit perc 0.85
+level def 11 - hit perc 0.84
+level def 12 - hit perc 0.83
+level def 13 - hit perc 0.83
+level def 14 - hit perc 0.82
+level def 15 - hit perc 0.81
+level def 16 - hit perc 0.8
+level def 17 - hit perc 0.8
+level def 18 - hit perc 0.79
+level def 19 - hit perc 0.78
+level def 20 - hit perc 0.78
+level def 21 - hit perc 0.77
+level def 22 - hit perc 0.76
+level def 23 - hit perc 0.76
+level def 24 - hit perc 0.75
+level def 25 - hit perc 0.74
+level def 26 - hit perc 0.74
+level def 27 - hit perc 0.73
+level def 28 - hit perc 0.73
+level def 29 - hit perc 0.72
+level def 30 - hit perc 0.71
+level def 31 - hit perc 0.71
+level def 32 - hit perc 0.7
+level def 33 - hit perc 0.7
+level def 34 - hit perc 0.69
+level def 35 - hit perc 0.69
+level def 36 - hit perc 0.68
+level def 37 - hit perc 0.68
+level def 38 - hit perc 0.67
+level def 39 - hit perc 0.67
+level def 40 - hit perc 0.66
+level def 41 - hit perc 0.66
+level def 42 - hit perc 0.65
+level def 43 - hit perc 0.65
+level def 44 - hit perc 0.65
+level def 45 - hit perc 0.64
+level def 46 - hit perc 0.64
+level def 47 - hit perc 0.63
+level def 48 - hit perc 0.63
+level def 49 - hit perc 0.62
+level def 50 - hit perc 0.62
+level def 51 - hit perc 0.62
+level def 52 - hit perc 0.61
+level def 53 - hit perc 0.61
+level def 54 - hit perc 0.61
+level def 55 - hit perc 0.6
+level def 56 - hit perc 0.6
+level def 57 - hit perc 0.59
+level def 58 - hit perc 0.59
+level def 59 - hit perc 0.59
+level def 60 - hit perc 0.58
+level def 61 - hit perc 0.58
+level def 62 - hit perc 0.58
+level def 63 - hit perc 0.58
+level def 64 - hit perc 0.57
+level def 65 - hit perc 0.57
+level def 66 - hit perc 0.57
+level def 67 - hit perc 0.56
+level def 68 - hit perc 0.56
+level def 69 - hit perc 0.56
+level def 70 - hit perc 0.55
+level def 71 - hit perc 0.55
+level def 72 - hit perc 0.55
+level def 73 - hit perc 0.55
+level def 74 - hit perc 0.54
+level def 75 - hit perc 0.54
+level def 76 - hit perc 0.54
+level def 77 - hit perc 0.54
+level def 78 - hit perc 0.53
+level def 79 - hit perc 0.53
+level def 80 - hit perc 0.53
+level def 81 - hit perc 0.53
+level def 82 - hit perc 0.52
+level def 83 - hit perc 0.52
+level def 84 - hit perc 0.52
+level def 85 - hit perc 0.52
+level def 86 - hit perc 0.51
+level def 87 - hit perc 0.51
+level def 88 - hit perc 0.51
+level def 89 - hit perc 0.51
+level def 90 - hit perc 0.51
+level def 91 - hit perc 0.5
+level def 92 - hit perc 0.5
+level def 93 - hit perc 0.5
+level def 94 - hit perc 0.5
+level def 95 - hit perc 0.5
+level def 96 - hit perc 0.49
+level def 97 - hit perc 0.49
+level def 98 - hit perc 0.49
+level def 99 - hit perc 0.49
+level att 1 - hit perc 0.02
+level att 2 - hit perc 0.03
+level att 3 - hit perc 0.04
+level att 4 - hit perc 0.04
+level att 5 - hit perc 0.05
+level att 6 - hit perc 0.06
+level att 7 - hit perc 0.06
+level att 8 - hit perc 0.07
+level att 9 - hit perc 0.08
+level att 10 - hit perc 0.09
+level att 11 - hit perc 0.09
+level att 12 - hit perc 0.1
+level att 13 - hit perc 0.11
+level att 14 - hit perc 0.12
+level att 15 - hit perc 0.12
+level att 16 - hit perc 0.13
+level att 17 - hit perc 0.14
+level att 18 - hit perc 0.15
+level att 19 - hit perc 0.16
+level att 20 - hit perc 0.16
+level att 21 - hit perc 0.17
+level att 22 - hit perc 0.18
+level att 23 - hit perc 0.18
+level att 24 - hit perc 0.19
+level att 25 - hit perc 0.2
+level att 26 - hit perc 0.21
+level att 27 - hit perc 0.21
+level att 28 - hit perc 0.22
+level att 29 - hit perc 0.23
+level att 30 - hit perc 0.23
+level att 31 - hit perc 0.24
+level att 32 - hit perc 0.24
+level att 33 - hit perc 0.25
+level att 34 - hit perc 0.26
+level att 35 - hit perc 0.26
+level att 36 - hit perc 0.27
+level att 37 - hit perc 0.27
+level att 38 - hit perc 0.28
+level att 39 - hit perc 0.28
+level att 40 - hit perc 0.29
+level att 41 - hit perc 0.29
+level att 42 - hit perc 0.3
+level att 43 - hit perc 0.31
+level att 44 - hit perc 0.31
+level att 45 - hit perc 0.31
+level att 46 - hit perc 0.32
+level att 47 - hit perc 0.32
+level att 48 - hit perc 0.33
+level att 49 - hit perc 0.33
+level att 50 - hit perc 0.34
+level att 51 - hit perc 0.34
+level att 52 - hit perc 0.35
+level att 53 - hit perc 0.35
+level att 54 - hit perc 0.36
+level att 55 - hit perc 0.36
+level att 56 - hit perc 0.36
+level att 57 - hit perc 0.37
+level att 58 - hit perc 0.37
+level att 59 - hit perc 0.38
+level att 60 - hit perc 0.38
+level att 61 - hit perc 0.38
+level att 62 - hit perc 0.39
+level att 63 - hit perc 0.39
+level att 64 - hit perc 0.39
+level att 65 - hit perc 0.4
+level att 66 - hit perc 0.4
+level att 67 - hit perc 0.4
+level att 68 - hit perc 0.41
+level att 69 - hit perc 0.41
+level att 70 - hit perc 0.41
+level att 71 - hit perc 0.42
+level att 72 - hit perc 0.42
+level att 73 - hit perc 0.42
+level att 74 - hit perc 0.43
+level att 75 - hit perc 0.43
+level att 76 - hit perc 0.43
+level att 77 - hit perc 0.43
+level att 78 - hit perc 0.44
+level att 79 - hit perc 0.44
+level att 80 - hit perc 0.44
+level att 81 - hit perc 0.45
+level att 82 - hit perc 0.45
+level att 83 - hit perc 0.45
+level att 84 - hit perc 0.45
+level att 85 - hit perc 0.46
+level att 86 - hit perc 0.46
+level att 87 - hit perc 0.46
+level att 88 - hit perc 0.46
+level att 89 - hit perc 0.47
+level att 90 - hit perc 0.47
+level att 91 - hit perc 0.47
+level att 92 - hit perc 0.47
+level att 93 - hit perc 0.47
+level att 94 - hit perc 0.48
+level att 95 - hit perc 0.48
+level att 96 - hit perc 0.48
+level att 97 - hit perc 0.48
+level att 98 - hit perc 0.49
+level att 99 - hit perc 0.49</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/combat-formulas/547538/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/combat-formulas/547538/1</link>
+        <pubDate>Thu, 30 Oct 2014 11:13:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-547538-1</guid>
+        <source url="https://forum.moparisthebest.com/t/combat-formulas/547538.rss">Combat Formulas</source>
+      </item>
+  </channel>
+</rss>

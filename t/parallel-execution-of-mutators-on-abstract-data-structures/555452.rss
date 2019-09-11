@@ -1,0 +1,549 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Parallel Execution of Mutators on Abstract Data Structures</title>
+    <link>https://forum.moparisthebest.com/t/parallel-execution-of-mutators-on-abstract-data-structures/555452</link>
+    <description>[u]The jist:[/u]
+
+This algorithm is meant to calculate the order that mutators, or functions that modify data containers, must be executed in parallel without any race conditions. This assumes that all of the mutators being called are instantaneous and without step. Further expansion on that would require that mutators indicate an argument for their presidence. I have not worked on exactly how that would function but I imagine it wouldn&#39;t take too much thought.
+
+The concept for gaming in this algorithm works as follows:
+
+A). You have a mutator that moves a player north one tile.
+B). You have a mutator that changes the text a player has over their head to &#39;hello&#39;.
+C). You have a mutator that moves a player south one tile.
+
+These mutators explicitly state their dependencies of an abstract data container. These dependencies are components. Components are logical organizations of data.
+
+A). Location
+B). HeadText
+C). Location
+
+A dependency is described as a pointer to these components which have a universal identifier. This algorithm only works if abstract data containers do not share components. You can describe these components as pointers then create a list of what dependencies a mutator operating on a data container will access and use the following code to calculate the order in which they have to be executed in parallel. If A, B, C are each mutator different data containers then they can be executed in parallel because they will have access to different data.
+
+However a generalization can be made. This generalization can be made at a macro level for the logical organization of data. This is possible because components of data containers do not have access to any other data container. If it is possible, it makes calculating the dependencies slightly more complex so this rule is employed to simplify the process. We can assume that mutator A and B would not share dependencies to data, and mutator B and C would not as well. However A and C would and therefore could not be ran in parallel in any case.
+
+O(N**2/2) (I believe, correct me if I&#39;m wrong my math is terrible)
+
+[u]The code[/u]
+
+[code=java]
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Queue;
+import java.util.Random;
+import java.util.Set;
+
+/**
+ * @author hadyn
+ */
+public class Runner {
+
+  private static final int STATE_COUNT = 5000;
+  private static final int MUTATOR_COUNT = 5000;
+  private static final int MAXIMUM_DEPS = 8;
+
+  public static void main(String... args) {
+    State[] states = new State[STATE_COUNT];
+    for (int i = 0; i &lt; STATE_COUNT; i++) {
+      states[i] = new State(i);
+    }
+
+    Mutator[] mutators = new Mutator[MUTATOR_COUNT];
+    for (int i = 0; i &lt; MUTATOR_COUNT; i++) {
+      mutators[i] = new Mutator(i);
+    }
+
+    // Set up the dependencies.
+    Random random = new Random();
+    for(int i = 0; i &lt; MUTATOR_COUNT; i++) {
+      int count = random.nextInt(MAXIMUM_DEPS - 1) + 1;
+      for(int j = 0; j &lt; count; j++) {
+        mutators[i].addDependency(states[random.nextInt(STATE_COUNT)]);
+      }
+    }
+
+    // Start the process of determining which mutators to execute.
+    Queue&lt;Mutator&gt; queue = new ArrayDeque&lt;&gt;();
+    for(Mutator mutator : mutators) {
+      queue.add(mutator);
+    }
+
+    System.out.println(&quot;Starting...&quot;);
+    long startTime = System.currentTimeMillis();
+
+    List&lt;ExecutionSet&gt; executionSets = new ArrayList&lt;&gt;();
+    int maximumSize = 0;
+    while (!queue.isEmpty()) {
+      ExecutionSet executionSet = new ExecutionSet();
+      executionSets.add(executionSet);
+
+      Mutator start = queue.poll();
+      executionSet.addMutator(start.getId());
+      queue.add(start);                             // Append it back to the queue as a stopper.
+
+      Set&lt;Mutator&gt; except = new HashSet&lt;&gt;();
+      except.addAll(start.getExcept());
+      int width = 1;
+
+      Mutator next;
+      while(!start.equals(next = queue.poll())) {
+        if(except.contains(next)) {
+          queue.add(next);
+          continue;
+        }
+        executionSet.addMutator(next.getId());
+        except.addAll(next.getExcept());
+        width++;
+      }
+      maximumSize = Math.max(width, maximumSize);
+    }
+
+    long elapsed = System.currentTimeMillis() - startTime;
+    System.out.println(&quot;Elapsed (ms): &quot; + elapsed);
+    System.out.println(&quot;State count: &quot; + STATE_COUNT);
+    System.out.println(&quot;Mutator count: &quot; + MUTATOR_COUNT);
+    System.out.println(&quot;Maximum width: &quot; + maximumSize);
+    System.out.println(&quot;Maximum dependencies: &quot; + MAXIMUM_DEPS);
+
+    System.out.println();
+
+    System.out.println(&quot;Mutators&quot;);
+    System.out.println(&quot;--------&quot;);
+
+    for(Mutator mutator : mutators) {
+      System.out.println(mutator);
+    }
+
+    System.out.println();
+
+    System.out.println(&quot;Execution steps&quot;);
+    System.out.println(&quot;---------------&quot;);
+
+    int step = 0;
+    for(ExecutionSet executionSet : executionSets) {
+      System.out.println(&quot;Step &quot; + step++ + &quot; | &quot; + executionSet);
+
+    }
+  }
+
+  private static class State {
+    int id;
+    Set&lt;Mutator&gt; mutators = new HashSet&lt;&gt;();
+
+    State(int id) {
+      this.id = id;
+    }
+
+    public void addRelationship(Mutator mutator) {
+      mutators.add(mutator);
+    }
+
+    public Set&lt;Mutator&gt; getMutators() {
+      return mutators;
+    }
+
+    @Override public int hashCode() {
+      int hashCode = 1;
+      hashCode = hashCode * 31 + id;
+      return hashCode;
+    }
+
+    @Override public boolean equals(Object obj) {
+      if(obj == null) {
+        return false;
+      }
+
+      if(!(obj instanceof State)) {
+        return false;
+      }
+
+      State state = (State) obj;
+      return id == state.id;
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append(&quot;State&quot;)
+        .append(&#39; &#39;)
+        .append(id);
+      return builder.toString();
+    }
+
+    public int getId() {
+      return id;
+    }
+  }
+
+  private static class Mutator {
+    int id;
+    Set&lt;State&gt; states = new HashSet&lt;&gt;();
+    Set&lt;Mutator&gt; except;
+
+    Mutator(int id) {
+      this.id = id;
+    }
+
+    public int getId() {
+      return id;
+    }
+
+    public void addDependency(State state) {
+      states.add(state);
+      state.addRelationship(this);
+    }
+
+    public Set&lt;Mutator&gt; getExcept() {
+      if(except != null) {
+        return except;
+      }
+      Set&lt;Mutator&gt; results = new HashSet&lt;&gt;();
+      for (State state : states) {
+        Set&lt;Mutator&gt; mutators = state.getMutators();
+        results.addAll(mutators);
+      }
+      results.remove(this);
+      except = results;
+      return results;
+    }
+
+    @Override public int hashCode() {
+      int hashCode = 1;
+      hashCode = hashCode * 31 + id;
+      return hashCode;
+    }
+
+    @Override public boolean equals(Object obj) {
+      if(obj == null) {
+        return false;
+      }
+
+      if(!(obj instanceof Mutator)) {
+        return false;
+      }
+
+      Mutator mutator = (Mutator) obj;
+      return id == mutator.id;
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append(&quot;Mutator &quot;).append(id).append(&quot; | &quot;);
+
+      boolean first = true;
+      for (State state : states) {
+        if (!first) {
+          builder.append(&quot;, &quot;);
+        }
+        builder.append(state.getId());
+        first = false;
+      }
+
+      return builder.toString();
+    }
+  }
+
+  private static class ExecutionSet {
+    Set&lt;Integer&gt; mutatorIds = new HashSet&lt;&gt;();
+
+    public void addMutator(int id) {
+      mutatorIds.add(id);
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append(&#39;{&#39;);
+      boolean first = true;
+      for(int mutatorId : mutatorIds) {
+        if(!first) {
+          builder.append(&quot;, &quot;);
+        }
+        builder.append(mutatorId);
+        first = false;
+      }
+      builder.append(&#39;}&#39;);
+      return builder.toString();
+    }
+  }
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Sat, 21 May 2016 01:37:58 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/parallel-execution-of-mutators-on-abstract-data-structures/555452.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Parallel Execution of Mutators on Abstract Data Structures</title>
+        <dc:creator><![CDATA[@_nova1 _nova]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_nova1">@_nova1</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-u">The jist:</span></p>
+<p>This algorithm is meant to calculate the order that mutators, or functions that modify data containers, must be executed in parallel without any race conditions. This assumes that all of the mutators being called are instantaneous and without step. Further expansion on that would require that mutators indicate an argument for their presidence. I have not worked on exactly how that would function but I imagine it wouldn’t take too much thought.</p>
+<p>The concept for gaming in this algorithm works as follows:</p>
+<p>A). You have a mutator that moves a player north one tile.<br>
+B). You have a mutator that changes the text a player has over their head to ‘hello’.<br>
+C). You have a mutator that moves a player south one tile.</p>
+<p>These mutators explicitly state their dependencies of an abstract data container. These dependencies are components. Components are logical organizations of data.</p>
+<p>A). Location<br>
+B). HeadText<br>
+C). Location</p>
+<p>A dependency is described as a pointer to these components which have a universal identifier. This algorithm only works if abstract data containers do not share components. You can describe these components as pointers then create a list of what dependencies a mutator operating on a data container will access and use the following code to calculate the order in which they have to be executed in parallel. If A, B, C are each mutator different data containers then they can be executed in parallel because they will have access to different data.</p>
+<p>However a generalization can be made. This generalization can be made at a macro level for the logical organization of data. This is possible because components of data containers do not have access to any other data container. If it is possible, it makes calculating the dependencies slightly more complex so this rule is employed to simplify the process. We can assume that mutator A and B would not share dependencies to data, and mutator B and C would not as well. However A and C would and therefore could not be ran in parallel in any case.</p>
+<p>O(N**2/2) (I believe, correct me if I’m wrong my math is terrible)</p>
+<p><span class="bbcode-u">The code</span></p>
+<pre><code class="lang-auto">
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Queue;
+import java.util.Random;
+import java.util.Set;
+
+/**
+ * @author hadyn
+ */
+public class Runner {
+
+  private static final int STATE_COUNT = 5000;
+  private static final int MUTATOR_COUNT = 5000;
+  private static final int MAXIMUM_DEPS = 8;
+
+  public static void main(String... args) {
+    State[] states = new State[STATE_COUNT];
+    for (int i = 0; i &lt; STATE_COUNT; i++) {
+      states[i] = new State(i);
+    }
+
+    Mutator[] mutators = new Mutator[MUTATOR_COUNT];
+    for (int i = 0; i &lt; MUTATOR_COUNT; i++) {
+      mutators[i] = new Mutator(i);
+    }
+
+    // Set up the dependencies.
+    Random random = new Random();
+    for(int i = 0; i &lt; MUTATOR_COUNT; i++) {
+      int count = random.nextInt(MAXIMUM_DEPS - 1) + 1;
+      for(int j = 0; j &lt; count; j++) {
+        mutators[i].addDependency(states[random.nextInt(STATE_COUNT)]);
+      }
+    }
+
+    // Start the process of determining which mutators to execute.
+    Queue&lt;Mutator&gt; queue = new ArrayDeque&lt;&gt;();
+    for(Mutator mutator : mutators) {
+      queue.add(mutator);
+    }
+
+    System.out.println("Starting...");
+    long startTime = System.currentTimeMillis();
+
+    List&lt;ExecutionSet&gt; executionSets = new ArrayList&lt;&gt;();
+    int maximumSize = 0;
+    while (!queue.isEmpty()) {
+      ExecutionSet executionSet = new ExecutionSet();
+      executionSets.add(executionSet);
+
+      Mutator start = queue.poll();
+      executionSet.addMutator(start.getId());
+      queue.add(start);                             // Append it back to the queue as a stopper.
+
+      Set&lt;Mutator&gt; except = new HashSet&lt;&gt;();
+      except.addAll(start.getExcept());
+      int width = 1;
+
+      Mutator next;
+      while(!start.equals(next = queue.poll())) {
+        if(except.contains(next)) {
+          queue.add(next);
+          continue;
+        }
+        executionSet.addMutator(next.getId());
+        except.addAll(next.getExcept());
+        width++;
+      }
+      maximumSize = Math.max(width, maximumSize);
+    }
+
+    long elapsed = System.currentTimeMillis() - startTime;
+    System.out.println("Elapsed (ms): " + elapsed);
+    System.out.println("State count: " + STATE_COUNT);
+    System.out.println("Mutator count: " + MUTATOR_COUNT);
+    System.out.println("Maximum width: " + maximumSize);
+    System.out.println("Maximum dependencies: " + MAXIMUM_DEPS);
+
+    System.out.println();
+
+    System.out.println("Mutators");
+    System.out.println("--------");
+
+    for(Mutator mutator : mutators) {
+      System.out.println(mutator);
+    }
+
+    System.out.println();
+
+    System.out.println("Execution steps");
+    System.out.println("---------------");
+
+    int step = 0;
+    for(ExecutionSet executionSet : executionSets) {
+      System.out.println("Step " + step++ + " | " + executionSet);
+
+    }
+  }
+
+  private static class State {
+    int id;
+    Set&lt;Mutator&gt; mutators = new HashSet&lt;&gt;();
+
+    State(int id) {
+      this.id = id;
+    }
+
+    public void addRelationship(Mutator mutator) {
+      mutators.add(mutator);
+    }
+
+    public Set&lt;Mutator&gt; getMutators() {
+      return mutators;
+    }
+
+    @Override public int hashCode() {
+      int hashCode = 1;
+      hashCode = hashCode * 31 + id;
+      return hashCode;
+    }
+
+    @Override public boolean equals(Object obj) {
+      if(obj == null) {
+        return false;
+      }
+
+      if(!(obj instanceof State)) {
+        return false;
+      }
+
+      State state = (State) obj;
+      return id == state.id;
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append("State")
+        .append(' ')
+        .append(id);
+      return builder.toString();
+    }
+
+    public int getId() {
+      return id;
+    }
+  }
+
+  private static class Mutator {
+    int id;
+    Set&lt;State&gt; states = new HashSet&lt;&gt;();
+    Set&lt;Mutator&gt; except;
+
+    Mutator(int id) {
+      this.id = id;
+    }
+
+    public int getId() {
+      return id;
+    }
+
+    public void addDependency(State state) {
+      states.add(state);
+      state.addRelationship(this);
+    }
+
+    public Set&lt;Mutator&gt; getExcept() {
+      if(except != null) {
+        return except;
+      }
+      Set&lt;Mutator&gt; results = new HashSet&lt;&gt;();
+      for (State state : states) {
+        Set&lt;Mutator&gt; mutators = state.getMutators();
+        results.addAll(mutators);
+      }
+      results.remove(this);
+      except = results;
+      return results;
+    }
+
+    @Override public int hashCode() {
+      int hashCode = 1;
+      hashCode = hashCode * 31 + id;
+      return hashCode;
+    }
+
+    @Override public boolean equals(Object obj) {
+      if(obj == null) {
+        return false;
+      }
+
+      if(!(obj instanceof Mutator)) {
+        return false;
+      }
+
+      Mutator mutator = (Mutator) obj;
+      return id == mutator.id;
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append("Mutator ").append(id).append(" | ");
+
+      boolean first = true;
+      for (State state : states) {
+        if (!first) {
+          builder.append(", ");
+        }
+        builder.append(state.getId());
+        first = false;
+      }
+
+      return builder.toString();
+    }
+  }
+
+  private static class ExecutionSet {
+    Set&lt;Integer&gt; mutatorIds = new HashSet&lt;&gt;();
+
+    public void addMutator(int id) {
+      mutatorIds.add(id);
+    }
+
+    @Override public String toString() {
+      StringBuilder builder = new StringBuilder();
+      builder.append('{');
+      boolean first = true;
+      for(int mutatorId : mutatorIds) {
+        if(!first) {
+          builder.append(", ");
+        }
+        builder.append(mutatorId);
+        first = false;
+      }
+      builder.append('}');
+      return builder.toString();
+    }
+  }
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/parallel-execution-of-mutators-on-abstract-data-structures/555452/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/parallel-execution-of-mutators-on-abstract-data-structures/555452/1</link>
+        <pubDate>Sat, 21 May 2016 01:37:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555452-1</guid>
+        <source url="https://forum.moparisthebest.com/t/parallel-execution-of-mutators-on-abstract-data-structures/555452.rss">Parallel Execution of Mutators on Abstract Data Structures</source>
+      </item>
+  </channel>
+</rss>

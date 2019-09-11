@@ -1,0 +1,568 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Vote4Cash MySQL Table</title>
+    <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160</link>
+    <description>I added vote4cash and when some one votes, this comes up on my vote.php site.
+
+Deprecated: Function mysql_list_tables() is deprecated in /home/somescap/public_html/vote.php on line 44
+
+Deprecated: Function sql_regcase() is deprecated in /home/somescap/public_html/vote.php on line 71
+
+this is my vote.php
+
+[code]&lt;?php
+
+/**
+ * @author Stuart &lt;RogueX | iVariable&gt;
+ * @version 1.1 UPDATED: 06.09.2010
+ * @comment fixed a few bugs
+ */
+
+/**
+ * mysql database hostname
+ */
+define(&quot;MYSQL_HOST&quot;, &quot;localhost&quot;);
+/**
+ *  mysql username to connect to the database server
+ */
+define(&quot;MYSQL_USERNAME&quot;, &quot;somescap_vote&quot;);
+/**
+ *  mysql password the password to connect to the database server
+ */
+define(&quot;MYSQL_PASSWORD&quot;, &quot;ssvote&quot;);
+/**
+ *  mysql database the database name in which you have your vote table setup
+ */
+define(&quot;MYSQL_DATABASE&quot;, &quot;somescap_vote&quot;);
+/**
+ *  vote url this is the url which where users will be sent to on voting
+ */
+define(&quot;VOTE_URL&quot;, &quot;http://www.moparisthebest.com/serverstatus.php?server=somescape2011.no-ip.info&quot;);
+/**
+ * The number of hours between voting
+ */
+define(&quot;VOTE_HOURS&quot;, 24);
+
+
+/**
+ *  connect() this function is used to connect to the mysql database server.
+ */
+function connect()
+{
+    if (!@mysql_connect(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))
+        die(&quot;Could not connect to mysql database: &quot; . mysql_error());
+    if (!@mysql_select_db(MYSQL_DATABASE))
+        die(&quot;Could not select mysql database: &quot; . mysql_error());
+    $tables = mysql_list_tables(MYSQL_DATABASE);
+    while (list($temp) = mysql_fetch_array($tables)) {
+        if ($temp == &quot;votes&quot;) {
+            return;
+        }
+    }
+    query(&quot;CREATE TABLE `votes` (
+        `playerName` VARCHAR( 255 ) NOT NULL ,
+        `ip` VARCHAR( 255 ) NOT NULL,
+        `time` BIGINT NOT NULL ,
+        `recieved` INT( 1 ) NOT NULL DEFAULT &#39;0&#39;)&quot;);
+}
+/**
+ *  query(string query) this function is used to query the mysql database server.
+ */
+function query($s)
+{
+    $query = @mysql_query($s);
+    if (!$query)
+        die(&quot;Error running query(&#39;&quot; . $s . &quot;&#39;): &quot; . mysql_error());
+    return $query;
+}
+/**
+ *  anti_inject(string text) this function is used to make sure no injections can be made.
+ */
+function anti_inject($sql)
+{
+    $sql = preg_replace(sql_regcase(&quot;/(from|select|insert|delete|where|drop table|show tables|#|\*|--|\\\\)/&quot;),
+        &quot;&quot;, $sql);
+    $sql = trim($sql);
+    $sql = strip_tags($sql);
+    $sql = addslashes($sql);
+    $sql = strtolower($sql);
+    return $sql;
+}
+/**
+ *  clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.
+ */
+function clean_request($time, $username)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+    if (mysql_num_rows($query) &gt; 0) {
+        $row = mysql_fetch_array($query);
+        $timerequested = $row[&#39;time&#39;];
+        if ($time - $timerequested &gt; VOTE_HOURS * 3600)
+            query(&quot;DELETE FROM `votes` WHERE time=&#39;&quot; . $timerequested . &quot;&#39;&quot;);
+    }
+}
+/**
+ *  vote_entries(string ip) this function is used return the number of rows within the table
+ */
+function vote_entries($ip)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE ip=&#39;&quot; . $ip . &quot;&#39;&quot;);
+    return mysql_num_rows($query);
+}
+
+
+/**
+ * This is the actual working of the script please do not touch anything below if you do not know what you are doing...
+ */
+if (isset($_POST[&#39;submit&#39;]) || isset($_GET[&#39;username&#39;]) &amp;&amp; isset($_GET[&#39;type&#39;])) {
+    connect();
+    if ($_POST[&#39;submit&#39;]) {
+        if(@fsockopen($_SERVER[&#39;REMOTE_ADDR&#39;], 80, $errno, $errstr, 1))
+            die(&quot;Sorry but you have port 80 open, this is to stop voting by proxy address.&quot;);
+        if(isset($_COOKIE[&#39;voted&#39;]))
+            die(&quot;Sorry but it looks like you have already voted...&quot;);
+        $username = anti_inject($_POST[&#39;username&#39;]);
+        $ip = gethostbyaddr($_SERVER[&#39;REMOTE_ADDR&#39;]);
+        clean_request(time(), $username);
+        if (vote_entries($ip) == 0) {
+            setcookie (&quot;voted&quot;, &quot;yes&quot;, VOTE_HOURS * 3600);
+            query(&quot;INSERT INTO `votes` (`playerName`, `ip`, `time`) VALUES (&#39;&quot; . $username .
+                &quot;&#39;, &#39;&quot; . $ip . &quot;&#39;, &#39;&quot; . time() . &quot;&#39;)&quot;);
+            header(&quot;Location: &quot; . VOTE_URL . &quot;&quot;);
+        } else {
+            die(&quot;You have already voted once today.&quot;);
+        }
+    } elseif ($_GET[&#39;type&#39;] == &quot;checkvote&quot;) {
+        $username = anti_inject($_GET[&#39;username&#39;]);
+        $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+        if (mysql_num_rows($query) == 1) {
+            $results = mysql_fetch_array($query);
+            if ($results[&#39;recieved&#39;] == 0) {
+                query(&quot;UPDATE `votes` SET `recieved`=&#39;1&#39; WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+                die(&quot;user needs reward...&quot;);
+            } else {
+                die(&quot;user been given reward...&quot;);
+            }
+        } else {
+          die(&quot;Vote not found... &quot;.  $username .&quot;.&quot;);
+        }
+    }
+}
+
+?&gt;
+
+&lt;!DOCTYPE html PUBLIC &quot;-//W3C//DTD XHTML 1.0 Transitional//EN&quot; &quot;http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd&quot;&gt;
+&lt;html xmlns=&quot;http://www.w3.org/1999/xhtml&quot;&gt;
+&lt;head&gt;
+&lt;meta http-equiv=&quot;Content-Type&quot; content=&quot;text/html; charset=utf-8&quot; /&gt;
+&lt;title&gt;Vote for a reward!&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div align=&quot;center&quot; style=&quot;color:#00F&quot;&gt;&lt;h2&gt;Vote for a reward!&lt;/h3&gt;&lt;/div&gt;
+&lt;table align=&quot;center&quot;&gt;
+
+&lt;form action=&quot;vote.php&quot; method=&quot;post&quot;&gt;
+  &lt;tr&gt;
+    &lt;td align=&quot;right&quot;&gt;Username: &lt;/td&gt;
+    &lt;td&gt;&lt;input name=&quot;username&quot; type=&quot;text&quot; /&gt;&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+  	&lt;td&gt;&amp;nbsp;&lt;/td&gt;
+    &lt;td align=&quot;center&quot;&gt;&lt;input type=&quot;submit&quot; name=&quot;submit&quot; value=&quot;Vote now&quot; /&gt;&lt;/td&gt;
+  &lt;/tr&gt;
+
+&lt;/form&gt;
+&lt;/table&gt;
+&lt;/body&gt;
+&lt;/html&gt;[/code]</description>
+    
+    <lastBuildDate>Mon, 30 Jan 2012 21:02:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@Pzezima2 Pzezima2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pzezima2">@Pzezima2</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto"></code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/11</link>
+        <pubDate>Mon, 30 Jan 2012 21:02:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-11</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <p>What exactly did you delete?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/10</link>
+        <pubDate>Mon, 30 Jan 2012 20:09:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-10</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@Pzezima2 Pzezima2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pzezima2">@Pzezima2</a> wrote:</p>
+          <blockquote>
+              <p>i fixed the first one but the last problem i dont know how to do so i deleted it and you cant get your cash after</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/9</link>
+        <pubDate>Mon, 30 Jan 2012 20:03:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-9</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:6, topic:431160”][quote author=deathschaos9 link=topic=533840.msg3902670#msg3902670 date=1327903661]<br>
+I thought some guy made a tutorial on how to add stats to my highscores?<br>
+[/quote]<br>
+I’ll have to look into it… last time I tried i got some errors. and completly broke my highscores.<br>
+Oh, would you happen to know why my scores show a negative number?<br>
+I got like 4 bill xp and on the highscores for everyone it show me having -94 million.</p>
+<p>Again, sorry for stealing the topic :)[/quote]</p>
+<p>Because total experience is stored as an integer (stupidly). If you have anymore questions just use PM.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/8</link>
+        <pubDate>Mon, 30 Jan 2012 06:55:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-8</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@Pzezima2 Pzezima2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pzezima2">@Pzezima2</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="431160">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/brandontan/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Brandontan:</div>
+<blockquote>
+<p>make your local host 127.0.0.1?</p>
+</blockquote>
+</aside>
+<p>ahahhahahhaha that made me laugh so much.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/7</link>
+        <pubDate>Mon, 30 Jan 2012 06:38:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-7</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="431160">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/deathschaos9/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> deathschaos9:</div>
+<blockquote>
+<p>I thought some guy made a tutorial on how to add stats to my highscores?</p>
+</blockquote>
+</aside>
+<p>I’ll have to look into it… last time I tried i got some errors. and completly broke my highscores.<br>
+Oh, would you happen to know why my scores show a negative number?<br>
+I got like 4 bill xp and on the highscores for everyone it show me having -94 million.</p>
+<p>Again, sorry for stealing the topic <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/6</link>
+        <pubDate>Mon, 30 Jan 2012 06:09:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-6</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="4" data-topic="431160">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sk8rdude461/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sk8rdude461:</div>
+<blockquote>
+<p>Not to intrude on this topic, though I’m still technically stealing it. But death, would you mind helping me add some stats to my Highscores?</p>
+</blockquote>
+</aside>
+<p>I thought some guy made a tutorial on how to add stats to my highscores?</p>
+<p>EDIT: <a href="http://www.moparisthebest.com/smf/index.php/topic,438602.0.html">http://www.moparisthebest.com/smf/index.php/topic,438602.0.html</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/5</link>
+        <pubDate>Mon, 30 Jan 2012 06:07:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-5</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Not to intrude on this topic, though I’m still technically stealing it. But death, would you mind helping me add some stats to my Highscores?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/4</link>
+        <pubDate>Mon, 30 Jan 2012 06:01:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-4</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <p>Those two functions are deprecated in your PHP version. I can give you an alternative for mysql_list_tables() but I don’t know an alternative for sql_regcase()</p>
+<p>Replace<br>
+[PHP]    $tables = mysql_list_tables(MYSQL_DATABASE);<br>
+while (list($temp) = mysql_fetch_array($tables)) {<br>
+if ($temp == “votes”) {<br>
+return;<br>
+}<br>
+}[/PHP]<br>
+With<br>
+[PHP]    $query = "SHOW TABLES FROM " . MYSQL_DATABASE;<br>
+$queryResults = mysql_query($query);<br>
+while (list($temp) = mysql_fetch_array($queryResults)) {<br>
+if ($temp == “votes”) {<br>
+return;<br>
+}<br>
+}[/PHP]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/3</link>
+        <pubDate>Mon, 30 Jan 2012 04:31:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-3</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@Brandontan Brandontan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/brandontan">@Brandontan</a> wrote:</p>
+          <blockquote>
+              <p>make your local host 127.0.0.1?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/2</link>
+        <pubDate>Mon, 30 Jan 2012 03:55:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-2</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+      <item>
+        <title>Vote4Cash MySQL Table</title>
+        <dc:creator><![CDATA[@Pzezima2 Pzezima2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pzezima2">@Pzezima2</a> wrote:</p>
+          <blockquote>
+              <p>I added vote4cash and when some one votes, this comes up on my vote.php site.</p>
+<p>Deprecated: Function mysql_list_tables() is deprecated in /home/somescap/public_html/vote.php on line 44</p>
+<p>Deprecated: Function sql_regcase() is deprecated in /home/somescap/public_html/vote.php on line 71</p>
+<p>this is my vote.php</p>
+<p>[code]&lt;?php</p>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> Stuart &lt;RogueX | iVariable&gt;</li>
+<li>
+<a class="mention" href="/u/version">@version</a> 1.1 UPDATED: 06.09.2010</li>
+<li>
+<span class="mention">@comment</span> fixed a few bugs<br>
+*/</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>mysql database hostname<br>
+<em>/<br>
+define(“MYSQL_HOST”, “localhost”);<br>
+/</em>*</li>
+<li>mysql username to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_USERNAME”, “somescap_vote”);<br>
+/</em>*</li>
+<li>mysql password the password to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_PASSWORD”, “ssvote”);<br>
+/</em>*</li>
+<li>mysql database the database name in which you have your vote table setup<br>
+<em>/<br>
+define(“MYSQL_DATABASE”, “somescap_vote”);<br>
+/</em>*</li>
+<li>vote url this is the url which where users will be sent to on voting<br>
+<em>/<br>
+define(“VOTE_URL”, “<a href="http://www.moparisthebest.com/serverstatus.php?server=somescape2011.no-ip.info" rel="nofollow noopener">http://www.moparisthebest.com/serverstatus.php?server=somescape2011.no-ip.info</a>”);<br>
+/</em>*</li>
+<li>The number of hours between voting<br>
+*/<br>
+define(“VOTE_HOURS”, 24);</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>connect() this function is used to connect to the mysql database server.<br>
+<em>/<br>
+function connect()<br>
+{<br>
+if (!<span class="mention">@mysql_connect</span>(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))<br>
+die("Could not connect to mysql database: " . mysql_error());<br>
+if (!<span class="mention">@mysql_select_db</span>(MYSQL_DATABASE))<br>
+die("Could not select mysql database: " . mysql_error());<br>
+$tables = mysql_list_tables(MYSQL_DATABASE);<br>
+while (list($temp) = mysql_fetch_array($tables)) {<br>
+if ($temp == “votes”) {<br>
+return;<br>
+}<br>
+}<br>
+query(“CREATE TABLE <code>votes</code> (<br>
+<code>playerName</code> VARCHAR( 255 ) NOT NULL ,<br>
+<code>ip</code> VARCHAR( 255 ) NOT NULL,<br>
+<code>time</code> BIGINT NOT NULL ,<br>
+<code>recieved</code> INT( 1 ) NOT NULL DEFAULT ‘0’)”);<br>
+}<br>
+/</em>*</li>
+<li>query(string query) this function is used to query the mysql database server.<br>
+<em>/<br>
+function query($s)<br>
+{<br>
+$query = <span class="mention">@mysql_query</span>($s);<br>
+if (!$query)<br>
+die(“Error running query(’” . $s . "’): " . mysql_error());<br>
+return $query;<br>
+}<br>
+/</em>*</li>
+<li>anti_inject(string text) this function is used to make sure no injections can be made.<br>
+<em>/<br>
+function anti_inject($sql)<br>
+{<br>
+$sql = preg_replace(sql_regcase("/(from|select|insert|delete|where|drop table|show tables|#|*|–|\\)/"),<br>
+“”, $sql);<br>
+$sql = trim($sql);<br>
+$sql = strip_tags($sql);<br>
+$sql = addslashes($sql);<br>
+$sql = strtolower($sql);<br>
+return $sql;<br>
+}<br>
+/</em>*</li>
+<li>clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.<br>
+<em>/<br>
+function clean_request($time, $username)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) &gt; 0) {<br>
+$row = mysql_fetch_array($query);<br>
+$timerequested = $row[‘time’];<br>
+if ($time - $timerequested &gt; VOTE_HOURS * 3600)<br>
+query(“DELETE FROM <code>votes</code> WHERE time=’” . $timerequested . “’”);<br>
+}<br>
+}<br>
+/</em>*</li>
+<li>vote_entries(string ip) this function is used return the number of rows within the table<br>
+*/<br>
+function vote_entries($ip)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE ip=’” . $ip . “’”);<br>
+return mysql_num_rows($query);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>This is the actual working of the script please do not touch anything below if you do not know what you are doing…<br>
+*/<br>
+if (isset($_POST[‘submit’]) || isset($_GET[‘username’]) &amp;&amp; isset($_GET[‘type’])) {<br>
+connect();<br>
+if ($_POST[‘submit’]) {<br>
+if(<span class="mention">@fsockopen</span>($_SERVER[‘REMOTE_ADDR’], 80, $errno, $errstr, 1))<br>
+die(“Sorry but you have port 80 open, this is to stop voting by proxy address.”);<br>
+if(isset($_COOKIE[‘voted’]))<br>
+die(“Sorry but it looks like you have already voted…”);<br>
+$username = anti_inject($_POST[‘username’]);<br>
+$ip = gethostbyaddr($_SERVER[‘REMOTE_ADDR’]);<br>
+clean_request(time(), $username);<br>
+if (vote_entries($ip) == 0) {<br>
+setcookie (“voted”, “yes”, VOTE_HOURS * 3600);<br>
+query(“INSERT INTO <code>votes</code> (<code>playerName</code>, <code>ip</code>, <code>time</code>) VALUES (’” . $username .<br>
+“’, '” . $ip . “’, '” . time() . “’)”);<br>
+header("Location: " . VOTE_URL . “”);<br>
+} else {<br>
+die(“You have already voted once today.”);<br>
+}<br>
+} elseif ($_GET[‘type’] == “checkvote”) {<br>
+$username = anti_inject($_GET[‘username’]);<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) == 1) {<br>
+$results = mysql_fetch_array($query);<br>
+if ($results[‘recieved’] == 0) {<br>
+query(“UPDATE <code>votes</code> SET <code>recieved</code>=‘1’ WHERE <code>playerName</code>=’” . $username . “’”);<br>
+die(“user needs reward…”);<br>
+} else {<br>
+die(“user been given reward…”);<br>
+}<br>
+} else {<br>
+die(“Vote not found… “.  $username .”.”);<br>
+}<br>
+}<br>
+}</li>
+</ul>
+<p>?&gt;</p>
+
+
+
+
+Vote for a reward!
+
+
+<div align="center"><h2>Vote for a reward!</h2></div>
+<table>
+
+  <tr>
+    <td>Username: </td>
+    <td></td>
+  </tr>
+  <tr>
+  	<td> </td>
+    <td></td>
+  </tr>
+
+</table>
+
+[/code]
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160/1</link>
+        <pubDate>Mon, 30 Jan 2012 01:36:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431160-1</guid>
+        <source url="https://forum.moparisthebest.com/t/vote4cash-mysql-table/431160.rss">Vote4Cash MySQL Table</source>
+      </item>
+  </channel>
+</rss>

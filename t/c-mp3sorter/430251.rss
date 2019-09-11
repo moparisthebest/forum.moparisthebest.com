@@ -1,0 +1,1306 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[C] mp3sorter</title>
+    <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251</link>
+    <description>This basically goes through the supplied directories, checks if the file has a id3 tag (and .mp3 extension) and then if it does, it sorts into output-dir/artist/album/title.mp3, works pretty well from what I&#39;ve done so far.
+Will copy then delete if it cannot move with rename
+supports multiple directories/files, if you&#39;re doing this then the output dir MUST be supplied
+if no output dir is supplied for a single file/directory, it will use the current working directory
+
+enjoy:
+[code]
+
+/*
+ * mp3sorter.c
+ *
+ * Sorts mp3 files into directories as dir/artist/album/title.mp3
+ *
+ *  Created on: Jan 21, 2012
+ *  Author: S. Mistry (speed)
+ */
+
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;string.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;dirent.h&gt;
+#include &lt;stdlib.h&gt;
+
+void sort(const char* file, const char* dest_dir)
+{
+        FILE* fp, *nf;
+        fp = fopen(file, &quot;r&quot;);
+        if (fp != NULL)
+        {
+                //seek to beginning of id3v1 tag (128 bytes from end)
+                fseek(fp, -128, SEEK_END);
+                char tag[4];
+                char title[31], artist[31], album[31];
+                //read tag title from file
+                fgets(tag, 4, fp);
+                //check for id3v1
+                if (strcmp(tag, &quot;TAG&quot;) == 0)
+                {
+                        printf(&quot;ID3v1 detected for file %s\n&quot;, file);
+                        fgets(title, 31, fp);
+                        fgets(artist, 31, fp);
+                        fgets(album, 31, fp);
+                        //replace forward slashes with back slashes
+                        //so files aren&#39;t recognised as directories
+                        char * pch;
+                        pch = strchr(title, &#39;/&#39;);
+                        while (pch != NULL)
+                        {
+                                printf(&quot;found / at %d\n&quot;, pch - title);
+                                //replace the / with a back slash
+                                title[pch - title] = &#39;\\&#39;;
+                                //search from char after current slash
+                                pch = strchr(pch + 1, &#39;/&#39;);
+                        }
+                        //print names
+                        printf(&quot;%s - %s on %s\n&quot;, title, artist, album);
+
+                }
+                else
+                {
+                        //TODO check id3v2
+                        fclose(fp);
+                        return;
+
+                }
+                char* dir = malloc(
+                                strlen(dest_dir) + strlen(artist) + strlen(album)
+                                                + strlen(title) + 8);
+                sprintf(dir, &quot;%s/%s&quot;, dest_dir, artist);
+                //create artist directory
+                mkdir(dir, S_IRWXU);
+                sprintf(dir, &quot;%s/%s&quot;, dir, album);
+                //create album directory
+                mkdir(dir, S_IRWXU);
+                puts(dir);
+                //append file name to path
+                sprintf(dir, &quot;%s/%s.mp3&quot;, dir, title);
+                fclose(fp);
+                //move file
+                if (rename(file, dir) == 0)
+                {
+                        //successful move is successful
+                        free(dir);
+                        return;
+                }
+                else
+                {
+                        //if the move failed, copy and delete
+                        fp = fopen(file, &quot;r&quot;);
+                        nf = fopen(dir, &quot;w&quot;);
+                        int ch;
+                        while (!feof(fp))
+                        {
+                                //read single char from file
+                                ch = fgetc(fp);
+                                if (ferror(fp))
+                                {
+                                        puts(&quot;Error reading source file.&quot;);
+                                        break;
+                                }
+                                if (!feof(nf))
+                                {
+                                        //write char to new file
+                                        fputc(ch, nf);
+                                }
+                                if (ferror(nf))
+                                {
+                                        puts(&quot;Error writing destination file.&quot;);
+                                        break;
+                                }
+                        }
+                        fclose(nf);
+                        fclose(fp);
+                        free(dir);
+                        //delete old file
+                        remove(file);
+                        return;
+                }
+
+        }
+        fclose(fp);
+}
+
+void sort_dir(const char *path, const char* dir_path)
+{
+        DIR *dir;
+        dir = opendir(path);
+        struct dirent *curr;
+        while ((curr = readdir(dir)) != NULL)
+        {
+                //loop through all files in directory
+                if (strstr(curr-&gt;d_name, &quot;.mp3&quot;) != NULL) //check for mp3 files
+                {
+                        char* full_path = malloc(strlen(path) + strlen(curr-&gt;d_name) + 2);
+                        //append file name to directory
+                        sprintf(full_path, &quot;%s/%s&quot;, path, curr-&gt;d_name);
+                        puts(full_path);
+                        //process this file
+                        sort(full_path, dir_path);
+                        //free the allocated mem for the path
+                        free(full_path);
+
+                }
+        }
+        closedir(dir);
+
+}
+
+int main(int argc, char **argv)
+{
+
+        if (argc == 1)
+        {
+                puts(&quot;Usage: mp3sorter  (directory|file)... out-dir&quot;);
+        }
+        else if (argc &gt;= 2)
+        {
+                char* dir;
+                char buffer[1024];
+                if (argc == 2)
+                {
+                        //if no out dir is supplied, use current working dir
+                        dir = getcwd(buffer, sizeof(buffer));
+
+                }
+                else
+                {
+                        //use last arg as out dir
+                        dir = argv[argc - 1];
+                }
+                puts(dir);
+                int curr;
+                //loop through all args except for output dir unless no out is supplied
+                for (curr = 1; curr &lt; (argc == 2 ? 2 : argc - 1); curr++)
+                {
+                        char* path = argv[curr];
+                        struct stat s;
+                        //read file attributes into stat struct
+                        if (stat(path, &amp;s) == 0)
+                        {
+                                if (s.st_mode &amp; S_IFDIR)
+                                {
+                                        //the passed path was a directory
+                                        sort_dir(path, dir);
+
+                                }
+                                else if (s.st_mode &amp; S_IFREG)
+                                {
+                                        //single file passed
+                                        sort(argv[1], dir);
+                                }
+                        }
+                }
+        }
+        return 0;
+}
+[/code]
+
+http://paste.strictfp.com/25361
+
+I will be adding id3v2 support later.
+This might work on windows, if you change the forward slashes to backward slashes, and the backward slash to forward slash (replaces / in titles with \ atm), but it&#39;s written for linux.</description>
+    
+    <lastBuildDate>Fri, 27 Jan 2012 15:44:25 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@Fat_Cookies Fat Cookies]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fat_cookies">@Fat_Cookies</a> wrote:</p>
+          <blockquote>
+              <p>HAI LOOK GUYS I WROTE THIS USING ASM trollface.jpg:</p>
+<pre><code class="lang-auto">
+.section .rdata,"dr"
+LC0:
+	.ascii "r\0"
+LC1:
+	.ascii "TAG\0"
+LC2:
+	.ascii "ID3v1 detected for file %s\12\0"
+LC3:
+	.ascii "found / at %d\12\0"
+LC4:
+	.ascii "%s - %s on %s\12\0"
+LC5:
+	.ascii "%s/%s\0"
+LC6:
+	.ascii "%s/%s.mp3\0"
+LC7:
+	.ascii "w\0"
+LC8:
+	.ascii "Error reading source file.\0"
+	.align 4
+LC9:
+	.ascii "Error writing destination file.\0"
+	.text
+	.p2align 2,,3
+	.globl	_sort
+	.def	_sort;	.scl	2;	.type	32;	.endef
+_sort:
+LFB20:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset 5, -8
+	pushl	%edi
+	.cfi_def_cfa_offset 12
+	.cfi_offset 7, -12
+	pushl	%esi
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	pushl	%ebx
+	.cfi_def_cfa_offset 20
+	.cfi_offset 3, -20
+	subl	$172, %esp
+	.cfi_def_cfa_offset 192
+	movl	192(%esp), %eax
+	movl	%eax, 32(%esp)
+	movl	196(%esp), %ecx
+	movl	%ecx, 36(%esp)
+	movl	$LC0, 4(%esp)
+	movl	%eax, (%esp)
+	call	_fopen
+	movl	%eax, %ebp
+	testl	%eax, %eax
+	je	L2
+	movl	$2, 8(%esp)
+	movl	$-128, 4(%esp)
+	movl	%eax, (%esp)
+	call	_fseek
+	movl	%ebp, 8(%esp)
+	movl	$4, 4(%esp)
+	leal	156(%esp), %esi
+	movl	%esi, (%esp)
+	call	_fgets
+	movl	$LC1, %edi
+	movl	$4, %ecx
+	repe cmpsb
+	jne	L3
+	movl	32(%esp), %eax
+	movl	%eax, 4(%esp)
+	movl	$LC2, (%esp)
+	call	_printf
+	movl	%ebp, 8(%esp)
+	movl	$31, 4(%esp)
+	leal	63(%esp), %ebx
+	movl	%ebx, (%esp)
+	call	_fgets
+	movl	%ebp, 8(%esp)
+	movl	$31, 4(%esp)
+	leal	94(%esp), %ecx
+	movl	%ecx, 24(%esp)
+	movl	%ecx, (%esp)
+	call	_fgets
+	movl	%ebp, 8(%esp)
+	movl	$31, 4(%esp)
+	leal	125(%esp), %eax
+	movl	%eax, 28(%esp)
+	movl	%eax, (%esp)
+	call	_fgets
+	movl	$47, 4(%esp)
+	movl	%ebx, (%esp)
+	call	_strchr
+	movl	%eax, %esi
+	testl	%eax, %eax
+	je	L4
+	.p2align 2,,3
+L14:
+	movl	%esi, %edi
+	subl	%ebx, %edi
+	movl	%edi, 4(%esp)
+	movl	$LC3, (%esp)
+	call	_printf
+	movb	$92, 63(%esp,%edi)
+	incl	%esi
+	movl	$47, 4(%esp)
+	movl	%esi, (%esp)
+	call	_strchr
+	movl	%eax, %esi
+	testl	%eax, %eax
+	jne	L14
+L4:
+	leal	125(%esp), %ecx
+	movl	%ecx, 12(%esp)
+	leal	94(%esp), %eax
+	movl	%eax, 8(%esp)
+	movl	%ebx, 4(%esp)
+	movl	$LC4, (%esp)
+	call	_printf
+	movl	$-1, %edx
+	xorl	%eax, %eax
+	movl	%edx, %ecx
+	movl	36(%esp), %edi
+	repne scasb
+	movl	%ecx, 40(%esp)
+	movl	%edx, %ecx
+	movl	24(%esp), %edi
+	repne scasb
+	movl	%ecx, %esi
+	notl	%esi
+	movl	%edx, %ecx
+	movl	28(%esp), %edi
+	repne scasb
+	movl	%ecx, 44(%esp)
+	movl	%edx, %ecx
+	movl	%ebx, %edi
+	repne scasb
+	movl	%ecx, %edx
+	notl	%edx
+	subl	40(%esp), %esi
+	subl	44(%esp), %edx
+	leal	2(%edx,%esi), %eax
+	movl	%eax, (%esp)
+	call	_malloc
+	movl	%eax, %esi
+	leal	94(%esp), %eax
+	movl	%eax, 12(%esp)
+	movl	36(%esp), %ecx
+	movl	%ecx, 8(%esp)
+	movl	$LC5, 4(%esp)
+	movl	%esi, (%esp)
+	call	_sprintf
+	movl	%esi, (%esp)
+	call	_mkdir
+	leal	125(%esp), %eax
+	movl	%eax, 12(%esp)
+	movl	%esi, 8(%esp)
+	movl	$LC5, 4(%esp)
+	movl	%esi, (%esp)
+	call	_sprintf
+	movl	%esi, (%esp)
+	call	_mkdir
+	movl	%esi, (%esp)
+	call	_puts
+	movl	%ebx, 12(%esp)
+	movl	%esi, 8(%esp)
+	movl	$LC6, 4(%esp)
+	movl	%esi, (%esp)
+	call	_sprintf
+	movl	%ebp, (%esp)
+	call	_fclose
+	movl	%esi, 4(%esp)
+	movl	32(%esp), %ecx
+	movl	%ecx, (%esp)
+	call	_rename
+	testl	%eax, %eax
+	je	L19
+	movl	$LC0, 4(%esp)
+	movl	32(%esp), %eax
+	movl	%eax, (%esp)
+	call	_fopen
+	movl	%eax, %ebx
+	movl	$LC7, 4(%esp)
+	movl	%esi, (%esp)
+	call	_fopen
+	movl	%eax, %edi
+	jmp	L9
+	.p2align 2,,3
+L12:
+	andl	$32, %edx
+	jne	L20
+L9:
+	testb	$16, 12(%ebx)
+	jne	L11
+	movl	%ebx, (%esp)
+	call	_fgetc
+	testb	$32, 12(%ebx)
+	jne	L21
+	movl	12(%edi), %edx
+	testb	$16, %dl
+	jne	L12
+	movl	%edi, 4(%esp)
+	movl	%eax, (%esp)
+	call	_fputc
+	movl	12(%edi), %edx
+	andl	$32, %edx
+	je	L9
+L20:
+	movl	$LC9, (%esp)
+	call	_puts
+L11:
+	movl	%edi, (%esp)
+	call	_fclose
+	movl	%ebx, (%esp)
+	call	_fclose
+	movl	%esi, (%esp)
+	call	_free
+	movl	32(%esp), %ecx
+	movl	%ecx, (%esp)
+	call	_remove
+	addl	$172, %esp
+	.cfi_remember_state
+	.cfi_def_cfa_offset 20
+	popl	%ebx
+	.cfi_restore 3
+	.cfi_def_cfa_offset 16
+	popl	%esi
+	.cfi_restore 6
+	.cfi_def_cfa_offset 12
+	popl	%edi
+	.cfi_restore 7
+	.cfi_def_cfa_offset 8
+	popl	%ebp
+	.cfi_restore 5
+	.cfi_def_cfa_offset 4
+	ret
+	.p2align 2,,3
+L19:
+	.cfi_restore_state
+	movl	%esi, 192(%esp)
+	addl	$172, %esp
+	.cfi_remember_state
+	.cfi_def_cfa_offset 20
+	popl	%ebx
+	.cfi_def_cfa_offset 16
+	.cfi_restore 3
+	popl	%esi
+	.cfi_def_cfa_offset 12
+	.cfi_restore 6
+	popl	%edi
+	.cfi_def_cfa_offset 8
+	.cfi_restore 7
+	popl	%ebp
+	.cfi_def_cfa_offset 4
+	.cfi_restore 5
+	jmp	_free
+	.p2align 2,,3
+L3:
+	.cfi_restore_state
+	movl	%ebp, (%esp)
+	call	_fclose
+	addl	$172, %esp
+	.cfi_remember_state
+	.cfi_def_cfa_offset 20
+	popl	%ebx
+	.cfi_def_cfa_offset 16
+	.cfi_restore 3
+	popl	%esi
+	.cfi_def_cfa_offset 12
+	.cfi_restore 6
+	popl	%edi
+	.cfi_def_cfa_offset 8
+	.cfi_restore 7
+	popl	%ebp
+	.cfi_def_cfa_offset 4
+	.cfi_restore 5
+	ret
+	.p2align 2,,3
+L2:
+	.cfi_restore_state
+	movl	$0, (%esp)
+	call	_fclose
+	addl	$172, %esp
+	.cfi_remember_state
+	.cfi_def_cfa_offset 20
+	popl	%ebx
+	.cfi_restore 3
+	.cfi_def_cfa_offset 16
+	popl	%esi
+	.cfi_restore 6
+	.cfi_def_cfa_offset 12
+	popl	%edi
+	.cfi_restore 7
+	.cfi_def_cfa_offset 8
+	popl	%ebp
+	.cfi_restore 5
+	.cfi_def_cfa_offset 4
+	ret
+	.p2align 2,,3
+L21:
+	.cfi_restore_state
+	movl	$LC8, (%esp)
+	call	_puts
+	jmp	L11
+	.cfi_endproc
+LFE20:
+	.section .rdata,"dr"
+LC10:
+	.ascii ".mp3\0"
+	.text
+	.p2align 2,,3
+	.globl	_sort_dir
+	.def	_sort_dir;	.scl	2;	.type	32;	.endef
+_sort_dir:
+LFB21:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset 5, -8
+	pushl	%edi
+	.cfi_def_cfa_offset 12
+	.cfi_offset 7, -12
+	pushl	%esi
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	pushl	%ebx
+	.cfi_def_cfa_offset 20
+	.cfi_offset 3, -20
+	subl	$44, %esp
+	.cfi_def_cfa_offset 64
+	movl	64(%esp), %ebp
+	movl	68(%esp), %eax
+	movl	%eax, 28(%esp)
+	movl	%ebp, (%esp)
+	call	_opendir
+	movl	%eax, %esi
+	jmp	L28
+	.p2align 2,,3
+L25:
+	leal	8(%eax), %ebx
+	movl	$LC10, 4(%esp)
+	movl	%ebx, (%esp)
+	call	_strstr
+	testl	%eax, %eax
+	jne	L29
+L28:
+	movl	%esi, (%esp)
+	call	_readdir
+	testl	%eax, %eax
+	jne	L25
+	movl	%esi, 64(%esp)
+	addl	$44, %esp
+	.cfi_remember_state
+	.cfi_def_cfa_offset 20
+	popl	%ebx
+	.cfi_def_cfa_offset 16
+	.cfi_restore 3
+	popl	%esi
+	.cfi_def_cfa_offset 12
+	.cfi_restore 6
+	popl	%edi
+	.cfi_def_cfa_offset 8
+	.cfi_restore 7
+	popl	%ebp
+	.cfi_def_cfa_offset 4
+	.cfi_restore 5
+	jmp	_closedir
+	.p2align 2,,3
+L29:
+	.cfi_restore_state
+	movl	$-1, %ecx
+	movl	%ebp, %edi
+	xorl	%eax, %eax
+	repne scasb
+	movl	%ecx, %edx
+	notl	%edx
+	movl	$-1, %ecx
+	movl	%ebx, %edi
+	repne scasb
+	notl	%ecx
+	addl	%ecx, %edx
+	movl	%edx, (%esp)
+	call	_malloc
+	movl	%eax, %edi
+	movl	%ebx, 12(%esp)
+	movl	%ebp, 8(%esp)
+	movl	$LC5, 4(%esp)
+	movl	%eax, (%esp)
+	call	_sprintf
+	movl	%edi, (%esp)
+	call	_puts
+	movl	28(%esp), %eax
+	movl	%eax, 4(%esp)
+	movl	%edi, (%esp)
+	call	_sort
+	movl	%edi, (%esp)
+	call	_free
+	jmp	L28
+	.cfi_endproc
+LFE21:
+	.def	___main;	.scl	2;	.type	32;	.endef
+	.section .rdata,"dr"
+	.align 4
+LC11:
+	.ascii "Usage: mp3sorter  (directory|file)... out-dir\0"
+	.section	.text.startup,"x"
+	.p2align 2,,3
+	.globl	_main
+	.def	_main;	.scl	2;	.type	32;	.endef
+_main:
+LFB22:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset 5, -8
+	movl	%esp, %ebp
+	.cfi_def_cfa_register 5
+	pushl	%edi
+	pushl	%esi
+	pushl	%ebx
+	andl	$-16, %esp
+	subl	$1104, %esp
+	movl	8(%ebp), %ebx
+	.cfi_offset 3, -20
+	.cfi_offset 6, -16
+	.cfi_offset 7, -12
+	movl	12(%ebp), %edi
+	call	___main
+	cmpl	$1, %ebx
+	je	L41
+	jle	L32
+	cmpl	$2, %ebx
+	je	L42
+	leal	-1(%ebx), %esi
+	movl	(%edi,%esi,4), %eax
+	movl	%eax, 24(%esp)
+L34:
+	movl	24(%esp), %eax
+	movl	%eax, (%esp)
+	call	_puts
+	cmpl	$2, %ebx
+	je	L35
+	movl	%esi, 28(%esp)
+L36:
+	movl	$1, %ebx
+	cmpl	28(%esp), %ebx
+	jge	L32
+	.p2align 2,,3
+L40:
+	movl	(%edi,%ebx,4), %esi
+	leal	1068(%esp), %eax
+	movl	%eax, 4(%esp)
+	movl	%esi, (%esp)
+	call	_stat
+	testl	%eax, %eax
+	jne	L38
+	movw	1074(%esp), %ax
+	testb	$64, %ah
+	jne	L43
+	testw	%ax, %ax
+	js	L44
+L38:
+	incl	%ebx
+L45:
+	cmpl	28(%esp), %ebx
+	jl	L40
+L32:
+	xorl	%eax, %eax
+	leal	-12(%ebp), %esp
+	popl	%ebx
+	.cfi_remember_state
+	.cfi_restore 3
+	popl	%esi
+	.cfi_restore 6
+	popl	%edi
+	.cfi_restore 7
+	popl	%ebp
+	.cfi_def_cfa 4, 4
+	.cfi_restore 5
+	ret
+	.p2align 2,,3
+L43:
+	.cfi_restore_state
+	movl	24(%esp), %eax
+	movl	%eax, 4(%esp)
+	movl	%esi, (%esp)
+	call	_sort_dir
+	incl	%ebx
+	jmp	L45
+L44:
+	movl	24(%esp), %eax
+	movl	%eax, 4(%esp)
+	movl	4(%edi), %eax
+	movl	%eax, (%esp)
+	call	_sort
+	incl	%ebx
+	jmp	L45
+L35:
+	movl	$2, 28(%esp)
+	jmp	L36
+L42:
+	movl	$1024, 4(%esp)
+	leal	44(%esp), %eax
+	movl	%eax, (%esp)
+	call	_getcwd
+	movl	%eax, 24(%esp)
+	movl	$1, %esi
+	jmp	L34
+L41:
+	movl	$LC11, (%esp)
+	call	_puts
+	jmp	L32
+	.cfi_endproc
+LFE22:
+	.def	_fopen;	.scl	2;	.type	32;	.endef
+	.def	_fseek;	.scl	2;	.type	32;	.endef
+	.def	_fgets;	.scl	2;	.type	32;	.endef
+	.def	_printf;	.scl	2;	.type	32;	.endef
+	.def	_strchr;	.scl	2;	.type	32;	.endef
+	.def	_malloc;	.scl	2;	.type	32;	.endef
+	.def	_sprintf;	.scl	2;	.type	32;	.endef
+	.def	_mkdir;	.scl	2;	.type	32;	.endef
+	.def	_puts;	.scl	2;	.type	32;	.endef
+	.def	_fclose;	.scl	2;	.type	32;	.endef
+	.def	_rename;	.scl	2;	.type	32;	.endef
+	.def	_fgetc;	.scl	2;	.type	32;	.endef
+	.def	_fputc;	.scl	2;	.type	32;	.endef
+	.def	_free;	.scl	2;	.type	32;	.endef
+	.def	_remove;	.scl	2;	.type	32;	.endef
+	.def	_opendir;	.scl	2;	.type	32;	.endef
+	.def	_strstr;	.scl	2;	.type	32;	.endef
+	.def	_readdir;	.scl	2;	.type	32;	.endef
+	.def	_closedir;	.scl	2;	.type	32;	.endef
+	.def	_stat;	.scl	2;	.type	32;	.endef
+	.def	_getcwd;	.scl	2;	.type	32;	.endef</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/17</link>
+        <pubDate>Fri, 27 Jan 2012 15:44:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-17</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“c|p, post:15, topic:430251”]Using ASM does not inherently make a program run faster;  there is no real intrinsic benefit to using ASM over any other native language.<br>
+The only thing you ‘gain’ by writing something in ASM is potentially hand optimizing your program.  However, most modern compilers can do a pretty damn good job at optimizing, and even when they aren’t turning out an obviously quicker solution, there’s always the ability to inline ASM if you think you need to that badly.<br>
+Generally, you shouldn’t write an entire project in ASM, because odds are your reasons for doing so are ridiculous and it will be a waste of time.[/quote]<br>
+first part about optimisation was implied, this was written in C for more or less as a learning exercise, if not I probably would’ve written it in Java</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/16</link>
+        <pubDate>Tue, 24 Jan 2012 18:36:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-16</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>Using ASM does not inherently make a program run faster;  there is no real intrinsic benefit to using ASM over any other native language.<br>
+The only thing you ‘gain’ by writing something in ASM is potentially hand optimizing your program.  However, most modern compilers can do a pretty damn good job at optimizing, and even when they aren’t turning out an obviously quicker solution, there’s always the ability to inline ASM if you think you need to that badly.<br>
+Generally, you shouldn’t write an entire project in ASM, because odds are your reasons for doing so are ridiculous and it will be a waste of time.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/15</link>
+        <pubDate>Mon, 23 Jan 2012 23:01:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-15</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:13, topic:430251”][quote author=eczema3 link=topic=532930.msg3896464#msg3896464 date=1327347448]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>because it’s not at all practical?</p>
+</blockquote>
+</aside>
+<p>yes it is… if you’re looking for speed, then ASM should definitely be an option</p>
+</blockquote>
+</aside>
+<p>But he’s saying it’s not practical for something like this.<br>
+[/quote]<br>
+Yes I understand that. I was speaking in general terms.<br>
+I don’t see why I wouldn’t use C for this…[/quote]<br>
+a tool like this should strive to compatibility, hence Java or C# or even Python would be nice. also, file I/O in those languages (java/c# mainly) i find to be less of a hassle - but that’s just a personal preference.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/14</link>
+        <pubDate>Mon, 23 Jan 2012 20:30:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-14</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“eczema3, post:12, topic:430251”][quote author=SpeedIsMeh link=topic=532930.msg3896453#msg3896453 date=1327347023]</p>
+<aside class="quote">
+<blockquote>
+<p>because it’s not at all practical?</p>
+</blockquote>
+</aside>
+<p>yes it is… if you’re looking for speed, then ASM should definitely be an option<br>
+[/quote]<br>
+But he’s saying it’s not practical for something like this.[/quote]<br>
+Yes I understand that. I was speaking in general terms.<br>
+I don’t see why I wouldn’t use C for this…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/13</link>
+        <pubDate>Mon, 23 Jan 2012 19:45:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-13</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@eczema3 eczema3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eczema3">@eczema3</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:11, topic:430251”][quote author=abraham2119 link=topic=532930.msg3896337#msg3896337 date=1327340755]<br>
+because it’s not at all practical?<br>
+[/quote]<br>
+yes it is… if you’re looking for speed, then ASM should definitely be an option[/quote]<br>
+But he’s saying it’s not practical for something like this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/12</link>
+        <pubDate>Mon, 23 Jan 2012 19:37:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-12</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="9" data-topic="430251">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>because it’s not at all practical?</p>
+</blockquote>
+</aside>
+<p>yes it is… if you’re looking for speed, then ASM should definitely be an option</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/11</link>
+        <pubDate>Mon, 23 Jan 2012 19:30:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-11</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="9" data-topic="430251">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>because it’s not at all practical?</p>
+</blockquote>
+</aside>
+<p>agreeing with abraham for once!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/10</link>
+        <pubDate>Mon, 23 Jan 2012 17:47:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-10</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>because it’s not at all practical?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/9</link>
+        <pubDate>Mon, 23 Jan 2012 17:45:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-9</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:7, topic:430251”][quote author=SpeedIsMeh link=topic=532930.msg3895690#msg3895690 date=1327273780]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>I tried sorting MP3s like this once, really does not work as it’s highly unreliable.</p>
+</blockquote>
+</aside>
+<p>It does if you have correct tags on your music, i.e. buy it or rip it correctly. Also, if you pirate it, then the better pirates tag it correctly, it’s worked for me on ~2.5k songs perfectly, I don’t understand why it’s unreliable.</p>
+</blockquote>
+</aside>
+<p>exactly, nice job Mr. Speed - not sure why you’d do this in C, though…</p>
+</blockquote>
+</aside>
+<p>even blakenig5895894 said that, why not?<br>
+C is a nice language, sure, I could’ve done it in some pretty language topped with lots of syntactic sugar, but that’d just be uncool.<br>
+[/quote]<br>
+less complex, less lines. doesn’t really matter though. i’d only use C/++ if i needed something operate as fast as possible - or have direct control of memory allocation/deallocation.[/quote]<br>
+if you’re looking for speed/memory allocation, why not use ASM?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/8</link>
+        <pubDate>Mon, 23 Jan 2012 17:42:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-8</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:6, topic:430251”][quote author=t4 link=topic=532930.msg3895640#msg3895640 date=1327272538]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>I tried sorting MP3s like this once, really does not work as it’s highly unreliable.</p>
+</blockquote>
+</aside>
+<p>It does if you have correct tags on your music, i.e. buy it or rip it correctly. Also, if you pirate it, then the better pirates tag it correctly, it’s worked for me on ~2.5k songs perfectly, I don’t understand why it’s unreliable.</p>
+</blockquote>
+</aside>
+<p>exactly, nice job Mr. Speed - not sure why you’d do this in C, though…<br>
+[/quote]<br>
+even blakenig5895894 said that, why not?<br>
+C is a nice language, sure, I could’ve done it in some pretty language topped with lots of syntactic sugar, but that’d just be uncool.[/quote]<br>
+less complex, less lines. doesn’t really matter though. i’d only use C/++ if i needed something operate as fast as possible - or have direct control of memory allocation/deallocation.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/7</link>
+        <pubDate>Mon, 23 Jan 2012 00:22:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-7</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:5, topic:430251”][quote author=SpeedIsMeh link=topic=532930.msg3895474#msg3895474 date=1327266139]</p>
+<aside class="quote">
+<blockquote>
+<p>I tried sorting MP3s like this once, really does not work as it’s highly unreliable.</p>
+</blockquote>
+</aside>
+<p>It does if you have correct tags on your music, i.e. buy it or rip it correctly. Also, if you pirate it, then the better pirates tag it correctly, it’s worked for me on ~2.5k songs perfectly, I don’t understand why it’s unreliable.<br>
+[/quote]<br>
+exactly, nice job Mr. Speed - not sure why you’d do this in C, though…[/quote]<br>
+even blakenig5895894 said that, why not?<br>
+C is a nice language, sure, I could’ve done it in some pretty language topped with lots of syntactic sugar, but that’d just be uncool.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/6</link>
+        <pubDate>Sun, 22 Jan 2012 23:09:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-6</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:3, topic:430251”][quote author=eczema3 link=topic=532930.msg3895348#msg3895348 date=1327258886]<br>
+I tried sorting MP3s like this once, really does not work as it’s highly unreliable.<br>
+[/quote]<br>
+It does if you have correct tags on your music, i.e. buy it or rip it correctly. Also, if you pirate it, then the better pirates tag it correctly, it’s worked for me on ~2.5k songs perfectly, I don’t understand why it’s unreliable.[/quote]<br>
+exactly, nice job Mr. Speed - not sure why you’d do this in C, though…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/5</link>
+        <pubDate>Sun, 22 Jan 2012 22:48:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-5</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@_Rick1 _Rick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_rick1">@_Rick1</a> wrote:</p>
+          <blockquote>
+              <p>Nothing unreliable about it, your id3 tags are unreliable, not the application.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/4</link>
+        <pubDate>Sun, 22 Jan 2012 21:10:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-4</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="2" data-topic="430251">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/eczema3/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> eczema3:</div>
+<blockquote>
+<p>I tried sorting MP3s like this once, really does not work as it’s highly unreliable.</p>
+</blockquote>
+</aside>
+<p>It does if you have correct tags on your music, i.e. buy it or rip it correctly. Also, if you pirate it, then the better pirates tag it correctly, it’s worked for me on ~2.5k songs perfectly, I don’t understand why it’s unreliable.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/3</link>
+        <pubDate>Sun, 22 Jan 2012 21:02:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-3</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@eczema3 eczema3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eczema3">@eczema3</a> wrote:</p>
+          <blockquote>
+              <p>I tried sorting MP3s like this once, really does not work as it’s highly unreliable.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/2</link>
+        <pubDate>Sun, 22 Jan 2012 19:01:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-2</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>This basically goes through the supplied directories, checks if the file has a id3 tag (and .mp3 extension) and then if it does, it sorts into output-dir/artist/album/title.mp3, works pretty well from what I’ve done so far.<br>
+Will copy then delete if it cannot move with rename<br>
+supports multiple directories/files, if you’re doing this then the output dir MUST be supplied<br>
+if no output dir is supplied for a single file/directory, it will use the current working directory</p>
+<p>enjoy:</p>
+<pre><code class="lang-auto">
+/*
+ * mp3sorter.c
+ *
+ * Sorts mp3 files into directories as dir/artist/album/title.mp3
+ *
+ *  Created on: Jan 21, 2012
+ *  Author: S. Mistry (speed)
+ */
+
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;string.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;dirent.h&gt;
+#include &lt;stdlib.h&gt;
+
+void sort(const char* file, const char* dest_dir)
+{
+        FILE* fp, *nf;
+        fp = fopen(file, "r");
+        if (fp != NULL)
+        {
+                //seek to beginning of id3v1 tag (128 bytes from end)
+                fseek(fp, -128, SEEK_END);
+                char tag[4];
+                char title[31], artist[31], album[31];
+                //read tag title from file
+                fgets(tag, 4, fp);
+                //check for id3v1
+                if (strcmp(tag, "TAG") == 0)
+                {
+                        printf("ID3v1 detected for file %s\n", file);
+                        fgets(title, 31, fp);
+                        fgets(artist, 31, fp);
+                        fgets(album, 31, fp);
+                        //replace forward slashes with back slashes
+                        //so files aren't recognised as directories
+                        char * pch;
+                        pch = strchr(title, '/');
+                        while (pch != NULL)
+                        {
+                                printf("found / at %d\n", pch - title);
+                                //replace the / with a back slash
+                                title[pch - title] = '\\';
+                                //search from char after current slash
+                                pch = strchr(pch + 1, '/');
+                        }
+                        //print names
+                        printf("%s - %s on %s\n", title, artist, album);
+
+                }
+                else
+                {
+                        //TODO check id3v2
+                        fclose(fp);
+                        return;
+
+                }
+                char* dir = malloc(
+                                strlen(dest_dir) + strlen(artist) + strlen(album)
+                                                + strlen(title) + 8);
+                sprintf(dir, "%s/%s", dest_dir, artist);
+                //create artist directory
+                mkdir(dir, S_IRWXU);
+                sprintf(dir, "%s/%s", dir, album);
+                //create album directory
+                mkdir(dir, S_IRWXU);
+                puts(dir);
+                //append file name to path
+                sprintf(dir, "%s/%s.mp3", dir, title);
+                fclose(fp);
+                //move file
+                if (rename(file, dir) == 0)
+                {
+                        //successful move is successful
+                        free(dir);
+                        return;
+                }
+                else
+                {
+                        //if the move failed, copy and delete
+                        fp = fopen(file, "r");
+                        nf = fopen(dir, "w");
+                        int ch;
+                        while (!feof(fp))
+                        {
+                                //read single char from file
+                                ch = fgetc(fp);
+                                if (ferror(fp))
+                                {
+                                        puts("Error reading source file.");
+                                        break;
+                                }
+                                if (!feof(nf))
+                                {
+                                        //write char to new file
+                                        fputc(ch, nf);
+                                }
+                                if (ferror(nf))
+                                {
+                                        puts("Error writing destination file.");
+                                        break;
+                                }
+                        }
+                        fclose(nf);
+                        fclose(fp);
+                        free(dir);
+                        //delete old file
+                        remove(file);
+                        return;
+                }
+
+        }
+        fclose(fp);
+}
+
+void sort_dir(const char *path, const char* dir_path)
+{
+        DIR *dir;
+        dir = opendir(path);
+        struct dirent *curr;
+        while ((curr = readdir(dir)) != NULL)
+        {
+                //loop through all files in directory
+                if (strstr(curr-&gt;d_name, ".mp3") != NULL) //check for mp3 files
+                {
+                        char* full_path = malloc(strlen(path) + strlen(curr-&gt;d_name) + 2);
+                        //append file name to directory
+                        sprintf(full_path, "%s/%s", path, curr-&gt;d_name);
+                        puts(full_path);
+                        //process this file
+                        sort(full_path, dir_path);
+                        //free the allocated mem for the path
+                        free(full_path);
+
+                }
+        }
+        closedir(dir);
+
+}
+
+int main(int argc, char **argv)
+{
+
+        if (argc == 1)
+        {
+                puts("Usage: mp3sorter  (directory|file)... out-dir");
+        }
+        else if (argc &gt;= 2)
+        {
+                char* dir;
+                char buffer[1024];
+                if (argc == 2)
+                {
+                        //if no out dir is supplied, use current working dir
+                        dir = getcwd(buffer, sizeof(buffer));
+
+                }
+                else
+                {
+                        //use last arg as out dir
+                        dir = argv[argc - 1];
+                }
+                puts(dir);
+                int curr;
+                //loop through all args except for output dir unless no out is supplied
+                for (curr = 1; curr &lt; (argc == 2 ? 2 : argc - 1); curr++)
+                {
+                        char* path = argv[curr];
+                        struct stat s;
+                        //read file attributes into stat struct
+                        if (stat(path, &amp;s) == 0)
+                        {
+                                if (s.st_mode &amp; S_IFDIR)
+                                {
+                                        //the passed path was a directory
+                                        sort_dir(path, dir);
+
+                                }
+                                else if (s.st_mode &amp; S_IFREG)
+                                {
+                                        //single file passed
+                                        sort(argv[1], dir);
+                                }
+                        }
+                }
+        }
+        return 0;
+}</code></pre>
+<p><a href="http://paste.strictfp.com/25361" class="onebox" target="_blank" rel="nofollow noopener">http://paste.strictfp.com/25361</a></p>
+<p>I will be adding id3v2 support later.<br>
+This might work on windows, if you change the forward slashes to backward slashes, and the backward slash to forward slash (replaces / in titles with \ atm), but it’s written for linux.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430251/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430251/1</link>
+        <pubDate>Sun, 22 Jan 2012 18:50:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430251-1</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430251.rss">[C] mp3sorter</source>
+      </item>
+  </channel>
+</rss>

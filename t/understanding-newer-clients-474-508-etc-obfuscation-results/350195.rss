@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+    <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195</link>
+    <description>Edit: Hmm... Probably wrong place... Not sure why I posted it here...
+
+Alright. I&#39;m here to teach you just a little bit about the wonderful world of newer clients (4xx-508, maybe higher, don&#39;t know). Now, you may have looked inside a client and thought Jagex was a bunch of crazy geniuses who mean business when working on stuff, but really, it&#39;s the obfuscator they use.
+
+Basically, they created the client where it&#39;s actually human-readable but the compiled version has had special work done to it to make it harder to reverse-engineer. I&#39;m not sure where the current deobfuscators will take us, but the ones used on 508 clients make it look like a 317 client with a bunch of stuff to confuse the hell out of us. I&#39;m going to teach you how to see what is really being done and show you how simple the code really is.
+
+Let&#39;s take a look at packet 89 from server to client, which is sending a message (pushMessage in a refactored 317).
+[code=java]	if ((Class49.anInt962 ^ 0xffffffff) == -90) {
+	    long l = Class68_Sub13_Sub8.aPacketStream_3560.method941(81);
+	    RSString class100
+		= (Class68_Sub20_Sub1.method1009
+		   (Class68_Sub19.method996
+			(25, Class68_Sub13_Sub8.aPacketStream_3560)
+			.method1616(2)));
+	    Class48.method520(Class56.method570(l, -1).method1597(12688), -67,
+			      class100, 6);
+	    Class49.anInt962 = -1;
+	    return true;
+	}[/code]
+
+Okay, looks complicated, right? Not really. This is how it should look.
+[code=java]	if (Class49.packetID == 89) {
+	    long playerNameEncrypted = Class68_Sub13_Sub8.packetStream.readQWord();
+	    RSString message = (Class68_Sub20_Sub1.method1009(Class68_Sub19.readRSString(Class68_Sub13_Sub8.packetStream).decryptMessage(2)));
+	    Class48.sendMessage(Class56.getName(playerNameEncrypted, true).method1597(true), message);
+		//The first true used to be -1, and it&#39;s just a simple number check acted as a flag.
+		//The second true was 12688, and once again, a flag disguised as a number.
+		//The 6 was yet another dummy, and only used for assign-only variables. In other words, it was checked and other variables were assigned based on it, but never used.
+		//The removed -67 was a dummy used for a math operation to another dummy.
+		//6 is probably useless as well, but it&#39;s not important for now.
+	    Class49.packetID = -1;
+	    return true;
+	}[/code]Not everything may be renamed perfectly, but you get the idea.
+
+Now, I don&#39;t normally recommend using anything but an IDE, but Notepad++ highlights all keywords the instant you select them. This helps you find dummy arguments and variables, which can really come in handy.
+
+[b]Finding Dummies and Getting Real Bit-Shift Values[/b]
+Okay. A lot, if not all methods, have dummy arguments in them, which are pretty much useless values to confuse you. For starts, in your Stream class, look at method method941. This is the ReadQWord, or ReadLong method. Although it doesn&#39;t look the same as it does in 317 clients and servers, it does the same thing. Here&#39;s what the method currently looks like.
+[code=java]public long method941(int i) {
+	anInt2989++;
+	if (i &lt; 27)
+	    aClass68_Sub20_Sub10_Sub1Array3006 = null;
+	long l = 0xffffffffL &amp; (long) readDWord();
+	long l_30_ = (long) readDWord() &amp; 0xffffffffL;
+	return l_30_ + (l &lt;&lt; -2097004448);
+}[/code]
+Here&#39;s what it should look like.
+[code=java]public long readQWord() {
+	long l = 0xffffffffL &amp; (long) readDWord();
+	long l_30_ = (long) readDWord() &amp; 0xffffffffL;
+	return l_30_ + (l &lt;&lt; 32);
+}[/code]So let&#39;s start with argument &#39;i&#39;. In Notepad++, select it. Within that method, you see an if statement comparing it with 27. If it&#39;s less than, set aClass68_Sub20_Sub10_Sub1Array3006 to null. This isn&#39;t assigned anywhere in the class, and overall it doesn&#39;t seem of much use around the client. Though, even if it does serve purpose, there&#39;s nothing reading 8 bytes would trigger, especially if a dummy argument was less than 27. So, you can remove i, the if statement, and the aClass68_Sub20_Sub10_Sub1Array3006 assignment.
+
+Something else you see is anInt2989++. Now, this is one of those assign-only variables and is never read from in the client, so free feel to delete it, and if you&#39;re brave enough, anInt2989&#39;s declaration and assignment in Class21.
+
+Now we&#39;re left with the insane shift left value of -2097004448. This is really simple. When dealing with bit shifts, for an integer, only the first 5 bits are used, and if a long, the first 6 bits. So, this method returns a long, which means we use the first 6 bits. -2097004448 &amp; 0x3F results in 32, so x &lt;&lt; -2097004448 is the same thing as x &lt;&lt; 32.
+
+[b]Integer Flags[/b]
+As you venture throughout the client, you&#39;ll never see a boolean-typed argument inside a method. Instead, it&#39;s an integer and you&#39;ll see an if statement checking if it&#39;s a specific value. Obviously, it wasn&#39;t originally a number, but a simple flag. Now, you&#39;ll most likely see the number is used again with some sort of math done to it. This can sometimes be the same as !flag or checking its value and assigning the flag from there. Either way though, it&#39;s just a flag in disguise meant to confuse us.
+
+[b]The Wonderful XOR Operations[/b]
+These you see nearly everywhere, and most commonly, the number used is 0xFFFFFFFF. All this one does is switches the sign and subtracts 1. This is used [i]most[/i] of the time for packet checks. So for example, if the value to be checked was 33 and you couldn&#39;t find it, you&#39;d search for -34. But if the value isn&#39;t 0xFFFFFFFF, just use Windows Calculator or something else. Normally it comes out to be a simple number.
+
+Another thing you might see is something like this.
+[code]if ((valueA ^ 0xFFFFFFFF) &lt; (valueB ^ 0xFFFFFFFF))[/code]
+Just remove the XOR operations and switch around the &lt; sign.
+
+[b]Static Assignments[/b]
+These are what you see in the static blocks inside several classes and are pretty straight-forward. They&#39;re just constant values that are placed in various areas instead of inside a method where they&#39;re used.
+
+
+So that&#39;s all I feel like typing. Sorry if I&#39;m unclear or made a mistake, but it&#39;s pretty early here and I&#39;m a bit tired. Anyway, &#39;hope someone finds this useful.
+
+~Lin</description>
+    
+    <lastBuildDate>Sun, 01 Aug 2010 18:57:11 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@noobs_are_ftw noobs are ftw]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/noobs_are_ftw">@noobs_are_ftw</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="7" data-topic="350195">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/lin/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> Lin:</div>
+<blockquote>
+<p>Really now? I haven’t seen you do anything related to the newer clients, and just because you’ve only seen code relating to clients doesn’t mean you understand the obfuscation.</p>
+</blockquote>
+</aside>
+<p>i do its just i dont feel like fixing my deober to work for the directx update cause new graphics lagg my comp but i already knew this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/16</link>
+        <pubDate>Sun, 01 Aug 2010 18:57:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-16</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@Svitkona Svitkona]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/svitkona">@Svitkona</a> wrote:</p>
+          <blockquote>
+              <p>didn’t get it, but i still think it’s well explained. great job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+by the way, should this be in client help?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/15</link>
+        <pubDate>Mon, 26 Jul 2010 18:08:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-15</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>Cool</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/14</link>
+        <pubDate>Mon, 26 Jul 2010 13:39:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-14</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Lin, post:9, topic:350195”][quote author=dillktm65 link=topic=446560.msg3280274#msg3280274 date=1279828820]<br>
+This Was OutStanding Guide And perfect For New Coders With The Hard To Code 508’s<br>
+[/quote]No Not Really It’s Not Like New Coders Should Be Coding 508’s In The First Place Which Is Why Almost Every Server Today Sucks[/quote]<br>
+It’s Not Like New Coders Should Be <span class="bbcode-b">Here</span> In The First Place Which Is Why Almost Every Server Today Sucks</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/13</link>
+        <pubDate>Fri, 23 Jul 2010 00:49:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-13</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@LilXCj LilXCj]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lilxcj">@LilXCj</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="10" data-topic="350195">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/asyo4/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> asyo4:</div>
+<blockquote>
+<p>this is great, however it is in the wrong section - a mod should move to the appropriete section and it should be stickied there</p>
+</blockquote>
+</aside>
+<p>It’s not in the wrong section. This is a tutorial regarding basic JAVA usage but it relates to clients. However, this is not a client tutorial either. It shows that JaGeX like to throw in more memory for us to use while using clients by throwing in useless code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/12</link>
+        <pubDate>Thu, 22 Jul 2010 22:30:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-12</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@dannydude8 dannydude8]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dannydude8">@dannydude8</a> wrote:</p>
+          <blockquote>
+              <p>Very nice Lin, were moving onto the 600 era. I think we need a 600 server that has all the fun features like a 317</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/11</link>
+        <pubDate>Thu, 22 Jul 2010 20:59:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-11</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@asyo4 asyo4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asyo4">@asyo4</a> wrote:</p>
+          <blockquote>
+              <p>this is great, however it is in the wrong section - a mod should move to the appropriete section and it should be stickied there</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/10</link>
+        <pubDate>Thu, 22 Jul 2010 20:20:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-10</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@Lin Lin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lin">@Lin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“dillktm65, post:8, topic:350195”]This Was OutStanding Guide And perfect For New Coders With The Hard To Code 508’s[/quote]No Not Really It’s Not Like New Coders Should Be Coding 508’s In The First Place Which Is Why Almost Every Server Today Sucks</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/9</link>
+        <pubDate>Thu, 22 Jul 2010 20:03:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-9</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@dillktm65 dillktm65]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dillktm65">@dillktm65</a> wrote:</p>
+          <blockquote>
+              <p>This Was OutStanding Guide And perfect For New Coders With The Hard To Code 508’s</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/8</link>
+        <pubDate>Thu, 22 Jul 2010 20:00:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-8</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@Lin Lin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lin">@Lin</a> wrote:</p>
+          <blockquote>
+              <p>Really now? I haven’t seen you do anything related to the newer clients, and just because you’ve only seen code relating to clients doesn’t mean you understand the obfuscation.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/7</link>
+        <pubDate>Thu, 22 Jul 2010 19:58:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-7</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@noobs_are_ftw noobs are ftw]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/noobs_are_ftw">@noobs_are_ftw</a> wrote:</p>
+          <blockquote>
+              <p>knew this but i was lazy to write something like this gj <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> sadly only java i see now is in clients so of course i would know this <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/6</link>
+        <pubDate>Wed, 21 Jul 2010 15:23:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-6</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@lesterknome lesterknome]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lesterknome">@lesterknome</a> wrote:</p>
+          <blockquote>
+              <p>Fantastic job Lin! I don’t think you need any/much pre-existing knowledge to be able to understand this!</p>
+<p>[quote=“Newty, post:3, topic:350195”][quote author=JaydenD12 link=topic=446560.msg3277422#msg3277422 date=1279635938]<br>
+Great explanation Lin. &lt;3<br>
+[/quote]</p>
+<p>So you read this and understood exactly what he was saying in a total of 4 minutes?[/quote]</p>
+<p>This is all very basic… The only part I didn’t know before reading this tutorial was the bitshift part.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/5</link>
+        <pubDate>Wed, 21 Jul 2010 15:18:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-5</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@Lin Lin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lin">@Lin</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Newty, post:3, topic:350195”][quote author=JaydenD12 link=topic=446560.msg3277422#msg3277422 date=1279635938]<br>
+Great explanation Lin. &lt;3<br>
+[/quote]</p>
+<p>So you read this and understood exactly what he was saying in a total of 4 minutes?[/quote]More like I linked him to it and because he’s an awesome friend he posts that <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/4</link>
+        <pubDate>Tue, 20 Jul 2010 20:37:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-4</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@NewbieNewty Newty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/newbienewty">@NewbieNewty</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="350195">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jaydend12/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> JaydenD12:</div>
+<blockquote>
+<p>Great explanation Lin. &lt;3</p>
+</blockquote>
+</aside>
+<p>So you read this and understood exactly what he was saying in a total of 4 minutes?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/3</link>
+        <pubDate>Tue, 20 Jul 2010 20:26:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-3</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@JaydenD12 JaydenD12]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jaydend12">@JaydenD12</a> wrote:</p>
+          <blockquote>
+              <p>Great explanation Lin. &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/2</link>
+        <pubDate>Tue, 20 Jul 2010 14:25:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-2</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+      <item>
+        <title>Understanding Newer Clients (474, 508, etc) Obfuscation Results</title>
+        <dc:creator><![CDATA[@Lin Lin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lin">@Lin</a> wrote:</p>
+          <blockquote>
+              <p>Edit: Hmm… Probably wrong place… Not sure why I posted it here…</p>
+<p>Alright. I’m here to teach you just a little bit about the wonderful world of newer clients (4xx-508, maybe higher, don’t know). Now, you may have looked inside a client and thought Jagex was a bunch of crazy geniuses who mean business when working on stuff, but really, it’s the obfuscator they use.</p>
+<p>Basically, they created the client where it’s actually human-readable but the compiled version has had special work done to it to make it harder to reverse-engineer. I’m not sure where the current deobfuscators will take us, but the ones used on 508 clients make it look like a 317 client with a bunch of stuff to confuse the hell out of us. I’m going to teach you how to see what is really being done and show you how simple the code really is.</p>
+<p>Let’s take a look at packet 89 from server to client, which is sending a message (pushMessage in a refactored 317).</p>
+<p><code>	if ((Class49.anInt962 ^ 0xffffffff) == -90) {
+	    long l = Class68_Sub13_Sub8.aPacketStream_3560.method941(81);
+	    RSString class100
+		= (Class68_Sub20_Sub1.method1009
+		   (Class68_Sub19.method996
+			(25, Class68_Sub13_Sub8.aPacketStream_3560)
+			.method1616(2)));
+	    Class48.method520(Class56.method570(l, -1).method1597(12688), -67,
+			      class100, 6);
+	    Class49.anInt962 = -1;
+	    return true;
+	}</code></p>
+<p>Okay, looks complicated, right? Not really. This is how it should look.</p>
+<p><code>	if (Class49.packetID == 89) {
+	    long playerNameEncrypted = Class68_Sub13_Sub8.packetStream.readQWord();
+	    RSString message = (Class68_Sub20_Sub1.method1009(Class68_Sub19.readRSString(Class68_Sub13_Sub8.packetStream).decryptMessage(2)));
+	    Class48.sendMessage(Class56.getName(playerNameEncrypted, true).method1597(true), message);
+		//The first true used to be -1, and it's just a simple number check acted as a flag.
+		//The second true was 12688, and once again, a flag disguised as a number.
+		//The 6 was yet another dummy, and only used for assign-only variables. In other words, it was checked and other variables were assigned based on it, but never used.
+		//The removed -67 was a dummy used for a math operation to another dummy.
+		//6 is probably useless as well, but it's not important for now.
+	    Class49.packetID = -1;
+	    return true;
+	}</code>Not everything may be renamed perfectly, but you get the idea.</p>
+<p>Now, I don’t normally recommend using anything but an IDE, but Notepad++ highlights all keywords the instant you select them. This helps you find dummy arguments and variables, which can really come in handy.</p>
+<p><span class="bbcode-b">Finding Dummies and Getting Real Bit-Shift Values</span><br>
+Okay. A lot, if not all methods, have dummy arguments in them, which are pretty much useless values to confuse you. For starts, in your Stream class, look at method method941. This is the ReadQWord, or ReadLong method. Although it doesn’t look the same as it does in 317 clients and servers, it does the same thing. Here’s what the method currently looks like.</p>
+<p><code>public long method941(int i) {
+	anInt2989++;
+	if (i &lt; 27)
+	    aClass68_Sub20_Sub10_Sub1Array3006 = null;
+	long l = 0xffffffffL &amp; (long) readDWord();
+	long l_30_ = (long) readDWord() &amp; 0xffffffffL;
+	return l_30_ + (l &lt;&lt; -2097004448);
+}</code><br>
+Here’s what it should look like.</p>
+<p><code>public long readQWord() {
+	long l = 0xffffffffL &amp; (long) readDWord();
+	long l_30_ = (long) readDWord() &amp; 0xffffffffL;
+	return l_30_ + (l &lt;&lt; 32);
+}</code>So let’s start with argument ‘i’. In Notepad++, select it. Within that method, you see an if statement comparing it with 27. If it’s less than, set aClass68_Sub20_Sub10_Sub1Array3006 to null. This isn’t assigned anywhere in the class, and overall it doesn’t seem of much use around the client. Though, even if it does serve purpose, there’s nothing reading 8 bytes would trigger, especially if a dummy argument was less than 27. So, you can remove i, the if statement, and the aClass68_Sub20_Sub10_Sub1Array3006 assignment.</p>
+<p>Something else you see is anInt2989++. Now, this is one of those assign-only variables and is never read from in the client, so free feel to delete it, and if you’re brave enough, anInt2989’s declaration and assignment in Class21.</p>
+<p>Now we’re left with the insane shift left value of -2097004448. This is really simple. When dealing with bit shifts, for an integer, only the first 5 bits are used, and if a long, the first 6 bits. So, this method returns a long, which means we use the first 6 bits. -2097004448 &amp; 0x3F results in 32, so x &lt;&lt; -2097004448 is the same thing as x &lt;&lt; 32.</p>
+<p><span class="bbcode-b">Integer Flags</span><br>
+As you venture throughout the client, you’ll never see a boolean-typed argument inside a method. Instead, it’s an integer and you’ll see an if statement checking if it’s a specific value. Obviously, it wasn’t originally a number, but a simple flag. Now, you’ll most likely see the number is used again with some sort of math done to it. This can sometimes be the same as !flag or checking its value and assigning the flag from there. Either way though, it’s just a flag in disguise meant to confuse us.</p>
+<p><span class="bbcode-b">The Wonderful XOR Operations</span><br>
+These you see nearly everywhere, and most commonly, the number used is 0xFFFFFFFF. All this one does is switches the sign and subtracts 1. This is used <span class="bbcode-i">most</span> of the time for packet checks. So for example, if the value to be checked was 33 and you couldn’t find it, you’d search for -34. But if the value isn’t 0xFFFFFFFF, just use Windows Calculator or something else. Normally it comes out to be a simple number.</p>
+<p>Another thing you might see is something like this.</p>
+<pre><code class="lang-auto">if ((valueA ^ 0xFFFFFFFF) &lt; (valueB ^ 0xFFFFFFFF))</code></pre>
+<p>Just remove the XOR operations and switch around the &lt; sign.</p>
+<p><span class="bbcode-b">Static Assignments</span><br>
+These are what you see in the static blocks inside several classes and are pretty straight-forward. They’re just constant values that are placed in various areas instead of inside a method where they’re used.</p>
+<p>So that’s all I feel like typing. Sorry if I’m unclear or made a mistake, but it’s pretty early here and I’m a bit tired. Anyway, 'hope someone finds this useful.</p>
+<p>~Lin</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195/1</link>
+        <pubDate>Tue, 20 Jul 2010 14:21:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-350195-1</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-newer-clients-474-508-etc-obfuscation-results/350195.rss">Understanding Newer Clients (474, 508, etc) Obfuscation Results</source>
+      </item>
+  </channel>
+</rss>

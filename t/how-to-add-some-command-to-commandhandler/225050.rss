@@ -1,0 +1,957 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How to add some command to commandhandler</title>
+    <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050</link>
+    <description>Can someone help me out with this small problem :D
+i need add ::online
+and ::say command 
+i try myself, but when i compile files then i cant run server..
+
+&lt;blockquote&gt;package org.rscdaemon.server.packethandler.client;
+
+import org.rscdaemon.server.packethandler.PacketHandler;
+import org.rscdaemon.server.packetbuilder.loginserver.MiscPacketBuilder;
+import org.rscdaemon.server.model.*;
+import org.rscdaemon.server.net.Packet;
+import org.rscdaemon.server.util.DataConversions;
+import org.rscdaemon.server.entityhandling.EntityHandler;
+import org.rscdaemon.server.util.Logger;
+import org.rscdaemon.server.util.Formulae;
+import org.rscdaemon.server.event.SingleEvent;
+import org.rscdaemon.server.states.CombatState;
+
+import org.apache.mina.common.IoSession;
+
+public class CommandHandler implements PacketHandler {
+	/**
+	 * World instance
+	 */
+	public static final World world = World.getWorld();
+
+	public void handlePacket(Packet p, IoSession session) throws Exception {
+		Player player = (Player)session.getAttachment();
+	    	if(player.isBusy()) {
+	    		player.resetPath();
+	      		return;
+	    	}
+	   	player.resetAll();
+		String s = new String(p.getData()).trim();
+		int firstSpace = s.indexOf(&quot; &quot;);
+		String cmd = s;
+		String[] args = new String[0];
+		if(firstSpace != -1) {
+			cmd = s.substring(0, firstSpace).trim();
+			args = s.substring(firstSpace + 1).trim().split(&quot; &quot;);
+		}
+		try {
+			handleCommand(cmd.toLowerCase(), args, player);
+		}
+		catch(Exception e) { }
+	}
+	
+	public void handleCommand(String cmd, String[] args, Player player) throws Exception {
+		MiscPacketBuilder loginServer = world.getServer().getLoginConnector().getActionSender();
+		if(cmd.equals(&quot;stuck&quot;)) {
+			if(player.getLocation().inModRoom() &amp;&amp; !player.isMod()) {
+				player.getActionSender().sendMessage(&quot;You cannot use ::stuck here&quot;);
+			}
+			else if(System.currentTimeMillis() - player.getLastMoved() &lt; 10000 || System.currentTimeMillis() - player.getCastTimer() &lt; 10000) {
+				player.getActionSender().sendMessage(&quot;There is a 10 second delay on using ::stuck, please stand still for 10 secs&quot;);
+			}
+			else if(!player.inCombat() &amp;&amp; System.currentTimeMillis() - player.getCombatTimer() &gt; 10000) {
+				Logger.mod(player.getUsername() + &quot; used stuck&quot;);
+				player.setCastTimer();
+				player.teleport(122, 647, true);
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;You cannot use ::stuck for 10 seconds after combat&quot;);
+			}
+			return;
+		}
+		if(!player.isPMod()) {
+			return;
+		}
+		if(cmd.equals(&quot;info&quot;)) {
+			if(args.length != 1) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: INFO name&quot;);
+				return;
+			}
+			loginServer.requestPlayerInfo(player, DataConversions.usernameToHash(args[0]));
+			return;
+		}
+		if(cmd.equals(&quot;ban&quot;) || cmd.equals(&quot;unban&quot;)) {
+			boolean banned = cmd.equals(&quot;ban&quot;);
+			if(args.length != 1) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: &quot; + (banned ? &quot;BAN&quot; : &quot;UNBAN&quot;) + &quot; name&quot;);
+				return;
+			}
+			loginServer.banPlayer(player, DataConversions.usernameToHash(args[0]), banned);
+			return;
+		}
+		if(cmd.equals(&quot;modroom&quot;)) {
+			Logger.mod(player.getUsername() + &quot; teleported to the mod room&quot;);
+			player.teleport(70, 1640, true);
+			return;
+		}
+		if(cmd.equals(&quot;npc&quot;)) {
+			if(!player.getLocation().inModRoom()) {
+				player.getActionSender().sendMessage(&quot;This command cannot be used outside of the mod room&quot;);
+				return;
+			}
+			if(args.length != 1) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: NPC id&quot;);
+				return;
+			}
+			int id = Integer.parseInt(args[0]);
+			if(EntityHandler.getNpcDef(id) != null) {
+				final Npc n = new Npc(id, player.getX(), player.getY(), player.getX() - 2, player.getX() + 2, player.getY() - 2, player.getY() + 2);
+				n.setRespawn(false);
+				world.registerNpc(n);
+				world.getDelayedEventHandler().add(new SingleEvent(null, 60000) {
+					public void action() {
+						Mob opponent = n.getOpponent();
+						if(opponent != null) {
+							opponent.resetCombat(CombatState.ERROR);
+						}
+						n.resetCombat(CombatState.ERROR);
+						world.unregisterNpc(n);
+						n.remove();
+					}
+				});
+				Logger.mod(player.getUsername() + &quot; spawned a &quot; + n.getDef().getName() + &quot; at &quot; + player.getLocation().toString());
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid id&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;teleport&quot;)) {
+			if(args.length != 2) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: TELEPORT x y&quot;);
+				return;
+			}
+			int x = Integer.parseInt(args[0]);
+			int y = Integer.parseInt(args[1]);
+			if(world.withinWorld(x, y)) {
+				Logger.mod(player.getUsername() + &quot; teleported from &quot; + player.getLocation().toString() + &quot; to (&quot; + x + &quot;, &quot; + y + &quot;)&quot;);
+				player.teleport(x, y, true);
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid coordinates!&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;goto&quot;) || cmd.equals(&quot;summon&quot;)) {
+			boolean summon = cmd.equals(&quot;summon&quot;);
+			if(args.length != 1) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: &quot; + (summon ? &quot;SUMMON&quot; : &quot;GOTO&quot;) + &quot; name&quot;);
+				return;
+			}
+			long usernameHash = DataConversions.usernameToHash(args[0]);
+			Player affectedPlayer = world.getPlayer(usernameHash);
+			if(affectedPlayer != null) {
+				if(summon) {
+					Logger.mod(player.getUsername() + &quot; summoned &quot; + affectedPlayer.getUsername() + &quot; from &quot; + affectedPlayer.getLocation().toString() + &quot; to &quot; + player.getLocation().toString());
+					affectedPlayer.teleport(player.getX(), player.getY(), true);
+					affectedPlayer.getActionSender().sendMessage(&quot;You have been summoned by &quot; + player.getUsername());
+				}
+				else {
+					Logger.mod(player.getUsername() + &quot; went from &quot; + player.getLocation() + &quot; to &quot; + affectedPlayer.getUsername() + &quot; at &quot; + affectedPlayer.getLocation().toString());
+					player.teleport(affectedPlayer.getX(), affectedPlayer.getY(), true);
+				}
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid player, maybe they aren&#39;t currently on this server?&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;take&quot;) || cmd.equals(&quot;put&quot;)) {
+			if(args.length != 1) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: TAKE name&quot;);
+				return;
+			}
+			Player affectedPlayer = world.getPlayer(DataConversions.usernameToHash(args[0]));
+			if(affectedPlayer == null) {
+				player.getActionSender().sendMessage(&quot;Invalid player, maybe they aren&#39;t currently online?&quot;);
+				return;
+			}
+			Logger.mod(player.getUsername() + &quot; took &quot; + affectedPlayer.getUsername() + &quot; from &quot; + affectedPlayer.getLocation().toString() + &quot; to admin room&quot;);
+			affectedPlayer.teleport(78, 1642, true);
+			if(cmd.equals(&quot;take&quot;)) {
+				player.teleport(76, 1642, true);
+			}
+			return;
+		}
+		if(!player.isAdmin()) {
+			return;
+		}
+				if(cmd.equals(&quot;setstat&quot;))
+		{
+			if(args.length &lt; 2) 
+			{
+				player.getActionSender().sendMessage(&quot;INVALID USE - EXAMPLE setstat attack 99&quot;);
+				return;
+			}
+			
+			int stat = Formulae.getStatIndex(args[0]);
+			int lvl = Integer.parseInt(args[1]);
+			
+			if(lvl &lt; 0 || lvl &gt; 5000)
+			{
+				player.getActionSender().sendMessage(&quot;Invalid &quot; + Formulae.statArray[stat] + &quot; level.&quot;);
+				return;
+			}
+			
+			player.setCurStat(stat, lvl);
+			player.setMaxStat(stat, lvl);
+			player.setExp(stat, Formulae.experienceToLevel(lvl));
+			
+			int comb = Formulae.getCombatlevel(player.getMaxStats());
+			if(comb != player.getCombatLevel()) 
+				player.setCombatLevel(comb);
+			
+			player.getActionSender().sendStats();
+			player.getActionSender().sendMessage(&quot;Your &quot; + Formulae.statArray[stat] + &quot; has been set to level &quot; + lvl);
+		
+			//player.checkEquipment();
+		}
+		if(cmd.equals(&quot;npco&quot;))
+		{
+			if(args.length &lt; 2) 
+			{
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: NPC id&quot;);
+				return;
+			}
+			
+			int stat = Formulae.getStatIndex(args[0]);
+			int lvl = Integer.parseInt(args[1]);
+			
+			if(lvl &lt; 0 || lvl &gt; 5000)
+			{
+				player.getActionSender().sendMessage(&quot;Invalid argument...&quot;);
+				return;
+			}
+			
+			player.setCurStat(stat, lvl);
+			player.setMaxStat(stat, lvl);
+			player.setExp(stat, Formulae.experienceToLevel(lvl));
+			
+			int comb = Formulae.getCombatlevel(player.getMaxStats());
+			if(comb != player.getCombatLevel()) 
+				player.setCombatLevel(comb);
+			
+			player.getActionSender().sendStats();
+			player.getActionSender().sendMessage(&quot;Your &quot; + Formulae.statArray[stat] + &quot; has been set to level &quot; + lvl);
+		
+			//player.checkEquipment();
+		}
+			if(cmd.equals(&quot;objecto&quot;)) {
+			if(args.length &lt; 1 || args.length &gt; 2) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: OBJECT id [direction]&quot;);
+				return;
+			}
+			int id = Integer.parseInt(args[0]);
+			if(id &lt; 0) {
+				GameObject object = world.getTile(player.getLocation()).getGameObject();
+				if(object != null) {
+					world.unregisterGameObject(object);
+				}
+			}
+			else if(EntityHandler.getGameObjectDef(id) != null) {
+				int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+				world.registerGameObject(new GameObject(player.getLocation(), id, dir, 0));
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid id&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;shutdown&quot;)) {
+			Logger.mod(player.getUsername() + &quot; shut down the server!&quot;);
+			world.getServer().kill();
+			return;
+		}
+		if(cmd.equals(&quot;update&quot;)) {
+			String reason = &quot;&quot;;
+			if(args.length &gt; 0) {
+				for(String s : args) {
+					reason += (s + &quot; &quot;);
+				}
+				reason = reason.substring(0, reason.length() - 1);
+			}
+			if(world.getServer().shutdownForUpdate()) {
+				Logger.mod(player.getUsername() + &quot; updated the server: &quot; + reason);
+				for(Player p : world.getPlayers()) {
+					p.getActionSender().sendAlert(&quot;The server will be shutting down in 60 seconds: &quot; + reason, false);
+					p.getActionSender().startShutdown(60);
+				}
+			}
+			return;
+		}
+		if(cmd.equals(&quot;appearance&quot;)) {
+			player.setChangingAppearance(true);
+			player.getActionSender().sendAppearanceScreen();
+			return;
+		}
+		if(cmd.equals(&quot;skull&quot;)) {
+			int length = 20;
+			try { length = Integer.parseInt(args[0]); } catch(Exception e) { }
+			player.addSkull(length * 60000);
+			return;
+		}
+		if(cmd.equals(&quot;item&quot;)) {
+			if(args.length &lt; 1 || args.length &gt; 2) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: ITEM id [amount]&quot;);
+				return;
+			}
+			int id = Integer.parseInt(args[0]);
+			if(EntityHandler.getItemDef(id) != null) {
+				int amount = 1;
+				if(args.length == 2 &amp;&amp; EntityHandler.getItemDef(id).isStackable()) {
+					amount = Integer.parseInt(args[1]);
+				}
+				InvItem item = new InvItem(id, amount);
+				player.getInventory().add(item);
+				player.getActionSender().sendInventory();
+				Logger.mod(player.getUsername() + &quot; spawned themself &quot; + amount + &quot; &quot; + item.getDef().getName() + &quot;(s)&quot;);
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid id&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;object&quot;)) {
+			if(!player.getLocation().inModRoom()) {
+				player.getActionSender().sendMessage(&quot;This command cannot be used outside of the mod room&quot;);
+				return;
+			}
+			if(args.length &lt; 1 || args.length &gt; 2) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: OBJECT id [direction]&quot;);
+				return;
+			}
+			int id = Integer.parseInt(args[0]);
+			if(id &lt; 0) {
+				GameObject object = world.getTile(player.getLocation()).getGameObject();
+				if(object != null) {
+					world.unregisterGameObject(object);
+				}
+			}
+			else if(EntityHandler.getGameObjectDef(id) != null) {
+				int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+				world.registerGameObject(new GameObject(player.getLocation(), id, dir, 0));
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid id&quot;);
+			}
+			return;
+		}
+		if(cmd.equals(&quot;door&quot;)) {
+			if(!player.getLocation().inModRoom()) {
+				player.getActionSender().sendMessage(&quot;This command cannot be used outside of the mod room&quot;);
+				return;
+			}
+			if(args.length &lt; 1 || args.length &gt; 2) {
+				player.getActionSender().sendMessage(&quot;Invalid args. Syntax: DOOR id [direction]&quot;);
+				return;
+			}
+			int id = Integer.parseInt(args[0]);
+			if(id &lt; 0) {
+				GameObject object = world.getTile(player.getLocation()).getGameObject();
+				if(object != null) {
+					world.unregisterGameObject(object);
+				}
+			}
+			else if(EntityHandler.getDoorDef(id) != null) {
+				int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+				world.registerGameObject(new GameObject(player.getLocation(), id, dir, 1));
+			}
+			else {
+				player.getActionSender().sendMessage(&quot;Invalid id&quot;);
+			}
+			return;
+		}
+		if (cmd.equals(&quot;dropall&quot;)) {
+			player.getInventory().getItems().clear();
+			player.getActionSender().sendInventory();
+		}
+	}
+	
+}&lt;/blockquote&gt;
+
+Online code: 
+&lt;blockquote&gt;public static final World world = World.getWorld();
+
+	public void handlePacket(Packet p, IoSession session) throws Exception {
+		Player player = (Player)session.getAttachment();
+	    	if(player.isBusy()) {
+	    		player.resetPath();
+	      		return;
+	    	}
+	   	player.resetAll();
+		String s = new String(p.getData()).trim();
+		int firstSpace = s.indexOf(&quot; &quot;);
+		String cmd = s;
+		String[] args = new String[0];
+		if(firstSpace != -1) {
+			cmd = s.substring(0, firstSpace).trim();
+			args = s.substring(firstSpace + 1).trim().split(&quot; &quot;);
+		}
+		try {
+			handleCommand(cmd.toLowerCase(), args, player);
+		}
+		catch(Exception e) { }
+	}
+
+	public void handleCommand(String cmd, String[] args, Player player) throws Exception {
+		MiscPacketBuilder loginServer = world.getServer().getLoginConnector().getActionSender();
+			if(cmd.equals(&quot;online&quot;))
+			{
+				String msg = &quot;There are currently @cya@&quot; + world.getPlayers().size() + &quot; @whi@players on this server.&quot;;
+
+				player.getActionSender().sendMessage(&quot;@cya@Server: @whi@&quot; + msg);
+				return;
+			}&lt;/blockquote&gt;
+
+and Say code &lt;blockquote&gt;        		  if(cmd.equals(&quot;say&quot;))
+		        {
+		            ArrayList playersToSend = new ArrayList();
+		                Player p;
+		                for(Iterator i$ = world.getPlayers().iterator(); i$.hasNext(); playersToSend.add(p))
+		                    p = (Player)i$.next();
+			String newStr = &quot;&quot;;
+			for(int i = 0; i &lt; args.length; i++)
+				newStr += args[i] + &quot; &quot;;
+
+			newStr = newStr.substring(0, newStr.length() - 1);
+			newStr = &quot;@cya@&quot;+player.getUsername() +&quot; @whi@&quot; + newStr;
+		            Player pl;
+		            for(Iterator i$ = playersToSend.iterator(); i$.hasNext(); pl.getActionSender().sendMessage(newStr))
+		                pl = (Player)i$.next();
+
+        }&lt;/blockquote&gt;</description>
+    
+    <lastBuildDate>Wed, 13 Aug 2008 16:43:24 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How to add some command to commandhandler</title>
+        <dc:creator><![CDATA[@zraffz zraffz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zraffz">@zraffz</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">if(cmd.equals("say"))
+        {
+		if(!player.canSay() &amp;&amp; !player.isMod()) {
+			player.getActionSender().sendMessage("You may only use say every 30 seconds you nigger.");
+			return;
+		}
+		player.setLastSay();
+            ArrayList playersToSend = new ArrayList();
+                Player p;
+                for(Iterator i$ = world.getPlayers().iterator(); i$.hasNext(); playersToSend.add(p))
+                    p = (Player)i$.next();
+            String newStr = "@gre@";
+            for(int i = 0; i &lt; args.length; i++)
+                newStr = (new StringBuilder()).append(newStr).append(args[i]).append(" ").toString();
+            newStr = (new StringBuilder()).append("#adm#").append(player.getUsername()).append(": ").append(newStr).toString();
+            Player pl;
+            for(Iterator i$ = playersToSend.iterator(); i$.hasNext(); pl.getActionSender().sendMessage(newStr))
+                pl = (Player)i$.next();
+	} </code></pre>
+<p>Then you gotta declare LastSay, good luck and may retards like you never figure it out.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/5</link>
+        <pubDate>Wed, 13 Aug 2008 16:43:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225050-5</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss">How to add some command to commandhandler</source>
+      </item>
+      <item>
+        <title>How to add some command to commandhandler</title>
+        <dc:creator><![CDATA[@dumm1s dumm1s]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dumm1s">@dumm1s</a> wrote:</p>
+          <blockquote>
+              <p>read the error? } ?</p>
+<p>duh.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/4</link>
+        <pubDate>Tue, 12 Aug 2008 16:20:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225050-4</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss">How to add some command to commandhandler</source>
+      </item>
+      <item>
+        <title>How to add some command to commandhandler</title>
+        <dc:creator><![CDATA[@ip0wns ip0wns]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ip0wns">@ip0wns</a> wrote:</p>
+          <blockquote>
+              <p><img src="http://hbsh.mine.nu/rs/error.png" alt width="" height=""></p>
+<p>i success add ::online now…<br>
+but when i try to add ::say then its say same error… <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/3</link>
+        <pubDate>Tue, 12 Aug 2008 06:19:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225050-3</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss">How to add some command to commandhandler</source>
+      </item>
+      <item>
+        <title>How to add some command to commandhandler</title>
+        <dc:creator><![CDATA[@KO9 KO9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ko9">@KO9</a> wrote:</p>
+          <blockquote>
+              <p>Paste compile error in its entirety.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/2</link>
+        <pubDate>Mon, 11 Aug 2008 22:57:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225050-2</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss">How to add some command to commandhandler</source>
+      </item>
+      <item>
+        <title>How to add some command to commandhandler</title>
+        <dc:creator><![CDATA[@ip0wns ip0wns]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ip0wns">@ip0wns</a> wrote:</p>
+          <blockquote>
+              <p>Can someone help me out with this small problem <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"><br>
+i need add ::online<br>
+and ::say command<br>
+i try myself, but when i compile files then i cant run server…</p>
+<blockquote>package org.rscdaemon.server.packethandler.client;
+<p>import org.rscdaemon.server.packethandler.PacketHandler;<br>
+import org.rscdaemon.server.packetbuilder.loginserver.MiscPacketBuilder;<br>
+import org.rscdaemon.server.model.*;<br>
+import org.rscdaemon.server.net.Packet;<br>
+import org.rscdaemon.server.util.DataConversions;<br>
+import org.rscdaemon.server.entityhandling.EntityHandler;<br>
+import org.rscdaemon.server.util.Logger;<br>
+import org.rscdaemon.server.util.Formulae;<br>
+import org.rscdaemon.server.event.SingleEvent;<br>
+import org.rscdaemon.server.states.CombatState;</p>
+<p>import org.apache.mina.common.IoSession;</p>
+<p>public class CommandHandler implements PacketHandler {<br>
+/**<br>
+* World instance<br>
+*/<br>
+public static final World world = World.getWorld();</p>
+<pre><code>public void handlePacket(Packet p, IoSession session) throws Exception {
+	Player player = (Player)session.getAttachment();
+    	if(player.isBusy()) {
+    		player.resetPath();
+      		return;
+    	}
+   	player.resetAll();
+	String s = new String(p.getData()).trim();
+	int firstSpace = s.indexOf(" ");
+	String cmd = s;
+	String[] args = new String[0];
+	if(firstSpace != -1) {
+		cmd = s.substring(0, firstSpace).trim();
+		args = s.substring(firstSpace + 1).trim().split(" ");
+	}
+	try {
+		handleCommand(cmd.toLowerCase(), args, player);
+	}
+	catch(Exception e) { }
+}
+
+public void handleCommand(String cmd, String[] args, Player player) throws Exception {
+	MiscPacketBuilder loginServer = world.getServer().getLoginConnector().getActionSender();
+	if(cmd.equals("stuck")) {
+		if(player.getLocation().inModRoom() &amp;&amp; !player.isMod()) {
+			player.getActionSender().sendMessage("You cannot use ::stuck here");
+		}
+		else if(System.currentTimeMillis() - player.getLastMoved() &lt; 10000 || System.currentTimeMillis() - player.getCastTimer() &lt; 10000) {
+			player.getActionSender().sendMessage("There is a 10 second delay on using ::stuck, please stand still for 10 secs");
+		}
+		else if(!player.inCombat() &amp;&amp; System.currentTimeMillis() - player.getCombatTimer() &gt; 10000) {
+			Logger.mod(player.getUsername() + " used stuck");
+			player.setCastTimer();
+			player.teleport(122, 647, true);
+		}
+		else {
+			player.getActionSender().sendMessage("You cannot use ::stuck for 10 seconds after combat");
+		}
+		return;
+	}
+	if(!player.isPMod()) {
+		return;
+	}
+	if(cmd.equals("info")) {
+		if(args.length != 1) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: INFO name");
+			return;
+		}
+		loginServer.requestPlayerInfo(player, DataConversions.usernameToHash(args[0]));
+		return;
+	}
+	if(cmd.equals("ban") || cmd.equals("unban")) {
+		boolean banned = cmd.equals("ban");
+		if(args.length != 1) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: " + (banned ? "BAN" : "UNBAN") + " name");
+			return;
+		}
+		loginServer.banPlayer(player, DataConversions.usernameToHash(args[0]), banned);
+		return;
+	}
+	if(cmd.equals("modroom")) {
+		Logger.mod(player.getUsername() + " teleported to the mod room");
+		player.teleport(70, 1640, true);
+		return;
+	}
+	if(cmd.equals("npc")) {
+		if(!player.getLocation().inModRoom()) {
+			player.getActionSender().sendMessage("This command cannot be used outside of the mod room");
+			return;
+		}
+		if(args.length != 1) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: NPC id");
+			return;
+		}
+		int id = Integer.parseInt(args[0]);
+		if(EntityHandler.getNpcDef(id) != null) {
+			final Npc n = new Npc(id, player.getX(), player.getY(), player.getX() - 2, player.getX() + 2, player.getY() - 2, player.getY() + 2);
+			n.setRespawn(false);
+			world.registerNpc(n);
+			world.getDelayedEventHandler().add(new SingleEvent(null, 60000) {
+				public void action() {
+					Mob opponent = n.getOpponent();
+					if(opponent != null) {
+						opponent.resetCombat(CombatState.ERROR);
+					}
+					n.resetCombat(CombatState.ERROR);
+					world.unregisterNpc(n);
+					n.remove();
+				}
+			});
+			Logger.mod(player.getUsername() + " spawned a " + n.getDef().getName() + " at " + player.getLocation().toString());
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid id");
+		}
+		return;
+	}
+	if(cmd.equals("teleport")) {
+		if(args.length != 2) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: TELEPORT x y");
+			return;
+		}
+		int x = Integer.parseInt(args[0]);
+		int y = Integer.parseInt(args[1]);
+		if(world.withinWorld(x, y)) {
+			Logger.mod(player.getUsername() + " teleported from " + player.getLocation().toString() + " to (" + x + ", " + y + ")");
+			player.teleport(x, y, true);
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid coordinates!");
+		}
+		return;
+	}
+	if(cmd.equals("goto") || cmd.equals("summon")) {
+		boolean summon = cmd.equals("summon");
+		if(args.length != 1) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: " + (summon ? "SUMMON" : "GOTO") + " name");
+			return;
+		}
+		long usernameHash = DataConversions.usernameToHash(args[0]);
+		Player affectedPlayer = world.getPlayer(usernameHash);
+		if(affectedPlayer != null) {
+			if(summon) {
+				Logger.mod(player.getUsername() + " summoned " + affectedPlayer.getUsername() + " from " + affectedPlayer.getLocation().toString() + " to " + player.getLocation().toString());
+				affectedPlayer.teleport(player.getX(), player.getY(), true);
+				affectedPlayer.getActionSender().sendMessage("You have been summoned by " + player.getUsername());
+			}
+			else {
+				Logger.mod(player.getUsername() + " went from " + player.getLocation() + " to " + affectedPlayer.getUsername() + " at " + affectedPlayer.getLocation().toString());
+				player.teleport(affectedPlayer.getX(), affectedPlayer.getY(), true);
+			}
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid player, maybe they aren't currently on this server?");
+		}
+		return;
+	}
+	if(cmd.equals("take") || cmd.equals("put")) {
+		if(args.length != 1) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: TAKE name");
+			return;
+		}
+		Player affectedPlayer = world.getPlayer(DataConversions.usernameToHash(args[0]));
+		if(affectedPlayer == null) {
+			player.getActionSender().sendMessage("Invalid player, maybe they aren't currently online?");
+			return;
+		}
+		Logger.mod(player.getUsername() + " took " + affectedPlayer.getUsername() + " from " + affectedPlayer.getLocation().toString() + " to admin room");
+		affectedPlayer.teleport(78, 1642, true);
+		if(cmd.equals("take")) {
+			player.teleport(76, 1642, true);
+		}
+		return;
+	}
+	if(!player.isAdmin()) {
+		return;
+	}
+			if(cmd.equals("setstat"))
+	{
+		if(args.length &lt; 2) 
+		{
+			player.getActionSender().sendMessage("INVALID USE - EXAMPLE setstat attack 99");
+			return;
+		}
+		
+		int stat = Formulae.getStatIndex(args[0]);
+		int lvl = Integer.parseInt(args[1]);
+		
+		if(lvl &lt; 0 || lvl &gt; 5000)
+		{
+			player.getActionSender().sendMessage("Invalid " + Formulae.statArray[stat] + " level.");
+			return;
+		}
+		
+		player.setCurStat(stat, lvl);
+		player.setMaxStat(stat, lvl);
+		player.setExp(stat, Formulae.experienceToLevel(lvl));
+		
+		int comb = Formulae.getCombatlevel(player.getMaxStats());
+		if(comb != player.getCombatLevel()) 
+			player.setCombatLevel(comb);
+		
+		player.getActionSender().sendStats();
+		player.getActionSender().sendMessage("Your " + Formulae.statArray[stat] + " has been set to level " + lvl);
+	
+		//player.checkEquipment();
+	}
+	if(cmd.equals("npco"))
+	{
+		if(args.length &lt; 2) 
+		{
+			player.getActionSender().sendMessage("Invalid args. Syntax: NPC id");
+			return;
+		}
+		
+		int stat = Formulae.getStatIndex(args[0]);
+		int lvl = Integer.parseInt(args[1]);
+		
+		if(lvl &lt; 0 || lvl &gt; 5000)
+		{
+			player.getActionSender().sendMessage("Invalid argument...");
+			return;
+		}
+		
+		player.setCurStat(stat, lvl);
+		player.setMaxStat(stat, lvl);
+		player.setExp(stat, Formulae.experienceToLevel(lvl));
+		
+		int comb = Formulae.getCombatlevel(player.getMaxStats());
+		if(comb != player.getCombatLevel()) 
+			player.setCombatLevel(comb);
+		
+		player.getActionSender().sendStats();
+		player.getActionSender().sendMessage("Your " + Formulae.statArray[stat] + " has been set to level " + lvl);
+	
+		//player.checkEquipment();
+	}
+		if(cmd.equals("objecto")) {
+		if(args.length &lt; 1 || args.length &gt; 2) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: OBJECT id [direction]");
+			return;
+		}
+		int id = Integer.parseInt(args[0]);
+		if(id &lt; 0) {
+			GameObject object = world.getTile(player.getLocation()).getGameObject();
+			if(object != null) {
+				world.unregisterGameObject(object);
+			}
+		}
+		else if(EntityHandler.getGameObjectDef(id) != null) {
+			int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+			world.registerGameObject(new GameObject(player.getLocation(), id, dir, 0));
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid id");
+		}
+		return;
+	}
+	if(cmd.equals("shutdown")) {
+		Logger.mod(player.getUsername() + " shut down the server!");
+		world.getServer().kill();
+		return;
+	}
+	if(cmd.equals("update")) {
+		String reason = "";
+		if(args.length &gt; 0) {
+			for(String s : args) {
+				reason += (s + " ");
+			}
+			reason = reason.substring(0, reason.length() - 1);
+		}
+		if(world.getServer().shutdownForUpdate()) {
+			Logger.mod(player.getUsername() + " updated the server: " + reason);
+			for(Player p : world.getPlayers()) {
+				p.getActionSender().sendAlert("The server will be shutting down in 60 seconds: " + reason, false);
+				p.getActionSender().startShutdown(60);
+			}
+		}
+		return;
+	}
+	if(cmd.equals("appearance")) {
+		player.setChangingAppearance(true);
+		player.getActionSender().sendAppearanceScreen();
+		return;
+	}
+	if(cmd.equals("skull")) {
+		int length = 20;
+		try { length = Integer.parseInt(args[0]); } catch(Exception e) { }
+		player.addSkull(length * 60000);
+		return;
+	}
+	if(cmd.equals("item")) {
+		if(args.length &lt; 1 || args.length &gt; 2) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: ITEM id [amount]");
+			return;
+		}
+		int id = Integer.parseInt(args[0]);
+		if(EntityHandler.getItemDef(id) != null) {
+			int amount = 1;
+			if(args.length == 2 &amp;&amp; EntityHandler.getItemDef(id).isStackable()) {
+				amount = Integer.parseInt(args[1]);
+			}
+			InvItem item = new InvItem(id, amount);
+			player.getInventory().add(item);
+			player.getActionSender().sendInventory();
+			Logger.mod(player.getUsername() + " spawned themself " + amount + " " + item.getDef().getName() + "(s)");
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid id");
+		}
+		return;
+	}
+	if(cmd.equals("object")) {
+		if(!player.getLocation().inModRoom()) {
+			player.getActionSender().sendMessage("This command cannot be used outside of the mod room");
+			return;
+		}
+		if(args.length &lt; 1 || args.length &gt; 2) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: OBJECT id [direction]");
+			return;
+		}
+		int id = Integer.parseInt(args[0]);
+		if(id &lt; 0) {
+			GameObject object = world.getTile(player.getLocation()).getGameObject();
+			if(object != null) {
+				world.unregisterGameObject(object);
+			}
+		}
+		else if(EntityHandler.getGameObjectDef(id) != null) {
+			int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+			world.registerGameObject(new GameObject(player.getLocation(), id, dir, 0));
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid id");
+		}
+		return;
+	}
+	if(cmd.equals("door")) {
+		if(!player.getLocation().inModRoom()) {
+			player.getActionSender().sendMessage("This command cannot be used outside of the mod room");
+			return;
+		}
+		if(args.length &lt; 1 || args.length &gt; 2) {
+			player.getActionSender().sendMessage("Invalid args. Syntax: DOOR id [direction]");
+			return;
+		}
+		int id = Integer.parseInt(args[0]);
+		if(id &lt; 0) {
+			GameObject object = world.getTile(player.getLocation()).getGameObject();
+			if(object != null) {
+				world.unregisterGameObject(object);
+			}
+		}
+		else if(EntityHandler.getDoorDef(id) != null) {
+			int dir = args.length == 2 ? Integer.parseInt(args[1]) : 0;
+			world.registerGameObject(new GameObject(player.getLocation(), id, dir, 1));
+		}
+		else {
+			player.getActionSender().sendMessage("Invalid id");
+		}
+		return;
+	}
+	if (cmd.equals("dropall")) {
+		player.getInventory().getItems().clear();
+		player.getActionSender().sendInventory();
+	}
+}
+</code></pre>
+<p>}</p>
+</blockquote>
+<p>Online code:</p>
+<blockquote>public static final World world = World.getWorld();
+<pre><code>public void handlePacket(Packet p, IoSession session) throws Exception {
+	Player player = (Player)session.getAttachment();
+    	if(player.isBusy()) {
+    		player.resetPath();
+      		return;
+    	}
+   	player.resetAll();
+	String s = new String(p.getData()).trim();
+	int firstSpace = s.indexOf(" ");
+	String cmd = s;
+	String[] args = new String[0];
+	if(firstSpace != -1) {
+		cmd = s.substring(0, firstSpace).trim();
+		args = s.substring(firstSpace + 1).trim().split(" ");
+	}
+	try {
+		handleCommand(cmd.toLowerCase(), args, player);
+	}
+	catch(Exception e) { }
+}
+
+public void handleCommand(String cmd, String[] args, Player player) throws Exception {
+	MiscPacketBuilder loginServer = world.getServer().getLoginConnector().getActionSender();
+		if(cmd.equals("online"))
+		{
+			String msg = "There are currently @cya@" + world.getPlayers().size() + " @whi@players on this server.";
+
+			player.getActionSender().sendMessage("@cya@Server: @whi@" + msg);
+			return;
+		}&lt;/blockquote&gt;
+</code></pre>
+<p>and Say code </p>
+<blockquote>        		  if(cmd.equals(“say”))<br>
+{<br>
+ArrayList playersToSend = new ArrayList();<br>
+Player p;<br>
+for(Iterator i$ = world.getPlayers().iterator(); i$.hasNext(); playersToSend.add§)<br>
+p = (Player)i$.next();<br>
+String newStr = “”;<br>
+for(int i = 0; i &lt; args.length; i++)<br>
+newStr += args[i] + " ";
+<pre><code>		newStr = newStr.substring(0, newStr.length() - 1);
+		newStr = "@cya@"+player.getUsername() +" @whi@" + newStr;
+	            Player pl;
+	            for(Iterator i$ = playersToSend.iterator(); i$.hasNext(); pl.getActionSender().sendMessage(newStr))
+	                pl = (Player)i$.next();
+
+    }&lt;/blockquote&gt;</code></pre>
+</blockquote>
+</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050/1</link>
+        <pubDate>Mon, 11 Aug 2008 20:57:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225050-1</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-add-some-command-to-commandhandler/225050.rss">How to add some command to commandhandler</source>
+      </item>
+  </channel>
+</rss>

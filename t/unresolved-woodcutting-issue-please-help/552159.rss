@@ -1,0 +1,1604 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>(Unresolved)Woodcutting issue - Please help!</title>
+    <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159</link>
+    <description>So I have this problem where when you start woodcutting you are able to spam click the tree to get more than one log after the delay between them. In my source there is a CycleEventHandler, and you can basically set a container of events to happen on a set delay. I have tried a lot of things and cannot fix it, does anyone have any ideas?
+
+Edit: I think the problem is that it creates multiple instances of the woodcutting class for the client (due to spamclick) so it probably isnt because of the cycle event. I still don&#39;t know how to fix this, maybe something in ActionHandler or ClickObject? My ClickObject takes the click packet and sends the clicked objectid to the actionhandler and then the actionhandler starts the woodcutting method.
+
+Here is my Woodcutting.java:
+[code]
+package server.model.players.skills;
+
+import server.Server;
+import server.model.players.Client;
+import server.model.players.PlayerHandler;
+import server.model.players.skills.SkillHandler;
+import server.event.CycleEventHandler;
+import server.event.CycleEvent;
+import server.event.CycleEventContainer;
+import server.util.Misc;
+import server.*;
+import server.model.players.PlayerAssistant;
+
+//Completely redone by TSplash
+
+public class Woodcutting extends SkillHandler {
+
+/**
+--Method Guide-- (most are private, can be changed if desired)
+***
+*Main: attemptWcing
+*Misc: wcEventTimer(for container), createStump, wcLogDelay
+*Axe: hasAxe, usableAxe
+*Tree: treeType(0-normal, 5-magic), treeLog, treeLvl, treeXP, treeRespawnTime
+***
+***
+*usableAxe returns axeNumber, or -1 if there&#39;s no usable axe
+*axes[x][y]: x=axeNumber(0-7, bronze-dragon)
+*	y=0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime
+*tree[x][y]: x=treeType(0-5, normal-magic); y=treeID
+***
+*/
+
+public static void attemptWcing(final Client c, final int treeID, final int treeX, final int treeY)
+{	
+	if(c.isWc || !wcReqMet(c, treeID))
+		return;
+	
+	c.turnPlayerTo(c.objectX, c.objectY);
+	c.wcStartX = c.absX;
+	c.wcStartY = c.absY;
+
+	int axeNum = usableAxe(c);
+	c.isWc = true;
+	c.sendMessage(&quot;You begin to swing your axe at the tree...&quot;);
+	c.startAnimation(axes[axeNum][2]);
+
+	if(treeType(treeID) == 0)
+		c.doAmount = 1;
+	else
+		c.doAmount = Misc.random(25);
+	
+	//Cycles through the woodcutting process
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			if(wcReqMet(c, treeID) &amp;&amp; c.isWc)
+			{
+				c.getItems().addItem(treeLog(treeID), 1);
+				c.sendMessage(&quot;You get some logs.&quot;);
+				c.getPA().addSkillXP(treeXP(treeID) * WOODCUTTING_XP, 8);
+				c.doAmount--;
+			}
+			if(c.doAmount == 0)
+			{
+				createStump(c, treeID, treeX, treeY);
+				container.stop();
+			}
+			if(!wcReqMet(c, treeID) || !c.isWc)
+				container.stop();
+		}
+		@Override
+		public void stop()
+		{
+			c.isWc = false;
+		}
+	}, wcLogDelay(c, axeNum, treeID));
+
+	//Cycles through the woodcutting animation
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			if(c.isWc &amp;&amp; wcReqMet(c, treeID))
+			{
+				c.turnPlayerTo(c.objectX, c.objectY);
+				c.startAnimation(axes[axeNum][2]);
+			}
+			else
+			{
+				c.startAnimation(65535);
+				container.stop();
+			}
+		}
+		@Override
+		public void stop()
+		{
+		}
+	}, 4);
+}
+
+private static int wcLogDelay(Client c, int axeNum, int treeID)
+{
+	int treeDelay = (treeType(treeID)); //0-5
+	int spontaneousConfrontations = Misc.random(7); 
+	int axeDelay = axes[axeNum][3]; //Delay from axes[0-7]: 10,10,10,9,8,7,5,4
+	int levelDelay = (10 - (int)Math.floor(c.playerLevel[8] / 10));
+	
+	int totalDelay = treeDelay + axeDelay + levelDelay + spontaneousConfrontations;
+	return totalDelay;
+}
+
+private static boolean wcReqMet(Client c, int treeID)
+{
+	boolean Met = false;
+	if(hasAxe(c)
+		&amp;&amp; usableAxe(c) != -1
+		&amp;&amp; isTree(treeID)
+		&amp;&amp; c.playerLevel[8] &gt;= treeLvl(treeID)
+		&amp;&amp; c.getItems().freeSlots() != 0
+		&amp;&amp; c.wcStartX == c.absX
+		&amp;&amp; c.wcStartY == c.absY)
+		Met = true;
+	else if(!hasAxe(c))
+		c.sendMessage(&quot;You&#39;ll need an axe to cut down this tree.&quot;);
+	else if(usableAxe(c) == -1)
+		c.sendMessage(&quot;Your woodcutting level isn&#39;t high enough to use this axe.&quot;);
+	else if(c.playerLevel[8] &lt; treeLvl(treeID))
+		c.sendMessage(&quot;You need a woodcutting level of &quot; + treeLvl(treeID) + &quot; to cut down this tree&quot;);
+	else if(c.getItems().freeSlots() == 0)
+		c.sendMessage(&quot;Your inventory is full!&quot;);
+	
+	if(!Met)
+		c.isWc = false;
+	
+	return Met;
+}
+
+private static void createStump(final Client c, final int treeID, final int treeX, final int treeY)
+{
+	int stumpID = 1344;
+	int type = treeType(treeID);
+	if(type == 0)
+		stumpID = 1344;
+	else if(type == 1)
+		stumpID = 1356;
+	else if(type == 2)
+		stumpID = 7399;
+	else if(type == 3)
+		stumpID = 7400;
+	else if(type == 4)
+		stumpID = 7402;
+	else if(type == 5)
+		stumpID = 7401;
+
+	Server.objectHandler.createAnObject(c, stumpID, treeX, treeY);
+	//Used as a timer, when the tree re-spawn time has passed it replaces tree
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			Server.objectHandler.createAnObject(c, treeID, treeX, treeY);
+			container.stop();
+		}
+		@Override
+		public void stop()
+		{
+		}
+	}, treeRespawnTime(treeID));
+}
+
+/**
+*AXE METHODS
+*hasAxe, usableAxe
+*usableAxe if there is no usable axe return -1, else returns the best usable axe number
+*axes[x][y]: x- axe number; y- 0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime
+**/
+
+public static boolean hasAxe(Client c)
+{
+	for(int x = 0; x &lt; 8; x++)
+		if(c.getItems().playerHasItem(axes[x][0]) 
+			|| c.playerEquipment[3] == axes[x][0])
+			return true;
+	return false;
+}
+
+private static int usableAxe(Client c)
+{
+	int axeNumber = -1;
+	if(hasAxe(c))
+		for(int x = 0; x &lt; 8; x++)
+			if((c.getItems().playerHasItem(axes[x][0]) 
+				|| c.playerEquipment[3] == axes[x][0])
+				&amp;&amp; c.playerLevel[8] &gt;= axes[x][1])
+				axeNumber = x;
+	return axeNumber;
+}
+
+/**
+*TREE METHODS
+*BOOLEANS: isTree
+*INTS: treeType, treeLog, treeXP, treeLvl, treeRespawnTime
+**/
+
+public static boolean isTree(int treeID)
+{
+	for(int x = 0; x &lt; trees.length; x++)
+		for(int x1 = 0; x1 &lt; 6; x1++)
+			if(treeID == trees[x1][x])
+				return true;
+	return false;
+}
+
+private static int treeType(int treeID)
+{
+	int Type = -1;
+	for(int x1 = 0; x1 &lt; 6; x1++)
+		for(int x2 = 0; x2 &lt; trees.length; x2++)
+			if(treeID == trees[x1][x2])
+				Type = x1;
+	return Type;
+}
+
+private static int treeLog(int treeID)
+{
+	int logID = -1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			logID = 1513;
+		else if(treeID == trees[4][x])
+			logID = 1515;
+		else if(treeID == trees[3][x])
+			logID = 1517;
+		else if(treeID == trees[2][x])
+			logID = 1519;
+		else if(treeID == trees[1][x])
+			logID = 1521;
+		else if(treeID == trees[0][x])
+			logID = 1511;
+	}
+	return logID;
+}
+
+private static int treeXP(int treeID)
+{
+	int logXP = 0;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			logXP = 250;
+		else if(treeID == trees[4][x])
+			logXP = 175;
+		else if(treeID == trees[3][x])
+			logXP = 100;
+		else if(treeID == trees[2][x])
+			logXP = 68;
+		else if(treeID == trees[1][x])
+			logXP = 38;
+		else if(treeID == trees[0][x])
+			logXP = 25;
+	}
+	return logXP;
+}
+
+private static int treeLvl(int treeID)
+{
+	int level = 1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			level = 75;
+		else if(treeID == trees[4][x])
+			level = 60;
+		else if(treeID == trees[3][x])
+			level = 45;
+		else if(treeID == trees[2][x])
+			level = 30;
+		else if(treeID == trees[1][x])
+			level = 15;
+		else if(treeID == trees[0][x])
+			level = 1;
+	}
+	return level;
+}
+
+private static int treeRespawnTime(int treeID)
+{
+	int respawnTime = -1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			respawnTime = 100;
+		else if(treeID == trees[4][x])
+			respawnTime = 50;
+		else if(treeID == trees[3][x])
+			respawnTime = 25;
+		else if(treeID == trees[2][x])
+			respawnTime = 25;
+		else if(treeID == trees[1][x])
+			respawnTime = 15;
+		else if(treeID == trees[0][x])
+			respawnTime = 10;
+	}
+	respawnTime += Misc.random(25);
+	return respawnTime;
+}
+
+private final static int[][] axes = 
+{
+	{1351, 1, 879, 10},
+	{1349, 1, 877, 10},
+	{1353, 6, 875, 10},
+	{1361, 6, 873, 9},
+	{1355, 21, 871, 8},
+	{1357, 31, 869, 7},
+	{1359, 41, 867, 5},
+	{6739, 61, 2846, 4}
+};
+
+private final static int[][] trees = 
+{
+	//0-Normal trees
+	{1276, 1277, 1278, 1279, 1280, 1282, 
+	1283, 1284, 1285, 1286, 1287, 1288, 
+	1289, 1290, 1291, 1301, 1303, 1304, 
+	1305, 1318, 1319, 1315, 1316, 1330, 
+	1331, 1332, 1333, 1383, 1384, 2409, 
+	2447, 2448, 3033, 3034, 3035, 3036, 
+	3879, 3881, 3883, 3893, 3885, 3886, 
+	3887, 3888, 3892, 3889, 3890, 3891, 
+	3928, 3967, 3968, 4048, 4049, 4050, 
+	4051, 4052, 4053, 4054, 4060, 5004, 
+	5005, 5045, 5902, 5903, 5904, 8973, 
+	8974, 10041, 10081, 10082, 10664, 11112, 
+	11510, 12559, 12560, 12732, 12895, 12896, 
+	13412, 13411, 13419, 13843, 13844, 13845, 
+	13847, 13848, 13849, 13850, 14308, 14309, 
+	14513, 14514, 14515, 14521, 14564, 14565, 
+	14566, 14593, 14594, 14595, 14600, 14635, 
+	14636, 14637, 14642, 14664, 14665, 14666, 
+	14693, 14694, 14695, 14696, 14701, 14738, 
+	14796, 14797, 14798, 14799, 14800, 14801, 
+	14802, 14803, 14804, 14805, 14806, 14807, 
+	15489, 15776, 15777, 16264, 16265, 19165, 
+	19166, 19167, 23381}, 
+	//1-Oak trees
+	{1281, 3037, 8462, 8463, 8464, 8465,
+	8466, 8467, 10083, 13413, 13420},
+	//2-Willow trees
+	{1308, 5551, 5552, 5553, 8481, 8482, 8483,
+	8484, 8485, 8486, 8487, 8488, 8496, 8497,
+	8498, 8499, 8500, 8501, 13414, 13421},
+	//3-Maple trees
+	{1307, 4674, 8435, 8436, 8437, 8438, 8439,
+	8440, 8441, 8442, 8443, 8444, 8454, 8455,
+	8456, 8457, 8458, 8459, 8460, 8461, 13415,
+	13423},
+	//4-Yew trees
+	{1309, 8503, 8504, 8505, 8506, 8507, 8508,
+	8509, 8510, 8511, 8512, 8513, 13416, 13422},
+	//5-Magic trees
+	{1306, 8396, 8397, 8398, 8399, 8400, 8401,
+	8402, 8403, 8404, 8405, 8406, 8407, 8408,
+	8409, 13417, 13424}
+};
+}
+[/code]
+
+And here is the CycleEventHandler
+[code]
+package server.event;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Handles all of our cycle based events
+ * 
+ * @author Stuart &lt;RogueX&gt;
+ * @author Null++
+ * Revised by Shawn
+ */
+public class CycleEventHandler {
+
+	/**
+	 * The instance of this class.
+	 */
+	private static CycleEventHandler instance;
+
+	/**
+	 * Returns the instance of this class.
+	 * 
+	 * @return
+	 */
+	public static CycleEventHandler getSingleton() {
+		if (instance == null) {
+			instance = new CycleEventHandler();
+		}
+		return instance;
+	}
+
+	/**
+	 * Holds all of our events currently being ran.
+	 */
+	private List&lt;CycleEventContainer&gt; events;
+
+	/**
+	 * Creates a new instance of this class.
+	 */
+	public CycleEventHandler() {
+		this.events = new ArrayList&lt;CycleEventContainer&gt;();
+	}
+
+	/**
+	 * Add an event to the list
+	 * 
+	 * @param id
+	 * @param owner
+	 * @param event
+	 * @param cycles
+	 */
+	public void addEvent(int id, Object owner, CycleEvent event, int cycles) {
+		this.events.add(new CycleEventContainer(id, owner, event, cycles));
+	}
+	
+	/**
+	 * Add an event to the list.
+	 * 
+	 * @param owner
+	 * @param event
+	 * @param cycles
+	 */
+	public void addEvent(Object owner, CycleEvent event, int cycles) {
+		this.events.add(new CycleEventContainer(-1, owner, event, cycles));
+	}
+
+	/**
+	 * Execute and remove events.
+	 */
+	public void process() {
+		List&lt;CycleEventContainer&gt; eventsCopy = new ArrayList&lt;CycleEventContainer&gt;(events);
+		List&lt;CycleEventContainer&gt; remove = new ArrayList&lt;CycleEventContainer&gt;();
+		for (CycleEventContainer c : eventsCopy) {
+			if (c != null) {
+				if (c.needsExecution())
+					c.execute();
+				if (!c.isRunning()) {
+					remove.add(c);
+				}
+			}
+		}
+		for (CycleEventContainer c : remove) {
+			events.remove(c);
+		}
+	}
+	
+	/**
+	 * Returns the amount of events currently running.
+	 *
+	 * @return amount
+	 */
+	public int getEventsCount() {
+		return this.events.size();
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param owner
+	 */
+	public void stopEvents(Object owner) {
+		for (CycleEventContainer c : events) {
+			if(c.getOwner() == owner) {
+				c.stop();
+			}
+		}
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param owner
+	 * @param id
+	 */
+	public void stopEvents(Object owner, int id) {
+		for (CycleEventContainer c : events) {
+			if(c.getOwner() == owner &amp;&amp; id == c.getID()) {
+				c.stop();
+			}
+		}
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param id
+	 */
+	public void stopEvents(int id) {
+		for (CycleEventContainer c : events) {
+			if(id == c.getID()) {
+				c.stop();
+			}
+		}
+	}
+
+}
+[/code]
+
+CycleEvent
+[code]
+package server.event;
+
+/**
+ * What The Event Must Implement
+ * @author Stuart &lt;RogueX&gt;
+ * Revised by Shawn
+ */
+public abstract class CycleEvent {
+
+	/**
+	 * Code which should be ran when the event is executed.
+	 * 
+	 * @param container
+	 */
+	public abstract void execute(CycleEventContainer container);
+
+	/**
+	 * Code which should be ran when the event stops.
+	 */
+	public abstract void stop();
+
+}
+[/code]
+
+And the section from ActionHandler
+[code]
+
+	public void firstClickObject(int objectType, int obX, int obY) {
+		c.clickObjectType = 0;
+		if (Woodcutting.isTree(objectType)) {
+			Woodcutting.attemptWcing(c, objectType, obX, obY);
+			return;
+		}
+[/code]
+
+Thank you so much guys!</description>
+    
+    <lastBuildDate>Fri, 26 Jun 2015 19:02:02 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:7, topic:552159”]use a flag variable.</p>
+<p><code>if (/*VARIABLE IN CLIENT THAT DETERMINES IF YOU ARE CUTTING ALREADY*/) {
+ cancelOldCutting();//or just reset the delay on it. 
+ invokeNewCutting();
+}</code></p>
+<p>good luck o.o[/quote]<br>
+He already is.<br>
+c.isWC.</p>
+<p>Like I said OP, change the stopEvents method to this and it should work right…</p>
+<p><code>
+CycleEventHandler.getSingleton().stopEvents(c);</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/8</link>
+        <pubDate>Fri, 26 Jun 2015 19:02:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-8</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>use a flag variable.</p>
+<p><code>if (/*VARIABLE IN CLIENT THAT DETERMINES IF YOU ARE CUTTING ALREADY*/) {
+ cancelOldCutting();//or just reset the delay on it. 
+ invokeNewCutting();
+}</code></p>
+<p>good luck o.o</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/7</link>
+        <pubDate>Thu, 25 Jun 2015 22:35:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-7</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Talkingsplash, post:3, topic:552159”]Thanks! But still unsuccessful.</p>
+<p>I’ve tried adding CycleEventHandler.stopEvents©; already, it throws me the error “non-static method stopEvents(Object) cannot be referenced from a static context”</p>
+<p>I’ve also tried adding variables to check and make sure the container doesn’t open multiple times as well but the bug is still there, could the error be that it is creating multiple instances of the class for the player instead of the container? It is only when you spam click it, you can click it multiple times and it’s fine[/quote]<br>
+Try making it:<br>
+CycleEventHandler.getSingleton().stopEvents©;</p>
+<p>I had this error with fishing at one point.<br>
+I believe it was solved by making the skill static and by using a boolean to check if the player was already skilling.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/6</link>
+        <pubDate>Thu, 25 Jun 2015 08:00:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-6</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@Talkingsplash Talkingsplash]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/talkingsplash">@Talkingsplash</a> wrote:</p>
+          <blockquote>
+              <p>That was what Sk8rdude tried, and it throws errors because it’s not a static method; I think the error is in that it is creating multiple instances of the Woodcutting class for the client, maybe it could be fixed by adding something in clickObject or ActionHandler? idk</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/5</link>
+        <pubDate>Thu, 25 Jun 2015 07:24:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-5</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>there should be an instance of the cyclehandlerevent thing somewhere<br>
+look for that and use that instance to stopevents rather than what youre doing now since that is erronous</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/4</link>
+        <pubDate>Thu, 25 Jun 2015 06:26:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-4</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@Talkingsplash Talkingsplash]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/talkingsplash">@Talkingsplash</a> wrote:</p>
+          <blockquote>
+              <p>Thanks! But still unsuccessful.</p>
+<p>I’ve tried adding CycleEventHandler.stopEvents©; already, it throws me the error “non-static method stopEvents(Object) cannot be referenced from a static context”</p>
+<p>I’ve also tried adding variables to check and make sure the container doesn’t open multiple times as well but the bug is still there, could the error be that it is creating multiple instances of the class for the player instead of the container? It is only when you spam click it, you can click it multiple times and it’s fine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/3</link>
+        <pubDate>Thu, 25 Jun 2015 03:27:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-3</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>There’s no reason for the else statement in your attemptWcing method, as you return in the if statement.</p>
+<p>Also, your code is flawed because you’re using static variables, that will set for all players. Not just one.<br>
+There’s no need for the final variables either, as you don’t modify them anyways.</p>
+<p>I did some minor cleanup on your code, and removed a few unneeded variables.<br>
+However, you’re looping a lot. I suggest storing the data externally or at least storing the indexs of the data so you don’t have to loop to get everything constantly.</p>
+<p>[code=java]package server.model.players.skills;</p>
+<p>import server.Server;<br>
+import server.model.players.Client;<br>
+import server.model.players.PlayerHandler;<br>
+import server.model.players.skills.SkillHandler;<br>
+import server.event.CycleEventHandler;<br>
+import server.event.CycleEvent;<br>
+import server.event.CycleEventContainer;<br>
+import server.util.Misc;<br>
+import server.*;<br>
+import server.model.players.PlayerAssistant;</p>
+<p>//Completely redone by TSplash</p>
+<p>public class Woodcutting extends SkillHandler {</p>
+<pre><code>/**
+</code></pre>
+<p>–Method Guide–</p>
+<hr>
+<p>*Main: attemptWcing<br>
+*Misc: wcEventTimer(for container), createStump, wcLogDelay<br>
+*Axe: hasAxe, usableAxe<br>
+*Tree: treeType(0-normal, 5-magic), treeLog, treeLvl, treeXP, treeRespawnTime</p>
+<hr>
+<hr>
+<p>*usableAxe returns axeNumber, or -1 if there’s no usable axe<br>
+*axes[x][y]: x=axeNumber(0-7, bronze-dragon)</p>
+<ul>
+<li>y=0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime<br>
+*tree[x][y]: x=treeType(0-5, normal-magic); y=treeID</li>
+</ul>
+<hr>
+<p>*/</p>
+<pre><code>public static void attemptWcing(Client c, int treeID, int treeX, int treeY) {
+	c.turnPlayerTo(c.objectX, c.objectY);
+
+	if (c.isWc || !wcReqMet(c, treeID)) {
+		return;
+	}
+	CycleEventHandler.stopEvents(c);// Stops -ALL- events for player.
+	int axeNum = usableAxe(c);
+	c.isWc = true;
+	c.sendMessage("You begin to swing your axe at the tree...");
+	c.startAnimation(axes[axeNum][2]);
+	
+	if (treeType(treeID) == 0)
+		c.doAmount = 1;
+	else
+		c.doAmount = Misc.random(25);
+
+	//Cycles through the woodcutting process
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {@Override
+		public void execute(CycleEventContainer container) {
+			if (wcReqMet(c, treeID) &amp;&amp; c.isWc) {
+				c.getItems().addItem(treeLog(treeID), 1);
+				c.sendMessage("You get some logs.");
+				c.getPA().addSkillXP(treeXP(treeID) * WOODCUTTING_XP, 8);
+				c.doAmount--;
+			}
+			if (c.doAmount == 0) {
+				createStump(c, treeID, treeX, treeY);
+				container.stop();
+			}
+			if (!wcReqMet(c, treeID) || !c.isWc)
+				container.stop();
+		}@Override
+		public void stop() {
+			c.isWc = false;
+		}
+	}, wcLogDelay(c, axeNum, treeID));
+
+	//Cycles through the woodcutting animation
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {@Override
+		public void execute(CycleEventContainer container) {
+			if (c.isWc &amp;&amp; wcReqMet(c, treeID)) {
+				c.turnPlayerTo(c.objectX, c.objectY);
+				c.startAnimation(axes[axeNum][2]);
+			} else {
+				c.startAnimation(65535);
+				container.stop();
+			}
+		}@Override
+		public void stop() {
+			
+		}
+	}, 4);
+}
+
+private static int wcLogDelay(Client c, int axeNum, int treeID) {
+	int treeDelay = (treeType(treeID)); //0-5
+	int spontaneousConfrontations = Misc.random(7);
+	int axeDelay = axes[axeNum][3]; //Delay from axes[0-7]: 10,10,10,9,8,7,5,4
+	int levelDelay = (10 - (int) Math.floor(c.playerLevel[8] / 10));
+
+	int totalDelay = treeDelay + axeDelay + levelDelay + spontaneousConfrontations;
+	return totalDelay;
+}
+
+private static boolean wcReqMet(Client c, int treeID) {
+	if (!hasAxe(c)) {
+		c.sendMessage("You'll need an axe to cut down this tree.");
+		return false;
+	}
+	if (usableAxe(c) == -1) {
+		c.sendMessage("Your woodcutting level isn't high enough to use this axe.");
+		return false;
+	}
+	if (c.playerLevel[8] &lt; treeLvl(treeID)) {
+		c.sendMessage("You need a woodcutting level of " + treeLvl(treeID) + " to cut down this tree");
+		return false;
+	}
+	if (c.getItems().freeSlots() == 0) {
+		c.sendMessage("Your inventory is full!");
+		return false;
+	}
+	return true;
+}
+
+private static void createStump(final Client c, final int treeID, final int treeX, final int treeY) {
+	int type = treeType(treeID);
+	int stumpId = getStumpId(type);
+
+	Server.objectHandler.createAnObject(c, stumpID, treeX, treeY);
+	//Used as a timer, when the tree re-spawn time has passed it replaces tree
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {@Override
+		public void execute(CycleEventContainer container) {
+			Server.objectHandler.createAnObject(c, treeID, treeX, treeY);
+			container.stop();
+		}@Override
+		public void stop() {}
+	}, treeRespawnTime(treeID));
+}
+
+private static int getStumpId(int type) {
+	switch(type) {
+		default:
+		case 0:
+			return 1344;
+		case 1:
+			return 1356;
+		case 2:
+			return 7399;
+		case 3:
+			return 7400;
+		case 4:
+			return 7402;
+		case 5:
+			return 7401;
+	}
+}
+
+/**
+ *AXE METHODS
+ *hasAxe, usableAxe
+ *usableAxe if there is no usable axe return -1, else returns the best usable axe number
+ *axes[x][y]: x- axe number; y- 0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime
+ **/
+
+public static boolean hasAxe(Client c) {
+	for (int x = 0; x &lt; 8; x++) {
+		if (c.getItems().playerHasItem(axes[x][0]) || c.playerEquipment[3] == axes[x][0])
+			return true;
+	}
+	return false;
+}
+
+private static int usableAxe(Client c) {
+	if (hasAxe(c)) {
+		for (int x = 0; x &lt; 8; x++) {
+			if ((c.getItems().playerHasItem(axes[x][0]) || c.playerEquipment[3] == axes[x][0])
+				&amp;&amp; c.playerLevel[8] &gt;= axes[x][1])
+				return x;
+		}
+	return -1;
+}
+
+/**
+ *TREE METHODS
+ *BOOLEANS: isTree
+ *INTS: treeType, treeLog, treeXP, treeLvl, treeRespawnTime
+ **/
+
+public static boolean isTree(int treeID) {
+	for (int x = 0; x &lt; trees.length; x++) {
+		for (int x1 = 0; x1 &lt; 6; x1++) {
+			if (treeID == trees[x1][x])
+				return true;
+		}
+	}
+	return false;
+}
+
+private static int treeType(int treeID) {
+	for (int x1 = 0; x1 &lt; 6; x1++) {
+	for (int x2 = 0; x2 &lt; trees.length; x2++) {
+		if (treeID == trees[x1][x2])
+			return x1;
+		}
+	}
+	return -1;
+}
+
+private static int treeLog(int treeID) {
+	for (int x = 0; x &lt; trees.length; x++) {
+		if (treeID == trees[5][x])
+			return 1513;
+		else if (treeID == trees[4][x])
+			return 1515;
+		else if (treeID == trees[3][x])
+			return 1517;
+		else if (treeID == trees[2][x])
+			return 1519;
+		else if (treeID == trees[1][x])
+			return 1521;
+		else if (treeID == trees[0][x])
+			return 1511;
+	}
+	return -1;
+}
+
+private static int treeXP(int treeID) {
+	for (int x = 0; x &lt; trees.length; x++) {
+		if (treeID == trees[5][x])
+			return 250;
+		else if (treeID == trees[4][x])
+			return 175;
+		else if (treeID == trees[3][x])
+			return 100;
+		else if (treeID == trees[2][x])
+			return 68;
+		else if (treeID == trees[1][x])
+			return 38;
+		else if (treeID == trees[0][x])
+			return 25;
+	}
+	return 0;
+}
+
+private static int treeLvl(int treeID) {
+	for (int x = 0; x &lt; trees.length; x++) {
+		if (treeID == trees[5][x]) 
+			return 75;
+		else if (treeID == trees[4][x]) 
+			return 60;
+		else if (treeID == trees[3][x])
+			return 45;
+		else if (treeID == trees[2][x])
+			return 30;
+		else if (treeID == trees[1][x])
+			return 15;
+		else if (treeID == trees[0][x])
+			return 1;
+	}
+	return 1;
+}
+
+private static int treeRespawnTime(int treeID) {
+	int respawnTime = -1;
+	for (int x = 0; x &lt; trees.length; x++) {
+		if (treeID == trees[5][x])
+			respawnTime = 100;
+		else if (treeID == trees[4][x])
+			respawnTime = 50;
+		else if (treeID == trees[3][x])
+			respawnTime = 25;
+		else if (treeID == trees[2][x])
+			respawnTime = 25;
+		else if (treeID == trees[1][x])
+			respawnTime = 15;
+		else if (treeID == trees[0][x])
+			respawnTime = 10;
+	}
+	respawnTime += Misc.random(25);
+	return respawnTime;
+}
+
+private final static int[][] axes = {
+	{ 1351, 1, 879, 10 },
+	{ 1349, 1, 877, 10}, 
+	{1353, 6, 875, 10}, 
+	{1361, 6, 873, 9}, 
+	{1355, 21, 871, 8}, 
+	{1357, 31, 869, 7}, 
+	{1359, 41, 867, 5}, 
+	{6739, 61, 2846, 4}
+};
+
+private final static int[][] trees = {
+	//0-Normal trees
+	{
+		1276, 1277, 1278, 1279, 1280, 1282,
+		1283, 1284, 1285, 1286, 1287, 1288,
+		1289, 1290, 1291, 1301, 1303, 1304,
+		1305, 1318, 1319, 1315, 1316, 1330,
+		1331, 1332, 1333, 1383, 1384, 2409,
+		2447, 2448, 3033, 3034, 3035, 3036,
+		3879, 3881, 3883, 3893, 3885, 3886,
+		3887, 3888, 3892, 3889, 3890, 3891,
+		3928, 3967, 3968, 4048, 4049, 4050,
+		4051, 4052, 4053, 4054, 4060, 5004,
+		5005, 5045, 5902, 5903, 5904, 8973,
+		8974, 10041, 10081, 10082, 10664, 11112,
+		11510, 12559, 12560, 12732, 12895, 12896,
+		13412, 13411, 13419, 13843, 13844, 13845,
+		13847, 13848, 13849, 13850, 14308, 14309,
+		14513, 14514, 14515, 14521, 14564, 14565,
+		14566, 14593, 14594, 14595, 14600, 14635,
+		14636, 14637, 14642, 14664, 14665, 14666,
+		14693, 14694, 14695, 14696, 14701, 14738,
+		14796, 14797, 14798, 14799, 14800, 14801,
+		14802, 14803, 14804, 14805, 14806, 14807,
+		15489, 15776, 15777, 16264, 16265, 19165,
+		19166, 19167, 23381
+	},
+	//1-Oak trees
+	{
+		1281, 3037, 8462, 8463, 8464, 8465,
+		8466, 8467, 10083, 13413, 13420
+	},
+	//2-Willow trees
+	{
+		1308, 5551, 5552, 5553, 8481, 8482, 8483,
+		8484, 8485, 8486, 8487, 8488, 8496, 8497,
+		8498, 8499, 8500, 8501, 13414, 13421
+	},
+	//3-Maple trees
+	{
+		1307, 4674, 8435, 8436, 8437, 8438, 8439,
+		8440, 8441, 8442, 8443, 8444, 8454, 8455,
+		8456, 8457, 8458, 8459, 8460, 8461, 13415,
+		13423
+	},
+	//4-Yew trees
+	{
+		1309, 8503, 8504, 8505, 8506, 8507, 8508,
+		8509, 8510, 8511, 8512, 8513, 13416, 13422
+	},
+	//5-Magic trees
+	{
+		1306, 8396, 8397, 8398, 8399, 8400, 8401,
+		8402, 8403, 8404, 8405, 8406, 8407, 8408,
+		8409, 13417, 13424
+	}
+};
+</code></pre>
+<p>}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/2</link>
+        <pubDate>Thu, 25 Jun 2015 02:37:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-2</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+      <item>
+        <title>(Unresolved)Woodcutting issue - Please help!</title>
+        <dc:creator><![CDATA[@Talkingsplash Talkingsplash]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/talkingsplash">@Talkingsplash</a> wrote:</p>
+          <blockquote>
+              <p>So I have this problem where when you start woodcutting you are able to spam click the tree to get more than one log after the delay between them. In my source there is a CycleEventHandler, and you can basically set a container of events to happen on a set delay. I have tried a lot of things and cannot fix it, does anyone have any ideas?</p>
+<p>Edit: I think the problem is that it creates multiple instances of the woodcutting class for the client (due to spamclick) so it probably isnt because of the cycle event. I still don’t know how to fix this, maybe something in ActionHandler or ClickObject? My ClickObject takes the click packet and sends the clicked objectid to the actionhandler and then the actionhandler starts the woodcutting method.</p>
+<p>Here is my Woodcutting.java:</p>
+<pre><code class="lang-auto">package server.model.players.skills;
+
+import server.Server;
+import server.model.players.Client;
+import server.model.players.PlayerHandler;
+import server.model.players.skills.SkillHandler;
+import server.event.CycleEventHandler;
+import server.event.CycleEvent;
+import server.event.CycleEventContainer;
+import server.util.Misc;
+import server.*;
+import server.model.players.PlayerAssistant;
+
+//Completely redone by TSplash
+
+public class Woodcutting extends SkillHandler {
+
+/**
+--Method Guide-- (most are private, can be changed if desired)
+***
+*Main: attemptWcing
+*Misc: wcEventTimer(for container), createStump, wcLogDelay
+*Axe: hasAxe, usableAxe
+*Tree: treeType(0-normal, 5-magic), treeLog, treeLvl, treeXP, treeRespawnTime
+***
+***
+*usableAxe returns axeNumber, or -1 if there's no usable axe
+*axes[x][y]: x=axeNumber(0-7, bronze-dragon)
+*	y=0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime
+*tree[x][y]: x=treeType(0-5, normal-magic); y=treeID
+***
+*/
+
+public static void attemptWcing(final Client c, final int treeID, final int treeX, final int treeY)
+{	
+	if(c.isWc || !wcReqMet(c, treeID))
+		return;
+	
+	c.turnPlayerTo(c.objectX, c.objectY);
+	c.wcStartX = c.absX;
+	c.wcStartY = c.absY;
+
+	int axeNum = usableAxe(c);
+	c.isWc = true;
+	c.sendMessage("You begin to swing your axe at the tree...");
+	c.startAnimation(axes[axeNum][2]);
+
+	if(treeType(treeID) == 0)
+		c.doAmount = 1;
+	else
+		c.doAmount = Misc.random(25);
+	
+	//Cycles through the woodcutting process
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			if(wcReqMet(c, treeID) &amp;&amp; c.isWc)
+			{
+				c.getItems().addItem(treeLog(treeID), 1);
+				c.sendMessage("You get some logs.");
+				c.getPA().addSkillXP(treeXP(treeID) * WOODCUTTING_XP, 8);
+				c.doAmount--;
+			}
+			if(c.doAmount == 0)
+			{
+				createStump(c, treeID, treeX, treeY);
+				container.stop();
+			}
+			if(!wcReqMet(c, treeID) || !c.isWc)
+				container.stop();
+		}
+		@Override
+		public void stop()
+		{
+			c.isWc = false;
+		}
+	}, wcLogDelay(c, axeNum, treeID));
+
+	//Cycles through the woodcutting animation
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			if(c.isWc &amp;&amp; wcReqMet(c, treeID))
+			{
+				c.turnPlayerTo(c.objectX, c.objectY);
+				c.startAnimation(axes[axeNum][2]);
+			}
+			else
+			{
+				c.startAnimation(65535);
+				container.stop();
+			}
+		}
+		@Override
+		public void stop()
+		{
+		}
+	}, 4);
+}
+
+private static int wcLogDelay(Client c, int axeNum, int treeID)
+{
+	int treeDelay = (treeType(treeID)); //0-5
+	int spontaneousConfrontations = Misc.random(7); 
+	int axeDelay = axes[axeNum][3]; //Delay from axes[0-7]: 10,10,10,9,8,7,5,4
+	int levelDelay = (10 - (int)Math.floor(c.playerLevel[8] / 10));
+	
+	int totalDelay = treeDelay + axeDelay + levelDelay + spontaneousConfrontations;
+	return totalDelay;
+}
+
+private static boolean wcReqMet(Client c, int treeID)
+{
+	boolean Met = false;
+	if(hasAxe(c)
+		&amp;&amp; usableAxe(c) != -1
+		&amp;&amp; isTree(treeID)
+		&amp;&amp; c.playerLevel[8] &gt;= treeLvl(treeID)
+		&amp;&amp; c.getItems().freeSlots() != 0
+		&amp;&amp; c.wcStartX == c.absX
+		&amp;&amp; c.wcStartY == c.absY)
+		Met = true;
+	else if(!hasAxe(c))
+		c.sendMessage("You'll need an axe to cut down this tree.");
+	else if(usableAxe(c) == -1)
+		c.sendMessage("Your woodcutting level isn't high enough to use this axe.");
+	else if(c.playerLevel[8] &lt; treeLvl(treeID))
+		c.sendMessage("You need a woodcutting level of " + treeLvl(treeID) + " to cut down this tree");
+	else if(c.getItems().freeSlots() == 0)
+		c.sendMessage("Your inventory is full!");
+	
+	if(!Met)
+		c.isWc = false;
+	
+	return Met;
+}
+
+private static void createStump(final Client c, final int treeID, final int treeX, final int treeY)
+{
+	int stumpID = 1344;
+	int type = treeType(treeID);
+	if(type == 0)
+		stumpID = 1344;
+	else if(type == 1)
+		stumpID = 1356;
+	else if(type == 2)
+		stumpID = 7399;
+	else if(type == 3)
+		stumpID = 7400;
+	else if(type == 4)
+		stumpID = 7402;
+	else if(type == 5)
+		stumpID = 7401;
+
+	Server.objectHandler.createAnObject(c, stumpID, treeX, treeY);
+	//Used as a timer, when the tree re-spawn time has passed it replaces tree
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent()
+	{
+		@Override
+		public void execute(CycleEventContainer container)
+		{
+			Server.objectHandler.createAnObject(c, treeID, treeX, treeY);
+			container.stop();
+		}
+		@Override
+		public void stop()
+		{
+		}
+	}, treeRespawnTime(treeID));
+}
+
+/**
+*AXE METHODS
+*hasAxe, usableAxe
+*usableAxe if there is no usable axe return -1, else returns the best usable axe number
+*axes[x][y]: x- axe number; y- 0=axeID, 1=axeLvl, 2=axeAnim, 3=axeTime
+**/
+
+public static boolean hasAxe(Client c)
+{
+	for(int x = 0; x &lt; 8; x++)
+		if(c.getItems().playerHasItem(axes[x][0]) 
+			|| c.playerEquipment[3] == axes[x][0])
+			return true;
+	return false;
+}
+
+private static int usableAxe(Client c)
+{
+	int axeNumber = -1;
+	if(hasAxe(c))
+		for(int x = 0; x &lt; 8; x++)
+			if((c.getItems().playerHasItem(axes[x][0]) 
+				|| c.playerEquipment[3] == axes[x][0])
+				&amp;&amp; c.playerLevel[8] &gt;= axes[x][1])
+				axeNumber = x;
+	return axeNumber;
+}
+
+/**
+*TREE METHODS
+*BOOLEANS: isTree
+*INTS: treeType, treeLog, treeXP, treeLvl, treeRespawnTime
+**/
+
+public static boolean isTree(int treeID)
+{
+	for(int x = 0; x &lt; trees.length; x++)
+		for(int x1 = 0; x1 &lt; 6; x1++)
+			if(treeID == trees[x1][x])
+				return true;
+	return false;
+}
+
+private static int treeType(int treeID)
+{
+	int Type = -1;
+	for(int x1 = 0; x1 &lt; 6; x1++)
+		for(int x2 = 0; x2 &lt; trees.length; x2++)
+			if(treeID == trees[x1][x2])
+				Type = x1;
+	return Type;
+}
+
+private static int treeLog(int treeID)
+{
+	int logID = -1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			logID = 1513;
+		else if(treeID == trees[4][x])
+			logID = 1515;
+		else if(treeID == trees[3][x])
+			logID = 1517;
+		else if(treeID == trees[2][x])
+			logID = 1519;
+		else if(treeID == trees[1][x])
+			logID = 1521;
+		else if(treeID == trees[0][x])
+			logID = 1511;
+	}
+	return logID;
+}
+
+private static int treeXP(int treeID)
+{
+	int logXP = 0;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			logXP = 250;
+		else if(treeID == trees[4][x])
+			logXP = 175;
+		else if(treeID == trees[3][x])
+			logXP = 100;
+		else if(treeID == trees[2][x])
+			logXP = 68;
+		else if(treeID == trees[1][x])
+			logXP = 38;
+		else if(treeID == trees[0][x])
+			logXP = 25;
+	}
+	return logXP;
+}
+
+private static int treeLvl(int treeID)
+{
+	int level = 1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			level = 75;
+		else if(treeID == trees[4][x])
+			level = 60;
+		else if(treeID == trees[3][x])
+			level = 45;
+		else if(treeID == trees[2][x])
+			level = 30;
+		else if(treeID == trees[1][x])
+			level = 15;
+		else if(treeID == trees[0][x])
+			level = 1;
+	}
+	return level;
+}
+
+private static int treeRespawnTime(int treeID)
+{
+	int respawnTime = -1;
+	for(int x = 0; x &lt; trees.length; x++)
+	{
+		if(treeID == trees[5][x])
+			respawnTime = 100;
+		else if(treeID == trees[4][x])
+			respawnTime = 50;
+		else if(treeID == trees[3][x])
+			respawnTime = 25;
+		else if(treeID == trees[2][x])
+			respawnTime = 25;
+		else if(treeID == trees[1][x])
+			respawnTime = 15;
+		else if(treeID == trees[0][x])
+			respawnTime = 10;
+	}
+	respawnTime += Misc.random(25);
+	return respawnTime;
+}
+
+private final static int[][] axes = 
+{
+	{1351, 1, 879, 10},
+	{1349, 1, 877, 10},
+	{1353, 6, 875, 10},
+	{1361, 6, 873, 9},
+	{1355, 21, 871, 8},
+	{1357, 31, 869, 7},
+	{1359, 41, 867, 5},
+	{6739, 61, 2846, 4}
+};
+
+private final static int[][] trees = 
+{
+	//0-Normal trees
+	{1276, 1277, 1278, 1279, 1280, 1282, 
+	1283, 1284, 1285, 1286, 1287, 1288, 
+	1289, 1290, 1291, 1301, 1303, 1304, 
+	1305, 1318, 1319, 1315, 1316, 1330, 
+	1331, 1332, 1333, 1383, 1384, 2409, 
+	2447, 2448, 3033, 3034, 3035, 3036, 
+	3879, 3881, 3883, 3893, 3885, 3886, 
+	3887, 3888, 3892, 3889, 3890, 3891, 
+	3928, 3967, 3968, 4048, 4049, 4050, 
+	4051, 4052, 4053, 4054, 4060, 5004, 
+	5005, 5045, 5902, 5903, 5904, 8973, 
+	8974, 10041, 10081, 10082, 10664, 11112, 
+	11510, 12559, 12560, 12732, 12895, 12896, 
+	13412, 13411, 13419, 13843, 13844, 13845, 
+	13847, 13848, 13849, 13850, 14308, 14309, 
+	14513, 14514, 14515, 14521, 14564, 14565, 
+	14566, 14593, 14594, 14595, 14600, 14635, 
+	14636, 14637, 14642, 14664, 14665, 14666, 
+	14693, 14694, 14695, 14696, 14701, 14738, 
+	14796, 14797, 14798, 14799, 14800, 14801, 
+	14802, 14803, 14804, 14805, 14806, 14807, 
+	15489, 15776, 15777, 16264, 16265, 19165, 
+	19166, 19167, 23381}, 
+	//1-Oak trees
+	{1281, 3037, 8462, 8463, 8464, 8465,
+	8466, 8467, 10083, 13413, 13420},
+	//2-Willow trees
+	{1308, 5551, 5552, 5553, 8481, 8482, 8483,
+	8484, 8485, 8486, 8487, 8488, 8496, 8497,
+	8498, 8499, 8500, 8501, 13414, 13421},
+	//3-Maple trees
+	{1307, 4674, 8435, 8436, 8437, 8438, 8439,
+	8440, 8441, 8442, 8443, 8444, 8454, 8455,
+	8456, 8457, 8458, 8459, 8460, 8461, 13415,
+	13423},
+	//4-Yew trees
+	{1309, 8503, 8504, 8505, 8506, 8507, 8508,
+	8509, 8510, 8511, 8512, 8513, 13416, 13422},
+	//5-Magic trees
+	{1306, 8396, 8397, 8398, 8399, 8400, 8401,
+	8402, 8403, 8404, 8405, 8406, 8407, 8408,
+	8409, 13417, 13424}
+};
+}</code></pre>
+<p>And here is the CycleEventHandler</p>
+<pre><code class="lang-auto">package server.event;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Handles all of our cycle based events
+ * 
+ * @author Stuart &lt;RogueX&gt;
+ * @author Null++
+ * Revised by Shawn
+ */
+public class CycleEventHandler {
+
+	/**
+	 * The instance of this class.
+	 */
+	private static CycleEventHandler instance;
+
+	/**
+	 * Returns the instance of this class.
+	 * 
+	 * @return
+	 */
+	public static CycleEventHandler getSingleton() {
+		if (instance == null) {
+			instance = new CycleEventHandler();
+		}
+		return instance;
+	}
+
+	/**
+	 * Holds all of our events currently being ran.
+	 */
+	private List&lt;CycleEventContainer&gt; events;
+
+	/**
+	 * Creates a new instance of this class.
+	 */
+	public CycleEventHandler() {
+		this.events = new ArrayList&lt;CycleEventContainer&gt;();
+	}
+
+	/**
+	 * Add an event to the list
+	 * 
+	 * @param id
+	 * @param owner
+	 * @param event
+	 * @param cycles
+	 */
+	public void addEvent(int id, Object owner, CycleEvent event, int cycles) {
+		this.events.add(new CycleEventContainer(id, owner, event, cycles));
+	}
+	
+	/**
+	 * Add an event to the list.
+	 * 
+	 * @param owner
+	 * @param event
+	 * @param cycles
+	 */
+	public void addEvent(Object owner, CycleEvent event, int cycles) {
+		this.events.add(new CycleEventContainer(-1, owner, event, cycles));
+	}
+
+	/**
+	 * Execute and remove events.
+	 */
+	public void process() {
+		List&lt;CycleEventContainer&gt; eventsCopy = new ArrayList&lt;CycleEventContainer&gt;(events);
+		List&lt;CycleEventContainer&gt; remove = new ArrayList&lt;CycleEventContainer&gt;();
+		for (CycleEventContainer c : eventsCopy) {
+			if (c != null) {
+				if (c.needsExecution())
+					c.execute();
+				if (!c.isRunning()) {
+					remove.add(c);
+				}
+			}
+		}
+		for (CycleEventContainer c : remove) {
+			events.remove(c);
+		}
+	}
+	
+	/**
+	 * Returns the amount of events currently running.
+	 *
+	 * @return amount
+	 */
+	public int getEventsCount() {
+		return this.events.size();
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param owner
+	 */
+	public void stopEvents(Object owner) {
+		for (CycleEventContainer c : events) {
+			if(c.getOwner() == owner) {
+				c.stop();
+			}
+		}
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param owner
+	 * @param id
+	 */
+	public void stopEvents(Object owner, int id) {
+		for (CycleEventContainer c : events) {
+			if(c.getOwner() == owner &amp;&amp; id == c.getID()) {
+				c.stop();
+			}
+		}
+	}
+	
+	/**
+	 * Stops all events for a specific owner and ID.
+	 *
+	 * @param id
+	 */
+	public void stopEvents(int id) {
+		for (CycleEventContainer c : events) {
+			if(id == c.getID()) {
+				c.stop();
+			}
+		}
+	}
+
+}</code></pre>
+<p>CycleEvent</p>
+<pre><code class="lang-auto">package server.event;
+
+/**
+ * What The Event Must Implement
+ * @author Stuart &lt;RogueX&gt;
+ * Revised by Shawn
+ */
+public abstract class CycleEvent {
+
+	/**
+	 * Code which should be ran when the event is executed.
+	 * 
+	 * @param container
+	 */
+	public abstract void execute(CycleEventContainer container);
+
+	/**
+	 * Code which should be ran when the event stops.
+	 */
+	public abstract void stop();
+
+}</code></pre>
+<p>And the section from ActionHandler</p>
+<pre><code class="lang-auto">
+	public void firstClickObject(int objectType, int obX, int obY) {
+		c.clickObjectType = 0;
+		if (Woodcutting.isTree(objectType)) {
+			Woodcutting.attemptWcing(c, objectType, obX, obY);
+			return;
+		}</code></pre>
+<p>Thank you so much guys!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159/1</link>
+        <pubDate>Thu, 25 Jun 2015 00:16:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552159-1</guid>
+        <source url="https://forum.moparisthebest.com/t/unresolved-woodcutting-issue-please-help/552159.rss">(Unresolved)Woodcutting issue - Please help!</source>
+      </item>
+  </channel>
+</rss>

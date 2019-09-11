@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[VB 2005] Hotkeys made easy</title>
+    <link>https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758</link>
+    <description>This is a code I wrote to make hot keys really simple.
+All you need to do is add the hot key manager code to the project, tag methods with an attribute and call a single method and then hot keys will work.
+
+[b]Instructions:[/b]
+
+Create a new file named &quot;HotkeyManager.vb&quot; and place the following code inside:
+[code]Imports System.Runtime.InteropServices
+Imports System.Reflection
+
+Public Delegate Sub Method()
+Public Enum ModKeys
+    None = &amp;H0
+    Alt = &amp;H1
+    Control = &amp;H2
+    Shift = &amp;H4
+    Win = &amp;H8
+End Enum
+&lt;AttributeUsage(AttributeTargets.Method, AllowMultiple:=False)&gt; _
+Public NotInheritable Class HotkeyAttribute
+    Inherits Attribute
+    Sub New(ByVal Key As Keys, ByVal Mods As ModKeys)
+        Me.Mods = Mods
+        Me.Key = Key
+    End Sub
+    Sub New(ByVal Key As Keys)
+        Me.Mods = ModKeys.None
+        Me.Key = Key
+    End Sub
+    Public Mods As ModKeys
+    Public Key As Keys
+End Class
+Public NotInheritable Class HotkeyManager
+    Shared Sub New()
+        HotKeyListener = New Listener
+        HotKeyList = New Dictionary(Of Integer, HotKey)
+    End Sub
+    Private Shared WithEvents HotKeyListener As Listener
+    Private Shared ReadOnly HotKeyList As Dictionary(Of Integer, HotKey)
+    Public Shared Sub RegisterClass(ByVal [Class] As Type)
+        Dim Methods As MethodInfo() = [Class].GetMethods(BindingFlags.Public Or BindingFlags.Static)
+        For Each M As MethodInfo In Methods
+            For Each Attribute As HotkeyAttribute In M.GetCustomAttributes(GetType(HotkeyAttribute), False)
+                AddHotKey(Attribute.Key, Attribute.Mods, [Delegate].CreateDelegate(GetType(Method), M))
+                Exit For
+            Next
+        Next
+    End Sub
+    Public Shared Sub AddHotKey(ByVal Key As Keys, ByVal Modifier As ModKeys, ByVal Method As Method)
+        NativeMethods.RegisterHotKey(HotKeyListener.Handle, Method.Method.MethodHandle.Value, Modifier, Key)
+        HotKeyList.Add(NativeMethods.MakeLWord(Modifier, Key), New HotKey(Modifier, Keys.KeyCode, Method))
+    End Sub
+    Public Shared Function RemoveHotKey(ByVal Key As Keys, ByVal Modifier As ModKeys) As Boolean
+        If HotKeyList.ContainsKey(NativeMethods.MakeLWord(Modifier, Key)) Then
+            Dim V As HotKey = HotKeyList(NativeMethods.MakeLWord(Modifier, Key))
+            HotKeyList.Remove(NativeMethods.MakeLWord(Modifier, Key))
+            Return NativeMethods.UnregisterHotKey(HotKeyListener.Handle, V.ID)
+        Else
+            Return False
+        End If
+    End Function
+    Private Shared Sub HotKeyListener_OnHotkey(ByVal M As System.Windows.Forms.Message) Handles HotKeyListener.OnHotkey
+        If HotKeyList.ContainsKey(M.LParam) Then HotKeyList(M.LParam).Method.Invoke()
+    End Sub
+End Class
+
+Friend Class HotKey
+    Sub New(ByVal [Mod] As ModKeys, ByVal HotKey As Keys, ByVal InvokedMethod As Method)
+        Me.Modifier = [Mod]
+        Me.Key = HotKey
+        Me.Method = InvokedMethod
+    End Sub
+    Public Modifier As ModKeys = ModKeys.None
+    Public Key As Keys = Keys.None
+    Public Method As Method
+    Public ID As Integer
+End Class
+Friend Class Listener
+    Inherits NativeWindow
+    Sub New()
+        Dim cp As CreateParams = New CreateParams()
+        cp.Caption = &quot;&quot;
+        cp.ClassName = &quot;STATIC&quot;
+        cp.X = 0
+        cp.Y = 0
+        cp.Height = 0
+        cp.Width = 0
+        cp.Style = 0
+        cp.ExStyle = 0
+        Me.CreateHandle(cp)
+    End Sub
+    Public Event OnHotkey(ByVal M As Message)
+    Protected Overrides Sub WndProc(ByRef m As System.Windows.Forms.Message)
+        MyBase.WndProc(m)
+        If m.Msg = 786 Then
+            RaiseEvent OnHotkey(m)
+        End If
+    End Sub
+End Class
+Friend Class NativeMethods
+    &lt;DllImport(&quot;user32.dll&quot;)&gt; _
+    Public Shared Function RegisterHotKey _
+        (ByVal hWnd As IntPtr, ByVal id As Integer, ByVal fsModifiers As Integer, _
+         ByVal vlc As Integer) As Boolean
+    End Function
+    &lt;DllImport(&quot;user32.dll&quot;)&gt; _
+    Public Shared Function UnregisterHotKey _
+        (ByVal hWnd As IntPtr, ByVal id As Integer) As Boolean
+    End Function
+    Public Shared Function MakeLWord(ByVal LoWord As Integer, ByVal HiWord As Integer) As Long
+        Return (HiWord * &amp;H10000) Or (LoWord And &amp;HFFFF&amp;)
+    End Function
+End Class[/code]
+
+Create a module named &quot;HotKeys&quot;, and put some methods in that will do something.
+
+Each method in the module you want to handle a hot key will have to have the Hotkey attribute applied to it, and have no arguments.
+So before each of those methods you will need to put &quot;&lt;Hotkey(Keys.L, ModKeys.Control)&gt;&quot; so whenever you press &quot;Ctrl + L&quot; it will activate the method.
+
+Here is an example of what the module would be like:
+[code]Module HotKeys
+
+    Public Sub InitHotKeys()
+        HotkeyManager.RegisterClass(GetType(HotKeys))
+    End Sub
+
+    &#39;&#39;&#39; &lt;summary&gt;
+    &#39;&#39;&#39; Closes Form1 when Ctrl + L are pressed
+    &#39;&#39;&#39; &lt;/summary&gt;
+    &lt;Hotkey(Keys.L, ModKeys.Control)&gt; _
+    Public Sub Close()
+        My.Forms.Form1.Close()
+    End Sub
+
+    &#39;&#39;&#39; &lt;summary&gt;
+    &#39;&#39;&#39; hanges Form1&#39;s backcolor to Blue when Ctrl + B are pressed
+    &#39;&#39;&#39; &lt;/summary&gt;
+    &lt;Hotkey(Keys.B, ModKeys.Control)&gt; _
+    Public Sub Blue()
+        My.Forms.Form1.BackColor = Color.Blue
+    End Sub
+
+    &#39;&#39;&#39; &lt;summary&gt;
+    &#39;&#39;&#39; Changes Form1&#39;s backcolor to Green when Ctrl + G are pressed
+    &#39;&#39;&#39; &lt;/summary&gt;
+    &lt;Hotkey(Keys.G, ModKeys.Control)&gt; _
+    Public Sub Green()
+        My.Forms.Form1.BackColor = Color.Green
+    End Sub
+
+End Module[/code]
+
+Finally, to register the hotkeys, when your form loads, you will need to call &quot;InitHotKeys()&quot;.
+So now, whenever Control + B is pressed, the forms back color will be changed to blue for example.
+
+Here is a sample project if you want to play around with it: http://uppit.com/d/UB5XJ</description>
+    
+    <lastBuildDate>Mon, 26 Apr 2010 08:32:56 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[VB 2005] Hotkeys made easy</title>
+        <dc:creator><![CDATA[@davidude36 Brolapse]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidude36">@davidude36</a> wrote:</p>
+          <blockquote>
+              <p>No reason to bump this old topic</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/4</link>
+        <pubDate>Mon, 26 Apr 2010 08:32:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-113758-4</guid>
+        <source url="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758.rss">[VB 2005] Hotkeys made easy</source>
+      </item>
+      <item>
+        <title>[VB 2005] Hotkeys made easy</title>
+        <dc:creator><![CDATA[@Ryanz Ryanz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ryanz">@Ryanz</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“VB7 Rocks, post:2, topic:113758”]Very nice.</p>
+<p>Glad to see another person using VB .NET HURRAY!  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+<p>VB .NET will take over the world someday. Watch out C++  :P[/quote]Just shutup, and goobjob.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/3</link>
+        <pubDate>Mon, 26 Apr 2010 06:53:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-113758-3</guid>
+        <source url="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758.rss">[VB 2005] Hotkeys made easy</source>
+      </item>
+      <item>
+        <title>[VB 2005] Hotkeys made easy</title>
+        <dc:creator><![CDATA[@VB7_Rocks VB7 Rocks]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vb7_rocks">@VB7_Rocks</a> wrote:</p>
+          <blockquote>
+              <p>Very nice.</p>
+<p>Glad to see another person using VB .NET HURRAY!  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"></p>
+<p>VB .NET will take over the world someday. Watch out C++  <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/2</link>
+        <pubDate>Wed, 20 Jun 2007 06:34:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-113758-2</guid>
+        <source url="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758.rss">[VB 2005] Hotkeys made easy</source>
+      </item>
+      <item>
+        <title>[VB 2005] Hotkeys made easy</title>
+        <dc:creator><![CDATA[@Flaming_Idiot Flaming Idiot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/flaming_idiot">@Flaming_Idiot</a> wrote:</p>
+          <blockquote>
+              <p>This is a code I wrote to make hot keys really simple.<br>
+All you need to do is add the hot key manager code to the project, tag methods with an attribute and call a single method and then hot keys will work.</p>
+<p><span class="bbcode-b">Instructions:</span></p>
+<p>Create a new file named “HotkeyManager.vb” and place the following code inside:</p>
+<p>[code]Imports System.Runtime.InteropServices<br>
+Imports System.Reflection</p>
+<p>Public Delegate Sub Method()<br>
+Public Enum ModKeys<br>
+None = &amp;H0<br>
+Alt = &amp;H1<br>
+Control = &amp;H2<br>
+Shift = &amp;H4<br>
+Win = &amp;H8<br>
+End Enum<br>
+&lt;AttributeUsage(AttributeTargets.Method, AllowMultiple:=False)&gt; _<br>
+Public NotInheritable Class HotkeyAttribute<br>
+Inherits Attribute<br>
+Sub New(ByVal Key As Keys, ByVal Mods As ModKeys)<br>
+Me.Mods = Mods<br>
+Me.Key = Key<br>
+End Sub<br>
+Sub New(ByVal Key As Keys)<br>
+Me.Mods = ModKeys.None<br>
+Me.Key = Key<br>
+End Sub<br>
+Public Mods As ModKeys<br>
+Public Key As Keys<br>
+End Class<br>
+Public NotInheritable Class HotkeyManager<br>
+Shared Sub New()<br>
+HotKeyListener = New Listener<br>
+HotKeyList = New Dictionary(Of Integer, HotKey)<br>
+End Sub<br>
+Private Shared WithEvents HotKeyListener As Listener<br>
+Private Shared ReadOnly HotKeyList As Dictionary(Of Integer, HotKey)<br>
+Public Shared Sub RegisterClass(ByVal [Class] As Type)<br>
+Dim Methods As MethodInfo() = [Class].GetMethods(BindingFlags.Public Or BindingFlags.Static)<br>
+For Each M As MethodInfo In Methods<br>
+For Each Attribute As HotkeyAttribute In M.GetCustomAttributes(GetType(HotkeyAttribute), False)<br>
+AddHotKey(Attribute.Key, Attribute.Mods, [Delegate].CreateDelegate(GetType(Method), M))<br>
+Exit For<br>
+Next<br>
+Next<br>
+End Sub<br>
+Public Shared Sub AddHotKey(ByVal Key As Keys, ByVal Modifier As ModKeys, ByVal Method As Method)<br>
+NativeMethods.RegisterHotKey(HotKeyListener.Handle, Method.Method.MethodHandle.Value, Modifier, Key)<br>
+HotKeyList.Add(NativeMethods.MakeLWord(Modifier, Key), New HotKey(Modifier, Keys.KeyCode, Method))<br>
+End Sub<br>
+Public Shared Function RemoveHotKey(ByVal Key As Keys, ByVal Modifier As ModKeys) As Boolean<br>
+If HotKeyList.ContainsKey(NativeMethods.MakeLWord(Modifier, Key)) Then<br>
+Dim V As HotKey = HotKeyList(NativeMethods.MakeLWord(Modifier, Key))<br>
+HotKeyList.Remove(NativeMethods.MakeLWord(Modifier, Key))<br>
+Return NativeMethods.UnregisterHotKey(HotKeyListener.Handle, V.ID)<br>
+Else<br>
+Return False<br>
+End If<br>
+End Function<br>
+Private Shared Sub HotKeyListener_OnHotkey(ByVal M As System.Windows.Forms.Message) Handles HotKeyListener.OnHotkey<br>
+If HotKeyList.ContainsKey(M.LParam) Then HotKeyList(M.LParam).Method.Invoke()<br>
+End Sub<br>
+End Class</p>
+<p>Friend Class HotKey<br>
+Sub New(ByVal [Mod] As ModKeys, ByVal HotKey As Keys, ByVal InvokedMethod As Method)<br>
+Me.Modifier = [Mod]<br>
+Me.Key = HotKey<br>
+Me.Method = InvokedMethod<br>
+End Sub<br>
+Public Modifier As ModKeys = ModKeys.None<br>
+Public Key As Keys = Keys.None<br>
+Public Method As Method<br>
+Public ID As Integer<br>
+End Class<br>
+Friend Class Listener<br>
+Inherits NativeWindow<br>
+Sub New()<br>
+Dim cp As CreateParams = New CreateParams()<br>
+cp.Caption = “”<br>
+cp.ClassName = “STATIC”<br>
+cp.X = 0<br>
+cp.Y = 0<br>
+cp.Height = 0<br>
+cp.Width = 0<br>
+cp.Style = 0<br>
+cp.ExStyle = 0<br>
+Me.CreateHandle(cp)<br>
+End Sub<br>
+Public Event OnHotkey(ByVal M As Message)<br>
+Protected Overrides Sub WndProc(ByRef m As System.Windows.Forms.Message)<br>
+MyBase.WndProc(m)<br>
+If m.Msg = 786 Then<br>
+RaiseEvent OnHotkey(m)<br>
+End If<br>
+End Sub<br>
+End Class<br>
+Friend Class NativeMethods<br>
+&lt;DllImport(“user32.dll”)&gt; _<br>
+Public Shared Function RegisterHotKey _<br>
+(ByVal hWnd As IntPtr, ByVal id As Integer, ByVal fsModifiers As Integer, _<br>
+ByVal vlc As Integer) As Boolean<br>
+End Function<br>
+&lt;DllImport(“user32.dll”)&gt; _<br>
+Public Shared Function UnregisterHotKey _<br>
+(ByVal hWnd As IntPtr, ByVal id As Integer) As Boolean<br>
+End Function<br>
+Public Shared Function MakeLWord(ByVal LoWord As Integer, ByVal HiWord As Integer) As Long<br>
+Return (HiWord * &amp;H10000) Or (LoWord And &amp;HFFFF&amp;)<br>
+End Function<br>
+End Class[/code]</p>
+<p>Create a module named “HotKeys”, and put some methods in that will do something.</p>
+<p>Each method in the module you want to handle a hot key will have to have the Hotkey attribute applied to it, and have no arguments.<br>
+So before each of those methods you will need to put “&lt;Hotkey(Keys.L, ModKeys.Control)&gt;” so whenever you press “Ctrl + L” it will activate the method.</p>
+<p>Here is an example of what the module would be like:</p>
+<p>[code]Module HotKeys</p>
+<pre><code>Public Sub InitHotKeys()
+    HotkeyManager.RegisterClass(GetType(HotKeys))
+End Sub
+
+''' &lt;summary&gt;
+''' Closes Form1 when Ctrl + L are pressed
+''' &lt;/summary&gt;
+&lt;Hotkey(Keys.L, ModKeys.Control)&gt; _
+Public Sub Close()
+    My.Forms.Form1.Close()
+End Sub
+
+''' &lt;summary&gt;
+''' hanges Form1's backcolor to Blue when Ctrl + B are pressed
+''' &lt;/summary&gt;
+&lt;Hotkey(Keys.B, ModKeys.Control)&gt; _
+Public Sub Blue()
+    My.Forms.Form1.BackColor = Color.Blue
+End Sub
+
+''' &lt;summary&gt;
+''' Changes Form1's backcolor to Green when Ctrl + G are pressed
+''' &lt;/summary&gt;
+&lt;Hotkey(Keys.G, ModKeys.Control)&gt; _
+Public Sub Green()
+    My.Forms.Form1.BackColor = Color.Green
+End Sub
+</code></pre>
+<p>End Module[/code]</p>
+<p>Finally, to register the hotkeys, when your form loads, you will need to call “InitHotKeys()”.<br>
+So now, whenever Control + B is pressed, the forms back color will be changed to blue for example.</p>
+<p>Here is a sample project if you want to play around with it: <a href="http://uppit.com/d/UB5XJ" rel="nofollow noopener">http://uppit.com/d/UB5XJ</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758/1</link>
+        <pubDate>Wed, 20 Jun 2007 05:43:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-113758-1</guid>
+        <source url="https://forum.moparisthebest.com/t/vb-2005-hotkeys-made-easy/113758.rss">[VB 2005] Hotkeys made easy</source>
+      </item>
+  </channel>
+</rss>

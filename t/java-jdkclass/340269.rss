@@ -1,0 +1,712 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Java] JDKClass</title>
+    <link>https://forum.moparisthebest.com/t/java-jdkclass/340269</link>
+    <description>This basically gives you the ability to compile, javadoc, and jar using a java application.
+[code]
+package com.side;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
+
+/**
+ * Class to replace the functionality of the Sun JDK.
+ * Currently implements a replacement for javac, javadoc, and jar.
+ * 
+ * @author Moparisthebest, modified by (Anthony)
+ */
+public class JDKClass {
+
+    private String homeDir;
+
+    /**
+     * Default Constructor
+     */
+    public JDKClass() {
+    }
+
+    /**
+     * Constructs a new JDKClass with the given absolute path to the home directory.
+     *
+     * @param homeDir Absolute path to home directory.
+     */
+    public JDKClass(String homeDir) {
+        this.homeDir = homeDir;
+    }
+
+    /**
+     * Gets the current home directory.
+     *
+     * @return Home Directory
+     */
+    public String getHomeDir() {
+        return homeDir;
+    }
+
+    /**
+     * Sets the home directory.
+     *
+     * @param homeDir Home Directory
+     */
+    public void setHomeDir(String homeDir) {
+        this.homeDir = homeDir;
+    }
+
+    /**
+     * Searches a directory recursively for java source files. Uses wildcards in paths
+     *
+     * @param buffer The buffer to append the path of the .java files in a directory, deliminated by ;
+     * @param srcDir Directory File.
+     */
+    private static void findJavaRecursive(List&lt;String&gt; buffer, File srcDir) {
+        File[] javaFiles = srcDir.listFiles();
+        for (File file : javaFiles) {
+            if (file.getName().endsWith(&quot;.java&quot;)) {
+                buffer.add(file.getAbsolutePath());
+                continue;
+            }
+            if (file.isDirectory()) {
+                findJavaRecursive(buffer, file);
+                continue;
+            }
+        }
+    }
+
+    /**
+     * Searches a directory recursively for any files.
+     *
+     * @param dirName Absolute path of directory.
+     * @param param   Parameter to lead the files with, complete with deliminator ;
+     * @return String of all the files in the directory recursively, prefixed by param, deliminated by ;
+     */
+    private String findRecursive(String dirName, String param) {
+        File dir = new File(dirName);
+        String returnString = &quot;&quot;;
+        File[] javaFiles = dir.listFiles();
+        for (File javafile : javaFiles) {
+            if (javafile.isDirectory()) {
+                returnString += findRecursive(javafile, param, javafile.getName() + &quot;/&quot;);
+            } else {
+                returnString += param + javafile.getName() + &quot;;&quot;;
+            }
+        }
+        return returnString.substring(0, returnString.length() - 1);
+    }
+
+    /**
+     * Searches a directory recursively for any files, prefixes them with the dir name.
+     * This method is only meant to be called from findRecursive(String dirName, String param)
+     *
+     * @param dir    File to search.
+     * @param param  Parameter to lead the files with, complete with deliminator ;
+     * @param prefix Directory name to prefix all the files with.
+     * @return String of all the files in the directory recursively, prefixed by param and prefix, deliminated by ;
+     * @see JDKClass#findRecursive(String,String)
+     */
+    private String findRecursive(File dir, String param, String prefix) {
+        String returnString = &quot;&quot;;
+        File[] javaFiles = dir.listFiles();
+        for (File javafile : javaFiles) {
+            if (javafile.isDirectory()) {
+                returnString += findRecursive(javafile, param, prefix + javafile.getName() + &quot;/&quot;);
+            } else {
+                returnString += param + prefix + javafile.getName() + &quot;;&quot;;
+            }
+        }
+        return returnString;
+    }
+
+    /**
+     * This compiles the java source files using the newer javax.tools.JavaCompiler
+     * as the other is deprecated.
+     *
+     * @param srcDir The source directory.
+     * @param binDir The build directory.
+     * @param classPath The class path.
+     * @return
+     */
+    public boolean compile(String srcDir, String binDir, String classPath) {
+        boolean success = false;
+        try {
+            //Arrays.asList(&quot;-classpath&quot;, System.getProperty(&quot;java.class.path&quot;));
+            List&lt;String&gt; files = new LinkedList&lt;String&gt;();
+            List&lt;String&gt; args = new LinkedList&lt;String&gt;();
+            args.add(&quot;-cp&quot;);
+            args.add(classPath.replaceAll(&quot;[:;]&quot;, System.getProperty(&quot;path.separator&quot;)));
+            args.add(&quot;-d&quot;);
+            args.add(homeDir + binDir);
+            findJavaRecursive(files, new File(homeDir + srcDir));
+            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null);
+            Iterable&lt;? extends JavaFileObject&gt; compilationUnits = fileManager.getJavaFileObjectsFromStrings(files);
+            success = compiler.getTask(null, fileManager, null, args, null, compilationUnits).call();
+            fileManager.close();
+        } catch (IOException ex) {
+            return false;
+        }
+        return success;
+    }
+
+    /**
+     * This produces javadocs in the javadoc subdirectory of the home directory.
+     *
+     * @param srcDir The subdirectory of the home directory where the source files reside.
+     * @return True if javadoc&#39;n was succesful, false otherwise.
+     */
+    public boolean javaDoc(String srcDir) {
+        if (homeDir == null) {
+            return false;
+        }
+
+        List&lt;String&gt; args = new LinkedList&lt;String&gt;();
+        args.add(&quot;-d&quot;);
+        args.add(homeDir + &quot;javadoc/&quot;);
+        findJavaRecursive(args, new File(homeDir + srcDir));
+
+        StringBuilder param = new StringBuilder().append(&quot;javadoc&quot;);
+        for (String a : args) {
+            param.append(&#39; &#39;).append(a);
+        }
+        System.out.println(param);
+
+        int exitCode = com.sun.tools.javadoc.Main.execute(args.toArray(new String[0]));
+        return exitCode == 0;
+    }
+
+    private static void findRecursive(List&lt;File&gt; buffer, File dir) {
+        File[] javaFiles = dir.listFiles();
+        for (File file : javaFiles) {
+            if (file.getName().endsWith(&quot;.class&quot;) || file.getName().endsWith(&quot;.java&quot;)) {
+                buffer.add(file);
+                continue;
+            }
+            if (file.isDirectory()) {
+                findRecursive(buffer, file);
+                continue;
+            }
+        }
+    }
+
+    /**
+     * This produces a jar file in the home directory, complete with a manifest attribute of Main-Class:
+     *
+     * @param name      Name of the jar file to create.
+     * @param subDir1   The first subdirectory of home directory of whose content you want in the jar file.
+     * @param subDir2   The second subdirectory of home directory of whose content you want in the jar file.
+     * @param mainClass Main Class to put in the manifest.
+     * @return True if the jar was created succesfully, false otherwise.
+     */
+    public boolean jar(String name, String binDir, String mainClass, String srcDir) {
+        if (homeDir == null) {
+            return false;
+        }
+        if (!name.endsWith(&quot;.jar&quot;)) {
+            name += &quot;.jar&quot;;
+        }
+        File archiveFile = new File(homeDir + name);
+        List&lt;File&gt; toBeJaredList = new LinkedList&lt;File&gt;();
+        if (binDir != null) {
+            findRecursive(toBeJaredList, new File(homeDir + binDir));
+        }
+        if (srcDir != null) {
+            findRecursive(toBeJaredList, new File(homeDir + srcDir));
+        }
+        try {
+            byte[] buffer = new byte[10240];
+            // Open archive file
+            FileOutputStream stream = new FileOutputStream(archiveFile);
+            Manifest manifest = new Manifest();
+            if (mainClass != null) {
+                manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, SIDE.version);
+                manifest.getMainAttributes().put(Attributes.Name.MAIN_CLASS, mainClass);
+
+            }
+            JarOutputStream out = new JarOutputStream(stream, manifest);
+
+            for (File tobeJared : toBeJaredList) {
+                if (tobeJared == null || !tobeJared.exists()
+                        || tobeJared.isDirectory()) {
+                    continue;
+                }
+                System.out.println(&quot;Adding &quot; + tobeJared.getName());
+
+                // Add archive entry
+                JarEntry jarAdd = new JarEntry(tobeJared.getName());
+                jarAdd.setTime(tobeJared.lastModified());
+                out.putNextEntry(jarAdd);
+
+                // Write file to archive
+                FileInputStream in = new FileInputStream(tobeJared);
+                while (true) {
+                    int nRead = in.read(buffer, 0, buffer.length);
+                    if (nRead &lt;= 0) {
+                        break;
+                    }
+                    out.write(buffer, 0, nRead);
+                }
+                in.close();
+            }
+
+            out.close();
+            stream.close();
+            return true;
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return false;
+        }
+        /*String manifestStr = &quot;&quot;;
+        if (mainClass != null) {
+        try {
+        File manifest = new File(homeDir + &quot;MANIFEST.MF&quot;);
+        if (!manifest.exists()) {
+        manifest.deleteOnExit();
+        FileOutputStream fos = new FileOutputStream(manifest);
+        fos.write((&quot;Main-Class: &quot; + mainClass + &quot;\n\n&quot;).getBytes());
+        }
+        manifestStr = &quot;cvmf;&quot; + homeDir + &quot;MANIFEST.MF;&quot;;
+        } catch (Exception e) {
+        manifestStr = &quot;cvf;&quot;;
+        }
+        } else {
+        manifestStr = &quot;cvf;&quot;;
+        }
+        if (!name.endsWith(&quot;.jar&quot;)) {
+        name += &quot;.jar&quot;;
+        }
+
+        String params = manifestStr + homeDir + name + &quot;;&quot; + findRecursive(homeDir + subDir1, &quot;-C;&quot; + homeDir + subDir1 + &quot;;&quot;);
+        if (subDir2 != null) {
+        params += &quot;;&quot; + findRecursive(homeDir + subDir2, &quot;-C;&quot; + homeDir + subDir2 + &quot;;&quot;);
+        }
+        System.out.println(&quot;jar &quot; + params);
+        sun.tools.jar.Main jarer = new sun.tools.jar.Main(System.out, System.err, &quot;jar&quot;);
+        return jarer.run(params.split(&quot;;&quot;));*/
+    }
+}
+[/code]
+
+Did it for SIDE because I was doing the TODO&#39;s mitb left.</description>
+    
+    <lastBuildDate>Sun, 16 May 2010 23:33:31 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="6" data-topic="340269">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/m.dog311/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> m.dog311:</div>
+<blockquote>
+<p>&lt;3</p>
+</blockquote>
+</aside>
+<p>I love you too, btw go on IRC.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/7</link>
+        <pubDate>Sun, 16 May 2010 23:33:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-7</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@m.dog311 m.dog311]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m.dog311">@m.dog311</a> wrote:</p>
+          <blockquote>
+              <p>&lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/6</link>
+        <pubDate>Sun, 16 May 2010 22:17:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-6</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>No problem. You can learn a lot by looking at what methods are called and looking at the in the javadocs.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/5</link>
+        <pubDate>Sun, 16 May 2010 05:26:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-5</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@ChaosPkers ChaosPkers]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chaospkers">@ChaosPkers</a> wrote:</p>
+          <blockquote>
+              <p>this stuff confuses me -.- but im trying to learn. thanks for postin this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/4</link>
+        <pubDate>Sun, 16 May 2010 05:21:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-4</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@the_soul The Soul]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_soul">@the_soul</a> wrote:</p>
+          <blockquote>
+              <p>Very nice.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/3</link>
+        <pubDate>Sun, 16 May 2010 04:41:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-3</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@Project_Evolution Project Evolution]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/project_evolution">@Project_Evolution</a> wrote:</p>
+          <blockquote>
+              <p>This is really cool, good job bud. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/2</link>
+        <pubDate>Sun, 16 May 2010 04:22:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-2</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+      <item>
+        <title>[Java] JDKClass</title>
+        <dc:creator><![CDATA[@_bool]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_bool">@_bool</a> wrote:</p>
+          <blockquote>
+              <p>This basically gives you the ability to compile, javadoc, and jar using a java application.</p>
+<pre><code class="lang-auto">package com.side;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
+
+/**
+ * Class to replace the functionality of the Sun JDK.
+ * Currently implements a replacement for javac, javadoc, and jar.
+ * 
+ * @author Moparisthebest, modified by (Anthony)
+ */
+public class JDKClass {
+
+    private String homeDir;
+
+    /**
+     * Default Constructor
+     */
+    public JDKClass() {
+    }
+
+    /**
+     * Constructs a new JDKClass with the given absolute path to the home directory.
+     *
+     * @param homeDir Absolute path to home directory.
+     */
+    public JDKClass(String homeDir) {
+        this.homeDir = homeDir;
+    }
+
+    /**
+     * Gets the current home directory.
+     *
+     * @return Home Directory
+     */
+    public String getHomeDir() {
+        return homeDir;
+    }
+
+    /**
+     * Sets the home directory.
+     *
+     * @param homeDir Home Directory
+     */
+    public void setHomeDir(String homeDir) {
+        this.homeDir = homeDir;
+    }
+
+    /**
+     * Searches a directory recursively for java source files. Uses wildcards in paths
+     *
+     * @param buffer The buffer to append the path of the .java files in a directory, deliminated by ;
+     * @param srcDir Directory File.
+     */
+    private static void findJavaRecursive(List&lt;String&gt; buffer, File srcDir) {
+        File[] javaFiles = srcDir.listFiles();
+        for (File file : javaFiles) {
+            if (file.getName().endsWith(".java")) {
+                buffer.add(file.getAbsolutePath());
+                continue;
+            }
+            if (file.isDirectory()) {
+                findJavaRecursive(buffer, file);
+                continue;
+            }
+        }
+    }
+
+    /**
+     * Searches a directory recursively for any files.
+     *
+     * @param dirName Absolute path of directory.
+     * @param param   Parameter to lead the files with, complete with deliminator ;
+     * @return String of all the files in the directory recursively, prefixed by param, deliminated by ;
+     */
+    private String findRecursive(String dirName, String param) {
+        File dir = new File(dirName);
+        String returnString = "";
+        File[] javaFiles = dir.listFiles();
+        for (File javafile : javaFiles) {
+            if (javafile.isDirectory()) {
+                returnString += findRecursive(javafile, param, javafile.getName() + "/");
+            } else {
+                returnString += param + javafile.getName() + ";";
+            }
+        }
+        return returnString.substring(0, returnString.length() - 1);
+    }
+
+    /**
+     * Searches a directory recursively for any files, prefixes them with the dir name.
+     * This method is only meant to be called from findRecursive(String dirName, String param)
+     *
+     * @param dir    File to search.
+     * @param param  Parameter to lead the files with, complete with deliminator ;
+     * @param prefix Directory name to prefix all the files with.
+     * @return String of all the files in the directory recursively, prefixed by param and prefix, deliminated by ;
+     * @see JDKClass#findRecursive(String,String)
+     */
+    private String findRecursive(File dir, String param, String prefix) {
+        String returnString = "";
+        File[] javaFiles = dir.listFiles();
+        for (File javafile : javaFiles) {
+            if (javafile.isDirectory()) {
+                returnString += findRecursive(javafile, param, prefix + javafile.getName() + "/");
+            } else {
+                returnString += param + prefix + javafile.getName() + ";";
+            }
+        }
+        return returnString;
+    }
+
+    /**
+     * This compiles the java source files using the newer javax.tools.JavaCompiler
+     * as the other is deprecated.
+     *
+     * @param srcDir The source directory.
+     * @param binDir The build directory.
+     * @param classPath The class path.
+     * @return
+     */
+    public boolean compile(String srcDir, String binDir, String classPath) {
+        boolean success = false;
+        try {
+            //Arrays.asList("-classpath", System.getProperty("java.class.path"));
+            List&lt;String&gt; files = new LinkedList&lt;String&gt;();
+            List&lt;String&gt; args = new LinkedList&lt;String&gt;();
+            args.add("-cp");
+            args.add(classPath.replaceAll("[:;]", System.getProperty("path.separator")));
+            args.add("-d");
+            args.add(homeDir + binDir);
+            findJavaRecursive(files, new File(homeDir + srcDir));
+            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null);
+            Iterable&lt;? extends JavaFileObject&gt; compilationUnits = fileManager.getJavaFileObjectsFromStrings(files);
+            success = compiler.getTask(null, fileManager, null, args, null, compilationUnits).call();
+            fileManager.close();
+        } catch (IOException ex) {
+            return false;
+        }
+        return success;
+    }
+
+    /**
+     * This produces javadocs in the javadoc subdirectory of the home directory.
+     *
+     * @param srcDir The subdirectory of the home directory where the source files reside.
+     * @return True if javadoc'n was succesful, false otherwise.
+     */
+    public boolean javaDoc(String srcDir) {
+        if (homeDir == null) {
+            return false;
+        }
+
+        List&lt;String&gt; args = new LinkedList&lt;String&gt;();
+        args.add("-d");
+        args.add(homeDir + "javadoc/");
+        findJavaRecursive(args, new File(homeDir + srcDir));
+
+        StringBuilder param = new StringBuilder().append("javadoc");
+        for (String a : args) {
+            param.append(' ').append(a);
+        }
+        System.out.println(param);
+
+        int exitCode = com.sun.tools.javadoc.Main.execute(args.toArray(new String[0]));
+        return exitCode == 0;
+    }
+
+    private static void findRecursive(List&lt;File&gt; buffer, File dir) {
+        File[] javaFiles = dir.listFiles();
+        for (File file : javaFiles) {
+            if (file.getName().endsWith(".class") || file.getName().endsWith(".java")) {
+                buffer.add(file);
+                continue;
+            }
+            if (file.isDirectory()) {
+                findRecursive(buffer, file);
+                continue;
+            }
+        }
+    }
+
+    /**
+     * This produces a jar file in the home directory, complete with a manifest attribute of Main-Class:
+     *
+     * @param name      Name of the jar file to create.
+     * @param subDir1   The first subdirectory of home directory of whose content you want in the jar file.
+     * @param subDir2   The second subdirectory of home directory of whose content you want in the jar file.
+     * @param mainClass Main Class to put in the manifest.
+     * @return True if the jar was created succesfully, false otherwise.
+     */
+    public boolean jar(String name, String binDir, String mainClass, String srcDir) {
+        if (homeDir == null) {
+            return false;
+        }
+        if (!name.endsWith(".jar")) {
+            name += ".jar";
+        }
+        File archiveFile = new File(homeDir + name);
+        List&lt;File&gt; toBeJaredList = new LinkedList&lt;File&gt;();
+        if (binDir != null) {
+            findRecursive(toBeJaredList, new File(homeDir + binDir));
+        }
+        if (srcDir != null) {
+            findRecursive(toBeJaredList, new File(homeDir + srcDir));
+        }
+        try {
+            byte[] buffer = new byte[10240];
+            // Open archive file
+            FileOutputStream stream = new FileOutputStream(archiveFile);
+            Manifest manifest = new Manifest();
+            if (mainClass != null) {
+                manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, SIDE.version);
+                manifest.getMainAttributes().put(Attributes.Name.MAIN_CLASS, mainClass);
+
+            }
+            JarOutputStream out = new JarOutputStream(stream, manifest);
+
+            for (File tobeJared : toBeJaredList) {
+                if (tobeJared == null || !tobeJared.exists()
+                        || tobeJared.isDirectory()) {
+                    continue;
+                }
+                System.out.println("Adding " + tobeJared.getName());
+
+                // Add archive entry
+                JarEntry jarAdd = new JarEntry(tobeJared.getName());
+                jarAdd.setTime(tobeJared.lastModified());
+                out.putNextEntry(jarAdd);
+
+                // Write file to archive
+                FileInputStream in = new FileInputStream(tobeJared);
+                while (true) {
+                    int nRead = in.read(buffer, 0, buffer.length);
+                    if (nRead &lt;= 0) {
+                        break;
+                    }
+                    out.write(buffer, 0, nRead);
+                }
+                in.close();
+            }
+
+            out.close();
+            stream.close();
+            return true;
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return false;
+        }
+        /*String manifestStr = "";
+        if (mainClass != null) {
+        try {
+        File manifest = new File(homeDir + "MANIFEST.MF");
+        if (!manifest.exists()) {
+        manifest.deleteOnExit();
+        FileOutputStream fos = new FileOutputStream(manifest);
+        fos.write(("Main-Class: " + mainClass + "\n\n").getBytes());
+        }
+        manifestStr = "cvmf;" + homeDir + "MANIFEST.MF;";
+        } catch (Exception e) {
+        manifestStr = "cvf;";
+        }
+        } else {
+        manifestStr = "cvf;";
+        }
+        if (!name.endsWith(".jar")) {
+        name += ".jar";
+        }
+
+        String params = manifestStr + homeDir + name + ";" + findRecursive(homeDir + subDir1, "-C;" + homeDir + subDir1 + ";");
+        if (subDir2 != null) {
+        params += ";" + findRecursive(homeDir + subDir2, "-C;" + homeDir + subDir2 + ";");
+        }
+        System.out.println("jar " + params);
+        sun.tools.jar.Main jarer = new sun.tools.jar.Main(System.out, System.err, "jar");
+        return jarer.run(params.split(";"));*/
+    }
+}</code></pre>
+<p>Did it for SIDE because I was doing the TODO’s mitb left.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-jdkclass/340269/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-jdkclass/340269/1</link>
+        <pubDate>Sun, 16 May 2010 03:46:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-340269-1</guid>
+        <source url="https://forum.moparisthebest.com/t/java-jdkclass/340269.rss">[Java] JDKClass</source>
+      </item>
+  </channel>
+</rss>

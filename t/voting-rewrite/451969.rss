@@ -1,0 +1,883 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Voting Rewrite</title>
+    <link>https://forum.moparisthebest.com/t/voting-rewrite/451969</link>
+    <description>can someone please fix this for me, when people go to vote on my server they can click on the links and just exit without auctually voting on the links and claim the reward. Can someone please fix this for me. Thanks and if someone could make it look good i would much appreciate it. Or just a new good working script that has multiple buttons thanks. [code=php]&lt;?php
+
+/**
+ * @author Stuart &lt;RogueX | iVariable&gt;
+ * @version 1.1 UPDATED: 06.09.2010
+ * @comment fixed a few bugs
+ */
+
+/**
+ * mysql database hostname
+ */
+define(&quot;MYSQL_HOST&quot;, &quot;localhost&quot;);
+/**
+ *  mysql username to connect to the database server
+ */
+define(&quot;MYSQL_USERNAME&quot;, &quot;MYSQLUSER&quot;);
+/**
+ *  mysql password the password to connect to the database server
+ */
+define(&quot;MYSQL_PASSWORD&quot;, &quot;MYSQLPASS&quot;);
+/**
+ *  mysql database the database name in which you have your vote table setup
+ */
+define(&quot;MYSQL_DATABASE&quot;, &quot;MYSQLDATABASE&quot;);
+/**
+ *  vote url this is the url which where users will be sent to on voting
+ */
+define(&quot;VOTE_URL&quot;, &quot;FINALVOTING URL&quot;);
+/**
+ * The number of hours between voting
+ */
+define(&quot;VOTE_HOURS&quot;, 24);
+
+
+/**
+ *  connect() this function is used to connect to the mysql database server.
+ */
+function connect()
+{
+    if (!@mysql_connect(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))
+        die(&quot;Could not connect to mysql database: &quot; . mysql_error());
+    if (!@mysql_select_db(MYSQL_DATABASE))
+        die(&quot;Could not select mysql database: &quot; . mysql_error());
+    $tables = mysql_list_tables(MYSQL_DATABASE);
+    while (list($temp) = mysql_fetch_array($tables)) {
+        if ($temp == &quot;votes&quot;) {
+            return;
+        }
+    }
+    query(&quot;CREATE TABLE `votes` (
+        `playerName` VARCHAR( 255 ) NOT NULL ,
+        `ip` VARCHAR( 255 ) NOT NULL,
+        `time` BIGINT NOT NULL ,
+        `recieved` INT( 1 ) NOT NULL DEFAULT &#39;0&#39;)&quot;);
+}
+/**
+ *  query(string query) this function is used to query the mysql database server.
+ */
+function query($s)
+{
+    $query = @mysql_query($s);
+    if (!$query)
+        die(&quot;Error running query(&#39;&quot; . $s . &quot;&#39;): &quot; . mysql_error());
+    return $query;
+}
+/**
+ *  anti_inject(string text) this function is used to make sure no injections can be made.
+ */
+function anti_inject($sql)
+{
+    $sql = preg_replace(sql_regcase(&quot;/(from|select|insert|delete|where|drop table|show tables|#|\*|--|\\\\)/&quot;),
+        &quot;&quot;, $sql);
+    $sql = trim($sql);
+    $sql = strip_tags($sql);
+    $sql = addslashes($sql);
+    $sql = strtolower($sql);
+    return $sql;
+}
+/**
+ *  clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.
+ */
+function clean_request($time, $username)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+    if (mysql_num_rows($query) &gt; 0) {
+        $row = mysql_fetch_array($query);
+        $timerequested = $row[&#39;time&#39;];
+        if ($time - $timerequested &gt; VOTE_HOURS * 3600)
+            query(&quot;DELETE FROM `votes` WHERE time=&#39;&quot; . $timerequested . &quot;&#39;&quot;);
+    }
+}
+/**
+ *  vote_entries(string ip) this function is used return the number of rows within the table
+ */
+function vote_entries($ip)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE ip=&#39;&quot; . $ip . &quot;&#39;&quot;);
+    return mysql_num_rows($query);
+}
+
+
+/**
+ * This is the actual working of the script please do not touch anything below if you do not know what you are doing...
+ */
+if (isset($_POST[&#39;submit&#39;]) || isset($_GET[&#39;username&#39;]) &amp;&amp; isset($_GET[&#39;type&#39;])) {
+    connect();
+    if ($_POST[&#39;submit&#39;]) {
+        if(@fsockopen($_SERVER[&#39;REMOTE_ADDR&#39;], 80, $errno, $errstr, 1))
+            die(&quot;Sorry but you have port 80 open, this is to stop voting by proxy address.&quot;);
+        if(isset($_COOKIE[&#39;voted&#39;]))
+            die(&quot;Sorry but it looks like you have already voted...&quot;);
+        $username = anti_inject($_POST[&#39;username&#39;]);
+        $ip = gethostbyaddr($_SERVER[&#39;REMOTE_ADDR&#39;]);
+        clean_request(time(), $username);
+        if (vote_entries($ip) == 0) {
+            setcookie (&quot;voted&quot;, &quot;yes&quot;, VOTE_HOURS * 3600);
+            query(&quot;INSERT INTO `votes` (`playerName`, `ip`, `time`) VALUES (&#39;&quot; . $username .
+                &quot;&#39;, &#39;&quot; . $ip . &quot;&#39;, &#39;&quot; . time() . &quot;&#39;)&quot;);
+            header(&quot;Location: &quot; . VOTE_URL . &quot;&quot;);
+        } else {
+            die(&quot;You have already voted once today.&quot;);
+        }
+    } elseif ($_GET[&#39;type&#39;] == &quot;checkvote&quot;) {
+        $username = anti_inject($_GET[&#39;username&#39;]);
+        $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+        if (mysql_num_rows($query) == 1) {
+            $results = mysql_fetch_array($query);
+            if ($results[&#39;recieved&#39;] == 0) {
+                query(&quot;UPDATE `votes` SET `recieved`=&#39;1&#39; WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+                die(&quot;user needs reward...&quot;);
+            } else {
+                die(&quot;user been given reward...&quot;);
+            }
+        } else {
+          die(&quot;Vote not found... &quot;.  $username .&quot;.&quot;);
+        }
+    }
+}
+
+?&gt;
+
+&lt;html&gt;
+	&lt;head&gt;
+		&lt;title&gt;ClairtyX Vote&lt;/title&gt;
+		&lt;style type=&quot;text/css&quot;&gt;
+body {
+
+background-color: #111111;
+font-family:Arial;
+}
+.link {
+cursor:pointer;
+color: #037;
+text-decoration: underline;
+}
+.link:hover {
+color: #3300FF;
+}
+.link-done {
+cursor:pointer;
+color: #037;
+text-decoration: line-through;
+}
+.link-done:hover {
+color: #3300FF;
+}
+#container {
+
+background-color: #222222;
+height: auto;
+width: 500px;
+padding: 5px;
+border: 1px solid #333333;
+margin: 0 auto auto auto;
+-moz-box-shadow: 0 0 5px #000000;
+-webkit-box-shadow: 0 0 5px #000000;
+box-shadow: 0 0 5px #000000;
+}
+
+#help {
+
+
+background-color: #222222;
+height: auto;
+width: 500px;
+padding: 5px;
+border: 1px solid #333333;
+margin: 0 auto auto auto;
+-moz-box-shadow: 0 0 5px #000000;
+-webkit-box-shadow: 0 0 5px #000000;
+box-shadow: 0 0 5px #000000;
+}
+		&lt;/style&gt;
+		&lt;script type=&quot;text/javascript&quot;&gt;
+			var timer;
+			var timeLeft = 30;
+		
+			var voted1 = false;
+			var voted2 = false;
+			var voted3 = false;
+			
+			function clickedLink(button) { 
+				switch(button) {
+					case 1:
+						voted1 = true;
+						javascript:window.open(&#39;http://www.moparisthebest.com/serverstatus.php?action=up&amp;server=66.90.92.30&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote1&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+					case 2:
+						voted2 = true;
+						javascript:window.open(&#39;http://www.runelocus.com/toplist/vote-15237.html&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote2&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+					case 3:
+						voted3 = true;
+						javascript:window.open(&#39;http://runetoplist.com/ajax/ajax_vote.php?vote=549&amp;lightbox[iframe]=true&amp;lightbox[width]=340&amp;lightbox[height]=260&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote3&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+					case 4:
+						voted4 = true;
+						javascript:window.open(&#39;SITE4.com&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote4&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+					case 5:
+						voted5 = true;
+						javascript:window.open(&#39;SITE5.com&#39;, &#39;60&#39;, &#39;left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1&#39;);
+						document.getElementById(&quot;vote5&quot;).setAttribute(&quot;class&quot;, &quot;link-done&quot;);
+						break;
+				}
+				
+				setSitesLeft();
+				if (voted1 &amp;&amp; voted2 &amp;&amp; voted3) {
+					startCountDown();
+					document.getElementById(&#39;statusText&#39;).style.display = &#39;none&#39;; 
+				}
+			}
+			
+			function startCountDown() {
+				timer = setInterval(&quot;doCountDown();&quot;, 1000);
+				document.getElementById(&#39;timerText&#39;).style.display = &#39;block&#39;; 
+			}
+			
+			function doCountDown() {
+				document.getElementById(&#39;timeLeft&#39;).innerHTML = timeLeft;
+				timeLeft = (timeLeft - 1);
+				if (timeLeft &lt;= 0) {
+					document.getElementById(&#39;links&#39;).style.display = &#39;none&#39;; 
+					document.getElementById(&#39;voted&#39;).style.display = &#39;block&#39;; 
+					clearTimeout(timer);
+				}
+			}
+			
+			function setSitesLeft() {
+				var count = 3;
+				if (voted1) {
+					count = (count - 1);
+				}
+				if (voted2) {
+					count = (count - 1);
+				}
+				if (voted3) {
+					count = (count - 1);
+				}
+				document.getElementById(&#39;sitesLeft&#39;).innerHTML = count;
+			}
+		&lt;/script&gt;
+	&lt;/head&gt;
+
+	&lt;body&gt;
+&lt;center&gt;&lt;a href=&quot;/vote/img/ClairtyX.jpg&quot;&gt;&lt;img src=&quot;/vote/img/ClairtyX.jpg&quot; /&gt;&lt;/a&gt;&lt;/center&gt;&lt;br /&gt;
+&lt;div id=&quot;help&quot;&gt;&lt;strong&gt;How It Works:&lt;/strong&gt;&lt;br /&gt;&lt;br /&gt;Vote on each of the links below once you have voted on all of them you will be forwarded to A page that will allow you to input your username. When you are on this page make sure you put in your username and accept. Once in game type ::claim to receive your reward!&lt;/div&gt;&lt;br /&gt;
+
+&lt;div id=&quot;container&quot;&gt;
+		&lt;div id=&quot;links&quot;&gt;
+			1. &lt;a id=&quot;vote1&quot; onclick=&quot;clickedLink(1);&quot; class=&quot;link&quot;&gt;Moparscape&lt;/a&gt; &lt;br&gt;
+			2. &lt;a id=&quot;vote2&quot; onclick=&quot;clickedLink(2);&quot; class=&quot;link&quot;&gt;Runelocus&lt;/a&gt; &lt;br&gt;
+			3. &lt;a id=&quot;vote3&quot; onclick=&quot;clickedLink(3);&quot; class=&quot;link&quot;&gt;Runetoplist&lt;/a&gt; &lt;br&gt;
+			
+			&lt;span id=&quot;statusText&quot;&gt;Click &amp; vote at all the links above to continue, only &lt;b id=&quot;sitesLeft&quot;&gt;3&lt;/b&gt; left.&lt;/span&gt;
+			&lt;span id=&quot;timerText&quot; style=&quot;display: none;&quot;&gt;You have &lt;b id=&quot;timeLeft&quot;&gt;*&lt;/b&gt; seconds left before you can claim you reward. &lt;/span&gt;
+		&lt;/div&gt;
+		
+		&lt;div id=&quot;voted&quot; style=&quot;display: none;&quot;&gt;
+			&lt;form action=&quot;index.php&quot; method=&quot;post&quot;&gt;
+				&lt;center&gt;Username: &lt;input type=&quot;text&quot; name=&quot;username&quot; /&gt; &lt;input type=&quot;submit&quot; name=&quot;submit&quot; value=&quot;Claim Reward!&quot; /&gt;&lt;/center&gt;
+			&lt;/form&gt;
+		&lt;/div&gt;
+&lt;/div&gt;
+	&lt;/body&gt;
+&lt;/html&gt;[/code]
+
+Thanks guys</description>
+    
+    <lastBuildDate>Wed, 01 Aug 2012 06:38:02 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="15" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/clairtyx/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> ClairtyX:</div>
+<blockquote>
+<p>Could you please explain how to do this? I really need help.</p>
+</blockquote>
+</aside>
+<p>Do you understand the callback system some toplists provide? If the user votes and inputs his or her username, the website will send a $_GET or $_POST request to your website. Check to make sure that the IP address belongs to the toplist, and then store the user’s name in a database. In your server side code, add a vote reward claim command in which the server will check its MySQL database if the user’s name exists. If it does, give the user the reward, and remove the user from the database.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/16</link>
+        <pubDate>Wed, 01 Aug 2012 06:38:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-16</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>Could you please explain how to do this? I really need help.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/15</link>
+        <pubDate>Wed, 01 Aug 2012 06:02:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-15</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="13" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/clairtyx/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> ClairtyX:</div>
+<blockquote>
+<p>How can I make it so you can only click the reward button every 24 hours?</p>
+</blockquote>
+</aside>
+<p>You can use MySQL.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/14</link>
+        <pubDate>Wed, 01 Aug 2012 05:59:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-14</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>How can I make it so you can only click the reward button every 24 hours?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/13</link>
+        <pubDate>Wed, 01 Aug 2012 04:25:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-13</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Whackatre, post:11, topic:451969”][quote author=Ruby link=topic=554851.msg4064435#msg4064435 date=1343741461]<br>
+As I stated previously, use the incentive call back system that a lot of toplists offer.<br>
+[/quote]</p>
+<p>Only RL.[/quote]</p>
+<p>RsPsCoding and top100arena both offer incentive call back systems.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/12</link>
+        <pubDate>Wed, 01 Aug 2012 00:27:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-12</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="10" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ruby/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Ruby:</div>
+<blockquote>
+<p>As I stated previously, use the incentive call back system that a lot of toplists offer.</p>
+</blockquote>
+</aside>
+<p>Only RL.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/11</link>
+        <pubDate>Tue, 31 Jul 2012 15:23:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-11</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>As I stated previously, use the incentive call back system that a lot of toplists offer.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/10</link>
+        <pubDate>Tue, 31 Jul 2012 13:31:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-10</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>Well how can I make it tell that you have not voted on all the links? Say you don’t vote on all the links so it would pop up with a message after you vote saying you have not voted on all the links please go back and retry. This is really bugging me <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> thanks guys.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/9</link>
+        <pubDate>Tue, 31 Jul 2012 08:58:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-9</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@Bellend Bellend]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bellend">@Bellend</a> wrote:</p>
+          <blockquote>
+              <p>isn’t the whole point in voting to show how popular and good the server is, if this is the case users shouldn’t have to be bribed into voting they should vote for the server anyway…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/8</link>
+        <pubDate>Tue, 31 Jul 2012 03:16:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-8</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/clairtyx/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> ClairtyX:</div>
+<blockquote>
+<p>well wtf how do i make it like other servers so you can only get a reward every 24 hours? Please i really need help with this. if you could edit the code so you can it would be helpfull</p>
+</blockquote>
+</aside>
+<p>You can definitely limit a vote reward claim every 24 hours (TIME), but you cannot check if the user had voted on toplists other than RL. It is impossible unless that user had some sort of affiliation with the toplist webmasters. Most servers probably implement some sort of JavaScript shit, but that is easily bypassed.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/7</link>
+        <pubDate>Mon, 30 Jul 2012 20:40:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-7</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>You can do this by use of the incentive postback function that a lot of communities provide, I won’t implement it for you. However, I will tell you that it’s worth using.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/6</link>
+        <pubDate>Mon, 30 Jul 2012 10:01:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-6</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>well wtf how do i make it like other servers so you can only get a reward every 24 hours? Please i really need help with this. if you could edit the code so you can it would be helpfull</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/5</link>
+        <pubDate>Mon, 30 Jul 2012 07:47:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-5</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="3" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/clairtyx/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> ClairtyX:</div>
+<blockquote>
+<p>well how do i make it so you can only vote on each link one time. And so you can’t just click on the links and exit and get hte reward. Thanks mate.</p>
+</blockquote>
+</aside>
+<aside class="quote" data-post="2" data-topic="451969">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/whackatre/40/7608_1.png" class="avatar"> Whackatre:</div>
+<blockquote>
+<p>You <span class="bbcode-b">cannot</span></p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/4</link>
+        <pubDate>Mon, 30 Jul 2012 07:08:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-4</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>well how do i make it so you can only vote on each link one time. And so you can’t just click on the links and exit and get hte reward. Thanks mate.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/3</link>
+        <pubDate>Mon, 30 Jul 2012 06:56:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-3</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@whackatre Whackatre]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whackatre">@whackatre</a> wrote:</p>
+          <blockquote>
+              <p>Currently, the only popular private server toplist website that actually checks if the player voted is Rune_L0wkus. You <span class="bbcode-b">cannot</span> confirm votes without confirmation by both parties (RL’s website and your server’s database). Without this mutual confirmation, votes can and will be cheated.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/2</link>
+        <pubDate>Mon, 30 Jul 2012 06:20:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-2</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+      <item>
+        <title>Voting Rewrite</title>
+        <dc:creator><![CDATA[@ClairtyX ClairtyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clairtyx">@ClairtyX</a> wrote:</p>
+          <blockquote>
+              <p>can someone please fix this for me, when people go to vote on my server they can click on the links and just exit without auctually voting on the links and claim the reward. Can someone please fix this for me. Thanks and if someone could make it look good i would much appreciate it. Or just a new good working script that has multiple buttons thanks. [code=php]&lt;?php</p>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> Stuart &lt;RogueX | iVariable&gt;</li>
+<li>
+<a class="mention" href="/u/version">@version</a> 1.1 UPDATED: 06.09.2010</li>
+<li>
+<span class="mention">@comment</span> fixed a few bugs<br>
+*/</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>mysql database hostname<br>
+<em>/<br>
+define(“MYSQL_HOST”, “localhost”);<br>
+/</em>*</li>
+<li>mysql username to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_USERNAME”, “MYSQLUSER”);<br>
+/</em>*</li>
+<li>mysql password the password to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_PASSWORD”, “MYSQLPASS”);<br>
+/</em>*</li>
+<li>mysql database the database name in which you have your vote table setup<br>
+<em>/<br>
+define(“MYSQL_DATABASE”, “MYSQLDATABASE”);<br>
+/</em>*</li>
+<li>vote url this is the url which where users will be sent to on voting<br>
+<em>/<br>
+define(“VOTE_URL”, “FINALVOTING URL”);<br>
+/</em>*</li>
+<li>The number of hours between voting<br>
+*/<br>
+define(“VOTE_HOURS”, 24);</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>connect() this function is used to connect to the mysql database server.<br>
+<em>/<br>
+function connect()<br>
+{<br>
+if (!<span class="mention">@mysql_connect</span>(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))<br>
+die("Could not connect to mysql database: " . mysql_error());<br>
+if (!<span class="mention">@mysql_select_db</span>(MYSQL_DATABASE))<br>
+die("Could not select mysql database: " . mysql_error());<br>
+$tables = mysql_list_tables(MYSQL_DATABASE);<br>
+while (list($temp) = mysql_fetch_array($tables)) {<br>
+if ($temp == “votes”) {<br>
+return;<br>
+}<br>
+}<br>
+query(“CREATE TABLE <code>votes</code> (<br>
+<code>playerName</code> VARCHAR( 255 ) NOT NULL ,<br>
+<code>ip</code> VARCHAR( 255 ) NOT NULL,<br>
+<code>time</code> BIGINT NOT NULL ,<br>
+<code>recieved</code> INT( 1 ) NOT NULL DEFAULT ‘0’)”);<br>
+}<br>
+/</em>*</li>
+<li>query(string query) this function is used to query the mysql database server.<br>
+<em>/<br>
+function query($s)<br>
+{<br>
+$query = <span class="mention">@mysql_query</span>($s);<br>
+if (!$query)<br>
+die(“Error running query(’” . $s . "’): " . mysql_error());<br>
+return $query;<br>
+}<br>
+/</em>*</li>
+<li>anti_inject(string text) this function is used to make sure no injections can be made.<br>
+<em>/<br>
+function anti_inject($sql)<br>
+{<br>
+$sql = preg_replace(sql_regcase("/(from|select|insert|delete|where|drop table|show tables|#|*|–|\\)/"),<br>
+“”, $sql);<br>
+$sql = trim($sql);<br>
+$sql = strip_tags($sql);<br>
+$sql = addslashes($sql);<br>
+$sql = strtolower($sql);<br>
+return $sql;<br>
+}<br>
+/</em>*</li>
+<li>clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.<br>
+<em>/<br>
+function clean_request($time, $username)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) &gt; 0) {<br>
+$row = mysql_fetch_array($query);<br>
+$timerequested = $row[‘time’];<br>
+if ($time - $timerequested &gt; VOTE_HOURS * 3600)<br>
+query(“DELETE FROM <code>votes</code> WHERE time=’” . $timerequested . “’”);<br>
+}<br>
+}<br>
+/</em>*</li>
+<li>vote_entries(string ip) this function is used return the number of rows within the table<br>
+*/<br>
+function vote_entries($ip)<br>
+{<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE ip=’” . $ip . “’”);<br>
+return mysql_num_rows($query);<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>This is the actual working of the script please do not touch anything below if you do not know what you are doing…<br>
+*/<br>
+if (isset($_POST[‘submit’]) || isset($_GET[‘username’]) &amp;&amp; isset($_GET[‘type’])) {<br>
+connect();<br>
+if ($_POST[‘submit’]) {<br>
+if(<span class="mention">@fsockopen</span>($_SERVER[‘REMOTE_ADDR’], 80, $errno, $errstr, 1))<br>
+die(“Sorry but you have port 80 open, this is to stop voting by proxy address.”);<br>
+if(isset($_COOKIE[‘voted’]))<br>
+die(“Sorry but it looks like you have already voted…”);<br>
+$username = anti_inject($_POST[‘username’]);<br>
+$ip = gethostbyaddr($_SERVER[‘REMOTE_ADDR’]);<br>
+clean_request(time(), $username);<br>
+if (vote_entries($ip) == 0) {<br>
+setcookie (“voted”, “yes”, VOTE_HOURS * 3600);<br>
+query(“INSERT INTO <code>votes</code> (<code>playerName</code>, <code>ip</code>, <code>time</code>) VALUES (’” . $username .<br>
+“’, '” . $ip . “’, '” . time() . “’)”);<br>
+header("Location: " . VOTE_URL . “”);<br>
+} else {<br>
+die(“You have already voted once today.”);<br>
+}<br>
+} elseif ($_GET[‘type’] == “checkvote”) {<br>
+$username = anti_inject($_GET[‘username’]);<br>
+$query = query(“SELECT * FROM <code>votes</code> WHERE <code>playerName</code>=’” . $username . “’”);<br>
+if (mysql_num_rows($query) == 1) {<br>
+$results = mysql_fetch_array($query);<br>
+if ($results[‘recieved’] == 0) {<br>
+query(“UPDATE <code>votes</code> SET <code>recieved</code>=‘1’ WHERE <code>playerName</code>=’” . $username . “’”);<br>
+die(“user needs reward…”);<br>
+} else {<br>
+die(“user been given reward…”);<br>
+}<br>
+} else {<br>
+die(“Vote not found… “.  $username .”.”);<br>
+}<br>
+}<br>
+}</li>
+</ul>
+<p>?&gt;</p>
+
+	
+		ClairtyX Vote
+		
+body {
+<p>background-color: <span class="hashtag">#111111</span>;<br>
+font-family:Arial;<br>
+}<br>
+.link {<br>
+cursor:pointer;<br>
+color: <span class="hashtag">#037</span>;<br>
+text-decoration: underline;<br>
+}<br>
+.link:hover {<br>
+color: <span class="hashtag">#3300FF</span>;<br>
+}<br>
+.link-done {<br>
+cursor:pointer;<br>
+color: <span class="hashtag">#037</span>;<br>
+text-decoration: line-through;<br>
+}<br>
+.link-done:hover {<br>
+color: <span class="hashtag">#3300FF</span>;<br>
+}<br>
+<span class="hashtag">#container</span> {</p>
+<p>background-color: <span class="hashtag">#222222</span>;<br>
+height: auto;<br>
+width: 500px;<br>
+padding: 5px;<br>
+border: 1px solid <span class="hashtag">#333333</span>;<br>
+margin: 0 auto auto auto;<br>
+-moz-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+-webkit-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+}</p>
+<p><span class="hashtag">#help</span> {</p>
+<p>background-color: <span class="hashtag">#222222</span>;<br>
+height: auto;<br>
+width: 500px;<br>
+padding: 5px;<br>
+border: 1px solid <span class="hashtag">#333333</span>;<br>
+margin: 0 auto auto auto;<br>
+-moz-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+-webkit-box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+box-shadow: 0 0 5px <span class="hashtag">#000000</span>;<br>
+}<br>
+<br>
+<br>
+var timer;<br>
+var timeLeft = 30;</p>
+<pre><code>		var voted1 = false;
+		var voted2 = false;
+		var voted3 = false;
+		
+		function clickedLink(button) { 
+			switch(button) {
+				case 1:
+					voted1 = true;
+					javascript:window.open('http://www.moparisthebest.com/serverstatus.php?action=up&amp;server=66.90.92.30', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote1").setAttribute("class", "link-done");
+					break;
+				case 2:
+					voted2 = true;
+					javascript:window.open('http://www.runelocus.com/toplist/vote-15237.html', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote2").setAttribute("class", "link-done");
+					break;
+				case 3:
+					voted3 = true;
+					javascript:window.open('http://runetoplist.com/ajax/ajax_vote.php?vote=549&amp;lightbox[iframe]=true&amp;lightbox[width]=340&amp;lightbox[height]=260', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote3").setAttribute("class", "link-done");
+					break;
+				case 4:
+					voted4 = true;
+					javascript:window.open('SITE4.com', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote4").setAttribute("class", "link-done");
+					break;
+				case 5:
+					voted5 = true;
+					javascript:window.open('SITE5.com', '60', 'left = 20, top = 20, width = 800, height = 600, toolbar = 0, resizable = 0, scrollbars=1');
+					document.getElementById("vote5").setAttribute("class", "link-done");
+					break;
+			}
+			
+			setSitesLeft();
+			if (voted1 &amp;&amp; voted2 &amp;&amp; voted3) {
+				startCountDown();
+				document.getElementById('statusText').style.display = 'none'; 
+			}
+		}
+		
+		function startCountDown() {
+			timer = setInterval("doCountDown();", 1000);
+			document.getElementById('timerText').style.display = 'block'; 
+		}
+		
+		function doCountDown() {
+			document.getElementById('timeLeft').innerHTML = timeLeft;
+			timeLeft = (timeLeft - 1);
+			if (timeLeft &lt;= 0) {
+				document.getElementById('links').style.display = 'none'; 
+				document.getElementById('voted').style.display = 'block'; 
+				clearTimeout(timer);
+			}
+		}
+		
+		function setSitesLeft() {
+			var count = 3;
+			if (voted1) {
+				count = (count - 1);
+			}
+			if (voted2) {
+				count = (count - 1);
+			}
+			if (voted3) {
+				count = (count - 1);
+			}
+			document.getElementById('sitesLeft').innerHTML = count;
+		}
+	&lt;/script&gt;
+&lt;/head&gt;
+
+&lt;body&gt;
+</code></pre>
+<a href="/vote/img/ClairtyX.jpg"><img src="/vote/img/ClairtyX.jpg" width="" height=""></a><br>
+<div>
+<strong>How It Works:</strong><br><br>Vote on each of the links below once you have voted on all of them you will be forwarded to A page that will allow you to input your username. When you are on this page make sure you put in your username and accept. Once in game type ::claim to receive your reward!</div><br>
+<div>
+		<div>
+			1. <a>Moparscape</a> <br>
+			2. <a>Runelocus</a> <br>
+			3. <a>Runetoplist</a> <br>
+<pre><code>		&lt;span id="statusText"&gt;Click &amp; vote at all the links above to continue, only &lt;b id="sitesLeft"&gt;3&lt;/b&gt; left.&lt;/span&gt;
+		&lt;span id="timerText" style="display: none;"&gt;You have &lt;b id="timeLeft"&gt;*&lt;/b&gt; seconds left before you can claim you reward. &lt;/span&gt;
+	&lt;/div&gt;
+	
+	&lt;div id="voted" style="display: none;"&gt;
+		&lt;form action="index.php" method="post"&gt;
+			&lt;center&gt;Username: &lt;input type="text" name="username" /&gt; &lt;input type="submit" name="submit" value="Claim Reward!" /&gt;&lt;/center&gt;
+		&lt;/form&gt;
+	&lt;/div&gt;
+</code></pre>
+</div>
+	
+[/code]
+<p>Thanks guys</p>
+</div>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/voting-rewrite/451969/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/voting-rewrite/451969/1</link>
+        <pubDate>Mon, 30 Jul 2012 05:02:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-451969-1</guid>
+        <source url="https://forum.moparisthebest.com/t/voting-rewrite/451969.rss">Voting Rewrite</source>
+      </item>
+  </channel>
+</rss>

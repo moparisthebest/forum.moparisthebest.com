@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Snippet] Almost fully refactored player update protocol</title>
+    <link>https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115</link>
+    <description>There are a few bits that I&#39;ve left unrefactored, I&#39;m working on them but will appreciate any pointers as usual.
+
+[code=Java]	private void updatePlayerMask(int mask, int playerId, Stream stream,
+			Player player)
+	{
+		if ((mask &amp; 0x400) != 0)
+		{
+			// Move and animate synchronously
+			player.startLocationX = stream.getUnsignedByteS();
+			player.startLocationY = stream.getUnsignedByteS();
+			player.endLocationX = stream.getUnsignedByteS();
+			player.endLocationY = stream.getUnsignedByteS();
+			player.movementSpeedStartToEnd = stream.getUnsignedShortA()
+					+ currentCycle;
+			player.movementSpeedEndToStart = stream.getUnsignedLEShortA()
+					+ currentCycle;
+			player.direction = stream.getUnsignedByteS();
+			player.resetPath();
+		}
+		if ((mask &amp; 0x100) != 0)
+		{
+			// Player graphics
+			player.graphicID = stream.getUnsignedShort();
+			int graphicDelay = stream.getInt();
+			player.graphicDelay = graphicDelay &gt;&gt; 16;
+			player.graphicEndCycle = currentCycle + (graphicDelay &amp; 0xffff);
+			player.currentAnimationFrame = 0;
+			player.anInt1522 = 0;
+			if (player.graphicEndCycle &gt; currentCycle)
+				player.currentAnimationFrame = -1;
+			if (player.graphicID == 65535)
+				player.graphicID = -1;
+		}
+		if ((mask &amp; 8) != 0)
+		{
+			// Animation
+			int animationId = stream.getUnsignedShort();
+			if (animationId == 65535)
+				animationId = -1;
+			int animationDelay = stream.getUnsignedByteC();
+			if (animationId == player.animationId &amp;&amp; animationId != -1)
+			{
+				int i3 = Animation.anims[animationId].anInt365;
+				if (i3 == 1)
+				{
+					player.anInt1527 = 0;
+					player.anInt1528 = 0;
+					player.animationDelay = animationDelay;
+					player.anInt1530 = 0;
+				}
+				if (i3 == 2)
+					player.anInt1530 = 0;
+			}
+			else if (animationId == -1
+					|| player.animationId == -1
+					|| Animation.anims[animationId].anInt359 &gt;= Animation.anims[player.animationId].anInt359)
+			{
+				player.animationId = animationId;
+				player.anInt1527 = 0;
+				player.anInt1528 = 0;
+				player.animationDelay = animationDelay;
+				player.anInt1530 = 0;
+				player.anInt1542 = player.pathLength;
+			}
+		}
+		if ((mask &amp; 4) != 0)
+		{
+			// Forced chat
+			player.textSpoken = stream.getString();
+			if (player.textSpoken.charAt(0) == &#39;~&#39;)
+			{
+				player.textSpoken = player.textSpoken.substring(1);
+				pushMessage(player.textSpoken, 2, player.playerName);
+			}
+			else if (player == sessionPlayer)
+				pushMessage(player.textSpoken, 2, player.playerName);
+			player.chatColor = 0;
+			player.chatEffect = 0;
+			player.textCycle = 150;
+		}
+		if ((mask &amp; 0x80) != 0)
+		{
+			// Normal chat
+			int chatEffects = stream.getUnsignedShort();
+			int playerRights = stream.getUnsignedByte();
+			int messageLength = stream.getUnsignedByteC();
+			int message = stream.offset;
+			if (player.playerName != null &amp;&amp; player.visible)
+			{
+				long playerNameLong = TextClass.nameToLong(player.playerName);
+				boolean ignored = false;
+				if (playerRights &lt;= 1)
+				{
+					for (int ignoredUser = 0; ignoredUser &lt; ignoreListCount; ignoredUser++)
+					{
+						if (ignoreListName[ignoredUser] != playerNameLong)
+							continue;
+						ignored = true;
+						break;
+					}
+
+				}
+				if (!ignored &amp;&amp; inTutorial == 0)
+					try
+					{
+						chatStream.offset = 0;
+						stream.getBytes(messageLength, 0, chatStream.payload);
+						chatStream.offset = 0;
+						String chat = TextInput.get(messageLength, chatStream);
+						chat = Censor.doCensor(chat);
+						player.textSpoken = chat;
+						player.chatColor = chatEffects &gt;&gt; 8;
+						player.privilege = playerRights;
+
+						player.chatEffect = chatEffects &amp; 0xff;
+						player.textCycle = 150;
+						if (playerRights == 2 || playerRights == 3)
+							pushMessage(chat, 1, &quot;@cr2@&quot; + player.playerName);
+						else if (playerRights == 1)
+							pushMessage(chat, 1, &quot;@cr1@&quot; + player.playerName);
+						else
+							pushMessage(chat, 2, player.playerName);
+					}
+					catch (Exception exception)
+					{
+						signlink.reportError(&quot;cde2&quot;);
+					}
+			}
+			stream.offset = message + messageLength;
+		}
+		if ((mask &amp; 1) != 0)
+		{
+			// Current interacting entity
+			player.interactingEntity = stream.getUnsignedShort();
+			if (player.interactingEntity == 65535)
+				player.interactingEntity = -1;
+		}
+		if ((mask &amp; 0x10) != 0)
+		{
+			// Player appearance
+			int appearanceBufferSize = stream.getUnsignedByteC();
+			byte appearanceBufferBytes[] = new byte[appearanceBufferSize];
+			Stream appearanceBuffer = new Stream(appearanceBufferBytes);
+			stream.readBytes(appearanceBufferSize, 0, appearanceBufferBytes);
+			sessionPlayerUpdateStreams[playerId] = appearanceBuffer;
+			player.updatePlayer(appearanceBuffer);
+		}
+		if ((mask &amp; 2) != 0)
+		{
+			// Facing coordinate
+			player.faceCoordinateX = stream.getUnsignedShortA();
+			player.faceCoordinateY = stream.getUnsignedShort();
+		}
+		if ((mask &amp; 0x20) != 0)
+		{
+			// Player receiving damage
+			int hitAmount = stream.getUnsignedByte();
+			int hitType = stream.getUnsignedByteA();
+			player.updateHits(hitType, hitAmount, currentCycle);
+			player.loopCycleStatus = currentCycle + 300;
+			player.currentHealth = stream.getUnsignedByteC();
+			player.maxHealth = stream.getUnsignedByte();
+		}
+		if ((mask &amp; 0x200) != 0)
+		{
+			// Player receiving more damage
+			int hitAmount = stream.getUnsignedByte();
+			int hitType = stream.getUnsignedByteS();
+			player.updateHits(hitType, hitAmount, currentCycle);
+			player.loopCycleStatus = currentCycle + 300;
+			player.currentHealth = stream.getUnsignedByte();
+			player.maxHealth = stream.getUnsignedByteC();
+		}
+	}[/code]</description>
+    
+    <lastBuildDate>Mon, 06 Jan 2014 02:06:17 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Snippet] Almost fully refactored player update protocol</title>
+        <dc:creator><![CDATA[@Docent Limits]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/docent">@Docent</a> wrote:</p>
+          <blockquote>
+              <p>Again, nice job!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115/2</link>
+        <pubDate>Mon, 06 Jan 2014 02:06:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-538115-2</guid>
+        <source url="https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115.rss">[Snippet] Almost fully refactored player update protocol</source>
+      </item>
+      <item>
+        <title>[Snippet] Almost fully refactored player update protocol</title>
+        <dc:creator><![CDATA[@Ambokile Ambokile]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ambokile">@Ambokile</a> wrote:</p>
+          <blockquote>
+              <p>There are a few bits that I’ve left unrefactored, I’m working on them but will appreciate any pointers as usual.</p>
+<p>[code=Java]	private void updatePlayerMask(int mask, int playerId, Stream stream,<br>
+Player player)<br>
+{<br>
+if ((mask &amp; 0x400) != 0)<br>
+{<br>
+// Move and animate synchronously<br>
+player.startLocationX = stream.getUnsignedByteS();<br>
+player.startLocationY = stream.getUnsignedByteS();<br>
+player.endLocationX = stream.getUnsignedByteS();<br>
+player.endLocationY = stream.getUnsignedByteS();<br>
+player.movementSpeedStartToEnd = stream.getUnsignedShortA()<br>
++ currentCycle;<br>
+player.movementSpeedEndToStart = stream.getUnsignedLEShortA()<br>
++ currentCycle;<br>
+player.direction = stream.getUnsignedByteS();<br>
+player.resetPath();<br>
+}<br>
+if ((mask &amp; 0x100) != 0)<br>
+{<br>
+// Player graphics<br>
+player.graphicID = stream.getUnsignedShort();<br>
+int graphicDelay = stream.getInt();<br>
+player.graphicDelay = graphicDelay &gt;&gt; 16;<br>
+player.graphicEndCycle = currentCycle + (graphicDelay &amp; 0xffff);<br>
+player.currentAnimationFrame = 0;<br>
+player.anInt1522 = 0;<br>
+if (player.graphicEndCycle &gt; currentCycle)<br>
+player.currentAnimationFrame = -1;<br>
+if (player.graphicID == 65535)<br>
+player.graphicID = -1;<br>
+}<br>
+if ((mask &amp; 8) != 0)<br>
+{<br>
+// Animation<br>
+int animationId = stream.getUnsignedShort();<br>
+if (animationId == 65535)<br>
+animationId = -1;<br>
+int animationDelay = stream.getUnsignedByteC();<br>
+if (animationId == player.animationId &amp;&amp; animationId != -1)<br>
+{<br>
+int i3 = Animation.anims[animationId].anInt365;<br>
+if (i3 == 1)<br>
+{<br>
+player.anInt1527 = 0;<br>
+player.anInt1528 = 0;<br>
+player.animationDelay = animationDelay;<br>
+player.anInt1530 = 0;<br>
+}<br>
+if (i3 == 2)<br>
+player.anInt1530 = 0;<br>
+}<br>
+else if (animationId == -1<br>
+|| player.animationId == -1<br>
+|| Animation.anims[animationId].anInt359 &gt;= Animation.anims[player.animationId].anInt359)<br>
+{<br>
+player.animationId = animationId;<br>
+player.anInt1527 = 0;<br>
+player.anInt1528 = 0;<br>
+player.animationDelay = animationDelay;<br>
+player.anInt1530 = 0;<br>
+player.anInt1542 = player.pathLength;<br>
+}<br>
+}<br>
+if ((mask &amp; 4) != 0)<br>
+{<br>
+// Forced chat<br>
+player.textSpoken = stream.getString();<br>
+if (player.textSpoken.charAt(0) == ‘~’)<br>
+{<br>
+player.textSpoken = player.textSpoken.substring(1);<br>
+pushMessage(player.textSpoken, 2, player.playerName);<br>
+}<br>
+else if (player == sessionPlayer)<br>
+pushMessage(player.textSpoken, 2, player.playerName);<br>
+player.chatColor = 0;<br>
+player.chatEffect = 0;<br>
+player.textCycle = 150;<br>
+}<br>
+if ((mask &amp; 0x80) != 0)<br>
+{<br>
+// Normal chat<br>
+int chatEffects = stream.getUnsignedShort();<br>
+int playerRights = stream.getUnsignedByte();<br>
+int messageLength = stream.getUnsignedByteC();<br>
+int message = stream.offset;<br>
+if (player.playerName != null &amp;&amp; player.visible)<br>
+{<br>
+long playerNameLong = TextClass.nameToLong(player.playerName);<br>
+boolean ignored = false;<br>
+if (playerRights &lt;= 1)<br>
+{<br>
+for (int ignoredUser = 0; ignoredUser &lt; ignoreListCount; ignoredUser++)<br>
+{<br>
+if (ignoreListName[ignoredUser] != playerNameLong)<br>
+continue;<br>
+ignored = true;<br>
+break;<br>
+}</p>
+<pre><code>			}
+			if (!ignored &amp;&amp; inTutorial == 0)
+				try
+				{
+					chatStream.offset = 0;
+					stream.getBytes(messageLength, 0, chatStream.payload);
+					chatStream.offset = 0;
+					String chat = TextInput.get(messageLength, chatStream);
+					chat = Censor.doCensor(chat);
+					player.textSpoken = chat;
+					player.chatColor = chatEffects &gt;&gt; 8;
+					player.privilege = playerRights;
+
+					player.chatEffect = chatEffects &amp; 0xff;
+					player.textCycle = 150;
+					if (playerRights == 2 || playerRights == 3)
+						pushMessage(chat, 1, "@cr2@" + player.playerName);
+					else if (playerRights == 1)
+						pushMessage(chat, 1, "@cr1@" + player.playerName);
+					else
+						pushMessage(chat, 2, player.playerName);
+				}
+				catch (Exception exception)
+				{
+					signlink.reportError("cde2");
+				}
+		}
+		stream.offset = message + messageLength;
+	}
+	if ((mask &amp; 1) != 0)
+	{
+		// Current interacting entity
+		player.interactingEntity = stream.getUnsignedShort();
+		if (player.interactingEntity == 65535)
+			player.interactingEntity = -1;
+	}
+	if ((mask &amp; 0x10) != 0)
+	{
+		// Player appearance
+		int appearanceBufferSize = stream.getUnsignedByteC();
+		byte appearanceBufferBytes[] = new byte[appearanceBufferSize];
+		Stream appearanceBuffer = new Stream(appearanceBufferBytes);
+		stream.readBytes(appearanceBufferSize, 0, appearanceBufferBytes);
+		sessionPlayerUpdateStreams[playerId] = appearanceBuffer;
+		player.updatePlayer(appearanceBuffer);
+	}
+	if ((mask &amp; 2) != 0)
+	{
+		// Facing coordinate
+		player.faceCoordinateX = stream.getUnsignedShortA();
+		player.faceCoordinateY = stream.getUnsignedShort();
+	}
+	if ((mask &amp; 0x20) != 0)
+	{
+		// Player receiving damage
+		int hitAmount = stream.getUnsignedByte();
+		int hitType = stream.getUnsignedByteA();
+		player.updateHits(hitType, hitAmount, currentCycle);
+		player.loopCycleStatus = currentCycle + 300;
+		player.currentHealth = stream.getUnsignedByteC();
+		player.maxHealth = stream.getUnsignedByte();
+	}
+	if ((mask &amp; 0x200) != 0)
+	{
+		// Player receiving more damage
+		int hitAmount = stream.getUnsignedByte();
+		int hitType = stream.getUnsignedByteS();
+		player.updateHits(hitType, hitAmount, currentCycle);
+		player.loopCycleStatus = currentCycle + 300;
+		player.currentHealth = stream.getUnsignedByte();
+		player.maxHealth = stream.getUnsignedByteC();
+	}
+}[/code]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115/1</link>
+        <pubDate>Sat, 04 Jan 2014 23:31:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-538115-1</guid>
+        <source url="https://forum.moparisthebest.com/t/snippet-almost-fully-refactored-player-update-protocol/538115.rss">[Snippet] Almost fully refactored player update protocol</source>
+      </item>
+  </channel>
+</rss>

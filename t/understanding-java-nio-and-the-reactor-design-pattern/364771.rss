@@ -1,0 +1,710 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Understanding Java NIO and the Reactor Design Pattern</title>
+    <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771</link>
+    <description>Well I decided on quoting this topic because I thought the community should read up on it, as you can read the title this is about understanding the NIO API of Java and the reactor design pattern, I take no credit what so ever for posting this here, I don&#39;t even what thanks for this, thank Blakeman8192 and Java for this. :)
+
+[QUOTE=blakeman8192;10084][CENTER][B] - Understanding Java NIO and the Reactor Design Pattern -[/B]
+Fuck yeah.[/CENTER]
+
+Hey there, I&#39;m Blake, and welcome to my guide. When I was just starting out with learning the java.nio.channels package, it seemed like an arcane art that only the most experienced programmers could understand and use. While I admit that it&#39;s among the most advanced libraries in the Java API, I believe that with proper explanation, anyone can understand it if they are familiar with the Java language. One of the reasons as to why I love the reactor design pattern so much is how flexible it can be in terms of implementation. I have worked on and refined [i]my own[/i] design for the reactor pattern for multiple years now. Hopefully at the end of this guide, you&#39;ll understand my design and have the ideas and tools necessary to create your own design. Let&#39;s get started!
+
+[b]Table of Contents[/b]
+
+[ul][li]Prerequisites[/li]
+[li]Blocking IO and the problems associated with it[/li]
+[li]Solving these problems with non-blocking IO[/li]
+[li]What is the &quot;Reactor Pattern&quot;?[/li]
+[li]Components of a Reactor system[/li]
+[li]Basic implementation with Java[/li]
+[li]Refining our implementation[/li][/ul]
+
+
+[b]Prerequisites[/b]
+This is a guide for a very advanced aspect of the Java API. As such, it is assumed that you are familiar with the syntax and semantics of the Java language. You should be able to [u]use[/u] the Java language as a [u]tool[/u] to put your ideas into a computer, and not have to focus on the language itself but instead focus on what you are making with the language. You should know what concurrency/multi-threading is. You should have a basic understanding of how IO works (sockets, writing, reading) and you should be willing to read some parts of this guide multiple times until you can grasp the awkward, inverted design of the reactor design pattern. Above all, you need patience. This is not simple, and you will most likely not understand it immediately. Don&#39;t worry, most programmers are very stubborn people; and there is very little difference between stubbornness and determination! Apply yourself, get determined, and with my help you should learn to write extremely high performance server applications in no time!
+
+[b]Blocking IO and the problems associated with it[/b]
+Before JDK 1.4.2, Java programmers were restricted to using the standard java.net and java.io libraries to accomplish networking. While this worked fine for most cases, highly scalable servers were infeasible and servers started to perform sluggishly as they could not scale well up to several hundred (or thousand) connections.
+
+[u]Why doesn&#39;t blocking IO scale well?[/u]
+Scalability is all about how well a program responds in performance when demand for service is increased. Applications that do not scale well are not able to handle increased demand very well. Applications that scale well are easily able to cope with higher loads and demands. You can probably come to the conclusion that it is absolutely essential to make servers highly scalable, as the demand for their service will almost inevitably be variable.
+
+Blocking IO does not scale well because of the concept called [i]thread-per-client[/i]. All normal implementations of networking with the java.net/java.io packages [i]must[/i] use one dedicated thread for each individual client. Why is this? Because [i]block[/i]ing IO [i]blocks[/i] the thread using it until the desired IO operation is complete. If a thread attempts to read data from a java.net.Socket and there is no data ready to be read, the thread will [i]block[/i] (wait, and do absolutely nothing else) until data is ready to be read - at which point it will read and return the data. If there is only one thread, multiple clients cannot be handled simultaneously as the one thread will be blocked indefinitely. This is a fine concept, except threads have quite a bit of overhead.
+
+Essentially, blocking IO uses the JVM thread scheduler to notify the application when it can read data from a socket; something that the JVM thread scheduler was never intended to do.
+
+[u]The overhead of threads[/u]
+Threads carry quite a bit of baggage with them. First, they take CPU resources. Remember that single-core CPU can [i]literally[/i] only do [i]one[/i] thing at a time. In order for it to &quot;multi-task&quot;, it switches between all running threads on the computer in round-robin fashion, giving each thread an equal time-slice. The more threads there are, the smaller the time-slices get as the CPU must share its limited resources evenly among all of the threads. On top of that, we have [i]thread context switches[/i]. As I mentioned earlier, the CPU switches between all running threads in round-robin fashion. A context switch has overhead associated with it that gets out of hand very quickly as the amount of threads increases. For one context switch, the CPU must create a process control block, save it, load the process control block of the next thread, and resume executing the new thread from the point it left off (which was previously saved in the process control block). This may not seem like much, but when it&#39;s happening thousands of times per second, the effects become dramatic. Threads also have a memory overhead. Each thread maintains it&#39;s own stack for keeping track of code execution. The default thread stack size in a 32 bit JVM on an Intel processor is 256kb. This means that one thousand threads [i]automatically[/i] will consume 256MB of memory, without consideration of live objects and the JVM itself. Threads can detrimentally affect the performance of an application.
+
+[b]Solving these problems with Non-Blocking IO[/b]
+In JDK 1.4.2, the [b]java.nio[/b] package (and it&#39;s sub-packages) were introduced. For the first time, Java programmers were able to write highly scalable networking applications! NIO stands for &quot;New IO&quot;, because it&#39;s relatively new in the Java world. We will be looking specifically into the [b]java.nio.channels[/b] package, as this is the main package that will allow us to implement the Reactor Design Pattern.
+
+[u]So how can we solve the problems using new (non-blocking) IO?[/u]
+The problem of blocking IO is that it forces us to use an unnecessary amount of threads to service multiple clients. This is simply because blocking IO blocks operating threads. With non-blocking IO, we can perform IO operations without blocking any thread. One non-blocking server could easily service [i]several thousand[/i] clients simultaneously on [i]one thread[/i]. Instead of an O(n) ratio of threads to clients, non-blocking IO allows us to have an O(1) ratio. This is the heart of scalability - the server can easily [i]scale[/i] up in performance to meet increased demand without consuming a non-linear amount of resources.
+
+
+[b]What is the &quot;Reactor Pattern&quot;?[/b]
+[u][url=http://en.wikipedia.org/wiki/Reactor_pattern]Wikipedia[/url] defines the reactor design pattern as:[/u]
+&quot;... a concurrent programming pattern for handling service requests delivered concurrently to a service handler by one or more inputs. The service handler then demultiplexes the incoming requests and dispatches them synchronously to the associated request handlers&quot;
+
+[u]In English:[/u]
+A service that waits for IO operations that it&#39;s interested in to become ready, after which it [i]reacts[/i] by handling those operations. For example, if a reactor is interested in reading data sent from a client, it will be notified when the client writes data and it reacts accordingly by reading the data that was written. A reactor can do this with many (possibly several thousand) clients simultaneously with different interested IO operations for each client. You may have to read this a few times until it all becomes clear.
+
+[b]Components of a Reactor System[/b]
+A basic reactor system is comprised of the following components:
+
+[ul][*]Selector
+[*]Dispatcher
+[*]IO Handler(s)[/ul]
+
+
+[u]The Selector[/u]
+At the heart of every reactor system is a selector. This is the service that actually provides notification when an interested IO operation is ready on one or more clients. Clients are [i]registered[/i] with the selector and the IO operations (read, write, connect) that the server is currently interested in for the client are specified.
+
+[u]The Dispatcher:[/u]
+The dispatcher is the glue that holds a reactor together. It controls when the Selector should run, it controls how the entire server reacts to IO events being ready. It keeps track of all IO handlers (or just one), as well as the main design of concurrency within a reactor (more on that later). The dispatcher usually runs in its own dedicated thread, it uses the selector to wait until interested IO events become ready, after which it reacts by [i]dispatching[/i] signals to IO handlers to handle the actual events.
+
+[u]The IO Handler(s):[/u]
+The meat and potatoes of any reactor. There can be one single IO handler which handles all events in order, or there can be a thread pool of IO handler objects that handle all IO concurrently. These are signaled by the dispatcher when IO events become ready and they carry out those respective IO events for the given channels.
+
+[u]How they all come together:[/u]
+[center]
+I made you guys a neat little visual aid! :)
+[img]http://img440.imageshack.us/img440/3262/reactordiagram.png[/img]
+[/center]
+
+[u]Remember:[/u]
+[code]
+Client (sends the signal) -&gt; Selector (gets the signal) -&gt; Dispatcher (reacts to the signal) -&gt; IO Handler(s) (handle(s) the signal)
+[/code]
+
+[b]Basic Implementation in Java[/b]
+Here&#39;s where it&#39;ll get a bit crazy, so make sure you understand everything up until this point. If not, go back and read over it again.To implement the reactor pattern, we will use several parts of the Java API. For the most part, Java hides all of the under-the-hood messy stuff from us, and we can rely on the fact that the Java API will work properly. To implement a basic reactor system, we need the following Java classes:
+
+[u]java.nio.channels.Selector ([url=http://download.oracle.com/javase/6/docs/api/java/nio/channels/Selector.html]Javadoc[/url])[/u]
+The heart of the reactor. We use the Selector to do the actual selecting for us. We call the &quot;select()&quot; method, and it will block until IO events that we are interested in become ready. We then use the &quot;selectedKeys()&quot; method to get selection key objects which represent a ready IO events.
+
+[u]java.nio.channels.SelectionKey ([url=http://download.oracle.com/javase/6/docs/api/java/nio/channels/SelectionKey.html]Javadoc[/url])[/u]
+A SelectionKey is an object that helps you keep track of the relationship between a client and a Selector. This key holds the IO operation that we are interested in for the client, the ready IO operations, the respective channel, and the respective selector. None of this would be possible without the SelectionKey. Pun intended, the SelectionKey is key to using the Java NIO API to implement the reactor design pattern.
+
+[u]java.nio.channels.SelectableChannel ([url=http://download.oracle.com/javase/6/docs/api/java/nio/channels/SelectableChannel.html]Javadoc[/url])[/u]
+Any object that extends SelectableChannel can be registered with a Selector. A SelectableChannel could be our connection to a client (like a Socket), or it could be our actual server socket itself.
+
+[u]java.nio.channels.SocketChannel ([url=http://download.oracle.com/javase/6/docs/api/java/nio/channels/ServerSocketChannel.html]Javadoc[/url])[/u]
+A connection to a client. It&#39;s almost exactly like a java.net.Socket, except it can be used with a Selector and it can be put into non-blocking mode.
+
+[u]java.nio.channels.ServerSocketChannel ([url=http://download.oracle.com/javase/6/docs/api/java/nio/channels/ServerSocketChannel.html]Javadoc[/url])[/u]
+Almost exactly like a java.net.ServerSocket, except it can be used with a Selector and it can be put into non-blocking mode. We use this as a gateway to accept incoming connetions.
+
+[u]java.nio.ByteBuffer ([url=http://download.oracle.com/javase/6/docs/api/java/nio/ByteBuffer.html]Javadoc[/url])[/u]
+A ByteBuffer is basically a super-awesome class that manages an array of bytes for you. It&#39;s a container (aka buffer) of bytes, you can put bytes into it, and you can read bytes from it. All of the read/write methods we&#39;ll be using will use ByteBuffers.
+
+[B]UNDER CONSTRUCTION[/B]
+I am working on this thread when I can, but it&#39;s taking a very long time. As such, I cannot do it all in one sitting. Please be patient while this thread is under construction. I&#39;ll work on it as much as I can until it&#39;s done.[/QUOTE]</description>
+    
+    <lastBuildDate>Fri, 10 Jan 2014 08:50:01 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>bump!!! ive been looking for this for ages after seeing it on rune-server. its no longer there because his account was deleted. this might be useful to some others <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/42</link>
+        <pubDate>Fri, 10 Jan 2014 08:50:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-42</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“blakeman8192, post:40, topic:364771”][quote author=iKilem link=topic=460976.msg3391340#msg3391340 date=1288973438]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>l2appreciate criticism…</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Thanks for re-stating what I made clear:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>The default thread stack size in a 32 bit JVM <span class="bbcode-b">on an Intel processor</span> is 256kb.</p>
+</blockquote>
+</aside>
+<p>Also, Win32 threads are often considered to be better than POSIX threads, so I don’t understand what your point is as what I said remains valid on all major operating systems.</p>
+</blockquote>
+</aside>
+<p>Uhmm, what about the OS?</p>
+<p>I don’t see how “win32 threads &gt; posix threads” is relevant.</p>
+<p>You say scheduling is done in a round-robin fashion, but where in the java specs does it mention this? Even practically, this is probably far from the truth. Same with “threads automatically will consume…”.</p>
+</blockquote>
+</aside>
+<p>It wouldn’t be mentioned in the Java specs as it should be automatically assumed, because Java uses native threads.<br>
+Also, that’s just how threads work.</p>
+</blockquote>
+</aside>
+<p>You’ve proven my point; Java uses native threads, so, therefore, it is platform-dependant.</p>
+<p>It’s not how threads work. With all due respect, do you know what you’re saying?<br>
+[/quote]<br>
+<a href="http://en.wikipedia.org/wiki/Time-division_multiplexing%5B/quote%5D" class="onebox" target="_blank" rel="nofollow noopener">http://en.wikipedia.org/wiki/Time-division_multiplexing[/quote]</a><br>
+I’m preserving this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/41</link>
+        <pubDate>Sat, 06 Nov 2010 22:14:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-41</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“iKilem, post:39, topic:364771”][quote author=blakeman8192 link=topic=460976.msg3390680#msg3390680 date=1288900644]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>l2appreciate criticism…</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Thanks for re-stating what I made clear:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>The default thread stack size in a 32 bit JVM <span class="bbcode-b">on an Intel processor</span> is 256kb.</p>
+</blockquote>
+</aside>
+<p>Also, Win32 threads are often considered to be better than POSIX threads, so I don’t understand what your point is as what I said remains valid on all major operating systems.</p>
+</blockquote>
+</aside>
+<p>Uhmm, what about the OS?</p>
+<p>I don’t see how “win32 threads &gt; posix threads” is relevant.</p>
+<p>You say scheduling is done in a round-robin fashion, but where in the java specs does it mention this? Even practically, this is probably far from the truth. Same with “threads automatically will consume…”.</p>
+</blockquote>
+</aside>
+<p>It wouldn’t be mentioned in the Java specs as it should be automatically assumed, because Java uses native threads.<br>
+Also, that’s just how threads work.<br>
+[/quote]<br>
+You’ve proven my point; Java uses native threads, so, therefore, it is platform-dependant.</p>
+<p>It’s not how threads work. With all due respect, do you know what you’re saying?[/quote]<br>
+<aside class="onebox wikipedia">
+  <header class="source">
+      <a href="https://en.wikipedia.org/wiki/Time-division_multiplexing" target="_blank">en.wikipedia.org</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:150/106;"><img src="//upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Multiplexing_diagram.svg/150px-Multiplexing_diagram.svg.png" class="thumbnail"></div>
+
+<h3><a href="https://en.wikipedia.org/wiki/Time-division_multiplexing" target="_blank">Time-division multiplexing</a></h3>
+
+<p>Time-division multiplexing (TDM) is a method of transmitting and receiving independent signals over a common signal path by means of synchronized switches at each end of the transmission line so that each signal appears on the line only a fraction of time in an alternating pattern. It is used when the bit rate of the transmission medium exceeds that of the signal to be transmitted. This form of signal multiplexing was developed in telecommunications for telegraphy systems in the late 19th century...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/40</link>
+        <pubDate>Sat, 06 Nov 2010 19:57:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-40</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“blakeman8192, post:38, topic:364771”][quote author=iKilem link=topic=460976.msg3388674#msg3388674 date=1288721280]<br>
+l2appreciate criticism…</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Thanks for re-stating what I made clear:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>The default thread stack size in a 32 bit JVM <span class="bbcode-b">on an Intel processor</span> is 256kb.</p>
+</blockquote>
+</aside>
+<p>Also, Win32 threads are often considered to be better than POSIX threads, so I don’t understand what your point is as what I said remains valid on all major operating systems.</p>
+</blockquote>
+</aside>
+<p>Uhmm, what about the OS?</p>
+<p>I don’t see how “win32 threads &gt; posix threads” is relevant.</p>
+<p>You say scheduling is done in a round-robin fashion, but where in the java specs does it mention this? Even practically, this is probably far from the truth. Same with “threads automatically will consume…”.<br>
+[/quote]<br>
+It wouldn’t be mentioned in the Java specs as it should be automatically assumed, because Java uses native threads.<br>
+Also, that’s just how threads work.[/quote]<br>
+You’ve proven my point; Java uses native threads, so, therefore, it is platform-dependant.</p>
+<p>It’s not how threads work. With all due respect, do you know what you’re saying?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/39</link>
+        <pubDate>Fri, 05 Nov 2010 16:10:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-39</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“iKilem, post:33, topic:364771”]l2appreciate criticism…</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Thanks for re-stating what I made clear:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>The default thread stack size in a 32 bit JVM <span class="bbcode-b">on an Intel processor</span> is 256kb.</p>
+</blockquote>
+</aside>
+<p>Also, Win32 threads are often considered to be better than POSIX threads, so I don’t understand what your point is as what I said remains valid on all major operating systems.</p>
+</blockquote>
+</aside>
+<p>Uhmm, what about the OS?</p>
+<p>I don’t see how “win32 threads &gt; posix threads” is relevant.</p>
+<p>You say scheduling is done in a round-robin fashion, but where in the java specs does it mention this? Even practically, this is probably far from the truth. Same with “threads automatically will consume…”.[/quote]<br>
+It wouldn’t be mentioned in the Java specs as it should be automatically assumed, because Java uses native threads.<br>
+Also, that’s just how threads work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/38</link>
+        <pubDate>Thu, 04 Nov 2010 19:57:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-38</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>hello my name is blakeman8192 and i live in a time bubble where the latest linux kernel is always 2.4.x and NPTL isn’t heard of</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/37</link>
+        <pubDate>Thu, 04 Nov 2010 07:32:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-37</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="34" data-topic="364771">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_1887921562df0dabfae55079ddabeb03.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>_s and iKilem, your point is retarded – what he was trying to convey is that threads do take up memory, so fuck off and die</p>
+</blockquote>
+</aside>
+<p>how convenient, the jester comes to make us all laugh. gj broskini.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/36</link>
+        <pubDate>Tue, 02 Nov 2010 22:19:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-36</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="34" data-topic="364771">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/abraham2119/40/5_1887921562df0dabfae55079ddabeb03.png" class="avatar"> abraham2119:</div>
+<blockquote>
+<p>_s and iKilem, your point is retarded – what he was trying to convey is that threads do take up memory, so fuck off and die</p>
+</blockquote>
+</aside>
+<p>I understood what he said. I simply pointed out that some of it was misleading.</p>
+<p><span class="bbcode-i">So fuck off and die.</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/35</link>
+        <pubDate>Tue, 02 Nov 2010 21:55:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-35</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>_s and iKilem, your point is retarded – what he was trying to convey is that threads do take up memory, so fuck off and die</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/34</link>
+        <pubDate>Tue, 02 Nov 2010 20:38:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-34</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <p>l2appreciate criticism…</p>
+<p>[quote=“blakeman8192, post:31, topic:364771”]Thanks for re-stating what I made clear:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>The default thread stack size in a 32 bit JVM <span class="bbcode-b">on an Intel processor</span> is 256kb.</p>
+</blockquote>
+</aside>
+<p>Also, Win32 threads are often considered to be better than POSIX threads, so I don’t understand what your point is as what I said remains valid on all major operating systems.[/quote]<br>
+Uhmm, what about the OS?</p>
+<p>I don’t see how “win32 threads &gt; posix threads” is relevant.</p>
+<p>You say scheduling is done in a round-robin fashion, but where in the java specs does it mention this? Even practically, this is probably far from the truth. Same with “threads automatically will consume…”.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/33</link>
+        <pubDate>Tue, 02 Nov 2010 18:08:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-33</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>however iKilem is still right, this would be pretty shit for anyone that isn’t developing on the platform that this whole documentation is based on</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/32</link>
+        <pubDate>Tue, 02 Nov 2010 17:45:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-32</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>Bravo guys, I should just start posting tutorials if I want to start testing the community.<br>
+You guys are too busy trying to find something wrong with what I’ve said rather than actually reading the tutorial (that I wrote for you) itself.</p>
+<p>[quote=“surfer25, post:29, topic:364771”][quote]<br>
+Threads carry quite a bit of baggage with them. First, they take CPU resources. Remember that single-core CPU can literally only do one thing at a time. In order for it to “multi-task”, it switches between all running threads on the computer in round-robin fashion, giving each thread an equal time-slice. The more threads there are, the smaller the time-slices get as the CPU must share its limited resources evenly among all of the threads. On top of that, we have thread context switches. As I mentioned earlier, the CPU switches between all running threads in round-robin fashion. A context switch has overhead associated with it that gets out of hand very quickly as the amount of threads increases. For one context switch, the CPU must create a process control block, save it, load the process control block of the next thread, and resume executing the new thread from the point it left off (which was previously saved in the process control block). This may not seem like much, but when it’s happening thousands of times per second, the effects become dramatic. Threads also have a memory overhead. Each thread maintains it’s own stack for keeping track of code execution. The default thread stack size in a 32 bit JVM on an Intel processor is 256kb. This means that one thousand threads automatically will consume 256MB of memory, without consideration of live objects and the JVM itself. Threads can detrimentally affect the performance of an application.<br>
+[/quote]</p>
+<p>How do Thread Pools related to this, I don’t quite understand how thread pools manage to keep the performance costs down if they are just executing threads?[/quote]</p>
+<p>Thread pools are a good way of managing a concurrent “workforce”. You can tune the size of the thread pool dynamically (or have it tune itself) as well as get better execution management within the Java API (Future, ScheduledFuture, Callable, etc.). Thread pools can increase performance because they are a stable, efficient way of distributing work to many threads equally for parallel execution.</p>
+<p>[quote=“iKilem, post:30, topic:364771”][quote]<br>
+Threads carry quite a bit of baggage with them. First, they take CPU resources. Remember that single-core CPU can literally only do one thing at a time. In order for it to “multi-task”, it switches between all running threads on the computer in round-robin fashion, giving each thread an equal time-slice. The more threads there are, the smaller the time-slices get as the CPU must share its limited resources evenly among all of the threads. On top of that, we have thread context switches. As I mentioned earlier, the CPU switches between all running threads in round-robin fashion. A context switch has overhead associated with it that gets out of hand very quickly as the amount of threads increases. For one context switch, the CPU must create a process control block, save it, load the process control block of the next thread, and resume executing the new thread from the point it left off (which was previously saved in the process control block). This may not seem like much, but when it’s happening thousands of times per second, the effects become dramatic. Threads also have a memory overhead. Each thread maintains it’s own stack for keeping track of code execution. The default thread stack size in a 32 bit JVM on an Intel processor is 256kb. This means that one thousand threads automatically will consume 256MB of memory, without consideration of live objects and the JVM itself. Threads can detrimentally affect the performance of an application.<br>
+[/quote]<br>
+A lot of what you said is platform dependant.[/quote]</p>
+<p>Thanks for re-stating what I made clear:</p>
+<blockquote>The default thread stack size in a 32 bit JVM [b]on an Intel processor[/b] is 256kb.</blockquote>
+Also, Win32 threads are often considered to be better than POSIX threads, so I don't understand what your point is as what I said remains valid on all major operating systems.
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/31</link>
+        <pubDate>Tue, 02 Nov 2010 17:05:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-31</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <blockquote>Threads carry quite a bit of baggage with them. First, they take CPU resources. Remember that single-core CPU can literally only do one thing at a time. In order for it to "multi-task", it switches between all running threads on the computer in round-robin fashion, giving each thread an equal time-slice. The more threads there are, the smaller the time-slices get as the CPU must share its limited resources evenly among all of the threads. On top of that, we have thread context switches. As I mentioned earlier, the CPU switches between all running threads in round-robin fashion. A context switch has overhead associated with it that gets out of hand very quickly as the amount of threads increases. For one context switch, the CPU must create a process control block, save it, load the process control block of the next thread, and resume executing the new thread from the point it left off (which was previously saved in the process control block). This may not seem like much, but when it's happening thousands of times per second, the effects become dramatic. Threads also have a memory overhead. Each thread maintains it's own stack for keeping track of code execution. The default thread stack size in a 32 bit JVM on an Intel processor is 256kb. This means that one thousand threads automatically will consume 256MB of memory, without consideration of live objects and the JVM itself. Threads can detrimentally affect the performance of an application.</blockquote>
+A lot of what you said is platform dependant.
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/30</link>
+        <pubDate>Mon, 01 Nov 2010 16:17:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-30</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@surfer25 surfer25]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/surfer25">@surfer25</a> wrote:</p>
+          <blockquote>
+              <blockquote>Threads carry quite a bit of baggage with them. First, they take CPU resources. Remember that single-core CPU can literally only do one thing at a time. In order for it to "multi-task", it switches between all running threads on the computer in round-robin fashion, giving each thread an equal time-slice. The more threads there are, the smaller the time-slices get as the CPU must share its limited resources evenly among all of the threads. On top of that, we have thread context switches. As I mentioned earlier, the CPU switches between all running threads in round-robin fashion. A context switch has overhead associated with it that gets out of hand very quickly as the amount of threads increases. For one context switch, the CPU must create a process control block, save it, load the process control block of the next thread, and resume executing the new thread from the point it left off (which was previously saved in the process control block). This may not seem like much, but when it's happening thousands of times per second, the effects become dramatic. Threads also have a memory overhead. Each thread maintains it's own stack for keeping track of code execution. The default thread stack size in a 32 bit JVM on an Intel processor is 256kb. This means that one thousand threads automatically will consume 256MB of memory, without consideration of live objects and the JVM itself. Threads can detrimentally affect the performance of an application.</blockquote>
+<p>How do Thread Pools related to this, I don’t quite understand how thread pools manage to keep the performance costs down if they are just executing threads?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/29</link>
+        <pubDate>Mon, 01 Nov 2010 14:42:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-29</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:27, topic:364771”][quote author=blakeman8192 link=topic=460976.msg3379427#msg3379427 date=1287898420]</p>
+<p>[quote author=_s link=topic=460976.msg3378460#msg3378460 date=1287835995]</p>
+<p>[quote author=blakeman8192 link=topic=460976.msg3377542#msg3377542 date=1287763320]<br>
+I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine.[/quote]</p>
+<p>…and the recurring problem is that they succeed in finding something wrong with what you say and thus can be lulled into the false pretense that they are better than you. that is if the pretense is false…<br>
+[/quote]This community isn’t a competition for me anymore, it used to be, but I’ve pretty much grown out of that. You guys can feel however you wish, your insecurity speaks for itself when the only reason you read my guide is to find something I’ve done that you view as wrong.<br>
+[/quote]Your view of this is quite hilarious. Can it not be that we began to read the guide, found something wrong and pointed it out? Seriously, grow the fuck up – you were wrong, get over it.[/quote]I know you too well to believe that you’re capable of something like that, especially on this subject.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/28</link>
+        <pubDate>Sun, 24 Oct 2010 17:53:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-28</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“blakeman8192, post:26, topic:364771”][quote author=_s link=topic=460976.msg3378460#msg3378460 date=1287835995]</p>
+<p>[quote author=blakeman8192 link=topic=460976.msg3377542#msg3377542 date=1287763320]<br>
+I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine.[/quote]</p>
+<p>…and the recurring problem is that they succeed in finding something wrong with what you say and thus can be lulled into the false pretense that they are better than you. that is if the pretense is false…<br>
+[/quote]This community isn’t a competition for me anymore, it used to be, but I’ve pretty much grown out of that. You guys can feel however you wish, your insecurity speaks for itself when the only reason you read my guide is to find something I’ve done that you view as wrong.[/quote]Your view of this is quite hilarious. Can it not be that we began to read the guide, found something wrong and pointed it out? Seriously, grow the fuck up – you were wrong, get over it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/27</link>
+        <pubDate>Sun, 24 Oct 2010 14:29:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-27</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:21, topic:364771"][quote author=blakeman8192 link=topic=460976.msg3377542#msg3377542 date=1287763320]<br>
+I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine.[/quote]</p>
+<p>…and the recurring problem is that they succeed in finding something wrong with what you say and thus can be lulled into the false pretense that they are better than you. that is if the pretense is false…[/quote]This community isn’t a competition for me anymore, it used to be, but I’ve pretty much grown out of that. You guys can feel however you wish, your insecurity speaks for itself when the only reason you read my guide is to find something I’ve done that you view as wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/26</link>
+        <pubDate>Sun, 24 Oct 2010 05:33:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-26</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <p>[quote="_s, post:24, topic:364771"][quote author=iKilem link=topic=460976.msg3378475#msg3378475 date=1287837313]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Are _s and iKilem the same people?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+</blockquote>
+</aside>
+<p>…</p>
+<p>No. _s is R3KoN/s1gma (unless I’ve been wrong this whole time).<br>
+[/quote] :/[/quote]<br>
+Am I wrong? <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/25</link>
+        <pubDate>Sat, 23 Oct 2010 13:28:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-25</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“iKilem, post:23, topic:364771”][quote author=Rixxx link=topic=460976.msg3378467#msg3378467 date=1287836803]<br>
+Are _s and iKilem the same people?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"><br>
+[/quote]<br>
+…</p>
+<p>No. _s is R3KoN/s1gma (unless I’ve been wrong this whole time).[/quote] <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/24</link>
+        <pubDate>Sat, 23 Oct 2010 12:49:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-24</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="22" data-topic="364771">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/rixxx/40/10308_1.png" class="avatar"> Rixxx:</div>
+<blockquote>
+<p>Are _s and iKilem the same people?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+</blockquote>
+</aside>
+<p>…</p>
+<p>No. _s is R3KoN/s1gma (unless I’ve been wrong this whole time).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/23</link>
+        <pubDate>Sat, 23 Oct 2010 12:35:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-23</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@Rixxx Rix_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rixxx">@Rixxx</a> wrote:</p>
+          <blockquote>
+              <p>Are _s and iKilem the same people?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/22</link>
+        <pubDate>Sat, 23 Oct 2010 12:26:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-22</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="17" data-topic="364771">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/blakeman8192/40/5_1887921562df0dabfae55079ddabeb03.png" class="avatar"> blakeman8192:</div>
+<blockquote>
+<p>I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine.</p>
+</blockquote>
+</aside>
+<p>…and the recurring problem is that they succeed in finding something wrong with what you say and thus can be lulled into the false pretense that they are better than you. that is if the pretense is false…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/21</link>
+        <pubDate>Sat, 23 Oct 2010 12:13:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-21</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@iKilem iKilem]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ikilem">@iKilem</a> wrote:</p>
+          <blockquote>
+              <p>I agree with abraham2119 that it’s definitely worth mentioning, though. Inform your readers about it, and tell them why it is bad. Otherwise, someone who doesn’t know any better will use it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/20</link>
+        <pubDate>Sat, 23 Oct 2010 11:59:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-20</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@system system]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/system">@system</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:18, topic:364771”][quote author=blakeman8192 link=topic=460976.msg3377542#msg3377542 date=1287763320]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>blake, i dont know if you realize but i never proposed it as a viable solution…i was just stating how this statement is wrong:</p>
+<aside class="quote no-group">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/blakeman8192/40/5_1887921562df0dabfae55079ddabeb03.png" class="avatar"> blakeman8192:</div>
+<blockquote>
+<p>All normal implementations of networking with the <a href="http://java.net/java.io">java.net/java.io</a> packages must use one dedicated thread for each individual client.</p>
+</blockquote>
+</aside>
+</blockquote>
+</aside>
+<p>I knew that this specific statement would come back to “bite” me, as anytime I post something networking related, a bunch of people jump on the bandwagon trying to prove that they understand what the subject is. I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine. I knew what I was saying when I made this statement, and I had what you’ve been saying in mind. I decided to not mention it for sake of simplicity - it’s not needed in the guide.</p>
+<p>The logic of the matter, however, is that if it’s not a viable solution, then there is nothing viable and concrete to challenge my point.<br>
+You can have your opinions, but as far as I’m concerned, my statement remains valid.<br>
+[/quote]What the fuck are you on about? Have you ever actually performed benchmarks to compare a thread-per-client design vs one that loops through clients on one (or multiple) thread(s) and checks the amount of data available for reading on the socket via available() instead of just blocking the entire thread? I have and the latter is much less resource-heavy and can even be distributed among a few threads for optimal performance. No, I would never use it but yes, it is better than a thread-per-client design. And I don’t know under what fucking means this would classify as an “abnormal” implementation of blocking I/O as this is a viable alternative for people that are yet unfamiliar with NIO (or NIO-based libraries) and have only given a go at servers allocating a thread per connection.[/quote]<br>
+It’s abnormal because <span class="bbcode-i">nobody fucking uses it</span>.<br>
+And now you’re contradicting yourself.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/19</link>
+        <pubDate>Fri, 22 Oct 2010 21:42:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-19</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+      <item>
+        <title>Understanding Java NIO and the Reactor Design Pattern</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“blakeman8192, post:17, topic:364771”][quote author=abraham2119 link=topic=460976.msg3377344#msg3377344 date=1287717467]<br>
+blake, i dont know if you realize but i never proposed it as a viable solution…i was just stating how this statement is wrong:</p>
+<aside class="quote no-group">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/blakeman8192/40/5_1887921562df0dabfae55079ddabeb03.png" class="avatar"> blakeman8192:</div>
+<blockquote>
+<p>All normal implementations of networking with the <a href="http://java.net/java.io" rel="nofollow noopener">java.net/java.io</a> packages must use one dedicated thread for each individual client.</p>
+</blockquote>
+</aside>
+<p>[/quote]<br>
+I knew that this specific statement would come back to “bite” me, as anytime I post something networking related, a bunch of people jump on the bandwagon trying to prove that they understand what the subject is. I’m not saying that you don’t understand it, but to me you appear to be one of the people (among thiefmn6092, PeeHPee, etc.) that always attempt to find <span class="bbcode-i">something</span> wrong with whatever I say in order to prove yourself by comparing your knowledge to mine. I knew what I was saying when I made this statement, and I had what you’ve been saying in mind. I decided to not mention it for sake of simplicity - it’s not needed in the guide.</p>
+<p>The logic of the matter, however, is that if it’s not a viable solution, then there is nothing viable and concrete to challenge my point.<br>
+You can have your opinions, but as far as I’m concerned, my statement remains valid.[/quote]What the fuck are you on about? Have you ever actually performed benchmarks to compare a thread-per-client design vs one that loops through clients on one (or multiple) thread(s) and checks the amount of data available for reading on the socket via available() instead of just blocking the entire thread? I have and the latter is much less resource-heavy and can even be distributed among a few threads for optimal performance. No, I would never use it but yes, it is better than a thread-per-client design. And I don’t know under what fucking means this would classify as an “abnormal” implementation of blocking I/O as this is a viable alternative for people that are yet unfamiliar with NIO (or NIO-based libraries) and have only given a go at servers allocating a thread per connection.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771/18</link>
+        <pubDate>Fri, 22 Oct 2010 21:08:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-364771-18</guid>
+        <source url="https://forum.moparisthebest.com/t/understanding-java-nio-and-the-reactor-design-pattern/364771.rss">Understanding Java NIO and the Reactor Design Pattern</source>
+      </item>
+  </channel>
+</rss>

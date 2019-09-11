@@ -1,0 +1,908 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Multiplayer Issues</title>
+    <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458</link>
+    <description>Okay, it&#39;s been two days. Google has just returned topics on creating a server from searching numerous quotes, and I don&#39;t think anybody else has had the problem I&#39;m about to describe, hence searches returning nothing.
+
+[b]The Problem:[/b]
+
+I&#39;m connected to my server right (base is Project No-Doze - originally Shards), I load up another client and try to connect two players, and the server will kick player 1 and connect player 2. I&#39;ll then try to re-log and it will kick player 2 and connect player 1.
+
+I also tried this with an outside IP and the effects are the same. Only one player can play on my server at any one given time. Well that&#39;s no use it is?
+
+I&#39;ll post my ConnectionListener, because I think it&#39;s to do with that. No errors return it just don&#39;t let multi people connect.
+
+Can you see anything wrong?
+[code=java]
+package com.rs2.net;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.channels.spi.SelectorProvider;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+import com.rs2.Constants;
+import com.rs2.GameEngine;
+import com.rs2.eventmanager.EventManager;
+import com.rs2.model.player.Client;
+import com.rs2.util.Misc;
+import com.rs2.world.PlayerManager;
+
+/**
+ * Handles all client IO through the selector.
+ * 
+ * @author Graham
+ */
+public class ConnectionListener implements Runnable {
+
+	private ServerSocketChannel serverChannel;
+	private Selector selector;
+	private Map&lt;SocketChannel, Login&gt; ioClientMap;
+	private Map&lt;Login, SocketChannel&gt; revIoClientMap;
+	private Map&lt;SocketChannel, Client&gt; clientMap;
+	private Map&lt;Client, SocketChannel&gt; revClientMap;
+	private ByteBuffer buffer;
+	public static final int BUFFER_SIZE = 4096;
+	public static final int BACKLOG = 100;
+	private boolean toggleShutdown = false;
+	private volatile boolean isShutdown = false;
+
+	public ConnectionListener() throws IOException {
+		buffer = ByteBuffer.allocate(BUFFER_SIZE);
+		ioClientMap = new HashMap&lt;SocketChannel, Login&gt;();
+		clientMap = new HashMap&lt;SocketChannel, Client&gt;();
+		revIoClientMap = new HashMap&lt;Login, SocketChannel&gt;();
+		revClientMap = new HashMap&lt;Client, SocketChannel&gt;();
+		selector = SelectorProvider.provider().openSelector();
+		serverChannel = ServerSocketChannel.open();
+		serverChannel.configureBlocking(false);
+		InetSocketAddress iAddress = new InetSocketAddress(&quot;56k-hype.no-ip.biz&quot;,
+				GameEngine.getServerPort());
+		serverChannel.socket().bind(iAddress, BACKLOG);
+		serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+		System.out.println(&quot;listening for connections on port &quot;
+				+ GameEngine.getServerPort() + &quot;.&quot;);
+	}
+
+	@Override
+	public void run() {
+		while (true) {
+			try {
+				selector.select();
+				if (toggleShutdown) {
+					isShutdown = true;
+					break;
+				}
+				Iterator&lt;SelectionKey&gt; selectedIterator = selector
+						.selectedKeys().iterator();
+				while (selectedIterator.hasNext()) {
+					SelectionKey selectionKey = selectedIterator.next();
+					selectedIterator.remove();
+					synchronized (this) {
+						if (selectionKey.isValid()) {
+							if (selectionKey.isAcceptable()) {
+								accept(selectionKey);
+							} else if (selectionKey.isReadable()) {
+								read(selectionKey);
+							}
+						}
+					}
+				}
+			} catch (Exception e) {
+				System.exit(0);
+			}
+		}
+		System.out.println(&quot;Selector thread shut down.&quot;);
+		if (EventManager.getSingleton().isShutdown()) {
+			System.exit(0);
+		}
+	}
+
+	private void read(SelectionKey selectionKey) throws IOException {
+
+		SocketChannel sc = (SocketChannel) selectionKey.channel();
+		buffer.clear();
+		int readStatus;
+
+		String address = null;
+
+		Login ioc = ioClientMap.get(sc);
+		if (ioc != null) {
+			address = ioc.connectedFrom;
+		}
+
+		Client c = clientMap.get(sc);
+		if (c != null) {
+			address = c.connectedFrom;
+		}
+
+		try {
+			try {
+				readStatus = sc.read(buffer);
+			} catch (IOException e) {
+				destroySocket(sc, address, true);
+				return;
+			}
+			if (readStatus == -1) {
+				destroySocket(sc, address, true);
+				return;
+			}
+		} catch (Exception e) {
+		}
+
+		ioc = ioClientMap.get(sc);
+		if (ioc != null) {
+			ioc.read(buffer);
+			return;
+		}
+
+		c = clientMap.get(sc);
+		if (c != null) {
+			synchronized (GameEngine.getGameLogicLock()) {
+				c.read(buffer);
+			}
+		}
+	}
+
+	private void accept(SelectionKey selectionKey) throws IOException,
+			Exception {
+		ServerSocketChannel ssc = (ServerSocketChannel) selectionKey.channel();
+		SocketChannel sc = ssc.accept();
+		String address = sc.socket().getInetAddress().getHostAddress();
+		synchronized (HostList.class) {
+			if (!HostList.has(address, Constants.MAX_CONNECTIONS_PER_IP)) {
+				Misc.print_debug(&quot;Accepted connection from &quot; + address + &quot;.&quot;);
+				Login ioc = PlayerManager.getSingleton().newPlayerClient(
+						sc.socket(), address);
+				if (ioc == null) {
+					destroySocket(sc, address, false);
+				} else {
+					HostList.add(address);
+					ioClientMap.put(sc, ioc);
+					revIoClientMap.put(ioc, sc);
+					sc.socket().setTcpNoDelay(true);
+					sc.configureBlocking(false);
+					sc.register(selector, SelectionKey.OP_READ);
+				}
+			} else {
+				Misc.print_debug(&quot;Rejected connection from &quot; + address + &quot;.&quot;);
+				destroySocket(sc, address, false);
+			}
+		}
+	}
+
+	public void destroySocket(SocketChannel sc, String connectedFrom,
+			boolean removeFromHostList) throws IOException, Exception {
+		if (removeFromHostList) {
+			synchronized (HostList.class) {
+				HostList.remove(connectedFrom);
+			}
+		}
+		if (ioClientMap.containsKey(sc)) {
+			Login ioc = ioClientMap.get(sc);
+			PlayerManager.getSingleton().removeIOClient(ioc);
+			ioClientMap.remove(sc);
+			revIoClientMap.remove(ioc);
+		}
+		if (clientMap.containsKey(sc)) {
+			Client c = clientMap.get(sc);
+			c.setLoggedOut(true);
+			clientMap.remove(sc);
+			revClientMap.remove(c);
+		}
+		sc.close();
+		Misc.print_debug(&quot;Closed connection from &quot; + connectedFrom + &quot;.&quot;);
+	}
+
+	public void switchIoClientToClient(Login ioc, Client c) {
+		synchronized (this) {
+			SocketChannel sc = revIoClientMap.get(ioc);
+			revIoClientMap.remove(ioc);
+			ioClientMap.remove(sc);
+			clientMap.put(sc, c);
+			revClientMap.put(c, sc);
+			/* System.out.println(&quot;Registered &quot; + c.getUsername() + &quot; [idx=&quot;
+					+ c.getUserID() + &quot;, online=&quot;
+					+ PlayerManager.getSingleton().getPlayerCount() + &quot;]&quot;); */
+		}
+	}
+
+	public SocketChannel socketFor(Login ioc) {
+		return revIoClientMap.get(ioc);
+	}
+
+	public SocketChannel socketFor(Client c) {
+		return revClientMap.get(c);
+	}
+
+	public void writeReq(SocketChannel sc, ByteBuffer buf) throws IOException {
+		sc.write(buf);
+	}
+
+	public void shutdown() {
+		toggleShutdown = true;
+		selector.wakeup();
+	}
+
+	public boolean isShutdown() {
+		return this.isShutdown;
+	}
+}
+[/code]
+
+To me it looks normal.
+ 
+I also have
+
+[code=java]
+public static final int MAX_PLAYERS = 50;
+public static final int MAX_CONNECTIONS_PER_IP = 5;
+[/code]
+
+Before anyone asks. It&#39;s nothing to with that directly. If I could post anymore examples of code, just ask.
+
+More examples:
+
+This is my whole process() method:
+[code=java]
+public void process() {
+		timeOutCounter++;
+
+		if (isKicked || isLoggedOut()) {
+			disconnected = true;
+		}
+
+		if (timeOutCounter &gt; Constants.INGAME_TIMEOUT * 2) {
+			actionSender.sendLogout();
+		}
+
+		if (logoutDelay &gt; 0) {
+			logoutDelay--;
+		}
+
+	}
+[/code]
+
+I don&#39;t want to start altering things unless I know what I am doing and I don&#39;t what I am doing. I&#39;m guessing this only disconnects you if you are ::kicked or click on the logout button...
+
+Thanks for reading.</description>
+    
+    <lastBuildDate>Tue, 12 Apr 2011 20:30:29 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Bill1 Bill_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bill1">@Bill1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="17" data-topic="389458">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mendorphins/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mendorphins:</div>
+<blockquote>
+<p>You know what, that’s the exact same line of code I kept looking at but I didn’t really know what to do with it. Does ioc stand for input output connection? Logical thinking there… I’ll have a look mate, thanks for suggesting.</p>
+</blockquote>
+</aside>
+<p>Try my version of destruct and if that doesn’t work, just fill the whole server with System.out.println(“Number *”)</p>
+<p>And then you’ll get a good idea</p>
+<p>No problem <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Thanks for stretching my brain a bit <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>Bill</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/18</link>
+        <pubDate>Tue, 12 Apr 2011 20:30:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-18</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>You know what, that’s the exact same line of code I kept looking at but I didn’t really know what to do with it. Does ioc stand for input output connection? Logical thinking there… I’ll have a look mate, thanks for suggesting.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/17</link>
+        <pubDate>Tue, 12 Apr 2011 20:03:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-17</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Bill1 Bill_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bill1">@Bill1</a> wrote:</p>
+          <blockquote>
+              <p>No idea if this is it, but a suggestion.</p>
+<pre><code class="lang-auto">                synchronized (HostList.class) {
+                        if (!HostList.has(address, Constants.MAX_CONNECTIONS_PER_IP)) {
+                                Misc.print_debug("Accepted connection from " + address + ".");
+                                Login ioc = PlayerManager.getSingleton().newPlayerClient(
+                                                sc.socket(), address);
+                                if (ioc == null) {
+                                        destroySocket(sc, address, false);
+                                } else {
+                                        HostList.add(address);
+                                        ioClientMap.put(sc, ioc);
+                                        revIoClientMap.put(ioc, sc);
+                                        sc.socket().setTcpNoDelay(true);
+                                        sc.configureBlocking(false);
+                                        sc.register(selector, SelectionKey.OP_READ);
+                                }[/code]
+
+
+[CODE]                                Login ioc = PlayerManager.getSingleton().newPlayerClient(
+                                                sc.socket(), address);[/CODE]
+
+Idk, but mabe if when a new player connects, it sends[code]ioc[/code] to null kicking out the other player.
+
+Try this
+
+[code]        public void destroySocket(SocketChannel sc, String connectedFrom,
+                        boolean removeFromHostList) throws IOException, Exception {
+                if (removeFromHostList) {
+                        synchronized (HostList.class) {
+                                HostList.remove(connectedFrom);
+                        }
+                }
+                sc.close();
+                Misc.print_debug("Closed connection from " + connectedFrom + ".");
+        }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/16</link>
+        <pubDate>Tue, 12 Apr 2011 19:36:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-16</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>I have exhausted all my knowledge into this so now just bumping in hope anyone has some vauge idea of what it could be.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/15</link>
+        <pubDate>Tue, 12 Apr 2011 16:38:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-15</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Scape-JAVA Scape-JAVA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/scape-java">@Scape-JAVA</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mendorphins, post:13, topic:389458”]The only thing I’m getting at the moment after adding the printStackTrace() is</p>
+<pre><code class="lang-auto">java.lang.NullPointerException
+at com.rs2.net.ConnectionListener.destroySocket(ConnectionListener.java:187)
+at com.rs2.model.player.Client.destruct(Client.java:91)
+at com.rs2.world.PlayerManager.removePlayer(PlayerManager.java:476)
+at com.rs2.world.PlayerManager.process(PlayerManager.java:225)
+at com.rs2.Process.run(Process.java:91)
+at java.lang.Thread.run(Unknown Source)</code></pre>
+<p>but this is only when I log one account in, not two, so possibly irrelevant to the topic. When one player disconnects and the other connects (forcefully), no messages yet appear that I have added.</p>
+<p>So still browsing…[/quote]<br>
+It very well could be you’re trying to throw null as if it we’re a throwable value.</p>
+<p>Edit: It could be from various things.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/14</link>
+        <pubDate>Wed, 06 Apr 2011 23:51:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-14</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>The only thing I’m getting at the moment after adding the printStackTrace() is</p>
+<pre><code class="lang-auto">java.lang.NullPointerException
+at com.rs2.net.ConnectionListener.destroySocket(ConnectionListener.java:187)
+at com.rs2.model.player.Client.destruct(Client.java:91)
+at com.rs2.world.PlayerManager.removePlayer(PlayerManager.java:476)
+at com.rs2.world.PlayerManager.process(PlayerManager.java:225)
+at com.rs2.Process.run(Process.java:91)
+at java.lang.Thread.run(Unknown Source)</code></pre>
+<p>but this is only when I log one account in, not two, so possibly irrelevant to the topic. When one player disconnects and the other connects (forcefully), no messages yet appear that I have added.</p>
+<p>So still browsing…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/13</link>
+        <pubDate>Wed, 06 Apr 2011 19:03:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-13</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Scape-JAVA Scape-JAVA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/scape-java">@Scape-JAVA</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="11" data-topic="389458">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mendorphins/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mendorphins:</div>
+<blockquote>
+<p>If Im just running out of memory to hold anymore players shouldn’t I get that error that returns “[KERNEL] Machine Too Slow!” on the old servers.</p>
+</blockquote>
+</aside>
+<p>Yes, if you’re running out of memory you should receive that error.</p>
+<p>So you have two option, add System.err.println(“Error!”); or you can add a catch exception where you think this error could be occuring.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/12</link>
+        <pubDate>Tue, 05 Apr 2011 23:28:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-12</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>If Im just running out of memory to hold anymore players shouldn’t I get that error that returns “[KERNEL] Machine Too Slow!” on the old servers.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/11</link>
+        <pubDate>Tue, 05 Apr 2011 23:24:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-11</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Epic_Steve Epic Steve]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/epic_steve">@Epic_Steve</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="9" data-topic="389458">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/scape-java/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Scape-JAVA:</div>
+<blockquote>
+<p>You could also throw in a catch exception.</p>
+</blockquote>
+</aside>
+<p>This also works. I prefer to find where the problem is first then print out the exception.</p>
+<p>I’m assuming you mean the printStackTrace() method.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/10</link>
+        <pubDate>Tue, 05 Apr 2011 23:21:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-10</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Scape-JAVA Scape-JAVA]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/scape-java">@Scape-JAVA</a> wrote:</p>
+          <blockquote>
+              <p>You could also throw in a catch exception.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/9</link>
+        <pubDate>Tue, 05 Apr 2011 23:20:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-9</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>^ Thanks for that Steve, a way to possibly get to the bottom of this. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> I’ll test and see what I get.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/8</link>
+        <pubDate>Tue, 05 Apr 2011 23:09:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-8</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Epic_Steve Epic Steve]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/epic_steve">@Epic_Steve</a> wrote:</p>
+          <blockquote>
+              <p>You should add some debug printlns to see where the player is getting disconnected from.</p>
+<p>System.err.println(“PLAYER DISCONNECTED!!!”);</p>
+<p>Add this is places where you think the player could be getting disconnected.<br>
+EG: In these methods;</p>
+<pre><code class="lang-auto">                if (isKicked || isLoggedOut()) {
+                        disconnected = true;
+                }
+
+                if (timeOutCounter &gt; Constants.INGAME_TIMEOUT * 2) {
+                        actionSender.sendLogout();
+                }</code></pre>
+<p>Also in the destroySocket(…) method (I know it already has one, but just to be sure it’s actually doing anything.) You should also add it in the try … catch’s as I see you have one catch(Exception e) that doesn’t print anything and the other closes the socke, see if you’re getting an exception.</p>
+<p>Also, make sure to might them slightly different so you can tell where it’s actually getting called from, like, just put a number at the end.</p>
+<p>System.err.println(“PLAYER DISCONNECTED 1”);</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/7</link>
+        <pubDate>Tue, 05 Apr 2011 23:05:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-7</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>No I get no errors, that’s the thing. It acts as if I click the logout button once pending a new connection. Tom, thank you so much - that will eliminate alot of potential causes for me. If you need help I r pro MySQL now kay?</p>
+<p>Best I could do: <a href="http://www.youtube.com/watch?v=0iq0x_xSsEQ" rel="nofollow noopener">http://www.youtube.com/watch?v=0iq0x_xSsEQ</a></p>
+<p>Here’s what happens (OMFG why are .gifs not working anymore? Does this play for anyone?):</p>
+<p><a href="http://img268.imageshack.us/i/test0002.gif/" data-bbcode="true" rel="nofollow noopener"><img src="http://img268.imageshack.us/img268/6730/test0002.gif" alt width="" height=""></a></p>
+<p>No errors in either Run or Client.bat.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/6</link>
+        <pubDate>Tue, 05 Apr 2011 22:57:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-6</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@durial12 durial12]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/durial12">@durial12</a> wrote:</p>
+          <blockquote>
+              <p>If that was the case surely you would get an error when it happens. Did you try this from a different IP? (Not sure if that would make any difference)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/5</link>
+        <pubDate>Tue, 05 Apr 2011 21:11:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-5</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>Thanks Tom. Could this be a possibility though: my computer don’t have enough memory to hold two or more players? I’m not sure how I can tell, but if it’s creating a thread/instance for each player? Or allocating certain a certain amount of memory for each player? It could be overloading my computer?</p>
+<p>With XAMPP, iTunes, No-IP, the client, the server and Eclipse running I am constantly running between 80-100% CPU. Even without iTunes…</p>
+<p>Might have to run some tests when I can.</p>
+<p>I’m going to research Shards and see what problems people have had.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/4</link>
+        <pubDate>Tue, 05 Apr 2011 21:03:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-4</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>Bump to first page. I’m still wading through my files looking for possible culprits. I’ll continue doing so until I or someone else sees something that could possibly be causing the problem. It’s been 3 days now lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/3</link>
+        <pubDate>Tue, 05 Apr 2011 11:21:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-3</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>Does it give any errors when it kicks the person?</p>
+<p>Also, does it “kick” or “null” the person so that way other connection can happen?</p>
+<p>I never really heard of this either before…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/2</link>
+        <pubDate>Mon, 04 Apr 2011 12:58:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-2</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+      <item>
+        <title>Multiplayer Issues</title>
+        <dc:creator><![CDATA[@Mendorphins Mendorphins]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mendorphins">@Mendorphins</a> wrote:</p>
+          <blockquote>
+              <p>Okay, it’s been two days. Google has just returned topics on creating a server from searching numerous quotes, and I don’t think anybody else has had the problem I’m about to describe, hence searches returning nothing.</p>
+<p><span class="bbcode-b">The Problem:</span></p>
+<p>I’m connected to my server right (base is Project No-Doze - originally Shards), I load up another client and try to connect two players, and the server will kick player 1 and connect player 2. I’ll then try to re-log and it will kick player 2 and connect player 1.</p>
+<p>I also tried this with an outside IP and the effects are the same. Only one player can play on my server at any one given time. Well that’s no use it is?</p>
+<p>I’ll post my ConnectionListener, because I think it’s to do with that. No errors return it just don’t let multi people connect.</p>
+<p>Can you see anything wrong?</p>
+<pre><code class="lang-auto">package com.rs2.net;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.channels.spi.SelectorProvider;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+import com.rs2.Constants;
+import com.rs2.GameEngine;
+import com.rs2.eventmanager.EventManager;
+import com.rs2.model.player.Client;
+import com.rs2.util.Misc;
+import com.rs2.world.PlayerManager;
+
+/**
+ * Handles all client IO through the selector.
+ * 
+ * @author Graham
+ */
+public class ConnectionListener implements Runnable {
+
+	private ServerSocketChannel serverChannel;
+	private Selector selector;
+	private Map&lt;SocketChannel, Login&gt; ioClientMap;
+	private Map&lt;Login, SocketChannel&gt; revIoClientMap;
+	private Map&lt;SocketChannel, Client&gt; clientMap;
+	private Map&lt;Client, SocketChannel&gt; revClientMap;
+	private ByteBuffer buffer;
+	public static final int BUFFER_SIZE = 4096;
+	public static final int BACKLOG = 100;
+	private boolean toggleShutdown = false;
+	private volatile boolean isShutdown = false;
+
+	public ConnectionListener() throws IOException {
+		buffer = ByteBuffer.allocate(BUFFER_SIZE);
+		ioClientMap = new HashMap&lt;SocketChannel, Login&gt;();
+		clientMap = new HashMap&lt;SocketChannel, Client&gt;();
+		revIoClientMap = new HashMap&lt;Login, SocketChannel&gt;();
+		revClientMap = new HashMap&lt;Client, SocketChannel&gt;();
+		selector = SelectorProvider.provider().openSelector();
+		serverChannel = ServerSocketChannel.open();
+		serverChannel.configureBlocking(false);
+		InetSocketAddress iAddress = new InetSocketAddress("56k-hype.no-ip.biz",
+				GameEngine.getServerPort());
+		serverChannel.socket().bind(iAddress, BACKLOG);
+		serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+		System.out.println("listening for connections on port "
+				+ GameEngine.getServerPort() + ".");
+	}
+
+	@Override
+	public void run() {
+		while (true) {
+			try {
+				selector.select();
+				if (toggleShutdown) {
+					isShutdown = true;
+					break;
+				}
+				Iterator&lt;SelectionKey&gt; selectedIterator = selector
+						.selectedKeys().iterator();
+				while (selectedIterator.hasNext()) {
+					SelectionKey selectionKey = selectedIterator.next();
+					selectedIterator.remove();
+					synchronized (this) {
+						if (selectionKey.isValid()) {
+							if (selectionKey.isAcceptable()) {
+								accept(selectionKey);
+							} else if (selectionKey.isReadable()) {
+								read(selectionKey);
+							}
+						}
+					}
+				}
+			} catch (Exception e) {
+				System.exit(0);
+			}
+		}
+		System.out.println("Selector thread shut down.");
+		if (EventManager.getSingleton().isShutdown()) {
+			System.exit(0);
+		}
+	}
+
+	private void read(SelectionKey selectionKey) throws IOException {
+
+		SocketChannel sc = (SocketChannel) selectionKey.channel();
+		buffer.clear();
+		int readStatus;
+
+		String address = null;
+
+		Login ioc = ioClientMap.get(sc);
+		if (ioc != null) {
+			address = ioc.connectedFrom;
+		}
+
+		Client c = clientMap.get(sc);
+		if (c != null) {
+			address = c.connectedFrom;
+		}
+
+		try {
+			try {
+				readStatus = sc.read(buffer);
+			} catch (IOException e) {
+				destroySocket(sc, address, true);
+				return;
+			}
+			if (readStatus == -1) {
+				destroySocket(sc, address, true);
+				return;
+			}
+		} catch (Exception e) {
+		}
+
+		ioc = ioClientMap.get(sc);
+		if (ioc != null) {
+			ioc.read(buffer);
+			return;
+		}
+
+		c = clientMap.get(sc);
+		if (c != null) {
+			synchronized (GameEngine.getGameLogicLock()) {
+				c.read(buffer);
+			}
+		}
+	}
+
+	private void accept(SelectionKey selectionKey) throws IOException,
+			Exception {
+		ServerSocketChannel ssc = (ServerSocketChannel) selectionKey.channel();
+		SocketChannel sc = ssc.accept();
+		String address = sc.socket().getInetAddress().getHostAddress();
+		synchronized (HostList.class) {
+			if (!HostList.has(address, Constants.MAX_CONNECTIONS_PER_IP)) {
+				Misc.print_debug("Accepted connection from " + address + ".");
+				Login ioc = PlayerManager.getSingleton().newPlayerClient(
+						sc.socket(), address);
+				if (ioc == null) {
+					destroySocket(sc, address, false);
+				} else {
+					HostList.add(address);
+					ioClientMap.put(sc, ioc);
+					revIoClientMap.put(ioc, sc);
+					sc.socket().setTcpNoDelay(true);
+					sc.configureBlocking(false);
+					sc.register(selector, SelectionKey.OP_READ);
+				}
+			} else {
+				Misc.print_debug("Rejected connection from " + address + ".");
+				destroySocket(sc, address, false);
+			}
+		}
+	}
+
+	public void destroySocket(SocketChannel sc, String connectedFrom,
+			boolean removeFromHostList) throws IOException, Exception {
+		if (removeFromHostList) {
+			synchronized (HostList.class) {
+				HostList.remove(connectedFrom);
+			}
+		}
+		if (ioClientMap.containsKey(sc)) {
+			Login ioc = ioClientMap.get(sc);
+			PlayerManager.getSingleton().removeIOClient(ioc);
+			ioClientMap.remove(sc);
+			revIoClientMap.remove(ioc);
+		}
+		if (clientMap.containsKey(sc)) {
+			Client c = clientMap.get(sc);
+			c.setLoggedOut(true);
+			clientMap.remove(sc);
+			revClientMap.remove(c);
+		}
+		sc.close();
+		Misc.print_debug("Closed connection from " + connectedFrom + ".");
+	}
+
+	public void switchIoClientToClient(Login ioc, Client c) {
+		synchronized (this) {
+			SocketChannel sc = revIoClientMap.get(ioc);
+			revIoClientMap.remove(ioc);
+			ioClientMap.remove(sc);
+			clientMap.put(sc, c);
+			revClientMap.put(c, sc);
+			/* System.out.println("Registered " + c.getUsername() + " [idx="
+					+ c.getUserID() + ", online="
+					+ PlayerManager.getSingleton().getPlayerCount() + "]"); */
+		}
+	}
+
+	public SocketChannel socketFor(Login ioc) {
+		return revIoClientMap.get(ioc);
+	}
+
+	public SocketChannel socketFor(Client c) {
+		return revClientMap.get(c);
+	}
+
+	public void writeReq(SocketChannel sc, ByteBuffer buf) throws IOException {
+		sc.write(buf);
+	}
+
+	public void shutdown() {
+		toggleShutdown = true;
+		selector.wakeup();
+	}
+
+	public boolean isShutdown() {
+		return this.isShutdown;
+	}
+}</code></pre>
+<p>To me it looks normal.</p>
+<p>I also have</p>
+<pre><code class="lang-auto">public static final int MAX_PLAYERS = 50;
+public static final int MAX_CONNECTIONS_PER_IP = 5;</code></pre>
+<p>Before anyone asks. It’s nothing to with that directly. If I could post anymore examples of code, just ask.</p>
+<p>More examples:</p>
+<p>This is my whole process() method:</p>
+<pre><code class="lang-auto">public void process() {
+		timeOutCounter++;
+
+		if (isKicked || isLoggedOut()) {
+			disconnected = true;
+		}
+
+		if (timeOutCounter &gt; Constants.INGAME_TIMEOUT * 2) {
+			actionSender.sendLogout();
+		}
+
+		if (logoutDelay &gt; 0) {
+			logoutDelay--;
+		}
+
+	}</code></pre>
+<p>I don’t want to start altering things unless I know what I am doing and I don’t what I am doing. I’m guessing this only disconnects you if you are ::kicked or click on the logout button…</p>
+<p>Thanks for reading.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/multiplayer-issues/389458/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/multiplayer-issues/389458/1</link>
+        <pubDate>Mon, 04 Apr 2011 12:53:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389458-1</guid>
+        <source url="https://forum.moparisthebest.com/t/multiplayer-issues/389458.rss">Multiplayer Issues</source>
+      </item>
+  </channel>
+</rss>

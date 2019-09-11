@@ -1,0 +1,1093 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Wrong packet size for chat [solved]</title>
+    <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416</link>
+    <description>I&#39;m having a problem with having the wrong data for the chat packet.
+When talking in chat it will disconnect me and after unpacking the bytes to string format it&#39;s obviously corrupt.
+
+I asked help for this already but there I wasn&#39;t able to find what&#39;s wrong yet, now I do. [url=https://www.moparisthebest.com/smf/index.php/topic,668300.0.html]Other thread[/url]
+
+I printed out packet sizes on mine and another server and they do [b]NOT[/b] match.
+The only place that it could be wrong as far as I know would be my packet decoding.
+But other packet sizes (not the chat packet) seem to be right according to the few tests I did,
+so I don&#39;t understand how it&#39;s wrong for the chat packet.
+
+Packet decoder where the size is retrieved.
+The packet size from the array for the chat packet is -1 which is definitely right.
+[code=java]
+@Override
+	protected void decode(ChannelHandlerContext context, ByteBuf buffer, List&lt;Object&gt; out) throws Exception {
+		if (!context.channel().isOpen() || !context.channel().isActive()) {
+			buffer.skipBytes(buffer.readableBytes());
+			return;
+		}
+		if (opcode == -1) {
+			if (buffer.readableBytes() &lt; 1) {
+				buffer.release();
+				return;
+			}
+			opcode = buffer.readByte() &amp; 0xFF;
+			opcode = opcode - player.getConnection().getDecryptor().getNextValue() &amp; 0xFF;
+			size = PACKET_SIZES[opcode];
+		}
+		if (size == -1) {
+			if (buffer.readableBytes() &lt; 1) {
+				buffer.release();
+				return;
+			}
+			size = buffer.readByte() &amp; 0xFF;
+		}
+		if (buffer.readableBytes() &gt;= size) {
+			final byte[] data = new byte[size];
+			buffer.readBytes(data);
+			final ByteBuf payload = Unpooled.buffer(size);
+			payload.writeBytes(data);
+			System.out.println(&quot;size: &quot; + size);
+			try {
+				out.add(new PacketDisassembler(payload, opcode, size));
+			} finally {
+				opcode = -1;
+				size = -1;
+			}
+		}
+	}
+[/code]
+
+Ideas?</description>
+    
+    <lastBuildDate>Thu, 29 Jan 2015 09:09:46 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="38" data-topic="549416">
+<div class="title">
+<div class="quote-controls"></div>
+ Zymus:</div>
+<blockquote>
+<p>It looks like the writeBigWordEndian is just writing the byte value. Is your code still calling readAdditionalByte? If so, try changing to to readByte.</p>
+</blockquote>
+</aside>
+<p>It has to be additional as it has values around 128, the received bytes array looks right now I think.</p>
+<p><span class="bbcode-b">Edit:</span><br>
+I took the text unpacking from the client, it also works for my private messages so I assume this is good now.<br>
+The array (reading the packet) still looks good as well, seems like I’m almost there.</p>
+<pre><code class="lang-auto">public static String bytesToText(byte packedData[], int size) {
+    	char[] characters = new char[100];
+    	
+    	int position = 0;
+    	
+    	for (int i = 0; i &lt; size; i++) {
+    		characters[position++] = XLATE_TABLE[packedData[i]];
+		}
+		boolean flag1 = true;
+		
+		for (int i = 0; i &lt; position; i++) {
+			char c = characters[i];
+			
+			if (flag1 &amp;&amp; c &gt;= 'a' &amp;&amp; c &lt;= 'z') {
+				characters[i] += '\uFFE0';
+			}
+		}
+		return new String(characters, 0, position).toLowerCase();
+    }
+
+    private static char XLATE_TABLE[] = {
+		' ', 'e', 't', 'a', 'o', 'i', 'h', 'n', 's', 'r', 
+		'd', 'l', 'u', 'm', 'w', 'c', 'y', 'f', 'g', 'p', 
+		'b', 'v', 'k', 'x', 'j', 'q', 'z', '0', '1', '2', 
+		'3', '4', '5', '6', '7', '8', '9', ' ', '!', '?', 
+		'.', ',', ':', ';', '(', ')', '-', '&amp;', '*', '\\', 
+		'\'', '@', '#', '+', '=', '\243', '$', '%', '"', '[', 
+		']', '&gt;', '&lt;', '^', '/', '_'
+	};</code></pre>
+<p>Only issue left now is that the chat updating disconnects the player.</p>
+<pre><code class="lang-auto">@Override
+	public void execute(Mobile mobile, PacketAssembler packet) {
+		packet.putLittleEndianShort(((color &amp; 0xff) &lt;&lt; 8) + (effects &amp; 0xff));
+		packet.putByte(((Player)mobile).getRights().getProtocolValue());
+		packet.putNegatedByte(text.length);
+		packet.putBytesReversed(text);
+	}</code></pre>
+<p><span class="bbcode-b">Edit:</span> The disconnecting had to do with my bit masks, everything seems solved now.<br>
+Will perform some tests but it’s looking good.<br>
+Thanks a bunch for all the effort in helping me Zymus.</p>
+<p>[size=10pt]<span class="bbcode-b">Solved</span>[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/39</link>
+        <pubDate>Thu, 29 Jan 2015 09:09:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-39</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>It looks like the writeBigWordEndian is just writing the byte value. Is your code still calling readAdditionalByte? If so, try changing to to readByte.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/38</link>
+        <pubDate>Wed, 28 Jan 2015 22:24:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-38</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>Galkon’s Refactored[474-look-alike]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/37</link>
+        <pubDate>Wed, 28 Jan 2015 22:21:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-37</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:35, topic:549416”][quote author=Zymus link=topic=668319.msg4470049#msg4470049 date=1422480056]</p>
+<aside class="quote">
+<blockquote>
+<p>Originally I read the first byte that is queued</p>
+<pre><code class="lang-auto">readByte();</code></pre>
+<p>I had to read the byte at the given index:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>My array outprint is correct now I think, though text still doesn’t unpack right and I still disconnect at updating</p>
+<p>input “i don’t know”</p>
+<pre><code class="lang-auto">[5, 0, 10, 4, 7, 50, 2, 0, 22, 7, 4, 14]
+ i   d o nat t  eh n o </code></pre>
+</blockquote>
+</aside>
+<p>Can you post the textPack method in the client?<br>
+[/quote]</p>
+<p><span class="bbcode-b">Client text pack:</span></p>
+<pre><code class="lang-auto">	public static void method526(String s, Stream stream) {
+		if(s.length() &gt; 80)
+			s = s.substring(0, 80);
+		s = s.toLowerCase();
+		int i = -1;
+		for(int j = 0; j &lt; s.length(); j++) {
+			char c = s.charAt(j); 
+			int k = 0;
+			for(int l = 0; l &lt; validChars.length; l++) {
+				if(c != validChars[l])
+					continue;
+				k = l;
+				break;
+			}
+			stream.writeWordBigEndian(k);
+		}
+	}</code></pre>
+<p><span class="bbcode-b">Client text unpack:</span></p>
+<p><code>
+public static String method525(int i, Stream stream) {
+		int j = 0;
+		int k = -1;
+		for(int l = 0; l &lt; i; l++) {
+			int i1 = stream.readUnsignedByte();
+					aCharArray631[j++] = validChars[i1];
+		}
+		boolean flag1 = true;
+		for(int k1 = 0; k1 &lt; j; k1++) {
+			char c = aCharArray631[k1];
+			if(flag1 &amp;&amp; c &gt;= 'a' &amp;&amp; c &lt;= 'z') {
+				aCharArray631[k1] += '\uFFE0';
+				flag1 = false;
+			}
+			if(c == '.' || c == '!' || c == '?')
+				flag1 = true;
+		}
+		return new String(aCharArray631, 0, j);
+	}
+</code>[/quote]</p>
+<p>What client did you pull this from?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/36</link>
+        <pubDate>Wed, 28 Jan 2015 22:17:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-36</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zymus, post:34, topic:549416”][quote author=RandQm link=topic=668319.msg4470031#msg4470031 date=1422475744]<br>
+Originally I read the first byte that is queued</p>
+<pre><code class="lang-auto">readByte();</code></pre>
+<p>I had to read the byte at the given index:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>My array outprint is correct now I think, though text still doesn’t unpack right and I still disconnect at updating</p>
+<p>input “i don’t know”</p>
+<pre><code class="lang-auto">[5, 0, 10, 4, 7, 50, 2, 0, 22, 7, 4, 14]
+ i   d o nat t  eh n o </code></pre>
+<p>[/quote]</p>
+<p>Can you post the textPack method in the client?[/quote]</p>
+<p><span class="bbcode-b">Client text pack:</span></p>
+<pre><code class="lang-auto">	public static void method526(String s, Stream stream) {
+		if(s.length() &gt; 80)
+			s = s.substring(0, 80);
+		s = s.toLowerCase();
+		int i = -1;
+		for(int j = 0; j &lt; s.length(); j++) {
+			char c = s.charAt(j); 
+			int k = 0;
+			for(int l = 0; l &lt; validChars.length; l++) {
+				if(c != validChars[l])
+					continue;
+				k = l;
+				break;
+			}
+			stream.writeWordBigEndian(k);
+		}
+	}</code></pre>
+<p><span class="bbcode-b">Client text unpack:</span></p>
+<pre><code class="lang-auto">public static String method525(int i, Stream stream) {
+		int j = 0;
+		int k = -1;
+		for(int l = 0; l &lt; i; l++) {
+			int i1 = stream.readUnsignedByte();
+					aCharArray631[j++] = validChars[i1];
+		}
+		boolean flag1 = true;
+		for(int k1 = 0; k1 &lt; j; k1++) {
+			char c = aCharArray631[k1];
+			if(flag1 &amp;&amp; c &gt;= 'a' &amp;&amp; c &lt;= 'z') {
+				aCharArray631[k1] += '\uFFE0';
+				flag1 = false;
+			}
+			if(c == '.' || c == '!' || c == '?')
+				flag1 = true;
+		}
+		return new String(aCharArray631, 0, j);
+	}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/35</link>
+        <pubDate>Wed, 28 Jan 2015 21:39:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-35</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:33, topic:549416”]Originally I read the first byte that is queued</p>
+<pre><code class="lang-auto">readByte();</code></pre>
+<p>I had to read the byte at the given index:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>My array outprint is correct now I think, though text still doesn’t unpack right and I still disconnect at updating</p>
+<p>input “i don’t know”</p>
+<p><code>
+[5, 0, 10, 4, 7, 50, 2, 0, 22, 7, 4, 14]
+ i   d o nat t  eh n o 
+</code>[/quote]</p>
+<p>Can you post the textPack method in the client?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/34</link>
+        <pubDate>Wed, 28 Jan 2015 21:20:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-34</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>Originally I read the first byte that is queued</p>
+<pre><code class="lang-auto">readByte();</code></pre>
+<p>I had to read the byte at the given index:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>My array outprint is correct now I think, though text still doesn’t unpack right and I still disconnect at updating</p>
+<p>input “i don’t know”</p>
+<pre><code class="lang-auto">[5, 0, 10, 4, 7, 50, 2, 0, 22, 7, 4, 14]
+ i   d o nat t  eh n o </code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/33</link>
+        <pubDate>Wed, 28 Jan 2015 20:09:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-33</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:31, topic:549416”][quote author=Zymus link=topic=668319.msg4469926#msg4469926 date=1422401281]</p>
+<aside class="quote">
+<blockquote>
+<p>“ee”<br>
+“eee”<br>
+“ew”<br>
+“ww”<br>
+“wz”<br>
+“zz”</p>
+<pre><code class="lang-auto">[1, 0]
+[1, 1, 0]
+[14, 0]
+[14, 0]
+[26, 0]
+[26, 0]</code></pre>
+<p>Tbh, I don’t know about the text unpacking, I ripped it from Asteria,<br>
+checked a PI as well when I noticed the issues and it seems to be done the same.</p>
+</blockquote>
+</aside>
+<p>Okay, and can you get the output after the unpacking for the same strings? assuming it doesn’t crash.<br>
+[/quote]</p>
+<pre><code class="lang-auto">e  
+ e e  
+ 2 
+ 2 
+ed  
+ed  </code></pre>
+<p>Btw, it crashes when I send it back to the client to update the player, not from reading/unpacking.<br>
+But it looks kinda obvious at this point that the data we read is not right,<br>
+so it’s logical the client will crash if it receives incorrect data.</p>
+<p>note: I have to go, checking back tomorrow, thanks for the effort you’re putting into this.[/quote]</p>
+<p>So, I found something odd. I downloaded the mopar 3.2 client and looked at the textpack method, and when I pack some text with that, and unpack it with your method, it works perfectly. Which client(s) were you checking with?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/32</link>
+        <pubDate>Wed, 28 Jan 2015 17:00:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-32</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zymus, post:30, topic:549416”][quote author=RandQm link=topic=668319.msg4469925#msg4469925 date=1422401124]<br>
+“ee”<br>
+“eee”<br>
+“ew”<br>
+“ww”<br>
+“wz”<br>
+“zz”</p>
+<pre><code class="lang-auto">[1, 0]
+[1, 1, 0]
+[14, 0]
+[14, 0]
+[26, 0]
+[26, 0]</code></pre>
+<p>Tbh, I don’t know about the text unpacking, I ripped it from Asteria,<br>
+checked a PI as well when I noticed the issues and it seems to be done the same.<br>
+[/quote]</p>
+<p>Okay, and can you get the output after the unpacking for the same strings? assuming it doesn’t crash.[/quote]</p>
+<pre><code class="lang-auto">e  
+ e e  
+ 2 
+ 2 
+ed  
+ed  </code></pre>
+<p>Btw, it crashes when I send it back to the client to update the player, not from reading/unpacking.<br>
+But it looks kinda obvious at this point that the data we read is not right,<br>
+so it’s logical the client will crash if it receives incorrect data.</p>
+<p>note: I have to go, checking back tomorrow, thanks for the effort you’re putting into this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/31</link>
+        <pubDate>Tue, 27 Jan 2015 23:30:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-31</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:29, topic:549416”]“ee”<br>
+“eee”<br>
+“ew”<br>
+“ww”<br>
+“wz”<br>
+“zz”</p>
+<pre><code class="lang-auto">[1, 0]
+[1, 1, 0]
+[14, 0]
+[14, 0]
+[26, 0]
+[26, 0]</code></pre>
+<p>Tbh, I don’t know about the text unpacking, I ripped it from Asteria,<br>
+checked a PI as well when I noticed the issues and it seems to be done the same.[/quote]</p>
+<p>Okay, and can you get the output after the unpacking for the same strings? assuming it doesn’t crash.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/30</link>
+        <pubDate>Tue, 27 Jan 2015 23:28:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-30</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>“ee”<br>
+“eee”<br>
+“ew”<br>
+“ww”<br>
+“wz”<br>
+“zz”</p>
+<pre><code class="lang-auto">[1, 0]
+[1, 1, 0]
+[14, 0]
+[14, 0]
+[26, 0]
+[26, 0]</code></pre>
+<p>Tbh, I don’t know about the text unpacking, I ripped it from Asteria,<br>
+checked a PI as well when I noticed the issues and it seems to be done the same.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/29</link>
+        <pubDate>Tue, 27 Jan 2015 23:25:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-29</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:27, topic:549416”][quote author=Zymus link=topic=668319.msg4469912#msg4469912 date=1422397719]</p>
+<aside class="quote">
+<blockquote>
+<p>I’m not in a hurry, I’ve been looking for this issue for a week on and off, a day more or less doesn’t matter.<br>
+I appreciate it a lot that you keep helping to get this solved.</p>
+<p>input: "hi man"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 8
+[-128, -128, -121, -125, -115, -128, -123, -122]</code></pre>
+<p>input: "lol"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 5
+[-128, -128, -117, -124, -117]</code></pre>
+</blockquote>
+</aside>
+<p>Alright, give me one minute to look at what’s going on.</p>
+<p>EDIT: it looks like it may be a problem with your textUnpack method. I’m looking into it now. It’s been a while since I did this type of thing (nibble arithmetic…)<br>
+[/quote]</p>
+<p>[code=java]<br>
+int effects = packet.getSubtrahendByte();<br>
+int color = packet.getSubtrahendByte();<br>
+int chatLength = (packet.getLength() - 2);<br>
+byte[] text = packet.getAdditionalBytesReversed(chatLength);</p>
+<pre><code>	System.out.println(Arrays.toString(text)); //PRINTING[/code]
+</code></pre>
+<p>The output for input “lol” is here:</p>
+<pre><code class="lang-auto">[11, 4, 0]</code></pre>
+<p>For “hi man”</p>
+<pre><code class="lang-auto">[7, 3, 13, 0, 0, 0]</code></pre>
+<p>It looks like it’s not assigning correctly, notice the 0’s where there are characters.<br>
+I’d assume we need to go back to my "read bytes method?[/quote]</p>
+<p>What exactly is the purpose of the text packing? From my testing, it looks like it reads a byte for each character in the string, subtracts/adds 128 from it, and that gives you the index in the XLATE_TABLE of the character. Is that correct?</p>
+<p>Can you get me the same output for the following strings?<br>
+“ee”<br>
+“eee”<br>
+“ew”<br>
+“ww”<br>
+“wz”<br>
+“zz”</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/28</link>
+        <pubDate>Tue, 27 Jan 2015 23:11:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-28</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zymus, post:26, topic:549416”][quote author=RandQm link=topic=668319.msg4469910#msg4469910 date=1422397026]<br>
+I’m not in a hurry, I’ve been looking for this issue for a week on and off, a day more or less doesn’t matter.<br>
+I appreciate it a lot that you keep helping to get this solved.</p>
+<p>input: "hi man"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 8
+[-128, -128, -121, -125, -115, -128, -123, -122]</code></pre>
+<p>input: "lol"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 5
+[-128, -128, -117, -124, -117]</code></pre>
+<p>[/quote]</p>
+<p>Alright, give me one minute to look at what’s going on.</p>
+<p>EDIT: it looks like it may be a problem with your textUnpack method. I’m looking into it now. It’s been a while since I did this type of thing (nibble arithmetic…)[/quote]</p>
+<p>[code=java]<br>
+int effects = packet.getSubtrahendByte();<br>
+int color = packet.getSubtrahendByte();<br>
+int chatLength = (packet.getLength() - 2);<br>
+byte[] text = packet.getAdditionalBytesReversed(chatLength);</p>
+<pre><code>	System.out.println(Arrays.toString(text)); //PRINTING[/code]
+</code></pre>
+<p>The output for input “lol” is here:</p>
+<pre><code class="lang-auto">[11, 4, 0]</code></pre>
+<p>For “hi man”</p>
+<pre><code class="lang-auto">[7, 3, 13, 0, 0, 0]</code></pre>
+<p>It looks like it’s not assigning correctly, notice the 0’s where there are characters.<br>
+I’d assume we need to go back to my "read bytes method?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/27</link>
+        <pubDate>Tue, 27 Jan 2015 23:03:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-27</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:25, topic:549416”]I’m not in a hurry, I’ve been looking for this issue for a week on and off, a day more or less doesn’t matter.<br>
+I appreciate it a lot that you keep helping to get this solved.</p>
+<p>input: "hi man"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 8
+[-128, -128, -121, -125, -115, -128, -123, -122]</code></pre>
+<p>input: "lol"<br>
+prints:</p>
+<p><code>
+size: 5
+[-128, -128, -117, -124, -117]
+</code>[/quote]</p>
+<p>Alright, give me one minute to look at what’s going on.</p>
+<p>EDIT: it looks like it may be a problem with your textUnpack method. I’m looking into it now. It’s been a while since I did this type of thing (nibble arithmetic…)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/26</link>
+        <pubDate>Tue, 27 Jan 2015 22:28:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-26</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>I’m not in a hurry, I’ve been looking for this issue for a week on and off, a day more or less doesn’t matter.<br>
+I appreciate it a lot that you keep helping to get this solved.</p>
+<p>input: "hi man"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 8
+[-128, -128, -121, -125, -115, -128, -123, -122]</code></pre>
+<p>input: "lol"<br>
+prints:</p>
+<pre><code class="lang-auto">size: 5
+[-128, -128, -117, -124, -117]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/25</link>
+        <pubDate>Tue, 27 Jan 2015 22:17:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-25</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Sorry for taking so long, I’m at work right now.</p>
+<p>For the ByteBuf thing, it’s possible. Let’s say it’s initially</p>
+<p><code>
+opcode|effect|color|text</code><br>
+so</p>
+<p><code>
+4|0|0|c|b|a
+^</code><br>
+would be valid. Now, when you get to actually parsing the packet data, you’re here</p>
+<p><code>
+4|0|0|c|b|a
+  ^</code><br>
+It reads the effect and color, which brings it to</p>
+<p><code>
+4|0|0|c|b|a
+      ^</code><br>
+It then reads the bytes in reverse, starting from the end, so</p>
+<p><code>
+4|0|0|c|b|a
+          ^
+4|0|0|c|b|a
+        ^
+4|0|0|c|b|a
+      ^</code><br>
+So we would be at the start index now. But, if we keep going to 0, we’ll also get</p>
+<p><code>
+4|0|0|c|b|a
+    ^
+4|0|0|c|b|a
+  ^
+4|0|0|c|b|a
+^</code><br>
+Giving us the data</p>
+<p><code>
+['a', 'b', 'c', 0, 0, 4]</code><br>
+which isn’t what we want.</p>
+<p>Now, to actually see what’s going on, Can you do</p>
+<pre><code class="lang-auto">if (buffer.readableBytes() &gt;= size) {
+	final byte[] data = new byte[size];
+	buffer.readBytes(data);
+	final ByteBuf payload = Unpooled.buffer(size);
+	payload.writeBytes(data);
+	System.out.println("size: " + size);
+        System.out.println(Arrays.toString(payload.array()));// add this line
+	try {
+		out.add(new PacketDisassembler(payload, opcode, size));
+	} finally {
+		opcode = -1;
+		size = -1;
+	}
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/24</link>
+        <pubDate>Tue, 27 Jan 2015 21:43:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-24</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zymus, post:22, topic:549416”][quote author=RandQm link=topic=668319.msg4469876#msg4469876 date=1422387559]</p>
+<aside class="quote">
+<blockquote>
+<p>Are those multiple packets being sent? 1, 2, 3, 1, 2, 3, 4?</p>
+</blockquote>
+</aside>
+<p>Those ain’t packets, index is the current index in the for-loop and size is the current size in the buffer (byte[] data)<br>
+which I printed out from this method:</p>
+<p>[code=java]<br>
+public byte[] getAdditionalBytesReversed(int amount) {<br>
+byte[] data = new byte[amount];</p>
+<pre><code>            for (int i = amount - 1; i &gt;= 0; i --) {
+                    data[i] = getAdditionalByte();
+            }
+            return data;
+    }[/code]
+</code></pre>
+<p><code>
+        public byte[] getAdditionalBytesReversed(int amount) {
+                byte[] data = new byte[amount];
+               int size = 0;
+                for (int i = amount - 1; i &gt;= 0; i --) {
+                        data[i] = getAdditionalByte();
+                        System.out.println("index:" + i + ", size:" + (++size));
+                }
+                return data;
+        }</code></p>
+<p>[/quote]</p>
+<p>I wouldn’t use 0 as the condition, because you’re reading the packet data from the same ByteBuf, so reading to 0 would also return the packet opcode, effects, and colors.[/quote]<br>
+Yeah that would be true if the method would be used in other packets, though right now the chat packet is the only one using it,<br>
+and as opcode, effects and colors are already read before calling this and nothing comes behind it should be working.</p>
+<p>Anyways I changed it back to the one from my previous post, so let’s continue, what kind of evil is ruining my chat</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/23</link>
+        <pubDate>Tue, 27 Jan 2015 19:54:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-23</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:21, topic:549416”][quote author=Zymus link=topic=668319.msg4469873#msg4469873 date=1422386558]<br>
+Are those multiple packets being sent? 1, 2, 3, 1, 2, 3, 4?<br>
+[/quote]<br>
+Those ain’t packets, index is the current index in the for-loop and size is the current size in the buffer (byte[] data)<br>
+which I printed out from this method:</p>
+<p>[code=java]<br>
+public byte[] getAdditionalBytesReversed(int amount) {<br>
+byte[] data = new byte[amount];</p>
+<pre><code>            for (int i = amount - 1; i &gt;= 0; i --) {
+                    data[i] = getAdditionalByte();
+            }
+            return data;
+    }[/code]
+</code></pre>
+<p><code>
+        public byte[] getAdditionalBytesReversed(int amount) {
+                byte[] data = new byte[amount];
+               int size = 0;
+                for (int i = amount - 1; i &gt;= 0; i --) {
+                        data[i] = getAdditionalByte();
+                        System.out.println("index:" + i + ", size:" + (++size));
+                }
+                return data;
+        }</code>[/quote]</p>
+<p>I wouldn’t use 0 as the condition, because you’re reading the packet data from the same ByteBuf, so reading to 0 would also return the packet opcode, effects, and colors.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/22</link>
+        <pubDate>Tue, 27 Jan 2015 19:46:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-22</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="20" data-topic="549416">
+<div class="title">
+<div class="quote-controls"></div>
+ Zymus:</div>
+<blockquote>
+<p>Are those multiple packets being sent? 1, 2, 3, 1, 2, 3, 4?</p>
+</blockquote>
+</aside>
+<p>Those ain’t packets, index is the current index in the for-loop and size is the current size in the buffer (byte[] data)<br>
+which I printed out from this method:</p>
+<p>[code=java]<br>
+public byte[] getAdditionalBytesReversed(int amount) {<br>
+byte[] data = new byte[amount];</p>
+<pre><code>            for (int i = amount - 1; i &gt;= 0; i --) {
+                    data[i] = getAdditionalByte();
+            }
+            return data;
+    }[/code]
+</code></pre>
+<p><code>
+        public byte[] getAdditionalBytesReversed(int amount) {
+                byte[] data = new byte[amount];
+               int size = 0;
+                for (int i = amount - 1; i &gt;= 0; i --) {
+                        data[i] = getAdditionalByte();
+                        System.out.println("index:" + i + ", size:" + (++size));
+                }
+                return data;
+        }</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/21</link>
+        <pubDate>Tue, 27 Jan 2015 19:39:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-21</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Are those multiple packets being sent? 1, 2, 3, 1, 2, 3, 4?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/20</link>
+        <pubDate>Tue, 27 Jan 2015 19:22:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-20</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">	public byte[] getAdditionalBytesReversed(int amount) {
+		byte[] data = new byte[amount];
+		
+		final int currentPosition = getBuffer().readerIndex();
+		final int startPosition = currentPosition + amount - 1;
+		
+		for (int i = startPosition; i &gt;= currentPosition; i--) {
+			data[i] = getAdditionalByte();
+		}
+		return data;</code></pre>
+<p>So I think you mean it like this?<br>
+It’s not working so either I’m not getting you completely or it’s just not the issue.</p>
+<p><span class="bbcode-b">Edit:</span> You got me thinking and I realized the previous method is way to complicated for what it does lol.<br>
+Still not working do.</p>
+<pre><code class="lang-auto">	public byte[] getAdditionalBytesReversed(int amount) {
+		byte[] data = new byte[amount];
+		
+		for (int i = amount - 1; i &gt;= 0; i --) {
+			data[i] = getAdditionalByte();
+		}
+		return data;
+	}</code></pre>
+<p>Output for “lol”<br>
+(“size” is the size of byte[] data)</p>
+<p><code>
+index: 2, size: 1
+unpacked:  
+index: 1, size: 2
+unpacked:   o
+index: 0, size: 3
+unpacked: l o l
+size: 3, text:  l o l</code><br>
+This one didn’t disconnect me, but when I did another input “derp” it was messed up again and dc’ed me.</p>
+<p><code>
+index: 3, size: 1
+unpacked:  
+index: 2, size: 2
+unpacked:    
+index: 1, size: 3
+unpacked:   e r
+index: 0, size: 4
+unpacked: d e rea
+size: 4, text:  d e rea</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/19</link>
+        <pubDate>Tue, 27 Jan 2015 18:14:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-19</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:17, topic:549416”][quote author=Zymus link=topic=668319.msg4469743#msg4469743 date=1422314659]<br>
+And does <span class="bbcode-i">getAdditionalByte</span> do basically</p>
+<pre><code class="lang-auto">return (byte) (getByte() + 128);</code></pre>
+<p>?</p>
+<p>Also, when you say the sizes are different, if you enter the same string into both, what is the size reported by each?</p>
+<p>EDIT: Wait, post your getByte() method.<br>
+[/quote]<br>
+The size is always (amount of chars + 1) now, yesterday it was +2 lol, no clue how that happens.</p>
+<pre><code class="lang-auto">Server sided, received chat packet (opcode: 4)
+  Entered text: "lol"
+  Unpacked text from the bytes: "l o  "
+  Size: 3
+
+Client sided error at dispatching the updated chat:
+  "Error: Error packet size mismatch in getplayer pos:3 psize:2"</code></pre>
+<p>Here’s everything I can think of that is related:</p>
+<p><span class="bbcode-b">Chat packet listener:</span><br>
+<a href="http://pastebin.com/1D1pwJWj" class="onebox" target="_blank">http://pastebin.com/1D1pwJWj</a></p>
+<p><span class="bbcode-b">Packet disassembler</span><br>
+<a href="http://pastebin.com/VCUPAqzr" class="onebox" target="_blank">http://pastebin.com/VCUPAqzr</a></p>
+<p><span class="bbcode-b">Packet decoder</span><br>
+<a href="http://pastebin.com/6W9TVGmG" class="onebox" target="_blank">http://pastebin.com/6W9TVGmG</a></p>
+<p><span class="bbcode-b">Chat state (player updating)</span><br>
+<a href="http://pastebin.com/SqnvYgci" class="onebox" target="_blank">http://pastebin.com/SqnvYgci</a></p>
+<p><span class="bbcode-b">Packet assembler</span><br>
+<a href="http://pastebin.com/KYnVNbNd" class="onebox" target="_blank">http://pastebin.com/KYnVNbNd</a></p>
+<p><span class="bbcode-b">Text unpacking</span><br>
+<a href="http://pastebin.com/KxKa3rCQ%5B/quote%5D" class="onebox" target="_blank">http://pastebin.com/KxKa3rCQ[/quote]</a></p>
+<p>Alright, give me a couple of minutes and I’ll see what I can come up with.</p>
+<p>Actually, can you also post the chat parsing block on the client side?</p>
+<p>EDIT:</p>
+<p>Okay I think I know what the issue is. It seems like your readReverseBytesAdditional is slightly broken. Specifically, the for loop:</p>
+<p><code>
+for (int i = getBuffer().readerIndex() + amount - 1; i &gt;= getBuffer().readerIndex(); i--)</code><br>
+and using</p>
+<p><code>
+getBuffer().readByte();</code><br>
+to read the data. Because when you call</p>
+<p><code>
+readByte();</code> on a ByteBuf from netty, it advances the position of the reader index. And since your checking statement calls reader index, it will only ever process half (well, <span class="bbcode-i">just over</span> half) of the data.</p>
+<p>To prove this, you can use the following class:</p>
+<pre><code class="lang-auto">public class TestThing {
+
+    public static void main(String[] args) {
+        final TestThing test = new TestThing();
+        test.setPosition(0);
+        for (int i = test.readerPosition() + 10; i &gt;= test.readerPosition(); i--) {
+            test.read();
+            System.out.println(i);
+        }
+    }
+
+    public void read() {
+        position++;
+    }
+    
+    public int readerPosition() {
+        return position;
+    }
+    
+    public void setPosition(final int position) {
+        this.position = position;
+    }
+
+    private int position;
+}</code></pre>
+<p>which is following the same process as what netty does in the background. The expected output would be to see it going from 10 to 0, but actually it goes</p>
+<pre><code class="lang-auto">10
+9
+8
+7
+6
+5</code></pre>
+<p>because it’s checking the reader index (which is increasing) at every iteration.</p>
+<p>Now, for the fix. To test, you could change it to</p>
+<p><code>
+final int currentPosition = getBuffer().readerPosition();
+final int startPosition = currentPosition + amount - 1;
+for (int i = startPosition; i &gt;= currentPosition; i--) {</code></p>
+<p>and see if that works.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/18</link>
+        <pubDate>Tue, 27 Jan 2015 16:56:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-18</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Zymus, post:16, topic:549416”]And does <span class="bbcode-i">getAdditionalByte</span> do basically</p>
+<pre><code class="lang-auto">return (byte) (getByte() + 128);</code></pre>
+<p>?</p>
+<p>Also, when you say the sizes are different, if you enter the same string into both, what is the size reported by each?</p>
+<p>EDIT: Wait, post your getByte() method.[/quote]<br>
+The size is always (amount of chars + 1) now, yesterday it was +2 lol, no clue how that happens.</p>
+<pre><code class="lang-auto">Server sided, received chat packet (opcode: 4)
+  Entered text: "lol"
+  Unpacked text from the bytes: "l o  "
+  Size: 3
+
+Client sided error at dispatching the updated chat:
+  "Error: Error packet size mismatch in getplayer pos:3 psize:2"</code></pre>
+<p>Here’s everything I can think of that is related:</p>
+<p><span class="bbcode-b">Chat packet listener:</span><br>
+<a href="http://pastebin.com/1D1pwJWj" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/1D1pwJWj</a></p>
+<p><span class="bbcode-b">Packet disassembler</span><br>
+<a href="http://pastebin.com/VCUPAqzr" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/VCUPAqzr</a></p>
+<p><span class="bbcode-b">Packet decoder</span><br>
+<a href="http://pastebin.com/6W9TVGmG" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/6W9TVGmG</a></p>
+<p><span class="bbcode-b">Chat state (player updating)</span><br>
+<a href="http://pastebin.com/SqnvYgci" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/SqnvYgci</a></p>
+<p><span class="bbcode-b">Packet assembler</span><br>
+<a href="http://pastebin.com/KYnVNbNd" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/KYnVNbNd</a></p>
+<p><span class="bbcode-b">Text unpacking</span><br>
+<a href="http://pastebin.com/KxKa3rCQ" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/KxKa3rCQ</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/17</link>
+        <pubDate>Tue, 27 Jan 2015 15:40:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-17</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>And does <span class="bbcode-i">getAdditionalByte</span> do basically</p>
+<pre><code class="lang-auto">return (byte) (getByte() + 128);</code></pre>
+<p>?</p>
+<p>Also, when you say the sizes are different, if you enter the same string into both, what is the size reported by each?</p>
+<p>EDIT: Wait, post your getByte() method.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/16</link>
+        <pubDate>Mon, 26 Jan 2015 23:24:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-16</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+      <item>
+        <title>Wrong packet size for chat [solved]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">	public byte getSubtrahendByte() {
+		return (byte) (128 - getByte());
+	}
+
+	public byte[] readAdditionalBytesReverse(int amount) {
+		byte[] data = new byte[amount];
+		int dataPosition = 0;
+		
+		for (int i = getBuffer().readerIndex() + amount - 1; i &gt;= getBuffer().readerIndex(); i--)
+			data[dataPosition++] = getAdditionalByte();
+		
+		return data;
+	}</code></pre>
+<pre><code class="lang-auto">	public void writeWordBigEndian(int i) {
+		buffer[currentOffset++] = (byte)i;
+	}
+
+	public void method425(int j) {
+		buffer[currentOffset++] = (byte)(128 - j);
+	}
+
+	public void method441(int i, byte abyte0[], int j) {
+		for(int k = (i + j) - 1; k &gt;= i; k--)
+			buffer[currentOffset++] = (byte)(abyte0[k] + 128);
+
+	}
+
+	public void writeBytes(byte abyte0[], int i, int j) {
+		for(int k = j; k &lt; j + i; k++)
+			buffer[currentOffset++] = abyte0[k];
+	}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416/15</link>
+        <pubDate>Mon, 26 Jan 2015 21:58:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549416-15</guid>
+        <source url="https://forum.moparisthebest.com/t/wrong-packet-size-for-chat-solved/549416.rss">Wrong packet size for chat [solved]</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,1279 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Sound effects</title>
+    <link>https://forum.moparisthebest.com/t/sound-effects/449061</link>
+    <description>[code=java]package jagex.audio; 
+
+import jagex.io.Buffer;
+
+public class Effect {
+
+  public Effect() {
+    instruments = new Instrument[10];
+  }
+
+  public static void load(Buffer data) {
+    _output = new byte[0x6baa8];
+    output = new Buffer(_output);
+    Instrument.initialize();
+    do {
+      int j = data.read_u16();
+      if (j == 65535)
+        return;
+      effects[j] = new Effect();
+      effects[j].decode(data);
+      effect_delays[j] = effects[j].delay();
+    } while (true);
+  }
+
+  public static Buffer data(int id, int i) {
+    if (effects[id] != null) {
+      Effect effect = effects[id];
+      return effect.encode(i);
+    } else {
+      return null;
+    }
+  }
+
+  public void decode(Buffer data) {
+    for (int i = 0; i &lt; 10; i++) {
+      int active = data.read_u8();
+      if (active != 0) {
+        data.pointer--;
+        instruments[i] = new Instrument();
+        instruments[i].decode(data);
+      }
+    }
+
+    loop_begin = data.read_u16();
+    loop_end = data.read_u16();
+  }
+
+  public int delay() {
+    int offset = 0x98967f;
+    for (int k = 0; k &lt; 10; k++)
+      if (instruments[k] != null &amp;&amp; instruments[k].begin / 20 &lt; offset)
+        offset = instruments[k].begin / 20;
+
+    if (loop_begin &lt; loop_end &amp;&amp; loop_begin / 20 &lt; offset)
+      offset = loop_begin / 20;
+    if (offset == 0x98967f || offset == 0)
+      return 0;
+    for (int l = 0; l &lt; 10; l++)
+      if (instruments[l] != null)
+        instruments[l].begin -= offset * 20;
+
+    if (loop_begin &lt; loop_end) {
+      loop_begin -= offset * 20;
+      loop_end -= offset * 20;
+    }
+    return offset;
+  }
+
+  public Buffer encode(int loops) {
+    int size = mix(loops);
+    output.pointer = 0;
+    output.write_32(0x52494646);
+    output.write_le32(36 + size);
+    output.write_32(0x57415645);
+    output.write_32(0x666d7420);
+    output.write_le32(16);
+    output.write_le16_2(1);
+    output.write_le16_2(1);
+    output.write_le32(22050);
+    output.write_le32(22050);
+    output.write_le16_2(1);
+    output.write_le16_2(8);
+    output.write_32(0x64617461);
+    output.write_le32(size);
+    output.pointer += size;
+    return output;
+  }
+
+  public int mix(int loop_count) {
+    int _dur = 0;
+    for (int k = 0; k &lt; 10; k++)
+      if (instruments[k] != null &amp;&amp; instruments[k].duration + instruments[k].begin &gt; _dur)
+        _dur = instruments[k].duration + instruments[k].begin;
+
+    if (_dur == 0)
+      return 0;
+    int n_s = (22050 * _dur) / 1000;
+    int loop_begin = (22050 * this.loop_begin) / 1000;
+    int loop_end = (22050 * this.loop_end) / 1000;
+    if (loop_begin &lt; 0 || loop_begin &gt; n_s || loop_end &lt; 0
+        || loop_end &gt; n_s || loop_begin &gt;= loop_end)
+      loop_count = 0;
+    int len = n_s + (loop_end - loop_begin) * (loop_count - 1);
+    for (int off = 44; off &lt; len + 44; off++)
+      _output[off] = -128;
+
+    for (int i2 = 0; i2 &lt; 10; i2++)
+      if (instruments[i2] != null) {
+        int dur = (instruments[i2].duration * 22050) / 1000;
+        int offset = (instruments[i2].begin * 22050) / 1000;
+        int samples[] = instruments[i2].synthesize(dur, instruments[i2].duration);
+        for (int l3 = 0; l3 &lt; dur; l3++) {
+          int out = (_output[l3 + offset + 44] &amp; 0xff) + (samples[l3] &gt;&gt; 8);
+          if ((out &amp; 0xffffff00) != 0)
+            out = ~(out &gt;&gt; 31);
+          _output[l3 + offset + 44] = (byte) out;
+        }
+
+      }
+
+    if (loop_count &gt; 1) {
+      loop_begin += 44;
+      loop_end += 44;
+      n_s += 44;
+      int k2 = (len += 44) - n_s;
+      for (int j3 = n_s - 1; j3 &gt;= loop_end; j3--)
+        _output[j3 + k2] = _output[j3];
+
+      for (int k3 = 1; k3 &lt; loop_count; k3++) {
+        int l2 = (loop_end - loop_begin) * k3;
+        for (int i4 = loop_begin; i4 &lt; loop_end; i4++)
+          _output[i4 + l2] = _output[i4];
+
+      }
+
+      len -= 44;
+    }
+    return len;
+  }
+
+  public static Effect effects[] = new Effect[5000];
+  public static int effect_delays[] = new int[5000];
+  public static byte _output[];
+  public static Buffer output;
+  public Instrument instruments[];
+  public int loop_begin;
+  public int loop_end;
+}[/code]
+[code=java]package jagex.audio;
+
+import jagex.io.Buffer;
+
+public class Instrument {
+
+  public static void initialize() {
+    noise = new int[32768];
+    for (int i = 0; i &lt; 32768; i++)
+      if (Math.random() &gt; 0.5D)
+        noise[i] = 1;
+      else
+        noise[i] = -1;
+
+    sine = new int[32768];
+    for (int j = 0; j &lt; 32768; j++)
+      sine[j] = (int) (Math.sin((double) j / 5215.1903000000002D) * 16384D);
+
+    output = new int[0x35d54];
+  }
+
+  /*
+   * an impl of a wavetable synthesizer that
+   * generates square/sine/saw/noise/flat tables
+   * and supports phase and amplitude modulation
+   *
+   * more: http://musicdsp.org/files/Wavetable-101.pdf
+   */
+
+  public int[] synthesize(int n_s, int dt) {
+    for (int k = 0; k &lt; n_s; k++)
+      output[k] = 0;
+
+    if (dt &lt; 10)
+      return output;
+    double f_s = (double) n_s / ((double) dt + 0.0D);
+    pitch_env.reset();
+    vol_env.reset();
+    int pitch_mod_step = 0;
+    int pitch_mod_base_step = 0;
+    int pitch_mod_phase = 0;
+    if (pitch_mod_env != null) {
+      pitch_mod_env.reset();
+      pitch_mod_amp_env.reset();
+      pitch_mod_step = (int) (((double) (pitch_mod_env.end - pitch_mod_env.start) * 32.768000000000001D) / f_s);
+      pitch_mod_base_step = (int) (((double) pitch_mod_env.start * 32.768000000000001D) / f_s);
+    }
+    int vol_mod_step = 0;
+    int vol_mod_base_step = 0;
+    int vol_mod_phase = 0;
+    if (vol_mod_env != null) {
+      vol_mod_env.reset();
+      vol_mod_amp_env.reset();
+      vol_mod_step = (int) (((double) (vol_mod_env.end - vol_mod_env.start) * 32.768000000000001D) / f_s);
+      vol_mod_base_step = (int) (((double) vol_mod_env.start * 32.768000000000001D) / f_s);
+    }
+    for (int j2 = 0; j2 &lt; 5; j2++)
+      if (oscill_vol[j2] != 0) {
+        phases[j2] = 0;
+        delays[j2] = (int) ((double) oscill_delay[j2] * f_s);
+        vol_step[j2] = (oscill_vol[j2] &lt;&lt; 14) / 100;
+        pitch_step[j2] = (int) (((double) (pitch_env.end - pitch_env.start) * 32.768000000000001D * Math.pow(1.0057929410678534D, oscill_pitch_delta[j2])) / f_s);
+        pitch_base_step[j2] = (int) (((double) pitch_env.start * 32.768000000000001D) / f_s);
+      }
+
+    for (int k2 = 0; k2 &lt; n_s; k2++) {
+      int pitch_change = pitch_env.step(n_s);
+      int vol_change = vol_env.step(n_s);
+      if (pitch_mod_env != null) {
+        int mod = pitch_mod_env.step(n_s);
+        int mod_amp = pitch_mod_amp_env.step(n_s);
+        pitch_change += evaluate_wave(pitch_mod_env.form, pitch_mod_phase, mod_amp) &gt;&gt; 1;
+        pitch_mod_phase += (mod * pitch_mod_step &gt;&gt; 16) + pitch_mod_base_step;
+      }
+      if (vol_mod_env != null) {
+        int mod = vol_mod_env.step(n_s);
+        int mod_amp = vol_mod_amp_env.step(n_s);
+        vol_change = vol_change * ((evaluate_wave(vol_mod_env.form, vol_mod_phase, mod_amp) &gt;&gt; 1) + 32768) &gt;&gt; 15;
+        vol_mod_phase += (mod * vol_mod_step &gt;&gt; 16) + vol_mod_base_step;
+      }
+      for (int l5 = 0; l5 &lt; 5; l5++)
+        if (oscill_vol[l5] != 0) {
+          int l6 = k2 + delays[l5];
+          if (l6 &lt; n_s) {
+            output[l6] += evaluate_wave(pitch_env.form, phases[l5], vol_change * vol_step[l5] &gt;&gt; 15);
+            phases[l5] += (pitch_change * pitch_step[l5] &gt;&gt; 16) + pitch_base_step[l5];
+          }
+        }
+
+    }
+    /* gating effect */
+    if (gating_release_env != null) {
+      gating_release_env.reset();
+      gating_attack_env.reset();
+      int counter = 0;
+      boolean muted = true;
+      for (int i7 = 0; i7 &lt; n_s; i7++) {
+        int on_step = gating_release_env.step(n_s);
+        int off_step = gating_attack_env.step(n_s);
+        int threshold;
+        if (muted)
+          threshold = gating_release_env.start + ((gating_release_env.end - gating_release_env.start) * on_step &gt;&gt; 8);
+        else
+          threshold = gating_release_env.start + ((gating_release_env.end - gating_release_env.start) * off_step &gt;&gt; 8);
+        if ((counter += 256) &gt;= threshold) {
+          counter = 0;
+          muted = !muted;
+        }
+        if (muted)
+          output[i7] = 0;
+      }
+
+    }
+    /* delay effect */
+    if (delay_time &gt; 0 &amp;&amp; delay_feedback &gt; 0) {
+      int delay = (int) ((double) delay_time * f_s);
+      for (int l4 = delay; l4 &lt; n_s; l4++)
+        output[l4] += (output[l4 - delay] * delay_feedback) / 100;
+    }
+    /* filter */
+    if (filter.num_pairs[0] &gt; 0 || filter.num_pairs[1] &gt; 0) {
+     /*
+      * apply iir filter
+      * y[n] = 1/a0 * (sum(i=0 -&gt; M, b_i * x[n-i]) - sum(j=0 -&gt; Q, a_j * y[n-j]))
+      */
+      filter_env.reset();
+      int t = filter_env.step(n_s + 1);
+      int M = filter.compute((float) t / 65536F, 0);
+      int N = filter.compute((float) t / 65536F, 1);
+      if (n_s &gt;= M + N) {
+        int n = 0;
+        int delay = N;
+        if (delay &gt; n_s - M)
+          delay = n_s - M;
+        for (; n &lt; delay; n++) {
+          int y = (int) ((long) output[n + M] * (long) Filter.inv_unity &gt;&gt; 16);
+          for (int i = 0; i &lt; M; i++)
+            y += (int) ((long) output[(n + M) - 1 - i] * (long) Filter.coef[0][i] &gt;&gt; 16);
+
+          for (int k = 0; k &lt; n; k++)
+            y -= (int) ((long) output[n - 1 - k] * (long) Filter.coef[1][k] &gt;&gt; 16);
+
+          output[n] = y;
+          t = filter_env.step(n_s + 1);
+        }
+
+        char c = &#39;\200&#39;;
+        delay = c;
+        do {
+          if (delay &gt; n_s - M)
+            delay = n_s - M;
+          for (; n &lt; delay; n++) {
+            int y = (int) ((long) output[n + M] * (long) Filter.inv_unity &gt;&gt; 16);
+            for (int k9 = 0; k9 &lt; M; k9++)
+              y += (int) ((long) output[(n + M) - 1 - k9] * (long) Filter.coef[0][k9] &gt;&gt; 16);
+
+            for (int i10 = 0; i10 &lt; N; i10++)
+              y -= (int) ((long) output[n - 1 - i10] * (long) Filter.coef[1][i10] &gt;&gt; 16);
+
+            output[n] = y;
+            t = filter_env.step(n_s + 1);
+          }
+
+          if (n &gt;= n_s - M)
+            break;
+          M = filter.compute((float) t / 65536F, 0);
+          N = filter.compute((float) t / 65536F, 1);
+          delay += c;
+        } while (true);
+        for (; n &lt; n_s; n++) {
+          int y = 0;
+          for (int l9 = (n + M) - n_s; l9 &lt; M; l9++)
+            y += (int) ((long) output[(n + M) - 1 - l9] * (long) Filter.coef[0][l9] &gt;&gt; 16);
+
+          for (int j10 = 0; j10 &lt; N; j10++)
+            y -= (int) ((long) output[n - 1 - j10] * (long) Filter.coef[1][j10] &gt;&gt; 16);
+
+          output[n] = y;
+          int l3 = filter_env.step(n_s + 1);
+        }
+
+      }
+    }
+    /* clamp */
+    for (int i4 = 0; i4 &lt; n_s; i4++) {
+      if (output[i4] &lt; -32768)
+        output[i4] = -32768;
+      if (output[i4] &gt; 32767)
+        output[i4] = 32767;
+    }
+
+    return output;
+  }
+
+  public int evaluate_wave(int table, int phase, int amplitude) {
+    if (table == 1) /* square */
+      if ((phase &amp; 0x7fff) &lt; 16384)
+        return amplitude;
+      else
+        return -amplitude;
+    if (table == 2) /* sine */
+      return sine[phase &amp; 0x7fff] * amplitude &gt;&gt; 14;
+    if (table == 3) /* saw */
+      return ((phase &amp; 0x7fff) * amplitude &gt;&gt; 14) - amplitude;
+    if (table == 4) /* noise */
+      return noise[phase / 2607 &amp; 0x7fff] * amplitude;
+    else           /* flat */
+      return 0;
+  }
+
+  public void decode(Buffer data) {
+    pitch_env = new Envelope();
+    pitch_env.decode(data);
+    vol_env = new Envelope();
+    vol_env.decode(data);
+    int option = data.read_u8();
+    if (option != 0) {
+      data.pointer--;
+      pitch_mod_env = new Envelope();
+      pitch_mod_env.decode(data);
+      pitch_mod_amp_env = new Envelope();
+      pitch_mod_amp_env.decode(data);
+    }
+    option = data.read_u8();
+    if (option != 0) {
+      data.pointer--;
+      vol_mod_env = new Envelope();
+      vol_mod_env.decode(data);
+      vol_mod_amp_env = new Envelope();
+      vol_mod_amp_env.decode(data);
+    }
+    option = data.read_u8();
+    if (option != 0) {
+      data.pointer--;
+      gating_release_env = new Envelope();
+      gating_release_env.decode(data);
+      gating_attack_env = new Envelope();
+      gating_attack_env.decode(data);
+    }
+    for (int k = 0; k &lt; 10; k++) {
+      int l = data.read_usmart();
+      if (l == 0)
+        break;
+      oscill_vol[k] = l;
+      oscill_pitch_delta[k] = data.read_smart();
+      oscill_delay[k] = data.read_usmart();
+    }
+
+    delay_time = data.read_usmart();
+    delay_feedback = data.read_usmart();
+    duration = data.read_u16();
+    begin = data.read_u16();
+    filter = new Filter();
+    filter_env = new Envelope();
+    filter.decode(data, filter_env);
+  }
+
+  public Instrument() {
+    oscill_vol = new int[5];
+    oscill_pitch_delta = new int[5];
+    oscill_delay = new int[5];
+    delay_feedback = 100;
+    duration = 500;
+  }
+
+  public Envelope pitch_env;
+  public Envelope vol_env;
+  public Envelope pitch_mod_env;
+  public Envelope pitch_mod_amp_env;
+  public Envelope vol_mod_env;
+  public Envelope vol_mod_amp_env;
+  public Envelope gating_release_env;
+  public Envelope gating_attack_env;
+  public int oscill_vol[];
+  public int oscill_pitch_delta[];
+  public int oscill_delay[];
+  public int delay_time;
+  public int delay_feedback;
+  public Filter filter;
+  public Envelope filter_env;
+  public int duration;
+  public int begin;
+  public static int output[];
+  public static int noise[];
+  public static int sine[];
+  public static int phases[] = new int[5];
+  public static int delays[] = new int[5];
+  public static int vol_step[] = new int[5];
+  public static int pitch_step[] = new int[5];
+  public static int pitch_base_step[] = new int[5];
+}[/code]
+[code=java]package jagex.audio;
+
+import jagex.io.Buffer;
+
+public class Envelope {
+
+  public void decode(Buffer data) {
+    form = data.read_u8();
+    start = data.read_32();
+    end = data.read_32();
+    decode_shape(data);
+  }
+
+  public void decode_shape(Buffer data) {
+    num_phases = data.read_u8();
+    phase_dur = new int[num_phases];
+    phase_peak = new int[num_phases];
+    for (int j = 0; j &lt; num_phases; j++) {
+      phase_dur[j] = data.read_u16();
+      phase_peak[j] = data.read_u16();
+    }
+  }
+
+  public void reset() {
+    critical = 0;
+    phase_idx = 0;
+    step = 0;
+    amp = 0;
+    ticks = 0;
+  }
+
+  public int step(int period) {
+    if (ticks &gt;= critical) {
+      amp = phase_peak[phase_idx++] &lt;&lt; 15;
+      if (phase_idx &gt;= num_phases)
+        phase_idx = num_phases - 1;
+      critical = (int) (((double) phase_dur[phase_idx] / 65536D) * (double) period);
+      if (critical &gt; ticks)
+        step = ((phase_peak[phase_idx] &lt;&lt; 15) - amp) / (critical - ticks);
+    }
+    amp += step;
+    ticks++;
+    return amp - step &gt;&gt; 15;
+  }
+
+  public Envelope() {
+  }
+
+  public int num_phases;
+  public int phase_dur[];
+  public int phase_peak[];
+  public int start;
+  public int end;
+  public int form;
+  public int critical;
+  public int phase_idx;
+  public int step;
+  public int amp;
+  public int ticks;
+}[/code]
+[code=java]package jagex.audio;
+
+import jagex.io.Buffer;
+
+/*
+ * an impl of an adaptive iir filter that calculates
+ * coefficients from pole magnitude/phases and a serial
+ * configuration of cascading biquad sections
+ */
+public class Filter {
+
+  public float adapt_mag(int dir, int k, float t) {
+    float alpha = (float) pair_mag[dir][0][k] + t * (float) (pair_mag[dir][1][k] - pair_mag[dir][0][k]);
+    alpha *= 0.001525879F; /* 100 / 65536 */
+    return 1.0F - (float) Math.pow(10D, -alpha / 20F);
+  }
+
+  public float normalize(float f) {
+    float _f = 32.7032F * (float) Math.pow(2D, f);
+    return (_f * 3.141593F) / 11025F;
+  }
+
+  public float adapt_phase(int dir, int i, float t) {
+    float f1 = (float) pair_phase[dir][0][i] + t * (float) (pair_phase[dir][1][i] - pair_phase[dir][0][i]);
+    f1 *= 0.0001220703F; /* 1 / 8192 */
+    return normalize(f1);
+  }
+
+  /* dir: 0 -&gt; feedforward, 1 -&gt; feedback */
+  public int compute(float t, int dir) {
+    if (dir == 0) {
+      float _a0 = (float) unity[0] + (float) (unity[1] - unity[0]) * t;
+      _a0 *= 0.003051758F; // 100 / 32767
+      _inv_unity = (float) Math.pow(0.10000000000000001D, _a0 / 20F);
+      inv_unity = (int) (_inv_unity * 65536F);
+    }
+    if (num_pairs[dir] == 0)
+      return 0;
+    float r = adapt_mag(dir, 0, t);
+    _coef[dir][0] = -2F * r * (float) Math.cos(adapt_phase(dir, 0, t));
+    _coef[dir][1] = r * r;
+    for (int p = 1; p &lt; num_pairs[dir]; p++) {
+      float _r = adapt_mag(dir, p, t);
+      float a1 = -2F * _r * (float) Math.cos(adapt_phase(dir, p, t));
+      float a2 = _r * _r;
+      _coef[dir][p * 2 + 1] = _coef[dir][p * 2 - 1] * a2;
+      _coef[dir][p * 2] = _coef[dir][p * 2 - 1] * a1 + _coef[dir][p * 2 - 2] * a2;
+      for (int m = p * 2 - 1; m &gt;= 2; m--)
+        _coef[dir][m] += _coef[dir][m - 1] * a1 + _coef[dir][m - 2] * a2;
+
+      _coef[dir][1] += _coef[dir][0] * a1 + a2;
+      _coef[dir][0] += a1;
+    }
+
+    if (dir == 0) {
+      for (int l = 0; l &lt; num_pairs[0] * 2; l++)
+        _coef[0][l] *= _inv_unity;
+
+    }
+    for (int i1 = 0; i1 &lt; num_pairs[dir] * 2; i1++)
+      coef[dir][i1] = (int) (_coef[dir][i1] * 65536F);
+
+    return num_pairs[dir] * 2;
+  }
+
+  public void decode(Buffer data, Envelope envelope) {
+    int j = data.read_u8();
+    num_pairs[0] = j &gt;&gt; 4;
+    num_pairs[1] = j &amp; 0xf;
+    if (j != 0) {
+      unity[0] = data.read_u16();
+      unity[1] = data.read_u16();
+      int migrated = data.read_u8();
+      for (int dir = 0; dir &lt; 2; dir++) {
+        for (int term = 0; term &lt; num_pairs[dir]; term++) {
+          pair_phase[dir][0][term] = data.read_u16();
+          pair_mag[dir][0][term] = data.read_u16();
+        }
+
+      }
+
+      for (int dir = 0; dir &lt; 2; dir++) {
+        for (int p = 0; p &lt; num_pairs[dir]; p++)
+          if ((migrated &amp; 1 &lt;&lt; dir * 4 &lt;&lt; p) != 0) {  /* pole/zero migration */
+            pair_phase[dir][1][p] = data.read_u16();
+            pair_mag[dir][1][p] = data.read_u16();
+          } else {
+            pair_phase[dir][1][p] = pair_phase[dir][0][p];
+            pair_mag[dir][1][p] = pair_mag[dir][0][p];
+          }
+      }
+
+      if (migrated != 0 || unity[1] != unity[0])
+        envelope.decode_shape(data);
+      return;
+    } else {
+      unity[0] = unity[1] = 0;
+      return;
+    }
+  }
+
+  public Filter() {
+    num_pairs = new int[2];
+    pair_phase = new int[2][2][4];
+    pair_mag = new int[2][2][4];
+    unity = new int[2];
+  }
+
+  public int num_pairs[];
+  public int pair_phase[][][];
+  public int pair_mag[][][];
+  public int unity[];
+  public static float _coef[][] = new float[2][8];
+  public static int coef[][] = new int[2][8];
+  public static float _inv_unity;
+  public static int inv_unity;
+}[/code]</description>
+    
+    <lastBuildDate>Tue, 10 Jul 2012 23:04:15 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/sound-effects/449061.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Sound effects</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>can you please put the entire refactor thus far on your github?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/sound-effects/449061/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/sound-effects/449061/4</link>
+        <pubDate>Tue, 10 Jul 2012 23:04:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449061-4</guid>
+        <source url="https://forum.moparisthebest.com/t/sound-effects/449061.rss">Sound effects</source>
+      </item>
+      <item>
+        <title>Sound effects</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="449061">
+<div class="title">
+<div class="quote-controls"></div>
+ t4:</div>
+<blockquote>
+<p>wait, did you finally refactor the audio-related classes?</p>
+</blockquote>
+</aside>
+<p>for sound effects it seems.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/sound-effects/449061/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/sound-effects/449061/3</link>
+        <pubDate>Tue, 10 Jul 2012 22:35:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449061-3</guid>
+        <source url="https://forum.moparisthebest.com/t/sound-effects/449061.rss">Sound effects</source>
+      </item>
+      <item>
+        <title>Sound effects</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>wait, did you finally refactor the audio-related classes?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/sound-effects/449061/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/sound-effects/449061/2</link>
+        <pubDate>Tue, 10 Jul 2012 19:58:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449061-2</guid>
+        <source url="https://forum.moparisthebest.com/t/sound-effects/449061.rss">Sound effects</source>
+      </item>
+      <item>
+        <title>Sound effects</title>
+        <dc:creator><![CDATA[@slavemaster veer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/slavemaster">@slavemaster</a> wrote:</p>
+          <blockquote>
+              <p>[code=java]package jagex.audio;</p>
+<p>import jagex.io.Buffer;</p>
+<p>public class Effect {</p>
+<p>public Effect() {<br>
+instruments = new Instrument[10];<br>
+}</p>
+<p>public static void load(Buffer data) {<br>
+_output = new byte[0x6baa8];<br>
+output = new Buffer(_output);<br>
+Instrument.initialize();<br>
+do {<br>
+int j = data.read_u16();<br>
+if (j == 65535)<br>
+return;<br>
+effects[j] = new Effect();<br>
+effects[j].decode(data);<br>
+effect_delays[j] = effects[j].delay();<br>
+} while (true);<br>
+}</p>
+<p>public static Buffer data(int id, int i) {<br>
+if (effects[id] != null) {<br>
+Effect effect = effects[id];<br>
+return effect.encode(i);<br>
+} else {<br>
+return null;<br>
+}<br>
+}</p>
+<p>public void decode(Buffer data) {<br>
+for (int i = 0; i &lt; 10; i++) {<br>
+int active = data.read_u8();<br>
+if (active != 0) {<br>
+data.pointer–;<br>
+instruments[i] = new Instrument();<br>
+instruments[i].decode(data);<br>
+}<br>
+}</p>
+<pre><code>loop_begin = data.read_u16();
+loop_end = data.read_u16();
+</code></pre>
+<p>}</p>
+<p>public int delay() {<br>
+int offset = 0x98967f;<br>
+for (int k = 0; k &lt; 10; k++)<br>
+if (instruments[k] != null &amp;&amp; instruments[k].begin / 20 &lt; offset)<br>
+offset = instruments[k].begin / 20;</p>
+<pre><code>if (loop_begin &lt; loop_end &amp;&amp; loop_begin / 20 &lt; offset)
+  offset = loop_begin / 20;
+if (offset == 0x98967f || offset == 0)
+  return 0;
+for (int l = 0; l &lt; 10; l++)
+  if (instruments[l] != null)
+    instruments[l].begin -= offset * 20;
+
+if (loop_begin &lt; loop_end) {
+  loop_begin -= offset * 20;
+  loop_end -= offset * 20;
+}
+return offset;
+</code></pre>
+<p>}</p>
+<p>public Buffer encode(int loops) {<br>
+int size = mix(loops);<br>
+output.pointer = 0;<br>
+output.write_32(0x52494646);<br>
+output.write_le32(36 + size);<br>
+output.write_32(0x57415645);<br>
+output.write_32(0x666d7420);<br>
+output.write_le32(16);<br>
+output.write_le16_2(1);<br>
+output.write_le16_2(1);<br>
+output.write_le32(22050);<br>
+output.write_le32(22050);<br>
+output.write_le16_2(1);<br>
+output.write_le16_2(8);<br>
+output.write_32(0x64617461);<br>
+output.write_le32(size);<br>
+output.pointer += size;<br>
+return output;<br>
+}</p>
+<p>public int mix(int loop_count) {<br>
+int _dur = 0;<br>
+for (int k = 0; k &lt; 10; k++)<br>
+if (instruments[k] != null &amp;&amp; instruments[k].duration + instruments[k].begin &gt; _dur)<br>
+_dur = instruments[k].duration + instruments[k].begin;</p>
+<pre><code>if (_dur == 0)
+  return 0;
+int n_s = (22050 * _dur) / 1000;
+int loop_begin = (22050 * this.loop_begin) / 1000;
+int loop_end = (22050 * this.loop_end) / 1000;
+if (loop_begin &lt; 0 || loop_begin &gt; n_s || loop_end &lt; 0
+    || loop_end &gt; n_s || loop_begin &gt;= loop_end)
+  loop_count = 0;
+int len = n_s + (loop_end - loop_begin) * (loop_count - 1);
+for (int off = 44; off &lt; len + 44; off++)
+  _output[off] = -128;
+
+for (int i2 = 0; i2 &lt; 10; i2++)
+  if (instruments[i2] != null) {
+    int dur = (instruments[i2].duration * 22050) / 1000;
+    int offset = (instruments[i2].begin * 22050) / 1000;
+    int samples[] = instruments[i2].synthesize(dur, instruments[i2].duration);
+    for (int l3 = 0; l3 &lt; dur; l3++) {
+      int out = (_output[l3 + offset + 44] &amp; 0xff) + (samples[l3] &gt;&gt; 8);
+      if ((out &amp; 0xffffff00) != 0)
+        out = ~(out &gt;&gt; 31);
+      _output[l3 + offset + 44] = (byte) out;
+    }
+
+  }
+
+if (loop_count &gt; 1) {
+  loop_begin += 44;
+  loop_end += 44;
+  n_s += 44;
+  int k2 = (len += 44) - n_s;
+  for (int j3 = n_s - 1; j3 &gt;= loop_end; j3--)
+    _output[j3 + k2] = _output[j3];
+
+  for (int k3 = 1; k3 &lt; loop_count; k3++) {
+    int l2 = (loop_end - loop_begin) * k3;
+    for (int i4 = loop_begin; i4 &lt; loop_end; i4++)
+      _output[i4 + l2] = _output[i4];
+
+  }
+
+  len -= 44;
+}
+return len;
+</code></pre>
+<p>}</p>
+<p>public static Effect effects[] = new Effect[5000];<br>
+public static int effect_delays[] = new int[5000];<br>
+public static byte _output[];<br>
+public static Buffer output;<br>
+public Instrument instruments[];<br>
+public int loop_begin;<br>
+public int loop_end;<br>
+}[/code]</p>
+<p>[code=java]package jagex.audio;</p>
+<p>import jagex.io.Buffer;</p>
+<p>public class Instrument {</p>
+<p>public static void initialize() {<br>
+noise = new int[32768];<br>
+for (int i = 0; i &lt; 32768; i++)<br>
+if (Math.random() &gt; 0.5D)<br>
+noise[i] = 1;<br>
+else<br>
+noise[i] = -1;</p>
+<pre><code>sine = new int[32768];
+for (int j = 0; j &lt; 32768; j++)
+  sine[j] = (int) (Math.sin((double) j / 5215.1903000000002D) * 16384D);
+
+output = new int[0x35d54];
+</code></pre>
+<p>}</p>
+<p>/*</p>
+<ul>
+<li>an impl of a wavetable synthesizer that</li>
+<li>generates square/sine/saw/noise/flat tables</li>
+<li>and supports phase and amplitude modulation</li>
+<li>
+</li>
+<li>more: <a href="http://musicdsp.org/files/Wavetable-101.pdf" rel="nofollow noopener">http://musicdsp.org/files/Wavetable-101.pdf</a><br>
+*/</li>
+</ul>
+<p>public int[] synthesize(int n_s, int dt) {<br>
+for (int k = 0; k &lt; n_s; k++)<br>
+output[k] = 0;</p>
+<pre><code>if (dt &lt; 10)
+  return output;
+double f_s = (double) n_s / ((double) dt + 0.0D);
+pitch_env.reset();
+vol_env.reset();
+int pitch_mod_step = 0;
+int pitch_mod_base_step = 0;
+int pitch_mod_phase = 0;
+if (pitch_mod_env != null) {
+  pitch_mod_env.reset();
+  pitch_mod_amp_env.reset();
+  pitch_mod_step = (int) (((double) (pitch_mod_env.end - pitch_mod_env.start) * 32.768000000000001D) / f_s);
+  pitch_mod_base_step = (int) (((double) pitch_mod_env.start * 32.768000000000001D) / f_s);
+}
+int vol_mod_step = 0;
+int vol_mod_base_step = 0;
+int vol_mod_phase = 0;
+if (vol_mod_env != null) {
+  vol_mod_env.reset();
+  vol_mod_amp_env.reset();
+  vol_mod_step = (int) (((double) (vol_mod_env.end - vol_mod_env.start) * 32.768000000000001D) / f_s);
+  vol_mod_base_step = (int) (((double) vol_mod_env.start * 32.768000000000001D) / f_s);
+}
+for (int j2 = 0; j2 &lt; 5; j2++)
+  if (oscill_vol[j2] != 0) {
+    phases[j2] = 0;
+    delays[j2] = (int) ((double) oscill_delay[j2] * f_s);
+    vol_step[j2] = (oscill_vol[j2] &lt;&lt; 14) / 100;
+    pitch_step[j2] = (int) (((double) (pitch_env.end - pitch_env.start) * 32.768000000000001D * Math.pow(1.0057929410678534D, oscill_pitch_delta[j2])) / f_s);
+    pitch_base_step[j2] = (int) (((double) pitch_env.start * 32.768000000000001D) / f_s);
+  }
+
+for (int k2 = 0; k2 &lt; n_s; k2++) {
+  int pitch_change = pitch_env.step(n_s);
+  int vol_change = vol_env.step(n_s);
+  if (pitch_mod_env != null) {
+    int mod = pitch_mod_env.step(n_s);
+    int mod_amp = pitch_mod_amp_env.step(n_s);
+    pitch_change += evaluate_wave(pitch_mod_env.form, pitch_mod_phase, mod_amp) &gt;&gt; 1;
+    pitch_mod_phase += (mod * pitch_mod_step &gt;&gt; 16) + pitch_mod_base_step;
+  }
+  if (vol_mod_env != null) {
+    int mod = vol_mod_env.step(n_s);
+    int mod_amp = vol_mod_amp_env.step(n_s);
+    vol_change = vol_change * ((evaluate_wave(vol_mod_env.form, vol_mod_phase, mod_amp) &gt;&gt; 1) + 32768) &gt;&gt; 15;
+    vol_mod_phase += (mod * vol_mod_step &gt;&gt; 16) + vol_mod_base_step;
+  }
+  for (int l5 = 0; l5 &lt; 5; l5++)
+    if (oscill_vol[l5] != 0) {
+      int l6 = k2 + delays[l5];
+      if (l6 &lt; n_s) {
+        output[l6] += evaluate_wave(pitch_env.form, phases[l5], vol_change * vol_step[l5] &gt;&gt; 15);
+        phases[l5] += (pitch_change * pitch_step[l5] &gt;&gt; 16) + pitch_base_step[l5];
+      }
+    }
+
+}
+/* gating effect */
+if (gating_release_env != null) {
+  gating_release_env.reset();
+  gating_attack_env.reset();
+  int counter = 0;
+  boolean muted = true;
+  for (int i7 = 0; i7 &lt; n_s; i7++) {
+    int on_step = gating_release_env.step(n_s);
+    int off_step = gating_attack_env.step(n_s);
+    int threshold;
+    if (muted)
+      threshold = gating_release_env.start + ((gating_release_env.end - gating_release_env.start) * on_step &gt;&gt; 8);
+    else
+      threshold = gating_release_env.start + ((gating_release_env.end - gating_release_env.start) * off_step &gt;&gt; 8);
+    if ((counter += 256) &gt;= threshold) {
+      counter = 0;
+      muted = !muted;
+    }
+    if (muted)
+      output[i7] = 0;
+  }
+
+}
+/* delay effect */
+if (delay_time &gt; 0 &amp;&amp; delay_feedback &gt; 0) {
+  int delay = (int) ((double) delay_time * f_s);
+  for (int l4 = delay; l4 &lt; n_s; l4++)
+    output[l4] += (output[l4 - delay] * delay_feedback) / 100;
+}
+/* filter */
+if (filter.num_pairs[0] &gt; 0 || filter.num_pairs[1] &gt; 0) {
+ /*
+  * apply iir filter
+  * y[n] = 1/a0 * (sum(i=0 -&gt; M, b_i * x[n-i]) - sum(j=0 -&gt; Q, a_j * y[n-j]))
+  */
+  filter_env.reset();
+  int t = filter_env.step(n_s + 1);
+  int M = filter.compute((float) t / 65536F, 0);
+  int N = filter.compute((float) t / 65536F, 1);
+  if (n_s &gt;= M + N) {
+    int n = 0;
+    int delay = N;
+    if (delay &gt; n_s - M)
+      delay = n_s - M;
+    for (; n &lt; delay; n++) {
+      int y = (int) ((long) output[n + M] * (long) Filter.inv_unity &gt;&gt; 16);
+      for (int i = 0; i &lt; M; i++)
+        y += (int) ((long) output[(n + M) - 1 - i] * (long) Filter.coef[0][i] &gt;&gt; 16);
+
+      for (int k = 0; k &lt; n; k++)
+        y -= (int) ((long) output[n - 1 - k] * (long) Filter.coef[1][k] &gt;&gt; 16);
+
+      output[n] = y;
+      t = filter_env.step(n_s + 1);
+    }
+
+    char c = '\200';
+    delay = c;
+    do {
+      if (delay &gt; n_s - M)
+        delay = n_s - M;
+      for (; n &lt; delay; n++) {
+        int y = (int) ((long) output[n + M] * (long) Filter.inv_unity &gt;&gt; 16);
+        for (int k9 = 0; k9 &lt; M; k9++)
+          y += (int) ((long) output[(n + M) - 1 - k9] * (long) Filter.coef[0][k9] &gt;&gt; 16);
+
+        for (int i10 = 0; i10 &lt; N; i10++)
+          y -= (int) ((long) output[n - 1 - i10] * (long) Filter.coef[1][i10] &gt;&gt; 16);
+
+        output[n] = y;
+        t = filter_env.step(n_s + 1);
+      }
+
+      if (n &gt;= n_s - M)
+        break;
+      M = filter.compute((float) t / 65536F, 0);
+      N = filter.compute((float) t / 65536F, 1);
+      delay += c;
+    } while (true);
+    for (; n &lt; n_s; n++) {
+      int y = 0;
+      for (int l9 = (n + M) - n_s; l9 &lt; M; l9++)
+        y += (int) ((long) output[(n + M) - 1 - l9] * (long) Filter.coef[0][l9] &gt;&gt; 16);
+
+      for (int j10 = 0; j10 &lt; N; j10++)
+        y -= (int) ((long) output[n - 1 - j10] * (long) Filter.coef[1][j10] &gt;&gt; 16);
+
+      output[n] = y;
+      int l3 = filter_env.step(n_s + 1);
+    }
+
+  }
+}
+/* clamp */
+for (int i4 = 0; i4 &lt; n_s; i4++) {
+  if (output[i4] &lt; -32768)
+    output[i4] = -32768;
+  if (output[i4] &gt; 32767)
+    output[i4] = 32767;
+}
+
+return output;
+</code></pre>
+<p>}</p>
+<p>public int evaluate_wave(int table, int phase, int amplitude) {<br>
+if (table == 1) /* square <em>/<br>
+if ((phase &amp; 0x7fff) &lt; 16384)<br>
+return amplitude;<br>
+else<br>
+return -amplitude;<br>
+if (table == 2) /</em> sine <em>/<br>
+return sine[phase &amp; 0x7fff] * amplitude &gt;&gt; 14;<br>
+if (table == 3) /</em> saw <em>/<br>
+return ((phase &amp; 0x7fff) * amplitude &gt;&gt; 14) - amplitude;<br>
+if (table == 4) /</em> noise <em>/<br>
+return noise[phase / 2607 &amp; 0x7fff] * amplitude;<br>
+else           /</em> flat */<br>
+return 0;<br>
+}</p>
+<p>public void decode(Buffer data) {<br>
+pitch_env = new Envelope();<br>
+pitch_env.decode(data);<br>
+vol_env = new Envelope();<br>
+vol_env.decode(data);<br>
+int option = data.read_u8();<br>
+if (option != 0) {<br>
+data.pointer–;<br>
+pitch_mod_env = new Envelope();<br>
+pitch_mod_env.decode(data);<br>
+pitch_mod_amp_env = new Envelope();<br>
+pitch_mod_amp_env.decode(data);<br>
+}<br>
+option = data.read_u8();<br>
+if (option != 0) {<br>
+data.pointer–;<br>
+vol_mod_env = new Envelope();<br>
+vol_mod_env.decode(data);<br>
+vol_mod_amp_env = new Envelope();<br>
+vol_mod_amp_env.decode(data);<br>
+}<br>
+option = data.read_u8();<br>
+if (option != 0) {<br>
+data.pointer–;<br>
+gating_release_env = new Envelope();<br>
+gating_release_env.decode(data);<br>
+gating_attack_env = new Envelope();<br>
+gating_attack_env.decode(data);<br>
+}<br>
+for (int k = 0; k &lt; 10; k++) {<br>
+int l = data.read_usmart();<br>
+if (l == 0)<br>
+break;<br>
+oscill_vol[k] = l;<br>
+oscill_pitch_delta[k] = data.read_smart();<br>
+oscill_delay[k] = data.read_usmart();<br>
+}</p>
+<pre><code>delay_time = data.read_usmart();
+delay_feedback = data.read_usmart();
+duration = data.read_u16();
+begin = data.read_u16();
+filter = new Filter();
+filter_env = new Envelope();
+filter.decode(data, filter_env);
+</code></pre>
+<p>}</p>
+<p>public Instrument() {<br>
+oscill_vol = new int[5];<br>
+oscill_pitch_delta = new int[5];<br>
+oscill_delay = new int[5];<br>
+delay_feedback = 100;<br>
+duration = 500;<br>
+}</p>
+<p>public Envelope pitch_env;<br>
+public Envelope vol_env;<br>
+public Envelope pitch_mod_env;<br>
+public Envelope pitch_mod_amp_env;<br>
+public Envelope vol_mod_env;<br>
+public Envelope vol_mod_amp_env;<br>
+public Envelope gating_release_env;<br>
+public Envelope gating_attack_env;<br>
+public int oscill_vol[];<br>
+public int oscill_pitch_delta[];<br>
+public int oscill_delay[];<br>
+public int delay_time;<br>
+public int delay_feedback;<br>
+public Filter filter;<br>
+public Envelope filter_env;<br>
+public int duration;<br>
+public int begin;<br>
+public static int output[];<br>
+public static int noise[];<br>
+public static int sine[];<br>
+public static int phases[] = new int[5];<br>
+public static int delays[] = new int[5];<br>
+public static int vol_step[] = new int[5];<br>
+public static int pitch_step[] = new int[5];<br>
+public static int pitch_base_step[] = new int[5];<br>
+}[/code]</p>
+<p>[code=java]package jagex.audio;</p>
+<p>import jagex.io.Buffer;</p>
+<p>public class Envelope {</p>
+<p>public void decode(Buffer data) {<br>
+form = data.read_u8();<br>
+start = data.read_32();<br>
+end = data.read_32();<br>
+decode_shape(data);<br>
+}</p>
+<p>public void decode_shape(Buffer data) {<br>
+num_phases = data.read_u8();<br>
+phase_dur = new int[num_phases];<br>
+phase_peak = new int[num_phases];<br>
+for (int j = 0; j &lt; num_phases; j++) {<br>
+phase_dur[j] = data.read_u16();<br>
+phase_peak[j] = data.read_u16();<br>
+}<br>
+}</p>
+<p>public void reset() {<br>
+critical = 0;<br>
+phase_idx = 0;<br>
+step = 0;<br>
+amp = 0;<br>
+ticks = 0;<br>
+}</p>
+<p>public int step(int period) {<br>
+if (ticks &gt;= critical) {<br>
+amp = phase_peak[phase_idx++] &lt;&lt; 15;<br>
+if (phase_idx &gt;= num_phases)<br>
+phase_idx = num_phases - 1;<br>
+critical = (int) (((double) phase_dur[phase_idx] / 65536D) * (double) period);<br>
+if (critical &gt; ticks)<br>
+step = ((phase_peak[phase_idx] &lt;&lt; 15) - amp) / (critical - ticks);<br>
+}<br>
+amp += step;<br>
+ticks++;<br>
+return amp - step &gt;&gt; 15;<br>
+}</p>
+<p>public Envelope() {<br>
+}</p>
+<p>public int num_phases;<br>
+public int phase_dur[];<br>
+public int phase_peak[];<br>
+public int start;<br>
+public int end;<br>
+public int form;<br>
+public int critical;<br>
+public int phase_idx;<br>
+public int step;<br>
+public int amp;<br>
+public int ticks;<br>
+}[/code]</p>
+<p>[code=java]package jagex.audio;</p>
+<p>import jagex.io.Buffer;</p>
+<p>/*</p>
+<ul>
+<li>an impl of an adaptive iir filter that calculates</li>
+<li>coefficients from pole magnitude/phases and a serial</li>
+<li>configuration of cascading biquad sections<br>
+*/<br>
+public class Filter {</li>
+</ul>
+<p>public float adapt_mag(int dir, int k, float t) {<br>
+float alpha = (float) pair_mag[dir][0][k] + t * (float) (pair_mag[dir][1][k] - pair_mag[dir][0][k]);<br>
+alpha <em>= 0.001525879F; /</em> 100 / 65536 */<br>
+return 1.0F - (float) Math.pow(10D, -alpha / 20F);<br>
+}</p>
+<p>public float normalize(float f) {<br>
+float _f = 32.7032F * (float) Math.pow(2D, f);<br>
+return (_f * 3.141593F) / 11025F;<br>
+}</p>
+<p>public float adapt_phase(int dir, int i, float t) {<br>
+float f1 = (float) pair_phase[dir][0][i] + t * (float) (pair_phase[dir][1][i] - pair_phase[dir][0][i]);<br>
+f1 <em>= 0.0001220703F; /</em> 1 / 8192 */<br>
+return normalize(f1);<br>
+}</p>
+<p>/* dir: 0 -&gt; feedforward, 1 -&gt; feedback */<br>
+public int compute(float t, int dir) {<br>
+if (dir == 0) {<br>
+float _a0 = (float) unity[0] + (float) (unity[1] - unity[0]) * t;<br>
+_a0 *= 0.003051758F; // 100 / 32767<br>
+_inv_unity = (float) Math.pow(0.10000000000000001D, _a0 / 20F);<br>
+inv_unity = (int) (_inv_unity * 65536F);<br>
+}<br>
+if (num_pairs[dir] == 0)<br>
+return 0;<br>
+float r = adapt_mag(dir, 0, t);<br>
+_coef[dir][0] = -2F * r * (float) Math.cos(adapt_phase(dir, 0, t));<br>
+_coef[dir][1] = r * r;<br>
+for (int p = 1; p &lt; num_pairs[dir]; p++) {<br>
+float _r = adapt_mag(dir, p, t);<br>
+float a1 = -2F * _r * (float) Math.cos(adapt_phase(dir, p, t));<br>
+float a2 = _r * _r;<br>
+_coef[dir][p * 2 + 1] = _coef[dir][p * 2 - 1] * a2;<br>
+_coef[dir][p * 2] = _coef[dir][p * 2 - 1] * a1 + _coef[dir][p * 2 - 2] * a2;<br>
+for (int m = p * 2 - 1; m &gt;= 2; m–)<br>
+_coef[dir][m] += _coef[dir][m - 1] * a1 + _coef[dir][m - 2] * a2;</p>
+<pre><code>  _coef[dir][1] += _coef[dir][0] * a1 + a2;
+  _coef[dir][0] += a1;
+}
+
+if (dir == 0) {
+  for (int l = 0; l &lt; num_pairs[0] * 2; l++)
+    _coef[0][l] *= _inv_unity;
+
+}
+for (int i1 = 0; i1 &lt; num_pairs[dir] * 2; i1++)
+  coef[dir][i1] = (int) (_coef[dir][i1] * 65536F);
+
+return num_pairs[dir] * 2;
+</code></pre>
+<p>}</p>
+<p>public void decode(Buffer data, Envelope envelope) {<br>
+int j = data.read_u8();<br>
+num_pairs[0] = j &gt;&gt; 4;<br>
+num_pairs[1] = j &amp; 0xf;<br>
+if (j != 0) {<br>
+unity[0] = data.read_u16();<br>
+unity[1] = data.read_u16();<br>
+int migrated = data.read_u8();<br>
+for (int dir = 0; dir &lt; 2; dir++) {<br>
+for (int term = 0; term &lt; num_pairs[dir]; term++) {<br>
+pair_phase[dir][0][term] = data.read_u16();<br>
+pair_mag[dir][0][term] = data.read_u16();<br>
+}</p>
+<pre><code>  }
+
+  for (int dir = 0; dir &lt; 2; dir++) {
+    for (int p = 0; p &lt; num_pairs[dir]; p++)
+      if ((migrated &amp; 1 &lt;&lt; dir * 4 &lt;&lt; p) != 0) {  /* pole/zero migration */
+        pair_phase[dir][1][p] = data.read_u16();
+        pair_mag[dir][1][p] = data.read_u16();
+      } else {
+        pair_phase[dir][1][p] = pair_phase[dir][0][p];
+        pair_mag[dir][1][p] = pair_mag[dir][0][p];
+      }
+  }
+
+  if (migrated != 0 || unity[1] != unity[0])
+    envelope.decode_shape(data);
+  return;
+} else {
+  unity[0] = unity[1] = 0;
+  return;
+}
+</code></pre>
+<p>}</p>
+<p>public Filter() {<br>
+num_pairs = new int[2];<br>
+pair_phase = new int[2][2][4];<br>
+pair_mag = new int[2][2][4];<br>
+unity = new int[2];<br>
+}</p>
+<p>public int num_pairs[];<br>
+public int pair_phase[][][];<br>
+public int pair_mag[][][];<br>
+public int unity[];<br>
+public static float _coef[][] = new float[2][8];<br>
+public static int coef[][] = new int[2][8];<br>
+public static float _inv_unity;<br>
+public static int inv_unity;<br>
+}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/sound-effects/449061/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/sound-effects/449061/1</link>
+        <pubDate>Tue, 10 Jul 2012 06:21:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449061-1</guid>
+        <source url="https://forum.moparisthebest.com/t/sound-effects/449061.rss">Sound effects</source>
+      </item>
+  </channel>
+</rss>

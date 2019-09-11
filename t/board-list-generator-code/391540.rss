@@ -1,0 +1,719 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Board List Generator Code</title>
+    <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540</link>
+    <description>Here is the code for the list generator I created. It&#39;s quite simple really, didn&#39;t put much effort into it. If you cared to, you could use some HTML parsing stuff, but I just used substrings and the like. Also, StringEscapeUtils is just used to change things like [tt]&amp;amp;[/tt] etc into their actual symbols, you need to download an external jar for that class.
+
+Example output - http://paste.strictfp.com/4757
+
+[code=java]import java.net.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.io.*;
+import org.apache.commons.lang.StringEscapeUtils;
+
+public class Main {
+	
+	public enum Category {
+		DEFAULT(&quot;Unsorted&quot;, -1, new String[]{}),
+		R317(&quot;317&quot;, 0, new String[]{&quot;317&quot;}), 
+		R508(&quot;508&quot;, 0, new String[]{&quot;508&quot;}),
+		R525(&quot;525+&quot;, 0, new String[]{&quot;525&quot;, &quot;530&quot;, &quot;562&quot;, &quot;602&quot;, &quot;614&quot;}),
+		LINUX(&quot;Other Operating Systems/VPS&#39;s&quot;, 0, new String[]{&quot;linux&quot;, &quot;vps&quot;, &quot;ubuntu&quot;, &quot;mac&quot;, &quot;osx&quot;, &quot;android&quot;, &quot;phone&quot;, &quot;itouch&quot;, &quot;iphone&quot;}),
+		PORTF(&quot;Portforwarding&quot;, 0, new String[]{&quot;port&quot;}),
+		PI(&quot;Projet Insaniy&quot;, 1, new String[]{&quot;[pi]&quot;, &quot;insanity&quot;, &quot;(pi)&quot;, &quot; pi &quot;}),
+		Hyperion(&quot;Hyperion&quot;, 1, new String[]{&quot;hyperion&quot;}),
+		DELTA(&quot;Delta&quot;, 1, new String[]{&quot;delta&quot;});
+
+		Category(String n, int p, String[] k) {
+			name = n;
+			keywords = k;
+			precedence = p;
+		}
+
+		String name;
+		String[] keywords;
+		int precedence;
+
+		public String getName() {
+			return name;
+		}
+
+		public String[] getKeywords() {
+			return keywords;
+		}
+
+		public int getPrecedence() {
+			return precedence;
+		}
+	}
+	
+	private final String LIST_TITLE = &quot;Tutorial List&quot;;
+	private final int BOARD_ID = 51;
+	private final String AUTHOR_DATA = &quot;&lt;td class=\&quot;windowbg2 starter\&quot;&gt;&quot;;
+	private final String SUBJECT_DATA = &quot;&lt;td class=\&quot;subject windowbg\&quot; &gt;&quot;;
+	private final String REPLIES_DATA = &quot;&lt;td class=\&quot;windowbg replies\&quot;&gt;&quot;;
+	private final String VIEWS_DATA = &quot;&lt;td class=\&quot;windowbg views\&quot;&gt;&quot;;
+	private final int THREAD_COUNT = 200;
+	private ArrayList&lt;Thread&gt; threads = new ArrayList&lt;Thread&gt;();
+	
+	/*private final Comparator&lt;Thread&gt; SORT = new Comparator&lt;Thread&gt;() {
+		public int compare(Thread t1, Thread t2) {
+			return t1.getTitle().compareTo(t2.getTitle());
+		}
+	};*/
+	private final Comparator&lt;Thread&gt; SORT = new Comparator&lt;Thread&gt;() {
+		public int compare(Thread t1, Thread t2) {
+			return t1.getAuthor().compareTo(t2.getAuthor());
+		}
+	};
+	/*private final Comparator&lt;Thread&gt; SORT = new Comparator&lt;Thread&gt;() {
+		public int compare(Thread t1, Thread t2) {
+			return (t1.getReplies() &lt; t2.getReplies()) ? 1 : -1;
+		}
+	};
+	private final Comparator&lt;Thread&gt; SORT = new Comparator&lt;Thread&gt;() {
+		public int compare(Thread t1, Thread t2) {
+			return (t1.getViews() &lt; t2.getViews()) ? 1 : -1;
+		}
+	};*/
+
+	public static void main(String args[]) {
+		new Main();
+	}
+	
+	Main() {
+		for(int i = 0; i &lt; THREAD_COUNT; i += 20) {
+			loadPage(&quot;http://www.moparisthebest.com/smf/index.php/board,&quot; + BOARD_ID + &quot;.&quot;+ i +&quot;.html&quot;);
+		}
+		sort();
+		System.out.println(createBBC());
+	}
+	
+	private void loadPage(String page) {
+		try {
+			URLConnection connection = new URL(page).openConnection();
+			connection.setRequestProperty(&quot;Cookie&quot;, &quot;mpr_agree4=yes&quot;);
+			connection.connect();
+			BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+			Thread currentThread = new Thread();
+			String line;
+			while ((line = in.readLine()) != null) {
+				line = line.trim();
+				if(line.startsWith(SUBJECT_DATA)) { 
+					if(currentThread.getAuthor() != null) {
+						currentThread = new Thread();
+					}
+					currentThread.setImgData(in.readLine().trim()); //Either lock or sticky, or blank
+					in.readLine(); //Junk, blame SMF
+					String titleDataHTML = in.readLine().trim();
+					currentThread.setTitle(parseTitleHTML(titleDataHTML));
+					currentThread.setTitleLink(parseTitleLinkHTML(titleDataHTML));
+				} else if(line.equals(AUTHOR_DATA) &amp;&amp; currentThread.getTitle() != null) {
+					currentThread.setAuthor(parseAuthorHTML(in.readLine().trim()));
+				} else if(line.equals(REPLIES_DATA) &amp;&amp; currentThread.getTitle() != null) {
+					currentThread.setReplies(Integer.parseInt(in.readLine().trim()));
+				} else if(line.equals(VIEWS_DATA) &amp;&amp; currentThread.getTitle() != null) {
+					currentThread.setViews(Integer.parseInt(in.readLine().trim()));
+				}
+				if(currentThread.complete()) {
+					if(!currentThread.locked()) {
+						threads.add(currentThread);
+					}
+					currentThread = new Thread();
+				}
+			}
+			in.close();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	private void sort() {
+		for(Thread t : threads) {
+			String title = t.getTitle();
+			for(Category c : Category.values()) {
+				for(String s : c.getKeywords()) {
+					if(title.toLowerCase().contains(s)) {
+						if(c.getPrecedence() &gt; t.getCategory().getPrecedence()) {
+							t.setCategory(c);
+						}
+						break;
+					}
+				}
+			}
+		}
+		Collections.sort(threads, SORT);
+	}
+
+	private String createBBC() {
+		String output = &quot;[center][size=22pt]&quot; + LIST_TITLE + &quot;[/size][/center]\n\n&quot;;
+		output += &quot;Last updated: [u]&quot; + new SimpleDateFormat(&quot;MMMM dd, yyyy - h:mm a z&quot;).format(new Date()) + &quot;[/u]\n&quot;;
+		output += &quot;Total threads: [u]&quot; + threads.size() + &quot;/&quot; + THREAD_COUNT + &quot; (&quot; + (THREAD_COUNT - threads.size())+ &quot; locked)[/u]\n\n&quot;;
+		output += &quot;[size=16pt][u]Categories[/u][/size]\n
+[ul]&quot;;
+		for(Main.Category c : Main.Category.values()) {
+			output += &quot;[li][iurl=#&quot; + c.name() + &quot;]&quot; + c.getName() + &quot;[/iurl][/li]&quot;;
+		}
+		output += &quot;[/ul]
+\n[hr]\n&quot;;
+		for(Main.Category c : Main.Category.values()) {
+			String temp = &quot;[anchor=&quot; + c.name() + &quot;][b][u]&quot; + c.getName() + &quot;[/u][/b]\n
+[ul]\n&quot;;
+			for(Thread t : threads) {
+				if(t.getCategory().equals(c)) {
+					temp += &quot;[li]&quot; + t.getTitleLink() + &quot; [b]by: [/b]&quot; + t.getAuthor() + &quot; (&quot; + t.getReplies() + ((t.getReplies() == 1) ?&quot; reply, &quot; : &quot; replies, &quot;) + t.getViews() + &quot; views)[/li]\n&quot;;
+				}
+			}
+			temp += &quot;[/ul]
+\n&quot;;
+			output += temp;
+		}
+		return output;
+	}
+
+	private String parseTitleHTML(String html) {
+		try {
+			html = html.substring(0, html.indexOf(&quot;&lt;/a&gt;&quot;));
+			html = html.substring(html.lastIndexOf(&quot;&gt;&quot;) + 1); //Get only title portion of the HTML
+			return StringEscapeUtils.unescapeHtml(html); //Decode the HTML (&amp;amp; &amp;quot; etc)
+		} catch (Exception e) {
+			return &quot;Not found&quot;;
+		}
+	}
+
+	private String parseTitleLinkHTML(String html) {
+		try {
+			html = html.substring(0, html.indexOf(&quot;&lt;/a&gt;&quot;)+4).substring(html.indexOf(&quot;&lt;a&quot;)); //Get only the link part of the HTML
+			return StringEscapeUtils.unescapeHtml(html.replace(&quot;&lt;a href&quot;, &quot;[url&quot;).replace(&quot;&lt;/a&gt;&quot;, &quot;[/url]&quot;).replace(&quot;&gt;&quot;, &quot;]&quot;).replace(&quot;\&quot;&quot;, &quot;&quot;)); //Turn it into BBC after decoding the HTML (&amp;amp; &amp;quot; etc)
+		} catch (Exception e) {
+			return &quot;Not found&quot;;
+		}
+	}
+
+	private String parseAuthorHTML(String html) {
+		try {
+			html = html.substring(0, html.indexOf(&quot;&lt;/a&quot;));
+			return StringEscapeUtils.unescapeHtml(html.substring(html.lastIndexOf(&quot;&gt;&quot;) + 1));
+		} catch (Exception e) {
+			return &quot;Not found&quot;;
+		}
+	}
+
+	private class Thread {
+
+		private String author = null, imgData = null, title = null, titleLink = null;
+		private int views = -1, replies = -1;
+
+		private Main.Category category = Main.Category.DEFAULT;
+
+		public void setImgData(String iD) {
+			imgData = iD;
+		}
+
+		public String getTitle() {
+			return title;
+		}
+
+		public void setTitle(String t) {
+			title = t;
+		}
+
+		public String getAuthor() {
+			return author;
+		}
+
+		public void setAuthor(String a) {
+			author = a;
+		}
+
+		public String getTitleLink() {
+			return titleLink;
+		}
+
+		public void setTitleLink(String tL) {
+			titleLink = tL;
+		}
+
+		public Main.Category getCategory() {
+			return category;
+		}
+
+		public void setCategory(Main.Category c) {
+			category = c;
+		}
+
+		public int getViews() {
+			return views;
+		}
+
+		public void setViews(int v) {
+			views = v;
+		}
+
+		public int getReplies() {
+			return replies;
+		}
+
+		public void setReplies(int r) {
+			replies = r;
+		}
+
+		public boolean complete() {
+			return author != null &amp;&amp; title != null &amp;&amp; titleLink != null &amp;&amp; imgData != null &amp;&amp; views &gt; -1 &amp;&amp;  replies &gt; -1;
+		}
+
+		public boolean locked() {
+			return imgData.contains(&quot;quick_lock.gif&quot;);
+		}
+	}
+
+}
+[/code]
+
+To change the look of the list parts, you&#39;d really just change this line:
+[code=java]temp += &quot;[li]&quot; + t.getTitleLink() + &quot; [b]by: [/b]&quot; + t.getAuthor() + &quot; (&quot; + t.getReplies() + ((t.getReplies() == 1) ?&quot; reply, &quot; : &quot; replies, &quot;) + t.getViews() + &quot; views)[/li]\n&quot;;[/code]Each part is rather self explanatory.</description>
+    
+    <lastBuildDate>Fri, 21 Oct 2011 18:39:38 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Just stop helping him ytuio. He obviously just wants to leech my work to get recognition on a different forum :rolleyes:</p>
+<p>He’s also that `Rebirth guy just trying on a new account, so he’s banned for multiple accounts anyway.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/56">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/56</link>
+        <pubDate>Fri, 21 Oct 2011 18:39:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-56</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@Svitkona Svitkona]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/svitkona">@Svitkona</a> wrote:</p>
+          <blockquote>
+              <p>Is there anything in that folder though?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/55">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/55</link>
+        <pubDate>Fri, 21 Oct 2011 09:31:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-55</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@UnHoly1 UnHoly_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unholy1">@UnHoly1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="53" data-topic="391540">
+<div class="title">
+<div class="quote-controls"></div>
+ ytuio9`:</div>
+<blockquote>
+<p>Check the following path: C:\Program Files\Java for something</p>
+</blockquote>
+</aside>
+<p>Still doesn’t work, I’m so lost… -.-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/54">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/54</link>
+        <pubDate>Thu, 20 Oct 2011 23:45:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-54</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@Svitkona Svitkona]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/svitkona">@Svitkona</a> wrote:</p>
+          <blockquote>
+              <p>Check the following path: C:\Program Files\Java for something</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/53">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/53</link>
+        <pubDate>Thu, 20 Oct 2011 14:24:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-53</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@UnHoly1 UnHoly_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unholy1">@UnHoly1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="51" data-topic="391540">
+<div class="title">
+<div class="quote-controls"></div>
+ ytuio9`:</div>
+<blockquote>
+<p>Do you have JDK downloaded?</p>
+</blockquote>
+</aside>
+<p>Yes…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/52">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/52</link>
+        <pubDate>Thu, 20 Oct 2011 11:33:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-52</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@Svitkona Svitkona]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/svitkona">@Svitkona</a> wrote:</p>
+          <blockquote>
+              <p>Do you have JDK downloaded?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/51">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/51</link>
+        <pubDate>Thu, 20 Oct 2011 03:51:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-51</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@UnHoly1 UnHoly_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unholy1">@UnHoly1</a> wrote:</p>
+          <blockquote>
+              <p>Same thing happens.  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/50">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/50</link>
+        <pubDate>Thu, 20 Oct 2011 00:18:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-50</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@Frell Frell]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frell">@Frell</a> wrote:</p>
+          <blockquote>
+              <p>environmental variables or do</p>
+<p>“c:\program files\java\bin\javac”</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/49">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/49</link>
+        <pubDate>Thu, 20 Oct 2011 00:07:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-49</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@UnHoly1 UnHoly_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unholy1">@UnHoly1</a> wrote:</p>
+          <blockquote>
+              <p>Sorry if this makes me seem retarded, but what am I doing wrong?</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="http://i56.tinypic.com/1zdyog8.jpg" title="1zdyog8.jpg" rel="nofollow noopener"><img src="http://i56.tinypic.com/1zdyog8.jpg" alt width="690" height="431"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">1zdyog8.jpg</span><span class="informations">1280×800</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/48">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/48</link>
+        <pubDate>Wed, 19 Oct 2011 23:17:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-48</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@baddy351 baddy351]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/baddy351">@baddy351</a> wrote:</p>
+          <blockquote>
+              <p>I did, i just didn’t know if you added that, or if it was generated  :o</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/47">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/47</link>
+        <pubDate>Wed, 19 Oct 2011 00:27:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-47</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Of course it sorts, didn’t you look at the output? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/46">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/46</link>
+        <pubDate>Wed, 19 Oct 2011 00:26:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-46</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@baddy351 baddy351]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/baddy351">@baddy351</a> wrote:</p>
+          <blockquote>
+              <p>Anyways, does this sort, or just gather up the boards? Helpfull, yes. However, i would suggest making this multi forum compatable. (atm, im doing this.)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/45</link>
+        <pubDate>Wed, 19 Oct 2011 00:19:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-45</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Stop creating new accounts.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/44</link>
+        <pubDate>Mon, 17 Oct 2011 03:31:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-44</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@UnHoly1 UnHoly_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unholy1">@UnHoly1</a> wrote:</p>
+          <blockquote>
+              <p>I’m new to these forums and to coding, please help me I have no idea what to do with this code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/43</link>
+        <pubDate>Mon, 17 Oct 2011 00:58:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-43</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="41" data-topic="391540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>It’s the context really, I didn’t even make it with releasing or changing it in mind.</p>
+</blockquote>
+</aside>
+<p>Still, lazy programming <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/42</link>
+        <pubDate>Mon, 10 Oct 2011 01:37:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-42</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>It’s the context really, I didn’t even make it with releasing or changing it in mind.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/41</link>
+        <pubDate>Mon, 10 Oct 2011 01:06:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-41</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:39, topic:391540”]Could easily use something like xml, but I really don’t feel like making it more complicated than it has to be for something I run every few months and don’t change the keywords for.</p>
+<p>And you can easily think about it any way you want, I like to think of enumerations of just a nice way to keep information that is going to be final clean (instead of like creating a new class for it and creating a bunch of final instances of that class in a messier way) I don’t think I’ve read anywhere that enumerations are strictly for symbolizing states, that’s just a common use of them (which I also do)</p>
+<p><a href="http://download.oracle.com/javase/tutorial/java/javaOO/enum.html" class="onebox" target="_blank" rel="nofollow noopener">http://download.oracle.com/javase/tutorial/java/javaOO/enum.html</a></p>
+<aside class="quote">
+<blockquote>
+<p>Java programming language enum types are much more powerful than their counterparts in other languages. The enum declaration defines a class (called an enum type). The enum class body can include methods and other fields. The compiler automatically adds some special methods when it creates an enum. For example, they have a static values method that returns an array containing all of the values of the enum in the order they are declared. This method is commonly used in combination with the for-each construct to iterate over the values of an enum type. For example, this code from the Planet class example below iterates over all the planets in the solar system.</p>
+</blockquote>
+</aside>
+<p>As you can see, that example doesn’t really store states at all, it’s just a final instance and storage of different information about planets. I do the same thing, except with categories.[/quote]</p>
+<p>However, board information used in this manner is an independent variable and therefore is expected to be subject to change. The way you encapsulate the board data is not as dynamic as I believe it should be. Enumerations of this data is really just counter intuitive to helping people create a board list when you must edit the code and not supply it with data that is easy to edit.</p>
+<blockquote>Could easily use something like xml, but I really don't feel like making it more complicated than it has to be for something I run every few months and don't change the keywords for.</blockquote>
+<p>Fak, it is just lazy programming.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/40</link>
+        <pubDate>Mon, 10 Oct 2011 00:46:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-40</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Could easily use something like xml, but I really don’t feel like making it more complicated than it has to be for something I run every few months and don’t change the keywords for.</p>
+<p>And you can easily think about it any way you want, I like to think of enumerations of just a nice way to keep information that is going to be final clean (instead of like creating a new class for it and creating a bunch of final instances of that class in a messier way) I don’t think I’ve read anywhere that enumerations are strictly for symbolizing states, that’s just a common use of them (which I also do)</p>
+<p><a href="http://download.oracle.com/javase/tutorial/java/javaOO/enum.html" class="onebox" target="_blank">http://download.oracle.com/javase/tutorial/java/javaOO/enum.html</a></p>
+<blockquote>Java programming language enum types are much more powerful than their counterparts in other languages. The enum declaration defines a class (called an enum type). The enum class body can include methods and other fields. The compiler automatically adds some special methods when it creates an enum. For example, they have a static values method that returns an array containing all of the values of the enum in the order they are declared. This method is commonly used in combination with the for-each construct to iterate over the values of an enum type. For example, this code from the Planet class example below iterates over all the planets in the solar system.</blockquote>
+<p>As you can see, that example doesn’t really store states at all, it’s just a final instance and storage of different information about planets. I do the same thing, except with categories.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/39</link>
+        <pubDate>Mon, 10 Oct 2011 00:16:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-39</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:37, topic:391540”][quote author=sinisoul link=topic=488704.msg3777597#msg3777597 date=1318203650]<br>
+Alright I went through it seriously this time and all I can say is: What was the purpose in doing this and why are you using enumerations excessively?<br>
+[/quote]The purpose can be found in the downloads or tutorial sections, and why not?[/quote]</p>
+<p>Because the way you are using enumerations does not make logical sense in my mind, why use something that is meant to symbolize a state to encapsulate data that may change depending on the person using it? Java is not a scripting language.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/38</link>
+        <pubDate>Mon, 10 Oct 2011 00:08:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-38</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:36, topic:391540”]Alright I went through it seriously this time and all I can say is: What was the purpose in doing this and why are you using enumerations excessively?[/quote]The purpose can be found in the downloads or tutorial sections, and why not?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/37</link>
+        <pubDate>Sun, 09 Oct 2011 23:43:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-37</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Alright I went through it seriously this time and all I can say is: What was the purpose in doing this and why are you using enumerations excessively?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/36</link>
+        <pubDate>Sun, 09 Oct 2011 23:40:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-36</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>The crappy apart about using regex would be that the only indication in smf about what part of the topic you are is on the previous line. Sorry if that makes no sense, but if you look at the source of a page of topics you’ll probably see what I mean.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/35</link>
+        <pubDate>Sun, 09 Oct 2011 23:37:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-35</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="391540">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>Need more REGEX.</p>
+</blockquote>
+</aside>
+<p>Need moar ENUMS.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/34</link>
+        <pubDate>Sun, 09 Oct 2011 23:34:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-34</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote="`Rebirth, post:31, topic:391540"][quote author=Davidi2 link=topic=488704.msg3777546#msg3777546 date=1318199859]<br>
+TBH If you can’t run this you should just do it manually.<br>
+[/quote]</p>
+<p>But it takes to long. Can’t you just PM download link to yours, or just help me on TeamViewer[/quote]Give me a link to the forums you are trying to do it for.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/33</link>
+        <pubDate>Sun, 09 Oct 2011 23:03:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-33</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+      <item>
+        <title>Board List Generator Code</title>
+        <dc:creator><![CDATA[@ziplock ziplock]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ziplock">@ziplock</a> wrote:</p>
+          <blockquote>
+              <p>[quote="`Rebirth, post:31, topic:391540"][quote author=Davidi2 link=topic=488704.msg3777546#msg3777546 date=1318199859]<br>
+TBH If you can’t run this you should just do it manually.<br>
+[/quote]</p>
+<p>But it takes to long. Can’t you just PM download link to yours, or just help me on TeamViewer[/quote]</p>
+<p>The whole thing is in the original post. Just change up a few lines and run it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/board-list-generator-code/391540/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/board-list-generator-code/391540/32</link>
+        <pubDate>Sun, 09 Oct 2011 22:45:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-391540-32</guid>
+        <source url="https://forum.moparisthebest.com/t/board-list-generator-code/391540.rss">Board List Generator Code</source>
+      </item>
+  </channel>
+</rss>

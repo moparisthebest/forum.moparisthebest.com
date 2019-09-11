@@ -1,0 +1,1589 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Easy to manage NPC loot table system</title>
+    <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438</link>
+    <description>Highly inspired by another drop system that was released on r-s, so thanks to poolside queer for making that!
+
+
+[B][U]Why you should use this over other drop systems[/U][/B]
+
+[ul][*]Its more than likely faster and more efficient then what you currently have
+[*]Uses a decimal for accuracy but only rounds to 3 decimal places to prevent results that are too insignifcant
+[*]Has support for minimum and maximum amounts
+[*]Has dynamic support for things like ring of wealth
+[*]Has support for debugging rare drops 
+[*]Clean and documented so you can understand everything[/ul]
+
+
+
+[B][U]How the system works[/U][/B]
+
+There are an array of npcs who use the specified drop table along with a dynamic drop table and a rare drop table. Every item in the dynamic drop table will be compared against the pseudo-randomly generated number to determine if it will be dropped. This means that in theory every single item in the dynamic table can be dropped that kill.
+
+[CODE=java]            for (NpcDrop drop : dynamic) {
+                if (drop == null) {
+                    continue;
+                }
+
+                /** Round to 3 decimal places for decreased accuracy. */
+                double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+                /** Compare the roll against the bet. */
+                if (rollRound &lt;= drop.getBet()) {
+
+                    /** Roll was successful! Add the item to the drops. */
+                    item[slot++] = drop.toItem();
+                }
+            }[/CODE]
+
+
+The same thing does not apply for the rare table, because only [B]one[/B] drop is selected randomly out of that table regardless of the amount of drops.
+
+[CODE=java]            /** The bet modification value. */
+            BetModification betMod = getBetModification(player);
+
+            /** Select one random item from out of the rare table. */
+            NpcDrop rareDrop = Misc.randomElement(rare);
+
+            /** Round to 3 decimal places for decreased accuracy. */
+            double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+            /**
+             * Compare the roll against the bet, including the bet
+             * modifications.
+             */
+            if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {
+
+                /** Roll was successful! Add the item to the drops. */
+                item[slot++] = rareDrop.toItem();
+
+                /** Drop successful! Apply any bet modification effects here. */
+                betMod.itemPassed(player, rareDrop);
+            } else {
+
+                /** Drop unsuccessful! Apply any bet modification effects here. */
+                betMod.itemFailed(player, rareDrop);
+            }[/CODE]
+
+
+There are support for things such as the ring of wealth, although they are referred to as [B][I]BetModfication[/I][/B]s. The bet modifications are only applied to the rare drop table and because of the design can be used to easily fire miscellaneous actions when a rare item is successfully dropped (or even if it is unsuccessful!).
+
+[CODE=java]            if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {
+
+                /** Roll was successful! Add the item to the drops. */
+                item[slot++] = rareDrop.toItem();
+
+                /** Drop successful! Apply any bet modification effects here. */
+                betMod.itemPassed(player, rareDrop);
+            } else {
+
+                /** Drop unsuccessful! Apply any bet modification effects here. */
+                betMod.itemFailed(player, rareDrop);
+            }[/CODE]
+
+
+[B][U]Adding the drop system[/U][/B]
+
+Not going to bother spoonfeeding on how to add it, but I&#39;ll provide all of the code essential to getting it working.
+
+[U]The main drop table class (has about 3 nested inner classes)[/U]
+
+[CODE=java]package server.world.entity.npc;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+
+import server.util.Misc;
+import server.world.entity.player.Player;
+import server.world.item.Item;
+
+/**
+ * The table that will be used to hold every drop possible for an {@link Npc}
+ * along with various functions to calculate which items will be dropped.
+ * 
+ * @author lare96
+ */
+public class NpcDropTable {
+
+    /**
+     * Will be used to hold all of the drops for each npc. We use a map for easy
+     * and fast retrieval of the npc&#39;s table.
+     */
+    private static Map&lt;Integer, NpcDropTable&gt; drops = new HashMap&lt;Integer, NpcDropTable&gt;();
+
+    /**
+     * Will be used to generate a random number called a &lt;code&gt;roll&lt;/code&gt; that
+     * will be compared against the number assigned to the drop called a
+     * &lt;code&gt;bet&lt;/code&gt; that will determine if the item can be dropped or not.
+     */
+    private static Random roll = new Random();
+
+    /** The npc(s) who uses this drop table. */
+    private int[] npcs;
+
+    /** The dynamic drop table assigned to this npc. */
+    private NpcDrop[] dynamic;
+
+    /** The rare table assigned to this npc. */
+    private NpcDrop[] rare;
+
+    /**
+     * Create a new {@link NpcDropTable}.
+     * 
+     * @param npc
+     *        the npc(s) who use this drop table.
+     * @param dynamic
+     *        the dynamic drop table assigned to this npc.
+     * @param rare
+     *        the rare table assigned to this npc.
+     */
+    public NpcDropTable(int[] npcs, NpcDrop[] dynamic, NpcDrop[] rare) {
+        this.npcs = npcs;
+        this.dynamic = dynamic;
+        this.rare = rare;
+    }
+
+    /**
+     * Calculates a set of drops with the intention that they will be dropped on
+     * death, although they can be used however one would like. Please note that
+     * this is not a static implementation, meaning that calling this method
+     * will return a different set of items each time.
+     * 
+     * @param player
+     *        the player these items are being calculated for.
+     * @return the calculated items that will be dropped.
+     */
+    public Item[] calculateDrops(Player player) {
+
+        /** The placeholder that will be used to track our slot position. */
+        int slot = 0;
+
+        /** The array of items that will be dropped. */
+        Item[] item = new Item[getDropLength()];
+
+        /** Gamble all items in the dynamic table. */
+        if (dynamic != null
+                &amp;&amp; dynamic.length &gt; 0) {
+            for (NpcDrop drop : dynamic) {
+                if (drop == null) {
+                    continue;
+                }
+
+                /** Round to 3 decimal places for decreased accuracy. */
+                double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+                /** Compare the roll against the bet. */
+                if (rollRound &lt;= drop.getBet()) {
+
+                    /** Roll was successful! Add the item to the drops. */
+                    item[slot++] = drop.toItem();
+                }
+            }
+        }
+
+        /** Gamble one item in the rare table. */
+        if (rare != null
+                &amp;&amp; rare.length &gt; 0) {
+
+            /** The bet modification value. */
+            BetModification betMod = getBetModification(player);
+
+            /** Select one random item from out of the rare table. */
+            NpcDrop rareDrop = Misc.randomElement(rare);
+
+            /** Round to 3 decimal places for decreased accuracy. */
+            double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+            /**
+             * Compare the roll against the bet, including the bet
+             * modifications.
+             */
+            if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {
+
+                /** Roll was successful! Add the item to the drops. */
+                item[slot++] = rareDrop.toItem();
+
+                /** Drop successful! Apply any bet modification effects here. */
+                betMod.itemPassed(player, rareDrop);
+            } else {
+
+                /** Drop unsuccessful! Apply any bet modification effects here. */
+                betMod.itemFailed(player, rareDrop);
+            }
+
+        }
+
+        return item;
+    }
+
+    /**
+     * Calculates a set of rare drops (without bet modifications) and prints out
+     * if any of them were successful out of 1 million kills. If they were
+     * successful it prints how many kills it took to make that drop successful.
+     * If none at all were successful out of a million kills it will print an
+     * indication of that. Please note that this method will exit the
+     * application once a rare drop is made or once the calculations have been
+     * completed with no successful drops. This method is for debugging only and
+     * &lt;b&gt;should not&lt;/b&gt; be used during runtime.
+     */
+    public void calculateDropsDebug() {
+
+        /** Gamble one item in the rare table. */
+        if (rare != null
+                &amp;&amp; rare.length &gt; 0) {
+
+            for (int i = 0; i &lt; 1000000; i++) {
+
+                /** Select one random item from out of the rare table. */
+                NpcDrop rareDrop = Misc.randomElement(rare);
+
+                /** Round to 3 decimal places for decreased accuracy. */
+                double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+                /** Compare the roll against the bet. */
+                if (rollRound &lt;= rareDrop.getBet()) {
+                    System.out.println(&quot;RARE ITEM DROPPED[item = &quot;
+                            + rareDrop.toItem().getDefinition().getItemName()
+                            + &quot;, kills= &quot;
+                            + (i + 1)
+                            + &quot;]&quot;);
+                    System.exit(0);
+                }
+            }
+
+            System.out.println(&quot;NO RARE ITEMS DROPPED&quot;);
+            System.exit(0);
+        }
+    }
+
+    /**
+     * Gets the max possible size of the array that will hold the drops. Any
+     * &lt;code&gt;null&lt;/code&gt; elements will be filtered out when the items are
+     * dropped.
+     * 
+     * @return the size of the array that will hold the drops.
+     */
+    private int getDropLength() {
+
+        /** The common table length plus one, for one rare item. */
+        return dynamic.length + 1;
+    }
+
+    /**
+     * Any modifications to the &lt;code&gt;bet&lt;/code&gt; should be put here. The number
+     * returned will increase the chance of a rare item being dropped.
+     * Alternatively, you can return a negative {@link Double} to decrease the
+     * chance of a rare item being dropped.
+     * 
+     * @param player
+     *        the player these items are being dropped for.
+     * @return the modification to the &lt;code&gt;bet&lt;/code&gt;.
+     */
+    private static BetModification getBetModification(Player player) {
+
+        /** Check if we have a ring of wealth equipped. */
+        if (player.getEquipment().getContainer().getItemId(Misc.EQUIPMENT_SLOT_RING) == 2572) {
+
+            /** Chance to drop a rare item is increased by 0.025, which is 2.5%. */
+            return new BetModification(0.025) {
+                @Override
+                public void itemPassed(Player player, NpcDrop item) {
+
+                    /** Item dropped, do ring of wealth stuff. */
+                    if (roll.nextBoolean()) {
+                        player.getEquipment().removeItem(Misc.EQUIPMENT_SLOT_RING);
+                        player.getPacketBuilder().sendMessage(&quot;Your ring of wealth takes effect and crumbles into dust!&quot;);
+                    } else {
+                        player.getPacketBuilder().sendMessage(&quot;Your ring of wealth takes effect and keeps itself intact!&quot;);
+                    }
+                }
+
+                @Override
+                public void itemFailed(Player player, NpcDrop item) {
+
+                    /** Item did not drop, nothing happens to our ring. */
+                }
+            };
+        }
+        return BetModification.DEFAULT_BET_MOD;
+    }
+
+    /**
+     * Gets all of the drops for each npc.
+     * 
+     * @return all of the drops for each npc.
+     */
+    public static Map&lt;Integer, NpcDropTable&gt; getAllDrops() {
+        return drops;
+    }
+
+    /**
+     * Gets the npc(s) who use this drop table.
+     * 
+     * @return the npc(s) who use this drop table.
+     */
+    public int[] getNpcs() {
+        return npcs;
+    }
+
+    /**
+     * A container class used to hold the bet modification.
+     * 
+     * @author lare96
+     */
+    public static abstract class BetModification {
+
+        /**
+         * The default bet modification. We use this so we do not have to check
+         * for &lt;code&gt;null&lt;/code&gt; values.
+         */
+        public static final BetModification DEFAULT_BET_MOD = new BetModification(0.0) {
+            @Override
+            public void itemPassed(Player player, NpcDrop item) {
+
+                /** Nothing happens, no bet modification. */
+            }
+
+            @Override
+            public void itemFailed(Player player, NpcDrop item) {
+
+                /** Nothing happens, no bet modification. */
+            }
+        };
+
+        /** The fixed bet modification. */
+        private double mod;
+
+        /**
+         * Create a new {@link BetModification}.
+         * 
+         * @param mod
+         *        the fixed bet modification.
+         */
+        public BetModification(double mod) {
+            this.mod = mod;
+        }
+
+        /**
+         * What happens when the item drops.
+         * 
+         * @param player
+         *        the player who is receiving the drops.
+         * @param item
+         *        the item being dropped.
+         */
+        public abstract void itemPassed(Player player, NpcDrop item);
+
+        /**
+         * What happens when the item was selected, but not successful enough to
+         * be dropped.
+         * 
+         * @param player
+         *        the player who is receiving the drops.
+         * @param item
+         *        the item being dropped.
+         */
+        public abstract void itemFailed(Player player, NpcDrop item);
+
+        /**
+         * Gets the fixed bet modification.
+         * 
+         * @return the fixed bet modification.
+         */
+        public double getMod() {
+            return mod;
+        }
+    }
+
+    /**
+     * A single item that will be gambled when the assigned npc dies in order to
+     * determine if it will be dropped or not.
+     * 
+     * @author lare96
+     */
+    public static class NpcDrop {
+
+        /** The id of item that will be dropped. */
+        private int id;
+
+        /** The minimum amount of item that will be dropped. */
+        private int minimum;
+
+        /** The maximum amount of item that will be dropped. */
+        private int maximum;
+
+        /**
+         * The chance that this item will be dropped. The lowest chance being
+         * 0.0 (0%, impossible) and the highest being 1.0 (100%, always).
+         */
+        private double bet;
+
+        /**
+         * Create a new {@link DeathDrop}.
+         * 
+         * @param id
+         *        the id of item that will be dropped.
+         * @param minimum
+         *        the minimum amount of item that will be dropped.
+         * @param maximum
+         *        the maximum amount of item that will be dropped.
+         * @param bet
+         *        the chance that this item will be dropped.
+         */
+        public NpcDrop(int id, int minimum, int maximum, double bet) {
+            this.id = id;
+            this.minimum = minimum;
+            this.maximum = maximum;
+            this.bet = bet;
+        }
+
+        /**
+         * Turns the id and amount into an {@link Item} instance.
+         * 
+         * @return the item instance representing the id and amount of this
+         *         drop.
+         */
+        public Item toItem() {
+            return new Item(id, Misc.inclusiveRandom(minimum, maximum));
+        }
+
+        /**
+         * Gets the chance that this item will be dropped.
+         * 
+         * @return the chance that this item will be dropped.
+         */
+        public double getBet() {
+            return bet;
+        }
+    }
+}
+[/CODE]
+
+
+Loading the drops from the JSON file
+
+[CODE=java]    /**
+     * Parse the all of the data for npc drops.
+     * 
+     * @throws Exception
+     *         if any errors occur while parsing this file.
+     */
+    public static void loadNpcDrops() throws Exception {
+        JsonParser parser = new JsonParser();
+        JsonArray array = (JsonArray) parser.parse(new FileReader(new File(&quot;./data/json/npcs/world_npc_drops.json&quot;)));
+        final Gson builder = new GsonBuilder().create();
+
+        for (int i = 0; i &lt; array.size(); i++) {
+            JsonObject reader = (JsonObject) array.get(i);
+
+            final int id[] = builder.fromJson(reader.get(&quot;id&quot;), int[].class);
+            final NpcDrop[] dynamic = builder.fromJson(reader.get(&quot;dynamic&quot;), NpcDrop[].class);
+            final NpcDrop[] rare = builder.fromJson(reader.get(&quot;rare&quot;), NpcDrop[].class);
+
+            for (int e : id) {
+                NpcDropTable.getAllDrops().put(e, new NpcDropTable(id, dynamic, rare));
+            }
+        }
+    }[/CODE]
+
+
+An example of how it would it in the JSON file for an abyssal demon
+
+[CODE]{
+        &quot;id&quot;: [
+         	1615
+         ],
+        &quot;dynamic&quot;: [
+            {
+               &quot;id&quot;: 592,
+               &quot;minimum&quot;: 1,
+               &quot;maximum&quot;: 1,
+               &quot;bet&quot;: 1.0
+            },
+            {
+               &quot;id&quot;: 995,
+               &quot;minimum&quot;: 1000,
+               &quot;maximum&quot;: 100000,
+               &quot;bet&quot;: 0.15
+            }
+         ],
+        &quot;rare&quot;: [
+            {
+               &quot;id&quot;: 4151,
+               &quot;minimum&quot;: 1,
+               &quot;maximum&quot;: 1,
+               &quot;bet&quot;: 0.001
+            }
+	]	
+}[/CODE]
+
+
+
+[B][U]Debugging Results[/U][/B]
+
+I used the debugging utility that comes with this to see how often a whip would be dropped for an abyssal demon, and these were the results
+
+[CODE]RARE ITEM DROPPED[item = Abyssal whip, kills= 211]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 163]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 461]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 7]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 304]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 564]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 45]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 377]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 435]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 53][/CODE]
+
+Based on these results a whip would drop at around every 257.2 kills :)</description>
+    
+    <lastBuildDate>Thu, 11 Sep 2014 11:33:28 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:16, topic:544438”][quote author=matzie link=topic=663319.msg4449260#msg4449260 date=1410412262]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Could you elaborate on how this is more efficient?</p>
+</blockquote>
+</aside>
+<p>json is pretty fast to parse and the design is decent</p>
+<p>could be improved a lot though that’s for sure I’ve learned tons more since then <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+</blockquote>
+</aside>
+<p>There 4 types of efficiency (at least):<br>
+Speed - how quickly it completes its task - what you are referring to<br>
+Memory management - how much space is required for it to function.<br>
+Usability - how functional it is, how simple it is to operate<br>
+Multiple purpose - how many ways can it be used and reused. (For instance, sets have infinite types of functionality)<br>
+[/quote]<br>
+referring to speed and usability[/quote]<br>
+I should add maintainability to the list as well.<br>
+Think about it, a heavy load at startup is not a bad thing if it causes better performance in the long run.<br>
+Polymorphism would be nice too, so You can have<br>
+ranges for item drops 1-300<br>
+Drop intervals: 10, 20, 30… etc.<br>
+Multiple drop chances by npc type(this is a difference in the drop code)<br>
+Constant drops (bones, ashes, etc…)</p>
+<p>I guess this would make a good start for a drop system, but will require another overhaul (rebuild) for any future additions.</p>
+<p>Does json support sub-class data types? If so it would be awesome <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+EX:<br>
+Drop, DropInterval extends Drop, DropRange extends Drop</p>
+<p>if json is to read a drop, can it interpret (or be cast) to a DropInterval, or DropRange?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/17</link>
+        <pubDate>Thu, 11 Sep 2014 11:33:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-17</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:15, topic:544438”][quote author=lare69 link=topic=663319.msg4449252#msg4449252 date=1410406254]</p>
+<aside class="quote">
+<blockquote>
+<p>Could you elaborate on how this is more efficient?</p>
+</blockquote>
+</aside>
+<p>json is pretty fast to parse and the design is decent</p>
+<p>could be improved a lot though that’s for sure I’ve learned tons more since then <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"><br>
+[/quote]<br>
+There 4 types of efficiency (at least):<br>
+Speed - how quickly it completes its task - what you are referring to<br>
+Memory management - how much space is required for it to function.<br>
+Usability - how functional it is, how simple it is to operate<br>
+Multiple purpose - how many ways can it be used and reused. (For instance, sets have infinite types of functionality)[/quote]<br>
+referring to speed and usability</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/16</link>
+        <pubDate>Thu, 11 Sep 2014 05:13:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-16</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:14, topic:544438”][quote author=matzie link=topic=663319.msg4449144#msg4449144 date=1410377315]<br>
+Could you elaborate on how this is more efficient?<br>
+[/quote]<br>
+json is pretty fast to parse and the design is decent</p>
+<p>could be improved a lot though that’s for sure I’ve learned tons more since then :D[/quote]<br>
+There 4 types of efficiency (at least):<br>
+Speed - how quickly it completes its task - what you are referring to<br>
+Memory management - how much space is required for it to function.<br>
+Usability - how functional it is, how simple it is to operate<br>
+Multiple purpose - how many ways can it be used and reused. (For instance, sets have infinite types of functionality)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/15</link>
+        <pubDate>Thu, 11 Sep 2014 05:11:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-15</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="13" data-topic="544438">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/matzie/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> matzie:</div>
+<blockquote>
+<p>Could you elaborate on how this is more efficient?</p>
+</blockquote>
+</aside>
+<p>json is pretty fast to parse and the design is decent</p>
+<p>could be improved a lot though that’s for sure I’ve learned tons more since then <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/14</link>
+        <pubDate>Thu, 11 Sep 2014 03:30:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-14</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>Could you elaborate on how this is more efficient?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/13</link>
+        <pubDate>Wed, 10 Sep 2014 19:28:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-13</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@JCor9 JCor9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jcor9">@JCor9</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:11, topic:544438”][quote author=JCor9 link=topic=663319.msg4445912#msg4445912 date=1408800285]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>So if I add this do I change my whole npcdrop file to the one you show for the Abby demon</p>
+</blockquote>
+</aside>
+<p>uh yeah but i dont see why you’d do that when you can use java to convert every single one of your drops to that format</p>
+</blockquote>
+</aside>
+<p>So I added the handler but the Json file has me thrown off. Is that loaded via your website? Because i have no idea were to add that server sided.<br>
+[/quote]<br>
+place it in your data folder where all of your other stuff loaded on startup is lol</p>
+<p>change “./data/json/npcs/world_npc_drops.json” to w.e you want[/quote]</p>
+<p>no i know that part its this part im confused on were to put [code]        /**<br>
+* Parse the all of the data for npc drops.<br>
+*<br>
+* <span class="mention">@throws</span> Exception<br>
+*         if any errors occur while parsing this file.<br>
+*/<br>
+public static void loadNpcDrops() throws Exception {<br>
+JsonParser parser = new JsonParser();<br>
+JsonArray array = (JsonArray) parser.parse(new FileReader(new File("./data/json/npcs/world_npc_drops.json")));<br>
+final Gson builder = new GsonBuilder().create();</p>
+<pre><code>        for (int i = 0; i &lt; array.size(); i++) {
+            JsonObject reader = (JsonObject) array.get(i);
+ 
+            final int id[] = builder.fromJson(reader.get("id"), int[].class);
+            final NpcDrop[] dynamic = builder.fromJson(reader.get("dynamic"), NpcDrop[].class);
+            final NpcDrop[] rare = builder.fromJson(reader.get("rare"), NpcDrop[].class);
+ 
+            for (int e : id) {
+                NpcDropTable.getAllDrops().put(e, new NpcDropTable(id, dynamic, rare));
+            }
+        }
+    }[/Code]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/12</link>
+        <pubDate>Sun, 24 Aug 2014 17:42:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-12</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“JCor9, post:10, topic:544438”][quote author=lare69 link=topic=663319.msg4445827#msg4445827 date=1408752257]</p>
+<aside class="quote">
+<blockquote>
+<p>So if I add this do I change my whole npcdrop file to the one you show for the Abby demon</p>
+</blockquote>
+</aside>
+<p>uh yeah but i dont see why you’d do that when you can use java to convert every single one of your drops to that format<br>
+[/quote]<br>
+So I added the handler but the Json file has me thrown off. Is that loaded via your website? Because i have no idea were to add that server sided.[/quote]<br>
+place it in your data folder where all of your other stuff loaded on startup is lol</p>
+<p>change “./data/json/npcs/world_npc_drops.json” to w.e you want</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/11</link>
+        <pubDate>Sat, 23 Aug 2014 17:27:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-11</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@JCor9 JCor9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jcor9">@JCor9</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:9, topic:544438”][quote author=JCor9 link=topic=663319.msg4445602#msg4445602 date=1408640894]<br>
+So if I add this do I change my whole npcdrop file to the one you show for the Abby demon<br>
+[/quote]<br>
+uh yeah but i dont see why you’d do that when you can use java to convert every single one of your drops to that format[/quote]<br>
+So I added the handler but the Json file has me thrown off. Is that loaded via your website? Because i have no idea were to add that server sided.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/10</link>
+        <pubDate>Sat, 23 Aug 2014 13:24:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-10</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="8" data-topic="544438">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/jcor9/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> JCor9:</div>
+<blockquote>
+<p>So if I add this do I change my whole npcdrop file to the one you show for the Abby demon</p>
+</blockquote>
+</aside>
+<p>uh yeah but i dont see why you’d do that when you can use java to convert every single one of your drops to that format</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/9</link>
+        <pubDate>Sat, 23 Aug 2014 00:04:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-9</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@JCor9 JCor9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jcor9">@JCor9</a> wrote:</p>
+          <blockquote>
+              <p>So if I add this do I change my whole npcdrop file to the one you show for the Abby demon</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/8</link>
+        <pubDate>Thu, 21 Aug 2014 17:08:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-8</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="544438">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/asshole_rule/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> asshole_rule:</div>
+<blockquote>
+<p>nice job jason, i also recently made a npc drop system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>didn’t even know you were still involved with rsps, thanks <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/7</link>
+        <pubDate>Tue, 01 Jul 2014 13:26:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-7</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>nice job jason, i also recently made a npc drop system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/6</link>
+        <pubDate>Sun, 29 Jun 2014 23:46:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-6</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="544438">
+<div class="title">
+<div class="quote-controls"></div>
+ Michael P:</div>
+<blockquote>
+<p>Nice job, my drop chance system is more accurate though. Hehe  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+</blockquote>
+</aside>
+<p>Oh wow let me give you a medal</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/5</link>
+        <pubDate>Sun, 29 Jun 2014 23:13:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-5</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:3, topic:544438”][quote author=Michael P link=topic=663319.msg4432931#msg4432931 date=1404080531]<br>
+Nice job, my drop chance system is more accurate though. Hehe  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"><br>
+[/quote]‘More accurate’? What does that mean?[/quote]Maybe in terms of, in comparison with runescape (ie ‘realism’).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/4</link>
+        <pubDate>Sun, 29 Jun 2014 22:59:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-4</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Michael P, post:2, topic:544438”]Nice job, my drop chance system is more accurate though. Hehe  :D[/quote]‘More accurate’? What does that mean?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/3</link>
+        <pubDate>Sun, 29 Jun 2014 22:33:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-3</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Michael_P1 Michael P]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/michael_p1">@Michael_P1</a> wrote:</p>
+          <blockquote>
+              <p>Nice job, my drop chance system is more accurate though. Hehe  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/2</link>
+        <pubDate>Sun, 29 Jun 2014 22:22:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-2</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+      <item>
+        <title>Easy to manage NPC loot table system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Highly inspired by another drop system that was released on r-s, so thanks to poolside queer for making that!</p>
+<p>[B][U]Why you should use this over other drop systems[/U][/B]</p>
+<p>[ul][<em>]Its more than likely faster and more efficient then what you currently have<br>
+[</em>]Uses a decimal for accuracy but only rounds to 3 decimal places to prevent results that are too insignifcant<br>
+[<em>]Has support for minimum and maximum amounts<br>
+[</em>]Has dynamic support for things like ring of wealth<br>
+[<em>]Has support for debugging rare drops<br>
+[</em>]Clean and documented so you can understand everything[/ul]</p>
+<p>[B][U]How the system works[/U][/B]</p>
+<p>There are an array of npcs who use the specified drop table along with a dynamic drop table and a rare drop table. Every item in the dynamic drop table will be compared against the pseudo-randomly generated number to determine if it will be dropped. This means that in theory every single item in the dynamic table can be dropped that kill.</p>
+<p>[CODE=java]            for (NpcDrop drop : dynamic) {<br>
+if (drop == null) {<br>
+continue;<br>
+}</p>
+<pre><code>            /** Round to 3 decimal places for decreased accuracy. */
+            double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+            /** Compare the roll against the bet. */
+            if (rollRound &lt;= drop.getBet()) {
+
+                /** Roll was successful! Add the item to the drops. */
+                item[slot++] = drop.toItem();
+            }
+        }[/CODE]
+</code></pre>
+<p>The same thing does not apply for the rare table, because only [B]one[/B] drop is selected randomly out of that table regardless of the amount of drops.</p>
+<p>[CODE=java]            /** The bet modification value. */<br>
+BetModification betMod = getBetModification(player);</p>
+<pre><code>        /** Select one random item from out of the rare table. */
+        NpcDrop rareDrop = Misc.randomElement(rare);
+
+        /** Round to 3 decimal places for decreased accuracy. */
+        double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+        /**
+         * Compare the roll against the bet, including the bet
+         * modifications.
+         */
+        if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {
+
+            /** Roll was successful! Add the item to the drops. */
+            item[slot++] = rareDrop.toItem();
+
+            /** Drop successful! Apply any bet modification effects here. */
+            betMod.itemPassed(player, rareDrop);
+        } else {
+
+            /** Drop unsuccessful! Apply any bet modification effects here. */
+            betMod.itemFailed(player, rareDrop);
+        }[/CODE]
+</code></pre>
+<p>There are support for things such as the ring of wealth, although they are referred to as [B][I]BetModfication[/I][/B]s. The bet modifications are only applied to the rare drop table and because of the design can be used to easily fire miscellaneous actions when a rare item is successfully dropped (or even if it is unsuccessful!).</p>
+<p>[CODE=java]            if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {</p>
+<pre><code>            /** Roll was successful! Add the item to the drops. */
+            item[slot++] = rareDrop.toItem();
+
+            /** Drop successful! Apply any bet modification effects here. */
+            betMod.itemPassed(player, rareDrop);
+        } else {
+
+            /** Drop unsuccessful! Apply any bet modification effects here. */
+            betMod.itemFailed(player, rareDrop);
+        }[/CODE]
+</code></pre>
+<p>[B][U]Adding the drop system[/U][/B]</p>
+<p>Not going to bother spoonfeeding on how to add it, but I’ll provide all of the code essential to getting it working.</p>
+<p>[U]The main drop table class (has about 3 nested inner classes)[/U]</p>
+<p>[CODE=java]package server.world.entity.npc;</p>
+<p>import java.util.HashMap;<br>
+import java.util.Map;<br>
+import java.util.Random;</p>
+<p>import server.util.Misc;<br>
+import server.world.entity.player.Player;<br>
+import server.world.item.Item;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>The table that will be used to hold every drop possible for an {<a class="mention" href="/u/link">@link</a> Npc}</p>
+</li>
+<li>
+<p>along with various functions to calculate which items will be dropped.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public class NpcDropTable {</p>
+<p>/**</p>
+<ul>
+<li>Will be used to hold all of the drops for each npc. We use a map for easy</li>
+<li>and fast retrieval of the npc’s table.<br>
+*/<br>
+private static Map&lt;Integer, NpcDropTable&gt; drops = new HashMap&lt;Integer, NpcDropTable&gt;();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Will be used to generate a random number called a <code>roll</code> that</li>
+<li>will be compared against the number assigned to the drop called a</li>
+<li>
+<code>bet</code> that will determine if the item can be dropped or not.<br>
+*/<br>
+private static Random roll = new Random();</li>
+</ul>
+<p>/** The npc(s) who uses this drop table. */<br>
+private int[] npcs;</p>
+<p>/** The dynamic drop table assigned to this npc. */<br>
+private NpcDrop[] dynamic;</p>
+<p>/** The rare table assigned to this npc. */<br>
+private NpcDrop[] rare;</p>
+<p>/**</p>
+<ul>
+<li>Create a new {<a class="mention" href="/u/link">@link</a> NpcDropTable}.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> npc</li>
+<li>
+<pre><code>   the npc(s) who use this drop table.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> dynamic</li>
+<li>
+<pre><code>   the dynamic drop table assigned to this npc.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> rare</li>
+<li>
+<pre><code>   the rare table assigned to this npc.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public NpcDropTable(int[] npcs, NpcDrop[] dynamic, NpcDrop[] rare) {<br>
+this.npcs = npcs;<br>
+this.dynamic = dynamic;<br>
+this.rare = rare;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Calculates a set of drops with the intention that they will be dropped on</p>
+</li>
+<li>
+<p>death, although they can be used however one would like. Please note that</p>
+</li>
+<li>
+<p>this is not a static implementation, meaning that calling this method</p>
+</li>
+<li>
+<p>will return a different set of items each time.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> player</p>
+</li>
+<li>
+<pre><code>   the player these items are being calculated for.
+</code></pre>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> the calculated items that will be dropped.<br>
+*/<br>
+public Item[] calculateDrops(Player player) {</p>
+<p>/** The placeholder that will be used to track our slot position. */<br>
+int slot = 0;</p>
+<p>/** The array of items that will be dropped. */<br>
+Item[] item = new Item[getDropLength()];</p>
+<p>/** Gamble all items in the dynamic table. */<br>
+if (dynamic != null<br>
+&amp;&amp; dynamic.length &gt; 0) {<br>
+for (NpcDrop drop : dynamic) {<br>
+if (drop == null) {<br>
+continue;<br>
+}</p>
+<pre><code>     /** Round to 3 decimal places for decreased accuracy. */
+     double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+     /** Compare the roll against the bet. */
+     if (rollRound &lt;= drop.getBet()) {
+
+         /** Roll was successful! Add the item to the drops. */
+         item[slot++] = drop.toItem();
+     }
+ }
+</code></pre>
+<p>}</p>
+<p>/** Gamble one item in the rare table. */<br>
+if (rare != null<br>
+&amp;&amp; rare.length &gt; 0) {</p>
+<pre><code> /** The bet modification value. */
+ BetModification betMod = getBetModification(player);
+
+ /** Select one random item from out of the rare table. */
+ NpcDrop rareDrop = Misc.randomElement(rare);
+
+ /** Round to 3 decimal places for decreased accuracy. */
+ double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+ /**
+  * Compare the roll against the bet, including the bet
+  * modifications.
+  */
+ if (rollRound &lt;= (rareDrop.getBet() + betMod.getMod())) {
+
+     /** Roll was successful! Add the item to the drops. */
+     item[slot++] = rareDrop.toItem();
+
+     /** Drop successful! Apply any bet modification effects here. */
+     betMod.itemPassed(player, rareDrop);
+ } else {
+
+     /** Drop unsuccessful! Apply any bet modification effects here. */
+     betMod.itemFailed(player, rareDrop);
+ }
+</code></pre>
+<p>}</p>
+<p>return item;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Calculates a set of rare drops (without bet modifications) and prints out</p>
+</li>
+<li>
+<p>if any of them were successful out of 1 million kills. If they were</p>
+</li>
+<li>
+<p>successful it prints how many kills it took to make that drop successful.</p>
+</li>
+<li>
+<p>If none at all were successful out of a million kills it will print an</p>
+</li>
+<li>
+<p>indication of that. Please note that this method will exit the</p>
+</li>
+<li>
+<p>application once a rare drop is made or once the calculations have been</p>
+</li>
+<li>
+<p>completed with no successful drops. This method is for debugging only and</p>
+</li>
+<li>
+<p><b>should not</b> be used during runtime.<br>
+*/<br>
+public void calculateDropsDebug() {</p>
+<p>/** Gamble one item in the rare table. */<br>
+if (rare != null<br>
+&amp;&amp; rare.length &gt; 0) {</p>
+<pre><code> for (int i = 0; i &lt; 1000000; i++) {
+
+     /** Select one random item from out of the rare table. */
+     NpcDrop rareDrop = Misc.randomElement(rare);
+
+     /** Round to 3 decimal places for decreased accuracy. */
+     double rollRound = Math.round(roll.nextDouble() * 1000.0) / 1000.0;
+
+     /** Compare the roll against the bet. */
+     if (rollRound &lt;= rareDrop.getBet()) {
+         System.out.println("RARE ITEM DROPPED[item = "
+                 + rareDrop.toItem().getDefinition().getItemName()
+                 + ", kills= "
+                 + (i + 1)
+                 + "]");
+         System.exit(0);
+     }
+ }
+
+ System.out.println("NO RARE ITEMS DROPPED");
+ System.exit(0);
+</code></pre>
+<p>}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Gets the max possible size of the array that will hold the drops. Any</p>
+</li>
+<li>
+<p><code>null</code> elements will be filtered out when the items are</p>
+</li>
+<li>
+<p>dropped.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> the size of the array that will hold the drops.<br>
+*/<br>
+private int getDropLength() {</p>
+<p>/** The common table length plus one, for one rare item. */<br>
+return dynamic.length + 1;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Any modifications to the <code>bet</code> should be put here. The number</p>
+</li>
+<li>
+<p>returned will increase the chance of a rare item being dropped.</p>
+</li>
+<li>
+<p>Alternatively, you can return a negative {<a class="mention" href="/u/link">@link</a> Double} to decrease the</p>
+</li>
+<li>
+<p>chance of a rare item being dropped.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> player</p>
+</li>
+<li>
+<pre><code>   the player these items are being dropped for.
+</code></pre>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a> the modification to the <code>bet</code>.<br>
+*/<br>
+private static BetModification getBetModification(Player player) {</p>
+<p>/** Check if we have a ring of wealth equipped. */<br>
+if (player.getEquipment().getContainer().getItemId(Misc.EQUIPMENT_SLOT_RING) == 2572) {</p>
+<pre><code> /** Chance to drop a rare item is increased by 0.025, which is 2.5%. */
+ return new BetModification(0.025) {
+     @Override
+     public void itemPassed(Player player, NpcDrop item) {
+
+         /** Item dropped, do ring of wealth stuff. */
+         if (roll.nextBoolean()) {
+             player.getEquipment().removeItem(Misc.EQUIPMENT_SLOT_RING);
+             player.getPacketBuilder().sendMessage("Your ring of wealth takes effect and crumbles into dust!");
+         } else {
+             player.getPacketBuilder().sendMessage("Your ring of wealth takes effect and keeps itself intact!");
+         }
+     }
+
+     @Override
+     public void itemFailed(Player player, NpcDrop item) {
+
+         /** Item did not drop, nothing happens to our ring. */
+     }
+ };
+</code></pre>
+<p>}<br>
+return BetModification.DEFAULT_BET_MOD;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets all of the drops for each npc.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> all of the drops for each npc.<br>
+*/<br>
+public static Map&lt;Integer, NpcDropTable&gt; getAllDrops() {<br>
+return drops;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Gets the npc(s) who use this drop table.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the npc(s) who use this drop table.<br>
+*/<br>
+public int[] getNpcs() {<br>
+return npcs;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>A container class used to hold the bet modification.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public static abstract class BetModification {</p>
+<p>/**</p>
+<ul>
+<li>
+<p>The default bet modification. We use this so we do not have to check</p>
+</li>
+<li>
+<p>for <code>null</code> values.<br>
+*/<br>
+public static final BetModification DEFAULT_BET_MOD = new BetModification(0.0) {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void itemPassed(Player player, NpcDrop item) {</p>
+<pre><code> /** Nothing happens, no bet modification. */
+</code></pre>
+<p>}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void itemFailed(Player player, NpcDrop item) {</p>
+<pre><code> /** Nothing happens, no bet modification. */
+</code></pre>
+<p>}<br>
+};</p>
+</li>
+</ul>
+<p>/** The fixed bet modification. */<br>
+private double mod;</p>
+<p>/**</p>
+<ul>
+<li>Create a new {<a class="mention" href="/u/link">@link</a> BetModification}.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> mod</li>
+<li>
+<pre><code>   the fixed bet modification.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public BetModification(double mod) {<br>
+this.mod = mod;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>What happens when the item drops.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> player</li>
+<li>
+<pre><code>   the player who is receiving the drops.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> item</li>
+<li>
+<pre><code>   the item being dropped.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public abstract void itemPassed(Player player, NpcDrop item);</p>
+<p>/**</p>
+<ul>
+<li>What happens when the item was selected, but not successful enough to</li>
+<li>be dropped.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> player</li>
+<li>
+<pre><code>   the player who is receiving the drops.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> item</li>
+<li>
+<pre><code>   the item being dropped.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public abstract void itemFailed(Player player, NpcDrop item);</p>
+<p>/**</p>
+<ul>
+<li>Gets the fixed bet modification.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the fixed bet modification.<br>
+*/<br>
+public double getMod() {<br>
+return mod;<br>
+}<br>
+}</li>
+</ul>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>A single item that will be gambled when the assigned npc dies in order to</p>
+</li>
+<li>
+<p>determine if it will be dropped or not.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public static class NpcDrop {</p>
+<p>/** The id of item that will be dropped. */<br>
+private int id;</p>
+<p>/** The minimum amount of item that will be dropped. */<br>
+private int minimum;</p>
+<p>/** The maximum amount of item that will be dropped. */<br>
+private int maximum;</p>
+<p>/**</p>
+<ul>
+<li>The chance that this item will be dropped. The lowest chance being</li>
+<li>0.0 (0%, impossible) and the highest being 1.0 (100%, always).<br>
+*/<br>
+private double bet;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Create a new {<a class="mention" href="/u/link">@link</a> DeathDrop}.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> id</li>
+<li>
+<pre><code>   the id of item that will be dropped.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> minimum</li>
+<li>
+<pre><code>   the minimum amount of item that will be dropped.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> maximum</li>
+<li>
+<pre><code>   the maximum amount of item that will be dropped.
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> bet</li>
+<li>
+<pre><code>   the chance that this item will be dropped.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public NpcDrop(int id, int minimum, int maximum, double bet) {<br>
+this.id = id;<br>
+this.minimum = minimum;<br>
+this.maximum = maximum;<br>
+this.bet = bet;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Turns the id and amount into an {<a class="mention" href="/u/link">@link</a> Item} instance.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the item instance representing the id and amount of this</li>
+<li>
+<pre><code>    drop.
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public Item toItem() {<br>
+return new Item(id, Misc.inclusiveRandom(minimum, maximum));<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Gets the chance that this item will be dropped.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/return">@return</a> the chance that this item will be dropped.<br>
+*/<br>
+public double getBet() {<br>
+return bet;<br>
+}<br>
+}<br>
+}<br>
+[/CODE]</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>Loading the drops from the JSON file</p>
+<p>[CODE=java]    /**<br>
+* Parse the all of the data for npc drops.<br>
+*<br>
+* <span class="mention">@throws</span> Exception<br>
+*         if any errors occur while parsing this file.<br>
+*/<br>
+public static void loadNpcDrops() throws Exception {<br>
+JsonParser parser = new JsonParser();<br>
+JsonArray array = (JsonArray) parser.parse(new FileReader(new File("./data/json/npcs/world_npc_drops.json")));<br>
+final Gson builder = new GsonBuilder().create();</p>
+<pre><code>    for (int i = 0; i &lt; array.size(); i++) {
+        JsonObject reader = (JsonObject) array.get(i);
+
+        final int id[] = builder.fromJson(reader.get("id"), int[].class);
+        final NpcDrop[] dynamic = builder.fromJson(reader.get("dynamic"), NpcDrop[].class);
+        final NpcDrop[] rare = builder.fromJson(reader.get("rare"), NpcDrop[].class);
+
+        for (int e : id) {
+            NpcDropTable.getAllDrops().put(e, new NpcDropTable(id, dynamic, rare));
+        }
+    }
+}[/CODE]
+</code></pre>
+<p>An example of how it would it in the JSON file for an abyssal demon</p>
+<p><code>{
+        "id": [
+         	1615
+         ],
+        "dynamic": [
+            {
+               "id": 592,
+               "minimum": 1,
+               "maximum": 1,
+               "bet": 1.0
+            },
+            {
+               "id": 995,
+               "minimum": 1000,
+               "maximum": 100000,
+               "bet": 0.15
+            }
+         ],
+        "rare": [
+            {
+               "id": 4151,
+               "minimum": 1,
+               "maximum": 1,
+               "bet": 0.001
+            }
+	]	
+}</code></p>
+<p>[B][U]Debugging Results[/U][/B]</p>
+<p>I used the debugging utility that comes with this to see how often a whip would be dropped for an abyssal demon, and these were the results</p>
+<p><code>RARE ITEM DROPPED[item = Abyssal whip, kills= 211]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 163]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 461]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 7]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 304]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 564]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 45]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 377]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 435]
+RARE ITEM DROPPED[item = Abyssal whip, kills= 53]</code></p>
+<p>Based on these results a whip would drop at around every 257.2 kills <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438/1</link>
+        <pubDate>Sun, 29 Jun 2014 21:22:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544438-1</guid>
+        <source url="https://forum.moparisthebest.com/t/easy-to-manage-npc-loot-table-system/544438.rss">Easy to manage NPC loot table system</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,1289 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PHP mysql all results return empty if first SELECT is empty</title>
+    <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521</link>
+    <description>I&#39;ve been working on a small php script to track the songs played on a local radio station. It works how it should for inserting artist and songs into the database. However for the playlog its only suppose to insert a new song if a song recently played was not found in the last 10 played songs or if the rank is lower than the last ten played songs (accounts for if the radio station plays the song twice in the past 10 played).
+
+If the last 10 songs are the same the scripts runs fine, however if the last ten songs differ the script inserts all 10 songs into the playlist regardless if its a new song or not.
+
+I am sure its a simple error somewhere but I simply cannot find it, as my source is poorly named I would assume a full working source is necessary for someone to debug this so I have included it. 
+
+
+98rockcron.php
+[code]
+&lt;?php
+
+define(&#39;PLAYLIST_URL&#39;, &#39;http://www.98rock.com/iplaylist/playlist.html?last10=1&#39;);
+define(&#39;PLAYLIST_ROW&#39;, &#39;tr[class^=playlist_row2]&#39;);
+define(&#39;PLAYLIST_ARTIST&#39;, &#39;td[class^=playlist_artist]&#39;);
+define(&#39;DEFAULT_SEPERATOR&#39;, &#39;-&#39;);
+
+
+define(&#39;DATABASE_HOST&#39;, &#39;127.0.0.1&#39;);
+define(&#39;DATABASE_USERNAME&#39;, &#39;&#39;);
+define(&#39;DATABASE_PASSWORD&#39;, &#39;&#39;); 
+define(&#39;DATABASE_NAME&#39;, &#39;&#39;);
+
+define(&#39;TABLE_PREFIX&#39;, &#39;&#39;);
+define(&#39;TABLE_ARTIST&#39;, &#39;artist&#39;);
+define(&#39;TABLE_SONG&#39;, &#39;song&#39;);
+
+include_once(&#39;simple_html_dom.php&#39;);
+
+function scraping_98rock() {
+    $process = curl_init(PLAYLIST_URL);
+    curl_setopt($process, CURLOPT_HEADER, 0);
+    curl_setopt($process, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($process, CURLOPT_CONNECTTIMEOUT, 1);
+    $resp = curl_exec($process);
+    curl_close($process);
+    $html = str_get_html($resp);
+    if ($html == null) {
+        die(&quot;Could not access the playlist!&quot;);
+    }
+    foreach ($html-&gt;find(PLAYLIST_ROW) as $song) {
+
+        $data = explode(DEFAULT_SEPERATOR, trim($song-&gt;find(PLAYLIST_ARTIST, 0)-&gt;plaintext));
+        $item[&#39;artist&#39;] = $data[0];
+        $item[&#39;song&#39;] = $data[1];
+        $ret[] = $item;
+    }
+
+// clean up memory
+    $html-&gt;clear();
+    unset($html);
+
+    return $ret;
+}
+
+$ret = scraping_98rock();
+$link = mysql_connect(DATABASE_HOST, DATABASE_USERNAME, DATABASE_PASSWORD);
+if (!$link) {
+    die(&#39;Could not connect: &#39; . mysql_error());
+}
+mysql_select_db(DATABASE_NAME);
+
+$rank = 0;
+$ins = 0;
+foreach ($ret as $v) {
+    $rank++;
+    $result = mysql_query(&quot;SELECT * FROM &quot; . TABLE_PREFIX . TABLE_ARTIST . &quot; WHERE name = &#39;&quot; . mysql_real_escape_string($v[&#39;artist&#39;]) . &quot;&#39;&quot;);
+    if (!$result) {
+        die(&#39;Could not query:&#39; . mysql_error());
+    }
+    $artist = mysql_fetch_row($result);
+    if (!$artist) {
+        mysql_query(&quot;INSERT into &quot; . TABLE_PREFIX . TABLE_ARTIST . &quot; (name) VALUES (&#39;&quot; . mysql_real_escape_string($v[&#39;artist&#39;]) . &quot;&#39;)&quot;);
+        echo &quot;artist inserted: &quot; . $v[&#39;artist&#39;] . &quot;\n&quot;;
+    }
+    if (!$artist) {
+        $result = mysql_query(&quot;SELECT * FROM &quot; . TABLE_PREFIX . TABLE_ARTIST . &quot; WHERE name = &#39;&quot; . mysql_real_escape_string($v[&#39;artist&#39;]) . &quot;&#39;&quot;);
+        if (!$result) {
+            die(&#39;Could not query:&#39; . mysql_error());
+        }
+        $artist = mysql_fetch_row($result);
+    }
+    $result = mysql_query(&quot;SELECT * FROM song WHERE name = &#39;&quot; . mysql_real_escape_string($v[&#39;song&#39;]) . &quot;&#39;&quot;);
+    if (!$result) {
+        die(&#39;Could not query:&#39; . mysql_error());
+    }
+    $song = mysql_fetch_row($result);
+    if (!$song) {
+       mysql_query(&quot;INSERT into song (name,artist_id) VALUES (&#39;&quot; . mysql_real_escape_string($v[&#39;song&#39;]) . &quot;&#39;,&#39;&quot; . mysql_real_escape_string($artist[0]) . &quot;&#39;)&quot;);
+        echo &quot;song inserted: &quot; . $v[&#39;song&#39;] . &quot;\n&quot;;
+    }
+    if (!$song) {
+        $result = mysql_query(&quot;SELECT * FROM song WHERE name = &#39;&quot; . mysql_real_escape_string($v[&#39;song&#39;]) . &quot;&#39;&quot;);
+        if (!$result) {
+            die(&#39;Could not query:&#39; . mysql_error());
+        }
+        $song = mysql_fetch_row($result);
+    }
+
+    if (!$song || !$artist) {
+        echo &quot;DANGER\n&quot;;
+        continue;
+    }
+
+   /* $result = mysql_query(&quot;SELECT * FROM  WHERE song_id=$song[0]&quot;);
+    if (!$result) {
+        die(&#39;Could not query:&#39; . mysql_error());
+    }
+    $last = mysql_fetch_row($result);
+    if (empty($last)) {
+        echo &quot;inserted into playlog \n&quot;;
+        mysql_query(&quot;INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])&quot;);
+     $ins++;
+    }else if($last[0] &gt; ($rank+$ins){
+     echo &quot;Repeat Play \n&quot;;
+     mysql_query(&quot;INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])&quot;);
+    mysql_query(&quot;UPDATE last SET artist_id=$artist[0], song_id=$song[0] WHERE rank=$rank&quot;);
+
+    * }
+    */
+}
+?&gt;
+
+[/code]
+
+SimpleHTMLDOM: http://sourceforge.net/projects/simplehtmldom/
+
+
+the SQL
+
+[code]
+-- phpMyAdmin SQL Dump
+-- version 3.4.9
+-- http://www.phpmyadmin.net
+--
+-- Host: localhost
+-- Generation Time: Jun 17, 2012 at 02:48 AM
+-- Server version: 5.1.63
+-- PHP Version: 5.2.17
+
+SET SQL_MODE=&quot;NO_AUTO_VALUE_ON_ZERO&quot;;
+SET time_zone = &quot;+00:00&quot;;
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8 */;
+
+--
+-- Database: `silabsof_98rock`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `artist`
+--
+
+CREATE TABLE IF NOT EXISTS `artist` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(75) NOT NULL,
+  `date_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=131 ;
+
+--
+-- Dumping data for table `artist`
+--
+
+INSERT INTO `artist` (`id`, `name`, `date_added`) VALUES
+(55, &#39;Collective Soul &#39;, &#39;2012-06-11 08:59:30&#39;),
+(56, &#39;Staind &#39;, &#39;2012-06-11 09:00:55&#39;),
+(57, &#39;Foo Fighters &#39;, &#39;2012-06-11 09:01:12&#39;),
+(58, &#39;Nirvana &#39;, &#39;2012-06-11 09:01:12&#39;),
+(59, &#39;Slash / Myles Kennedy And The Conspirators &#39;, &#39;2012-06-11 09:01:12&#39;),
+(60, &#39;Aerosmith &#39;, &#39;2012-06-11 09:06:11&#39;),
+(61, &#39;Marilyn Manson &#39;, &#39;2012-06-11 09:14:22&#39;),
+(62, &#39;Shinedown &#39;, &#39;2012-06-11 09:14:53&#39;),
+(63, &#39;Metallica &#39;, &#39;2012-06-11 09:16:33&#39;),
+(64, &#39;Seether &#39;, &#39;2012-06-11 09:16:33&#39;),
+(65, &#39;Incubus &#39;, &#39;2012-06-11 09:20:22&#39;),
+(66, &#39;Volbeat &#39;, &#39;2012-06-11 09:26:02&#39;),
+(67, &#39;Stone Temple Pilots &#39;, &#39;2012-06-11 09:30:02&#39;),
+(68, &#39;Five Finger Death Punch &#39;, &#39;2012-06-11 09:34:02&#39;),
+(69, &#39;Guns N&#39;&#39; Roses &#39;, &#39;2012-06-11 09:38:02&#39;),
+(70, &#39;Green Day &#39;, &#39;2012-06-11 09:54:02&#39;),
+(71, &#39;Pearl Jam &#39;, &#39;2012-06-11 09:58:02&#39;),
+(72, &#39;Linkin Park &#39;, &#39;2012-06-11 09:58:03&#39;),
+(73, &#39;Three Days Grace &#39;, &#39;2012-06-11 10:14:03&#39;),
+(74, &#39;Ozzy Osbourne &#39;, &#39;2012-06-11 10:14:03&#39;),
+(75, &#39;Seven Mary Three &#39;, &#39;2012-06-11 10:18:03&#39;),
+(76, &#39;3 Doors Down &#39;, &#39;2012-06-11 10:26:02&#39;),
+(77, &#39;Twisted Sister &#39;, &#39;2012-06-11 10:30:02&#39;),
+(78, &#39;Sick Puppies &#39;, &#39;2012-06-11 10:40:31&#39;),
+(79, &#39;Kid Rock &#39;, &#39;2012-06-11 10:58:02&#39;),
+(80, &#39;Stone Sour &#39;, &#39;2012-06-11 11:02:02&#39;),
+(81, &#39;Led Zeppelin &#39;, &#39;2012-06-11 11:10:08&#39;),
+(82, &#39;Bush &#39;, &#39;2012-06-11 11:34:02&#39;),
+(83, &#39;Chevelle &#39;, &#39;2012-06-11 11:34:02&#39;),
+(84, &#39;Everlast &#39;, &#39;2012-06-11 11:37:20&#39;),
+(85, &#39;Ac/dc &#39;, &#39;2012-06-11 11:50:02&#39;),
+(86, &#39;Korn &#39;, &#39;2012-06-11 11:50:03&#39;),
+(87, &#39;Breaking Benjamin &#39;, &#39;2012-06-11 11:54:58&#39;),
+(88, &#39;Lit &#39;, &#39;2012-06-11 12:02:03&#39;),
+(89, &#39;Trust Company &#39;, &#39;2012-06-11 12:14:02&#39;),
+(90, &#39;Kings Of Leon &#39;, &#39;2012-06-11 12:14:02&#39;),
+(91, &#39;Black Crowes &#39;, &#39;2012-06-11 12:18:03&#39;),
+(92, &#39;Sixx: A.m. &#39;, &#39;2012-06-11 12:22:02&#39;),
+(93, &#39;Tool &#39;, &#39;2012-06-11 12:30:02&#39;),
+(94, &#39;Disturbed &#39;, &#39;2012-06-12 02:09:17&#39;),
+(95, &#39;Offspring &#39;, &#39;2012-06-12 02:09:18&#39;),
+(96, &#39;Breaking Benjamin / Valora &#39;, &#39;2012-06-12 02:09:18&#39;),
+(97, &#39;P.o.d. &#39;, &#39;2012-06-12 02:09:19&#39;),
+(98, &#39;Avenged Sevenfold &#39;, &#39;2012-06-12 02:09:19&#39;),
+(99, &#39;Becoming The Archetype &#39;, &#39;2012-06-17 05:07:56&#39;),
+(100, &#39;Napalm Death &#39;, &#39;2012-06-17 05:07:56&#39;),
+(101, &#39;Parkway Drive &#39;, &#39;2012-06-17 05:07:56&#39;),
+(102, &#39;Bleeding Through &#39;, &#39;2012-06-17 05:07:56&#39;),
+(103, &#39;A Life Once Lost &#39;, &#39;2012-06-17 05:07:56&#39;),
+(104, &#39;Motorhead &#39;, &#39;2012-06-17 05:07:56&#39;),
+(105, &#39;Slayer &#39;, &#39;2012-06-17 05:07:56&#39;),
+(106, &#39;Killswitch Engage &#39;, &#39;2012-06-17 05:07:56&#39;),
+(107, &#39;Gojira &#39;, &#39;2012-06-17 05:07:56&#39;),
+(108, &#39;Megadeth &#39;, &#39;2012-06-17 05:07:56&#39;),
+(109, &#39;Ihsahn &#39;, &#39;2012-06-17 05:12:48&#39;),
+(110, &#39;Kataklysm &#39;, &#39;2012-06-17 05:12:48&#39;),
+(111, &#39;Pantera &#39;, &#39;2012-06-17 05:15:42&#39;),
+(112, &#39;Slipknot &#39;, &#39;2012-06-17 05:30:42&#39;),
+(113, &#39;Lamb Of God &#39;, &#39;2012-06-17 05:32:06&#39;),
+(114, &#39;Dethklok &#39;, &#39;2012-06-17 05:35:22&#39;),
+(115, &#39;Cannibal Corpse &#39;, &#39;2012-06-17 05:39:20&#39;),
+(116, &#39;Dillinger  Escape Plan  &#39;, &#39;2012-06-17 05:49:56&#39;),
+(117, &#39;Prong &#39;, &#39;2012-06-17 05:52:34&#39;),
+(118, &#39;Tardy Brothers &#39;, &#39;2012-06-17 05:53:07&#39;),
+(119, &#39;August Burns Red &#39;, &#39;2012-06-17 05:58:49&#39;),
+(120, &#39;Mnemic &#39;, &#39;2012-06-17 06:02:10&#39;),
+(121, &#39;Iron Maiden &#39;, &#39;2012-06-17 06:06:58&#39;),
+(122, &#39;Godsmack &#39;, &#39;2012-06-17 06:16:34&#39;),
+(123, &#39;Nine Inch Nails &#39;, &#39;2012-06-17 06:26:38&#39;),
+(124, &#39;Pink Floyd &#39;, &#39;2012-06-17 06:43:54&#39;),
+(125, &#39;Live &#39;, &#39;2012-06-17 06:51:40&#39;),
+(126, &#39;Deuce &#39;, &#39;2012-06-17 06:51:40&#39;),
+(127, &#39;Puddle Of Mudd &#39;, &#39;2012-06-17 07:01:14&#39;),
+(128, &#39;Soundgarden &#39;, &#39;2012-06-17 07:06:57&#39;),
+(129, &#39;Rob Zombie &#39;, &#39;2012-06-17 07:20:55&#39;),
+(130, &#39;Alice In Chains &#39;, &#39;2012-06-17 07:45:02&#39;);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `last`
+--
+
+CREATE TABLE IF NOT EXISTS `last` (
+  `rank` int(11) NOT NULL,
+  `artist_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  PRIMARY KEY (`rank`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Dumping data for table `last`
+--
+
+INSERT INTO `last` (`rank`, `artist_id`, `song_id`) VALUES
+(1, 92, 50),
+(2, 55, 61),
+(3, 57, 100),
+(4, 129, 99),
+(5, 63, 98),
+(6, 128, 97),
+(7, 67, 96),
+(8, 127, 95),
+(9, 62, 6),
+(10, 125, 93);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playlog`
+--
+
+CREATE TABLE IF NOT EXISTS `playlog` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `artist_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  `time_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `artist_id` (`artist_id`,`song_id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=42 ;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `song`
+--
+
+CREATE TABLE IF NOT EXISTS `song` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(75) NOT NULL,
+  `artist_id` int(11) NOT NULL,
+  `date_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=103 ;
+
+--
+-- Dumping data for table `song`
+--
+
+INSERT INTO `song` (`id`, `name`, `artist_id`, `date_added`) VALUES
+(5, &#39; The Beautiful People&#39;, 61, &#39;2012-06-11 09:14:52&#39;),
+(6, &#39; Bully&#39;, 62, &#39;2012-06-11 09:14:53&#39;),
+(7, &#39; Dream On&#39;, 60, &#39;2012-06-11 09:14:53&#39;),
+(8, &#39; Not Again&#39;, 56, &#39;2012-06-11 09:14:53&#39;),
+(9, &#39; December&#39;, 55, &#39;2012-06-11 09:14:53&#39;),
+(10, &#39; These Days&#39;, 57, &#39;2012-06-11 09:14:53&#39;),
+(11, &#39; All Apologies&#39;, 58, &#39;2012-06-11 09:14:53&#39;),
+(12, &#39; You&#39;&#39;re A Lie&#39;, 59, &#39;2012-06-11 09:16:33&#39;),
+(13, &#39; Fade To Black&#39;, 63, &#39;2012-06-11 09:16:33&#39;),
+(14, &#39; Country Song&#39;, 64, &#39;2012-06-11 09:16:33&#39;),
+(15, &#39; Pardon Me&#39;, 65, &#39;2012-06-11 09:20:22&#39;),
+(16, &#39; A Warrior&#39;&#39;s Call&#39;, 66, &#39;2012-06-11 09:26:02&#39;),
+(17, &#39; Sex Type Thing&#39;, 67, &#39;2012-06-11 09:30:02&#39;),
+(18, &#39; Coming Down&#39;, 68, &#39;2012-06-11 09:34:03&#39;),
+(19, &#39; Paradise City&#39;, 69, &#39;2012-06-11 09:38:03&#39;),
+(20, &#39; Holiday&#39;, 70, &#39;2012-06-11 09:54:03&#39;),
+(21, &#39; Better Man&#39;, 71, &#39;2012-06-11 09:58:02&#39;),
+(22, &#39; Burn It Down&#39;, 72, &#39;2012-06-11 09:58:03&#39;),
+(23, &#39; Walk&#39;, 57, &#39;2012-06-11 10:02:02&#39;),
+(24, &#39; Animal I Have Become&#39;, 73, &#39;2012-06-11 10:14:03&#39;),
+(25, &#39; Mama, I&#39;&#39;m Coming Home&#39;, 74, &#39;2012-06-11 10:14:03&#39;),
+(26, &#39; Cumbersome&#39;, 75, &#39;2012-06-11 10:18:03&#39;),
+(27, &#39; It&#39;&#39;s Not My Time&#39;, 76, &#39;2012-06-11 10:26:02&#39;),
+(28, &#39; We&#39;&#39;re Not Gonna Take It&#39;, 77, &#39;2012-06-11 10:30:02&#39;),
+(29, &#39; Diamond Eyes&#39;, 62, &#39;2012-06-11 10:32:09&#39;),
+(30, &#39; Basket Case&#39;, 70, &#39;2012-06-11 10:37:43&#39;),
+(31, &#39; You&#39;&#39;re Going Down&#39;, 78, &#39;2012-06-11 10:40:31&#39;),
+(32, &#39; Bawitdaba&#39;, 79, &#39;2012-06-11 10:58:02&#39;),
+(33, &#39; Numb&#39;, 72, &#39;2012-06-11 11:02:01&#39;),
+(34, &#39; Say You&#39;&#39;ll Haunt Me&#39;, 80, &#39;2012-06-11 11:02:02&#39;),
+(35, &#39; Lithium&#39;, 58, &#39;2012-06-11 11:06:02&#39;),
+(36, &#39; The Ocean&#39;, 81, &#39;2012-06-11 11:10:08&#39;),
+(37, &#39; Love In An Elevator&#39;, 60, &#39;2012-06-11 11:22:02&#39;),
+(38, &#39; Sweet Dreams&#39;, 61, &#39;2012-06-11 11:27:41&#39;),
+(39, &#39; The Sound Of Winter&#39;, 82, &#39;2012-06-11 11:34:02&#39;),
+(40, &#39; Send The Pain Below&#39;, 83, &#39;2012-06-11 11:34:03&#39;),
+(41, &#39; What It&#39;&#39;s Like&#39;, 84, &#39;2012-06-11 11:37:20&#39;),
+(42, &#39; Highway To Hell&#39;, 85, &#39;2012-06-11 11:50:02&#39;),
+(43, &#39; Make Me Bad&#39;, 86, &#39;2012-06-11 11:50:03&#39;),
+(44, &#39; So Cold&#39;, 87, &#39;2012-06-11 11:54:58&#39;),
+(45, &#39; Sad But True&#39;, 63, &#39;2012-06-11 12:02:03&#39;),
+(46, &#39; My Own Worst Enemy&#39;, 88, &#39;2012-06-11 12:02:03&#39;),
+(47, &#39; Heart In My Hands&#39;, 89, &#39;2012-06-11 12:14:02&#39;),
+(48, &#39; Use Somebody&#39;, 90, &#39;2012-06-11 12:14:02&#39;),
+(49, &#39; Hard To Handle&#39;, 91, &#39;2012-06-11 12:18:03&#39;),
+(50, &#39; Lies Of The Beautiful People&#39;, 92, &#39;2012-06-11 12:22:02&#39;),
+(51, &#39; Outside&#39;, 56, &#39;2012-06-11 12:27:38&#39;),
+(52, &#39; Sober&#39;, 93, &#39;2012-06-11 12:30:02&#39;),
+(53, &#39; Inside The Fire&#39;, 94, &#39;2012-06-12 02:09:18&#39;),
+(54, &#39; Glycerine&#39;, 82, &#39;2012-06-12 02:09:18&#39;),
+(55, &#39; Breaking The Habit&#39;, 72, &#39;2012-06-12 02:09:18&#39;),
+(56, &#39; Days Go By&#39;, 95, &#39;2012-06-12 02:09:18&#39;),
+(57, &#39; Blow Me Away&#39;, 96, &#39;2012-06-12 02:09:18&#39;),
+(58, &#39; Live And Let Die&#39;, 69, &#39;2012-06-12 02:09:18&#39;),
+(59, &#39; Youth Of The Nation&#39;, 97, &#39;2012-06-12 02:09:19&#39;),
+(60, &#39; So Far Away&#39;, 98, &#39;2012-06-12 02:09:19&#39;),
+(61, &#39; Shine&#39;, 55, &#39;2012-06-12 02:09:19&#39;),
+(62, &#39; Fallen&#39;, 66, &#39;2012-06-12 02:14:03&#39;),
+(63, &#39; Into Oblivion&#39;, 99, &#39;2012-06-17 05:07:56&#39;),
+(64, &#39; Quarantined&#39;, 100, &#39;2012-06-17 05:07:56&#39;),
+(65, &#39; Sleepwalker&#39;, 101, &#39;2012-06-17 05:07:56&#39;),
+(66, &#39; Love Lost In A Hail Of Gunfire&#39;, 102, &#39;2012-06-17 05:07:56&#39;),
+(67, &#39; Vulture&#39;, 103, &#39;2012-06-17 05:07:56&#39;),
+(68, &#39; I Know How To Die&#39;, 104, &#39;2012-06-17 05:07:56&#39;),
+(69, &#39; Epidemic&#39;, 105, &#39;2012-06-17 05:07:56&#39;),
+(70, &#39; Self Revolution&#39;, 106, &#39;2012-06-17 05:07:56&#39;),
+(71, &#39; L&#39;&#39;enfent Sauvage&#39;, 107, &#39;2012-06-17 05:07:56&#39;),
+(72, &#39; Holy Wars&#39;, 108, &#39;2012-06-17 05:07:56&#39;),
+(73, &#39; The Paranoid&#39;, 109, &#39;2012-06-17 05:12:48&#39;),
+(74, &#39; Iron Will&#39;, 110, &#39;2012-06-17 05:12:48&#39;),
+(75, &#39; Piss&#39;, 111, &#39;2012-06-17 05:15:42&#39;),
+(76, &#39; Psycho Holiday&#39;, 111, &#39;2012-06-17 05:18:17&#39;),
+(77, &#39; Wait And Bleed&#39;, 112, &#39;2012-06-17 05:30:42&#39;),
+(78, &#39; Ghost Walking&#39;, 113, &#39;2012-06-17 05:32:06&#39;),
+(79, &#39; Laser Canon Death Sentence&#39;, 114, &#39;2012-06-17 05:35:22&#39;),
+(80, &#39; Demented Aggression&#39;, 115, &#39;2012-06-17 05:39:20&#39;),
+(81, &#39; Farewell Mona Lisa&#39;, 116, &#39;2012-06-17 05:49:56&#39;),
+(82, &#39; Eternal Heat&#39;, 117, &#39;2012-06-17 05:52:34&#39;),
+(83, &#39; Fate&#39;&#39;s Call&#39;, 118, &#39;2012-06-17 05:53:07&#39;),
+(84, &#39; Composure&#39;, 119, &#39;2012-06-17 05:58:49&#39;),
+(85, &#39; Transcend&#39;, 120, &#39;2012-06-17 06:02:10&#39;),
+(86, &#39; Children Of The Damned&#39;, 121, &#39;2012-06-17 06:06:58&#39;),
+(87, &#39; Daughter&#39;, 71, &#39;2012-06-17 06:10:56&#39;),
+(88, &#39; Rocky Mountain Way&#39;, 122, &#39;2012-06-17 06:16:34&#39;),
+(89, &#39; Janie&#39;&#39;s Got A Gun&#39;, 60, &#39;2012-06-17 06:20:34&#39;),
+(90, &#39; Head Like A Hole&#39;, 123, &#39;2012-06-17 06:26:38&#39;),
+(91, &#39; Falling Away From Me&#39;, 86, &#39;2012-06-17 06:41:10&#39;),
+(92, &#39; Wish You Were Here&#39;, 124, &#39;2012-06-17 06:43:55&#39;),
+(93, &#39; I Alone&#39;, 125, &#39;2012-06-17 06:51:40&#39;),
+(94, &#39; America&#39;, 126, &#39;2012-06-17 06:51:40&#39;),
+(95, &#39; She Hates Me&#39;, 127, &#39;2012-06-17 07:01:14&#39;),
+(96, &#39; Vasoline&#39;, 67, &#39;2012-06-17 07:04:39&#39;),
+(97, &#39; Live To Rise&#39;, 128, &#39;2012-06-17 07:06:57&#39;),
+(98, &#39; Blackened&#39;, 63, &#39;2012-06-17 07:11:27&#39;),
+(99, &#39; Dragula&#39;, 129, &#39;2012-06-17 07:20:55&#39;),
+(100, &#39; Bridge Burning&#39;, 57, &#39;2012-06-17 07:23:09&#39;),
+(101, &#39; Still Counting&#39;, 66, &#39;2012-06-17 07:45:02&#39;),
+(102, &#39; I Stay Away&#39;, 130, &#39;2012-06-17 07:45:02&#39;);
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+[/code]
+
+
+The code that is not working is commented out on the 98rockcron source.</description>
+    
+    <lastBuildDate>Tue, 19 Jun 2012 07:17:59 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>I’ve ended up going a different route which has allowed me to drop the last10 table all together and now functions the way I want</p>
+<pre><code class="lang-auto">include_once('simple_html_dom.php');
+
+function scraping_98rock() {
+    $process = curl_init(PLAYLIST_URL);
+    curl_setopt($process, CURLOPT_HEADER, 0);
+    curl_setopt($process, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($process, CURLOPT_CONNECTTIMEOUT, 1);
+    $resp = curl_exec($process);
+    curl_close($process);
+    $html = str_get_html($resp);
+    if ($html == null) {
+        die("Could not access the playlist!");
+    }
+    foreach ($html-&gt;find(PLAYLIST_ROW) as $song) {
+
+        $data = explode(DEFAULT_SEPERATOR, trim($song-&gt;find(PLAYLIST_ARTIST, 0)-&gt;plaintext));
+        $item['artist'] = $data[0];
+        $item['song'] = $data[1];
+        $ret[] = $item;
+    }
+
+// clean up memory
+    $html-&gt;clear();
+    unset($html);
+
+    return $ret;
+}
+
+$ret = scraping_98rock();
+$link = mysql_connect(DATABASE_HOST, DATABASE_USERNAME, DATABASE_PASSWORD);
+if (!$link) {
+    die('Could not connect: ' . mysql_error());
+}
+mysql_select_db(DATABASE_NAME);
+
+$songs = array();
+foreach ($ret as $v) {
+    $rank++;
+    $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $artist = mysql_fetch_row($result);
+    if (!$artist) {
+        mysql_query("INSERT into " . TABLE_PREFIX . TABLE_ARTIST . " (name) VALUES ('" . mysql_real_escape_string($v['artist']) . "')");
+        echo "artist inserted: " . $v['artist'] . "\n";
+    }
+    if (!$artist) {
+        $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $artist = mysql_fetch_row($result);
+    }
+    $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $song = mysql_fetch_row($result);
+    if (!$song) {
+        mysql_query("INSERT into song (name,artist_id) VALUES ('" . mysql_real_escape_string($v['song']) . "','" . mysql_real_escape_string($artist[0]) . "')");
+        echo "song inserted: " . $v['song'] . "\n";
+    }
+    if (!$song) {
+        $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $song = mysql_fetch_row($result);
+    }
+
+    if (!$song || !$artist) {
+        echo "DANGER\n";
+        continue;
+    }
+    array_push($songs, array("song" =&gt; $song[0], "artist" =&gt; $artist[0]));
+}
+$result = mysql_query("SELECT * FROM playlog ORDER BY id DESC LIMIT 10");
+if (!$result) {
+    die('Could not query:' . mysql_error());
+}
+while ($last = mysql_fetch_array($result)) {
+    for ($i = 0; $i &lt; 10; $i++) {
+        if ($songs[$i]['song'] == $last['song_id'] &amp;&amp; $songs[$i]['artist'] == $last['artist_id']) {
+            unset($songs[$i]);
+        }
+    }
+}
+foreach ($songs as $s) {
+    if (isset($s)) {
+        $result = mysql_query("INSERT into playlog (song_id,artist_id) VALUES ('" . $s['song'] . "','" . $s['artist'] . "')");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        echo "Inserted: ".$s['song']." into playlog";
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/11</link>
+        <pubDate>Tue, 19 Jun 2012 07:17:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-11</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>the issue is here:</p>
+<blockquote>Inserted into playlog (Artist: 134, Song: 110)
+Inserted into playlog (Artist: 97, Song: 59)
+Inserted into playlog (Artist: 57, Song: 10)
+Inserted into playlog (Artist: 86, Song: 103)
+Inserted into playlog (Artist: 63, Song: 104)
+Inserted into playlog (Artist: 131, Song: 105)
+Inserted into playlog (Artist: 66, Song: 16)
+Inserted into playlog (Artist: 85, Song: 106)
+Inserted into playlog (Artist: 132, Song: 107)</blockquote>
+<p>I don’t nessesarily want to prevent duplicate entries because at times the radio station gets annoying and plays the same song repeatedly. but what it should do is check the last ten played and only add the new songs to the play log.</p>
+<p>the process should like this</p>
+<p>get the last10 played song.</p>
+<p>Add the artist if needed<br>
+Add the song if needed</p>
+<p>Check if the song is in the last10 songs played from the previous check</p>
+<p>if FALSE</p>
+<p>Add the song to the playlog</p>
+<p>if TRUE</p>
+<p>check to see if the rank+numberOfInsertedSongs is &lt; the last rank for the song</p>
+<p>if TRUE</p>
+<p>add the song to the playlog  because the song is being repeated</p>
+<p>update the last10 played songs</p>
+<p>end</p>
+<p>the problem is that it usually adds all the songs to the playlog because it thinks it can’t find them in the last10 songs played.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/10</link>
+        <pubDate>Mon, 18 Jun 2012 02:42:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-10</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@Skyro Arbe]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/skyro">@Skyro</a> wrote:</p>
+          <blockquote>
+              <p>Where’s Ruby when you need him, oh that’s right he has a massive hangover. :D.</p>
+<p>It’s pretty cool what you’re doing, I suggest asking Ruby. He is a master at anything along the lines of website development.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/9</link>
+        <pubDate>Sun, 17 Jun 2012 23:37:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-9</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">&lt;?php
+
+define('PLAYLIST_URL', 'http://www.98rock.com/iplaylist/playlist.html?last10=1');
+define('PLAYLIST_ROW', 'tr[class^=playlist_row2]');
+define('PLAYLIST_ARTIST', 'td[class^=playlist_artist]');
+define('DEFAULT_SEPERATOR', '-');
+
+
+define('DATABASE_HOST', '127.0.0.1');
+define('DATABASE_USERNAME', '');
+define('DATABASE_PASSWORD', ''); 
+define('DATABASE_NAME', '');
+
+define('TABLE_PREFIX', '');
+define('TABLE_ARTIST', 'artist');
+define('TABLE_SONG', 'song');
+
+include_once('simple_html_dom.php');
+
+function scraping_98rock() {
+    $process = curl_init(PLAYLIST_URL);
+    curl_setopt($process, CURLOPT_HEADER, 0);
+    curl_setopt($process, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($process, CURLOPT_CONNECTTIMEOUT, 1);
+    $resp = curl_exec($process);
+    curl_close($process);
+    $html = str_get_html($resp);
+    if ($html == null) {
+        die("Could not access the playlist!");
+    }
+    foreach ($html-&gt;find(PLAYLIST_ROW) as $song) {
+
+        $data = explode(DEFAULT_SEPERATOR, trim($song-&gt;find(PLAYLIST_ARTIST, 0)-&gt;plaintext));
+        $item['artist'] = $data[0];
+        $item['song'] = $data[1];
+        $ret[] = $item;
+    }
+
+// clean up memory
+    $html-&gt;clear();
+    unset($html);
+
+    return $ret;
+}
+
+$ret = scraping_98rock();
+$link = mysql_connect(DATABASE_HOST, DATABASE_USERNAME, DATABASE_PASSWORD);
+if (!$link) {
+    die('Could not connect: ' . mysql_error());
+}
+mysql_select_db(DATABASE_NAME);
+
+$rank = 0;
+$ins = 0;
+foreach ($ret as $v) {
+    $rank++;
+    $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $artist = mysql_fetch_row($result);
+    if (!$artist) {
+        mysql_query("INSERT into " . TABLE_PREFIX . TABLE_ARTIST . " (name) VALUES ('" . mysql_real_escape_string($v['artist']) . "')");
+        echo "Artist inserted: " . $v['artist'] . " (";
+    }
+    if (!$artist) {
+        $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $artist = mysql_fetch_row($result);
+		echo "$artist[0])&lt;br /&gt;";
+    }
+    $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $song = mysql_fetch_row($result);
+    if (!$song) {
+       mysql_query("INSERT into song (name,artist_id) VALUES ('" . mysql_real_escape_string($v['song']) . "','" . mysql_real_escape_string($artist[0]) . "')");
+        echo "Song inserted: " . $v['song'] . " (";
+    }
+    if (!$song) {
+        $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $song = mysql_fetch_row($result);
+		echo "$song[0])&lt;br /&gt;";
+    }
+
+    if (!$song || !$artist) {
+        echo "DANGER&lt;br /&gt;";
+        continue;
+    }
+
+    $result = mysql_query("SELECT * FROM last WHERE song_id=$song[0]");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $last = mysql_fetch_row($result);
+    if (empty($last)) {
+		$query = mysql_query("SELECT * FROM playlog WHERE song_id=$song[0] AND artist_id=$artist[0]");
+		$result = mysql_fetch_row($query);
+		if (empty($result)) {
+			echo "Inserted into playlog (Artist: $artist[0], Song: $song[0])&lt;br /&gt;";
+			mysql_query("INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])");
+			$ins++;
+		}
+    } else if($last[0] &gt; ($rank+$ins)){
+		echo "Repeat Play &lt;br /&gt;";
+		mysql_query("INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])");
+		mysql_query("UPDATE last SET artist_id=$artist[0], song_id=$song[0] WHERE rank=$rank");
+
+    }
+}
+?&gt;</code></pre>
+<p>Here’s your 98rockcron.php with my modifications. Whether or not its correct is up to you <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+<p>I added an additional query to prevent duplicate entries from being put into the playlog table.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/8</link>
+        <pubDate>Sun, 17 Jun 2012 23:20:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-8</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>With a Java driver, it’s something the lines of <code>SELECT ARTIST,TRACK FROM TABNAME WHERE ARTIST = 'artist' and TRACK = 'track'</code>. The SQL library in Java returns an iterable result - so if iterator.hasNext() is false, then no results were grabbed.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/7</link>
+        <pubDate>Sun, 17 Jun 2012 21:05:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-7</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>From what she said I’m guessing she is wanting not to add in duplicate entries?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/6</link>
+        <pubDate>Sun, 17 Jun 2012 20:52:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-6</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>im confused as to the expected behavior, and until then i can’t say what’s wrong with the queries.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/5</link>
+        <pubDate>Sun, 17 Jun 2012 14:18:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-5</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <p>I’ll play with it and see if I can get the results you’re looking for.</p>
+<p>EDIT: Okay these are the results that I came up with…</p>
+<p><span class="bbcode-b">This is my output the first time after uploading your provided database:</span><br>
+Inserted into playlog (Artist: 97, Song: 59)<br>
+Inserted into playlog (Artist: 57, Song: 10)<br>
+Song inserted: Get Up (103)<br>
+Inserted into playlog (Artist: 86, Song: 103)<br>
+Song inserted: King Nothing (104)<br>
+Inserted into playlog (Artist: 63, Song: 104)<br>
+Artist inserted: Red Hot Chili Peppers (131)<br>
+Song inserted: Dani California (105)<br>
+Inserted into playlog (Artist: 131, Song: 105)<br>
+Inserted into playlog (Artist: 66, Song: 16)<br>
+Song inserted: For Those About To Rock (106)<br>
+Inserted into playlog (Artist: 85, Song: 106)<br>
+Artist inserted: Smashing Pumpkins (132)<br>
+Song inserted: Today (107)<br>
+Inserted into playlog (Artist: 132, Song: 107)<br>
+Inserted into playlog (Artist: 98, Song: 60)<br>
+Artist inserted: Drowning Pool (133)<br>
+Song inserted: Bodies (108)<br>
+Inserted into playlog (Artist: 133, Song: 108)</p>
+<p><span class="bbcode-b">And about 10 minutes later the output is:</span><br>
+Song inserted: The Animal (109)<br>
+Inserted into playlog (Artist: 94, Song: 109)<br>
+Artist inserted: Oasis (134)<br>
+Song inserted: Champagne Supernova (110)<br>
+Inserted into playlog (Artist: 134, Song: 110)</p>
+<p><span class="bbcode-b">Without my modification it would be:</span><br>
+Song inserted: The Animal (109)<br>
+Inserted into playlog (Artist: 94, Song: 109)<br>
+Artist inserted: Oasis (134)<br>
+Song inserted: Champagne Supernova (110)<br>
+Inserted into playlog (Artist: 134, Song: 110)<br>
+Inserted into playlog (Artist: 97, Song: 59)<br>
+Inserted into playlog (Artist: 57, Song: 10)<br>
+Inserted into playlog (Artist: 86, Song: 103)<br>
+Inserted into playlog (Artist: 63, Song: 104)<br>
+Inserted into playlog (Artist: 131, Song: 105)<br>
+Inserted into playlog (Artist: 66, Song: 16)<br>
+Inserted into playlog (Artist: 85, Song: 106)<br>
+Inserted into playlog (Artist: 132, Song: 107)</p>
+<p>Does this look correct or am I still not understanding you correctly?  <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/4</link>
+        <pubDate>Sun, 17 Jun 2012 11:45:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-4</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>ok let me try to give a visual instead of 10 i will make it 3</p>
+<p>parse 1:<br>
+the last three played:</p>
+<ol>
+<li>green day - I suck</li>
+<li>Mopman - sucks</li>
+<li>redneck rampage - one dumb game</li>
+</ol>
+<p>parse 2:</p>
+<ol>
+<li>frank_ - is awesome (this should be the only one added to the play log table)</li>
+<li>green day - I suck</li>
+<li>redneck rampage</li>
+</ol>
+<p>but  all three get added because all results of the last table return empty if the first lookup is empty.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/3</link>
+        <pubDate>Sun, 17 Jun 2012 11:01:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-3</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@deathschaos9 DeathsChaos9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deathschaos9">@deathschaos9</a> wrote:</p>
+          <blockquote>
+              <p>So simply put your script will add duplicate data to the playlog table that you don’t want? Or am I understanding this incorrectly?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/2</link>
+        <pubDate>Sun, 17 Jun 2012 10:02:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-2</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+      <item>
+        <title>PHP mysql all results return empty if first SELECT is empty</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>I’ve been working on a small php script to track the songs played on a local radio station. It works how it should for inserting artist and songs into the database. However for the playlog its only suppose to insert a new song if a song recently played was not found in the last 10 played songs or if the rank is lower than the last ten played songs (accounts for if the radio station plays the song twice in the past 10 played).</p>
+<p>If the last 10 songs are the same the scripts runs fine, however if the last ten songs differ the script inserts all 10 songs into the playlist regardless if its a new song or not.</p>
+<p>I am sure its a simple error somewhere but I simply cannot find it, as my source is poorly named I would assume a full working source is necessary for someone to debug this so I have included it.</p>
+<p>98rockcron.php</p>
+<pre><code class="lang-auto">&lt;?php
+
+define('PLAYLIST_URL', 'http://www.98rock.com/iplaylist/playlist.html?last10=1');
+define('PLAYLIST_ROW', 'tr[class^=playlist_row2]');
+define('PLAYLIST_ARTIST', 'td[class^=playlist_artist]');
+define('DEFAULT_SEPERATOR', '-');
+
+
+define('DATABASE_HOST', '127.0.0.1');
+define('DATABASE_USERNAME', '');
+define('DATABASE_PASSWORD', ''); 
+define('DATABASE_NAME', '');
+
+define('TABLE_PREFIX', '');
+define('TABLE_ARTIST', 'artist');
+define('TABLE_SONG', 'song');
+
+include_once('simple_html_dom.php');
+
+function scraping_98rock() {
+    $process = curl_init(PLAYLIST_URL);
+    curl_setopt($process, CURLOPT_HEADER, 0);
+    curl_setopt($process, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($process, CURLOPT_CONNECTTIMEOUT, 1);
+    $resp = curl_exec($process);
+    curl_close($process);
+    $html = str_get_html($resp);
+    if ($html == null) {
+        die("Could not access the playlist!");
+    }
+    foreach ($html-&gt;find(PLAYLIST_ROW) as $song) {
+
+        $data = explode(DEFAULT_SEPERATOR, trim($song-&gt;find(PLAYLIST_ARTIST, 0)-&gt;plaintext));
+        $item['artist'] = $data[0];
+        $item['song'] = $data[1];
+        $ret[] = $item;
+    }
+
+// clean up memory
+    $html-&gt;clear();
+    unset($html);
+
+    return $ret;
+}
+
+$ret = scraping_98rock();
+$link = mysql_connect(DATABASE_HOST, DATABASE_USERNAME, DATABASE_PASSWORD);
+if (!$link) {
+    die('Could not connect: ' . mysql_error());
+}
+mysql_select_db(DATABASE_NAME);
+
+$rank = 0;
+$ins = 0;
+foreach ($ret as $v) {
+    $rank++;
+    $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $artist = mysql_fetch_row($result);
+    if (!$artist) {
+        mysql_query("INSERT into " . TABLE_PREFIX . TABLE_ARTIST . " (name) VALUES ('" . mysql_real_escape_string($v['artist']) . "')");
+        echo "artist inserted: " . $v['artist'] . "\n";
+    }
+    if (!$artist) {
+        $result = mysql_query("SELECT * FROM " . TABLE_PREFIX . TABLE_ARTIST . " WHERE name = '" . mysql_real_escape_string($v['artist']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $artist = mysql_fetch_row($result);
+    }
+    $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $song = mysql_fetch_row($result);
+    if (!$song) {
+       mysql_query("INSERT into song (name,artist_id) VALUES ('" . mysql_real_escape_string($v['song']) . "','" . mysql_real_escape_string($artist[0]) . "')");
+        echo "song inserted: " . $v['song'] . "\n";
+    }
+    if (!$song) {
+        $result = mysql_query("SELECT * FROM song WHERE name = '" . mysql_real_escape_string($v['song']) . "'");
+        if (!$result) {
+            die('Could not query:' . mysql_error());
+        }
+        $song = mysql_fetch_row($result);
+    }
+
+    if (!$song || !$artist) {
+        echo "DANGER\n";
+        continue;
+    }
+
+   /* $result = mysql_query("SELECT * FROM  WHERE song_id=$song[0]");
+    if (!$result) {
+        die('Could not query:' . mysql_error());
+    }
+    $last = mysql_fetch_row($result);
+    if (empty($last)) {
+        echo "inserted into playlog \n";
+        mysql_query("INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])");
+     $ins++;
+    }else if($last[0] &gt; ($rank+$ins){
+     echo "Repeat Play \n";
+     mysql_query("INSERT into playlog (artist_id,song_id) VALUES ($artist[0],$song[0])");
+    mysql_query("UPDATE last SET artist_id=$artist[0], song_id=$song[0] WHERE rank=$rank");
+
+    * }
+    */
+}
+?&gt;
+</code></pre>
+<p>SimpleHTMLDOM: <a href="http://sourceforge.net/projects/simplehtmldom/" rel="nofollow noopener">http://sourceforge.net/projects/simplehtmldom/</a></p>
+<p>the SQL</p>
+<pre><code class="lang-auto">-- phpMyAdmin SQL Dump
+-- version 3.4.9
+-- http://www.phpmyadmin.net
+--
+-- Host: localhost
+-- Generation Time: Jun 17, 2012 at 02:48 AM
+-- Server version: 5.1.63
+-- PHP Version: 5.2.17
+
+SET SQL_MODE="NO_AUTO_VALUE_ON_ZERO";
+SET time_zone = "+00:00";
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8 */;
+
+--
+-- Database: `silabsof_98rock`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `artist`
+--
+
+CREATE TABLE IF NOT EXISTS `artist` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(75) NOT NULL,
+  `date_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=131 ;
+
+--
+-- Dumping data for table `artist`
+--
+
+INSERT INTO `artist` (`id`, `name`, `date_added`) VALUES
+(55, 'Collective Soul ', '2012-06-11 08:59:30'),
+(56, 'Staind ', '2012-06-11 09:00:55'),
+(57, 'Foo Fighters ', '2012-06-11 09:01:12'),
+(58, 'Nirvana ', '2012-06-11 09:01:12'),
+(59, 'Slash / Myles Kennedy And The Conspirators ', '2012-06-11 09:01:12'),
+(60, 'Aerosmith ', '2012-06-11 09:06:11'),
+(61, 'Marilyn Manson ', '2012-06-11 09:14:22'),
+(62, 'Shinedown ', '2012-06-11 09:14:53'),
+(63, 'Metallica ', '2012-06-11 09:16:33'),
+(64, 'Seether ', '2012-06-11 09:16:33'),
+(65, 'Incubus ', '2012-06-11 09:20:22'),
+(66, 'Volbeat ', '2012-06-11 09:26:02'),
+(67, 'Stone Temple Pilots ', '2012-06-11 09:30:02'),
+(68, 'Five Finger Death Punch ', '2012-06-11 09:34:02'),
+(69, 'Guns N'' Roses ', '2012-06-11 09:38:02'),
+(70, 'Green Day ', '2012-06-11 09:54:02'),
+(71, 'Pearl Jam ', '2012-06-11 09:58:02'),
+(72, 'Linkin Park ', '2012-06-11 09:58:03'),
+(73, 'Three Days Grace ', '2012-06-11 10:14:03'),
+(74, 'Ozzy Osbourne ', '2012-06-11 10:14:03'),
+(75, 'Seven Mary Three ', '2012-06-11 10:18:03'),
+(76, '3 Doors Down ', '2012-06-11 10:26:02'),
+(77, 'Twisted Sister ', '2012-06-11 10:30:02'),
+(78, 'Sick Puppies ', '2012-06-11 10:40:31'),
+(79, 'Kid Rock ', '2012-06-11 10:58:02'),
+(80, 'Stone Sour ', '2012-06-11 11:02:02'),
+(81, 'Led Zeppelin ', '2012-06-11 11:10:08'),
+(82, 'Bush ', '2012-06-11 11:34:02'),
+(83, 'Chevelle ', '2012-06-11 11:34:02'),
+(84, 'Everlast ', '2012-06-11 11:37:20'),
+(85, 'Ac/dc ', '2012-06-11 11:50:02'),
+(86, 'Korn ', '2012-06-11 11:50:03'),
+(87, 'Breaking Benjamin ', '2012-06-11 11:54:58'),
+(88, 'Lit ', '2012-06-11 12:02:03'),
+(89, 'Trust Company ', '2012-06-11 12:14:02'),
+(90, 'Kings Of Leon ', '2012-06-11 12:14:02'),
+(91, 'Black Crowes ', '2012-06-11 12:18:03'),
+(92, 'Sixx: A.m. ', '2012-06-11 12:22:02'),
+(93, 'Tool ', '2012-06-11 12:30:02'),
+(94, 'Disturbed ', '2012-06-12 02:09:17'),
+(95, 'Offspring ', '2012-06-12 02:09:18'),
+(96, 'Breaking Benjamin / Valora ', '2012-06-12 02:09:18'),
+(97, 'P.o.d. ', '2012-06-12 02:09:19'),
+(98, 'Avenged Sevenfold ', '2012-06-12 02:09:19'),
+(99, 'Becoming The Archetype ', '2012-06-17 05:07:56'),
+(100, 'Napalm Death ', '2012-06-17 05:07:56'),
+(101, 'Parkway Drive ', '2012-06-17 05:07:56'),
+(102, 'Bleeding Through ', '2012-06-17 05:07:56'),
+(103, 'A Life Once Lost ', '2012-06-17 05:07:56'),
+(104, 'Motorhead ', '2012-06-17 05:07:56'),
+(105, 'Slayer ', '2012-06-17 05:07:56'),
+(106, 'Killswitch Engage ', '2012-06-17 05:07:56'),
+(107, 'Gojira ', '2012-06-17 05:07:56'),
+(108, 'Megadeth ', '2012-06-17 05:07:56'),
+(109, 'Ihsahn ', '2012-06-17 05:12:48'),
+(110, 'Kataklysm ', '2012-06-17 05:12:48'),
+(111, 'Pantera ', '2012-06-17 05:15:42'),
+(112, 'Slipknot ', '2012-06-17 05:30:42'),
+(113, 'Lamb Of God ', '2012-06-17 05:32:06'),
+(114, 'Dethklok ', '2012-06-17 05:35:22'),
+(115, 'Cannibal Corpse ', '2012-06-17 05:39:20'),
+(116, 'Dillinger  Escape Plan  ', '2012-06-17 05:49:56'),
+(117, 'Prong ', '2012-06-17 05:52:34'),
+(118, 'Tardy Brothers ', '2012-06-17 05:53:07'),
+(119, 'August Burns Red ', '2012-06-17 05:58:49'),
+(120, 'Mnemic ', '2012-06-17 06:02:10'),
+(121, 'Iron Maiden ', '2012-06-17 06:06:58'),
+(122, 'Godsmack ', '2012-06-17 06:16:34'),
+(123, 'Nine Inch Nails ', '2012-06-17 06:26:38'),
+(124, 'Pink Floyd ', '2012-06-17 06:43:54'),
+(125, 'Live ', '2012-06-17 06:51:40'),
+(126, 'Deuce ', '2012-06-17 06:51:40'),
+(127, 'Puddle Of Mudd ', '2012-06-17 07:01:14'),
+(128, 'Soundgarden ', '2012-06-17 07:06:57'),
+(129, 'Rob Zombie ', '2012-06-17 07:20:55'),
+(130, 'Alice In Chains ', '2012-06-17 07:45:02');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `last`
+--
+
+CREATE TABLE IF NOT EXISTS `last` (
+  `rank` int(11) NOT NULL,
+  `artist_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  PRIMARY KEY (`rank`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+--
+-- Dumping data for table `last`
+--
+
+INSERT INTO `last` (`rank`, `artist_id`, `song_id`) VALUES
+(1, 92, 50),
+(2, 55, 61),
+(3, 57, 100),
+(4, 129, 99),
+(5, 63, 98),
+(6, 128, 97),
+(7, 67, 96),
+(8, 127, 95),
+(9, 62, 6),
+(10, 125, 93);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playlog`
+--
+
+CREATE TABLE IF NOT EXISTS `playlog` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `artist_id` int(11) NOT NULL,
+  `song_id` int(11) NOT NULL,
+  `time_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `artist_id` (`artist_id`,`song_id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=42 ;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `song`
+--
+
+CREATE TABLE IF NOT EXISTS `song` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(75) NOT NULL,
+  `artist_id` int(11) NOT NULL,
+  `date_added` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=103 ;
+
+--
+-- Dumping data for table `song`
+--
+
+INSERT INTO `song` (`id`, `name`, `artist_id`, `date_added`) VALUES
+(5, ' The Beautiful People', 61, '2012-06-11 09:14:52'),
+(6, ' Bully', 62, '2012-06-11 09:14:53'),
+(7, ' Dream On', 60, '2012-06-11 09:14:53'),
+(8, ' Not Again', 56, '2012-06-11 09:14:53'),
+(9, ' December', 55, '2012-06-11 09:14:53'),
+(10, ' These Days', 57, '2012-06-11 09:14:53'),
+(11, ' All Apologies', 58, '2012-06-11 09:14:53'),
+(12, ' You''re A Lie', 59, '2012-06-11 09:16:33'),
+(13, ' Fade To Black', 63, '2012-06-11 09:16:33'),
+(14, ' Country Song', 64, '2012-06-11 09:16:33'),
+(15, ' Pardon Me', 65, '2012-06-11 09:20:22'),
+(16, ' A Warrior''s Call', 66, '2012-06-11 09:26:02'),
+(17, ' Sex Type Thing', 67, '2012-06-11 09:30:02'),
+(18, ' Coming Down', 68, '2012-06-11 09:34:03'),
+(19, ' Paradise City', 69, '2012-06-11 09:38:03'),
+(20, ' Holiday', 70, '2012-06-11 09:54:03'),
+(21, ' Better Man', 71, '2012-06-11 09:58:02'),
+(22, ' Burn It Down', 72, '2012-06-11 09:58:03'),
+(23, ' Walk', 57, '2012-06-11 10:02:02'),
+(24, ' Animal I Have Become', 73, '2012-06-11 10:14:03'),
+(25, ' Mama, I''m Coming Home', 74, '2012-06-11 10:14:03'),
+(26, ' Cumbersome', 75, '2012-06-11 10:18:03'),
+(27, ' It''s Not My Time', 76, '2012-06-11 10:26:02'),
+(28, ' We''re Not Gonna Take It', 77, '2012-06-11 10:30:02'),
+(29, ' Diamond Eyes', 62, '2012-06-11 10:32:09'),
+(30, ' Basket Case', 70, '2012-06-11 10:37:43'),
+(31, ' You''re Going Down', 78, '2012-06-11 10:40:31'),
+(32, ' Bawitdaba', 79, '2012-06-11 10:58:02'),
+(33, ' Numb', 72, '2012-06-11 11:02:01'),
+(34, ' Say You''ll Haunt Me', 80, '2012-06-11 11:02:02'),
+(35, ' Lithium', 58, '2012-06-11 11:06:02'),
+(36, ' The Ocean', 81, '2012-06-11 11:10:08'),
+(37, ' Love In An Elevator', 60, '2012-06-11 11:22:02'),
+(38, ' Sweet Dreams', 61, '2012-06-11 11:27:41'),
+(39, ' The Sound Of Winter', 82, '2012-06-11 11:34:02'),
+(40, ' Send The Pain Below', 83, '2012-06-11 11:34:03'),
+(41, ' What It''s Like', 84, '2012-06-11 11:37:20'),
+(42, ' Highway To Hell', 85, '2012-06-11 11:50:02'),
+(43, ' Make Me Bad', 86, '2012-06-11 11:50:03'),
+(44, ' So Cold', 87, '2012-06-11 11:54:58'),
+(45, ' Sad But True', 63, '2012-06-11 12:02:03'),
+(46, ' My Own Worst Enemy', 88, '2012-06-11 12:02:03'),
+(47, ' Heart In My Hands', 89, '2012-06-11 12:14:02'),
+(48, ' Use Somebody', 90, '2012-06-11 12:14:02'),
+(49, ' Hard To Handle', 91, '2012-06-11 12:18:03'),
+(50, ' Lies Of The Beautiful People', 92, '2012-06-11 12:22:02'),
+(51, ' Outside', 56, '2012-06-11 12:27:38'),
+(52, ' Sober', 93, '2012-06-11 12:30:02'),
+(53, ' Inside The Fire', 94, '2012-06-12 02:09:18'),
+(54, ' Glycerine', 82, '2012-06-12 02:09:18'),
+(55, ' Breaking The Habit', 72, '2012-06-12 02:09:18'),
+(56, ' Days Go By', 95, '2012-06-12 02:09:18'),
+(57, ' Blow Me Away', 96, '2012-06-12 02:09:18'),
+(58, ' Live And Let Die', 69, '2012-06-12 02:09:18'),
+(59, ' Youth Of The Nation', 97, '2012-06-12 02:09:19'),
+(60, ' So Far Away', 98, '2012-06-12 02:09:19'),
+(61, ' Shine', 55, '2012-06-12 02:09:19'),
+(62, ' Fallen', 66, '2012-06-12 02:14:03'),
+(63, ' Into Oblivion', 99, '2012-06-17 05:07:56'),
+(64, ' Quarantined', 100, '2012-06-17 05:07:56'),
+(65, ' Sleepwalker', 101, '2012-06-17 05:07:56'),
+(66, ' Love Lost In A Hail Of Gunfire', 102, '2012-06-17 05:07:56'),
+(67, ' Vulture', 103, '2012-06-17 05:07:56'),
+(68, ' I Know How To Die', 104, '2012-06-17 05:07:56'),
+(69, ' Epidemic', 105, '2012-06-17 05:07:56'),
+(70, ' Self Revolution', 106, '2012-06-17 05:07:56'),
+(71, ' L''enfent Sauvage', 107, '2012-06-17 05:07:56'),
+(72, ' Holy Wars', 108, '2012-06-17 05:07:56'),
+(73, ' The Paranoid', 109, '2012-06-17 05:12:48'),
+(74, ' Iron Will', 110, '2012-06-17 05:12:48'),
+(75, ' Piss', 111, '2012-06-17 05:15:42'),
+(76, ' Psycho Holiday', 111, '2012-06-17 05:18:17'),
+(77, ' Wait And Bleed', 112, '2012-06-17 05:30:42'),
+(78, ' Ghost Walking', 113, '2012-06-17 05:32:06'),
+(79, ' Laser Canon Death Sentence', 114, '2012-06-17 05:35:22'),
+(80, ' Demented Aggression', 115, '2012-06-17 05:39:20'),
+(81, ' Farewell Mona Lisa', 116, '2012-06-17 05:49:56'),
+(82, ' Eternal Heat', 117, '2012-06-17 05:52:34'),
+(83, ' Fate''s Call', 118, '2012-06-17 05:53:07'),
+(84, ' Composure', 119, '2012-06-17 05:58:49'),
+(85, ' Transcend', 120, '2012-06-17 06:02:10'),
+(86, ' Children Of The Damned', 121, '2012-06-17 06:06:58'),
+(87, ' Daughter', 71, '2012-06-17 06:10:56'),
+(88, ' Rocky Mountain Way', 122, '2012-06-17 06:16:34'),
+(89, ' Janie''s Got A Gun', 60, '2012-06-17 06:20:34'),
+(90, ' Head Like A Hole', 123, '2012-06-17 06:26:38'),
+(91, ' Falling Away From Me', 86, '2012-06-17 06:41:10'),
+(92, ' Wish You Were Here', 124, '2012-06-17 06:43:55'),
+(93, ' I Alone', 125, '2012-06-17 06:51:40'),
+(94, ' America', 126, '2012-06-17 06:51:40'),
+(95, ' She Hates Me', 127, '2012-06-17 07:01:14'),
+(96, ' Vasoline', 67, '2012-06-17 07:04:39'),
+(97, ' Live To Rise', 128, '2012-06-17 07:06:57'),
+(98, ' Blackened', 63, '2012-06-17 07:11:27'),
+(99, ' Dragula', 129, '2012-06-17 07:20:55'),
+(100, ' Bridge Burning', 57, '2012-06-17 07:23:09'),
+(101, ' Still Counting', 66, '2012-06-17 07:45:02'),
+(102, ' I Stay Away', 130, '2012-06-17 07:45:02');
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;</code></pre>
+<p>The code that is not working is commented out on the 98rockcron source.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521/1</link>
+        <pubDate>Sun, 17 Jun 2012 07:49:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-445521-1</guid>
+        <source url="https://forum.moparisthebest.com/t/php-mysql-all-results-return-empty-if-first-select-is-empty/445521.rss">PHP mysql all results return empty if first SELECT is empty</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,490 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Adding Delay</title>
+    <link>https://forum.moparisthebest.com/t/adding-delay/2490</link>
+    <description>hey all, i found a power arsonist script online but i am having some trouble changing the delay on it. it chops the wood perfectly then it tries to light it on fire but it doesnt wait long enough for the fire to start, instead it just makes my guy take a step back and start with a new log. thts why only like 12 outta 27 logs actually light on fire. is there any way i can change the delay time so that the script waits long for the log to light on fire? if anyone cud help tht would be awesome. thanx
+
+
+
+
+[code]
+/**
+ * @author RegeX, pd
+ * modded from PowerChopper to PowerArsonist by Morgoth
+ */
+public class PowerArsonist extends Script
+		implements ServerMessageListener {
+
+	public static String[] commands = { &quot;powerArsonist&quot; };
+
+	// incomplete
+	private static final String[] TREES = {
+		&quot;TREE:1276,1278&quot;,
+		&quot;OAK:1281&quot;,
+		&quot;WILLOW:1308,5551,5552,5553&quot;,
+		&quot;YEW:1309&quot;
+	};
+	private static final int empty = 32767;
+
+	private long startTime = System.currentTimeMillis();
+
+	private String treeName;
+	private int[] treeType;
+
+	private Tile treePos;
+	private Tile returnTile;
+
+	private int treeCount;
+	private int attachCount;
+
+	private boolean burning;
+
+	public boolean start(String cmd, String[] args) {
+		if (args.length &lt; 1) {
+			log(&quot;Usage: powerArsonist([Tree Type])&quot;);
+			return false;
+		}
+
+		treeType = getTreesForName(args[0]);
+
+		if (treeType == null) {
+			log(&quot;Tree type was invalid (&quot; + args[0] + &quot;)&quot;);
+			return false;
+		}
+
+		EventManager.addServerMessageListener(this);
+		return true;
+	}
+
+	public void serverMessage(String message) {
+		if (message.indexOf(&quot;you are dead&quot;) != -1) {
+			log(&quot;You died, quitting!&quot;);
+			shutdown();
+		} else if (message.indexOf(&quot;carefully attach&quot;) != -1) {
+			attachCount++;
+		} else if (message.indexOf(&quot;some &quot; + treeName.toLowerCase() + &quot; logs&quot;) != -1) {
+			treeCount++;
+		}
+	}
+
+	public long run(long lastExecuted) {
+		runProgress();
+
+		long ticks = runCombat();
+		if (ticks != 0)
+			return ticks;
+
+		ticks = runBurn();
+		if (ticks != 0)
+			return ticks;
+
+		return runChop();
+	}
+
+	private void runProgress() {
+		if (treeCount % 100 == 0 &amp;&amp; treeCount != 0) {
+			log(&quot;You have cut &quot; + treeCount + &quot; trees!&quot;);
+			log(&quot;You have reattached axe head &quot; + attachCount + &quot; times!&quot;);
+			log(&quot;Since &quot; + ((System.currentTimeMillis() - startTime) / 60000) +
+					&quot; minutes ago&quot;);
+			treeCount++;
+		}
+	}
+
+	private long runCombat() {
+		if (!inCombat(myPlayer())) {
+			if (returnTile != null) {
+				log(&quot;Returning to pre-combat tile...&quot;);
+				walk(returnTile);
+				returnTile = null;
+				return random(5000, 6000);
+			}
+			return 0;
+		} else {
+			log(&quot;Running away from combat... &quot;);
+			returnTile = getPosition(myPlayer());
+			Tile pos = returnTile;
+
+			do {
+				pos.x += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(5, 10);
+				pos.y += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(5, 10);
+			} while (!canReach(pos));
+
+			walk(pos);
+			return random(5000, 6000);
+		}
+	}
+
+	private long runBurn() {
+		if (getInvCountSuffix(&quot;ogs&quot;) == 0 &amp;&amp; burning) {
+			burning = false;
+			return 0;
+		}
+
+		if (burning)
+			return burnLogs();
+
+		if (inventoryCount() == 28) {
+			log(&quot;Time to BURN!!!&quot;);
+			burning = true;
+			return 1;
+		}
+		return 0;
+	}
+
+	private long runChop() {
+		if (myPlayer().anim == -1) {
+			int treeID = findObject(treeType);
+			if (treeID != -1) {
+				Tile pos = objectPos(treeID);
+				if (distanceTo(pos) &gt; 5) {
+					walk(pos);
+					return random(4500, 6500);
+				} else {
+					treePos = pos;
+					atObject(treeID, 1);
+					return random(3000, 3500);
+				}
+			} else {
+				log(&quot;Could not find tree, waiting&quot;);
+				return random(3000, 3500);
+			}
+		} else if (treePos != null &amp;&amp; myPlayer().anim != -1) {
+			NPC ent = findNearestNPCByName(treeName);
+			if (ent == null)
+				return 200;
+			if (getPosition(ent).distanceTo(treePos) &lt; 3) {
+				log(&quot;Ent appeared near us, stop chopping.&quot;);
+				walk(getPosition(myPlayer()));
+				treePos = null;
+			}
+			return random(3000, 3500);
+		}
+
+		return 200;
+	}
+	
+	private long burnLogs() {
+
+		if (getTab() != Constants.TAB_INVENTORY) {
+			selectTab(Constants.TAB_INVENTORY);
+			return random(500, 1000);
+		}
+
+		if (getInvCountPrefix(&quot;Tinderbox&quot;) == 0)
+			return random(250, 500);
+
+		
+		Tile pos = getPosition(myPlayer());
+		if (getObjectAt(pos) != -1) {
+			pos.x += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(1, 3);
+			pos.y += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(1, 3);
+			if (canReach(pos)) {
+				walk(pos);
+				return random(1000, 2000);
+			}			
+		}
+		//log(&quot;got till inv check&quot;);
+		int[] inv = getInventory();
+		for (int i = 0; i &lt; inv.length; i++) {
+			if (inv[i] != -1 &amp;&amp; getItemName(inv[i]).endsWith(&quot;ogs&quot;)) {
+				if (!isItemSelected()) {
+					selectItem(getInventory()[locateInvPrefix(&quot;Tinderbox&quot;)],
+							locateInvPrefix(&quot;Tinderbox&quot;));
+					return random(500, 1000);
+				} else {
+					useWithItem(getInventory()[locateInvSuffix(&quot;ogs&quot;)],
+							locateInvSuffix(&quot;ogs&quot;));
+					return random(3000, 4500);
+				}
+			} 
+		}
+		return 0;
+	}
+
+	
+
+	private final int[] getTreesForName(String name) {
+		for (String log : TREES) {
+			if (log.startsWith(name.toUpperCase())) {
+				treeName = new String(log.split(&quot;:&quot;)[0].substring(0, 1).toUpperCase() +
+						log.split(&quot;:&quot;)[0].substring(1).toLowerCase());
+				String[] trees = log.split(&quot;:&quot;)[1].split(&quot;,&quot;);
+				int[] rez = new int[trees.length];
+				for (int i = 0; i &lt; rez.length; i++)
+					rez[i] = Integer.parseInt(trees[i]);
+				return rez;
+			}
+		}
+		return null;
+	}
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Thu, 11 May 2006 01:26:35 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/adding-delay/2490.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Adding Delay</title>
+        <dc:creator><![CDATA[@sdouble sdouble]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sdouble">@sdouble</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, that would be the way to add a longer wait.  There are better ways to do this, but if you are just trying to make a simple edit, do that and it’ll work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-delay/2490/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-delay/2490/3</link>
+        <pubDate>Thu, 11 May 2006 01:26:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-2490-3</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-delay/2490.rss">Adding Delay</source>
+      </item>
+      <item>
+        <title>Adding Delay</title>
+        <dc:creator><![CDATA[@muerte4 muerte4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/muerte4">@muerte4</a> wrote:</p>
+          <blockquote>
+              <p><code>useWithItem(getInventory()[locateInvSuffix("ogs")],
+							locateInvSuffix("ogs"));
+					return random(3000, 4500);</code></p>
+<p>Change this to a greater number I think… try return random(8000, 8500)… if that’s too slow try something smaller.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-delay/2490/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-delay/2490/2</link>
+        <pubDate>Mon, 08 May 2006 01:30:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-2490-2</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-delay/2490.rss">Adding Delay</source>
+      </item>
+      <item>
+        <title>Adding Delay</title>
+        <dc:creator><![CDATA[@SuspectZero SuspectZero]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/suspectzero">@SuspectZero</a> wrote:</p>
+          <blockquote>
+              <p>hey all, i found a power arsonist script online but i am having some trouble changing the delay on it. it chops the wood perfectly then it tries to light it on fire but it doesnt wait long enough for the fire to start, instead it just makes my guy take a step back and start with a new log. thts why only like 12 outta 27 logs actually light on fire. is there any way i can change the delay time so that the script waits long for the log to light on fire? if anyone cud help tht would be awesome. thanx</p>
+<pre><code class="lang-auto">/**
+ * @author RegeX, pd
+ * modded from PowerChopper to PowerArsonist by Morgoth
+ */
+public class PowerArsonist extends Script
+		implements ServerMessageListener {
+
+	public static String[] commands = { "powerArsonist" };
+
+	// incomplete
+	private static final String[] TREES = {
+		"TREE:1276,1278",
+		"OAK:1281",
+		"WILLOW:1308,5551,5552,5553",
+		"YEW:1309"
+	};
+	private static final int empty = 32767;
+
+	private long startTime = System.currentTimeMillis();
+
+	private String treeName;
+	private int[] treeType;
+
+	private Tile treePos;
+	private Tile returnTile;
+
+	private int treeCount;
+	private int attachCount;
+
+	private boolean burning;
+
+	public boolean start(String cmd, String[] args) {
+		if (args.length &lt; 1) {
+			log("Usage: powerArsonist([Tree Type])");
+			return false;
+		}
+
+		treeType = getTreesForName(args[0]);
+
+		if (treeType == null) {
+			log("Tree type was invalid (" + args[0] + ")");
+			return false;
+		}
+
+		EventManager.addServerMessageListener(this);
+		return true;
+	}
+
+	public void serverMessage(String message) {
+		if (message.indexOf("you are dead") != -1) {
+			log("You died, quitting!");
+			shutdown();
+		} else if (message.indexOf("carefully attach") != -1) {
+			attachCount++;
+		} else if (message.indexOf("some " + treeName.toLowerCase() + " logs") != -1) {
+			treeCount++;
+		}
+	}
+
+	public long run(long lastExecuted) {
+		runProgress();
+
+		long ticks = runCombat();
+		if (ticks != 0)
+			return ticks;
+
+		ticks = runBurn();
+		if (ticks != 0)
+			return ticks;
+
+		return runChop();
+	}
+
+	private void runProgress() {
+		if (treeCount % 100 == 0 &amp;&amp; treeCount != 0) {
+			log("You have cut " + treeCount + " trees!");
+			log("You have reattached axe head " + attachCount + " times!");
+			log("Since " + ((System.currentTimeMillis() - startTime) / 60000) +
+					" minutes ago");
+			treeCount++;
+		}
+	}
+
+	private long runCombat() {
+		if (!inCombat(myPlayer())) {
+			if (returnTile != null) {
+				log("Returning to pre-combat tile...");
+				walk(returnTile);
+				returnTile = null;
+				return random(5000, 6000);
+			}
+			return 0;
+		} else {
+			log("Running away from combat... ");
+			returnTile = getPosition(myPlayer());
+			Tile pos = returnTile;
+
+			do {
+				pos.x += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(5, 10);
+				pos.y += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(5, 10);
+			} while (!canReach(pos));
+
+			walk(pos);
+			return random(5000, 6000);
+		}
+	}
+
+	private long runBurn() {
+		if (getInvCountSuffix("ogs") == 0 &amp;&amp; burning) {
+			burning = false;
+			return 0;
+		}
+
+		if (burning)
+			return burnLogs();
+
+		if (inventoryCount() == 28) {
+			log("Time to BURN!!!");
+			burning = true;
+			return 1;
+		}
+		return 0;
+	}
+
+	private long runChop() {
+		if (myPlayer().anim == -1) {
+			int treeID = findObject(treeType);
+			if (treeID != -1) {
+				Tile pos = objectPos(treeID);
+				if (distanceTo(pos) &gt; 5) {
+					walk(pos);
+					return random(4500, 6500);
+				} else {
+					treePos = pos;
+					atObject(treeID, 1);
+					return random(3000, 3500);
+				}
+			} else {
+				log("Could not find tree, waiting");
+				return random(3000, 3500);
+			}
+		} else if (treePos != null &amp;&amp; myPlayer().anim != -1) {
+			NPC ent = findNearestNPCByName(treeName);
+			if (ent == null)
+				return 200;
+			if (getPosition(ent).distanceTo(treePos) &lt; 3) {
+				log("Ent appeared near us, stop chopping.");
+				walk(getPosition(myPlayer()));
+				treePos = null;
+			}
+			return random(3000, 3500);
+		}
+
+		return 200;
+	}
+	
+	private long burnLogs() {
+
+		if (getTab() != Constants.TAB_INVENTORY) {
+			selectTab(Constants.TAB_INVENTORY);
+			return random(500, 1000);
+		}
+
+		if (getInvCountPrefix("Tinderbox") == 0)
+			return random(250, 500);
+
+		
+		Tile pos = getPosition(myPlayer());
+		if (getObjectAt(pos) != -1) {
+			pos.x += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(1, 3);
+			pos.y += (random(10, 20) % 2 == 0 ? -1 : 1 ) * random(1, 3);
+			if (canReach(pos)) {
+				walk(pos);
+				return random(1000, 2000);
+			}			
+		}
+		//log("got till inv check");
+		int[] inv = getInventory();
+		for (int i = 0; i &lt; inv.length; i++) {
+			if (inv[i] != -1 &amp;&amp; getItemName(inv[i]).endsWith("ogs")) {
+				if (!isItemSelected()) {
+					selectItem(getInventory()[locateInvPrefix("Tinderbox")],
+							locateInvPrefix("Tinderbox"));
+					return random(500, 1000);
+				} else {
+					useWithItem(getInventory()[locateInvSuffix("ogs")],
+							locateInvSuffix("ogs"));
+					return random(3000, 4500);
+				}
+			} 
+		}
+		return 0;
+	}
+
+	
+
+	private final int[] getTreesForName(String name) {
+		for (String log : TREES) {
+			if (log.startsWith(name.toUpperCase())) {
+				treeName = new String(log.split(":")[0].substring(0, 1).toUpperCase() +
+						log.split(":")[0].substring(1).toLowerCase());
+				String[] trees = log.split(":")[1].split(",");
+				int[] rez = new int[trees.length];
+				for (int i = 0; i &lt; rez.length; i++)
+					rez[i] = Integer.parseInt(trees[i]);
+				return rez;
+			}
+		}
+		return null;
+	}
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/adding-delay/2490/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/adding-delay/2490/1</link>
+        <pubDate>Sun, 07 May 2006 16:28:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-2490-1</guid>
+        <source url="https://forum.moparisthebest.com/t/adding-delay/2490.rss">Adding Delay</source>
+      </item>
+  </channel>
+</rss>

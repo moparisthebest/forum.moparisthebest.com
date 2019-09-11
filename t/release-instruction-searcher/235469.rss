@@ -1,0 +1,1818 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[RELEASE] Instruction Searcher</title>
+    <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469</link>
+    <description>Since I&#39;m moving to asm, this will be useless (well most of it).
+It is a BCEL instruction searcher.
+It has some nice features, which you haven&#39;t seen before, just read information above methods to know how to use it.
+If you got questions just ask
+
+[code]
+/***********************************
+ * This is created by Qauters,			     *
+ * You may use it as long as you give credit!	*
+ ***********************************/
+package com.qp.rs.updater;
+
+import java.util.ArrayList;
+
+import org.apache.bcel.Constants;
+import org.apache.bcel.classfile.LocalVariable;
+import org.apache.bcel.classfile.Method;
+import org.apache.bcel.generic.BranchHandle;
+import org.apache.bcel.generic.CHECKCAST;
+import org.apache.bcel.generic.CPInstruction;
+import org.apache.bcel.generic.ClassGen;
+import org.apache.bcel.generic.ConstantPoolGen;
+import org.apache.bcel.generic.Instruction;
+import org.apache.bcel.generic.InstructionHandle;
+import org.apache.bcel.generic.InstructionList;
+import org.apache.bcel.generic.LocalVariableInstruction;
+import org.apache.bcel.generic.MethodGen;
+import org.apache.bcel.generic.ObjectType;
+
+/**
+ * This is an instruction searcher,
+ * use it to locate instructions in an easy way.
+ * 
+ * @author Bert
+ */
+public class QIS {
+	private int index = -1;
+	private ConstantPoolGen cp = null;
+	private MethodGen mg = null;
+	private InstructionList il = null;
+	private InstructionHandle[] handles = null;
+
+	/**
+	 * Constructs a new QIS
+	 * @param cg The ClassGen where the method belongs to.
+	 * @param m The Method to search in
+	 */
+	public QIS(ClassGen cg, Method m)
+	{
+		this.cp = cg.getConstantPool();
+		this.mg = new MethodGen(m, cg.getClassName(), cp);
+		this.il = this.mg.getInstructionList();
+		this.handles = this.il.getInstructionHandles();
+	}
+
+	/**
+	 * The current instruction list, usefull if you delete instructions.
+	 * Note: If you delete instructions, you may still find them when you search!!!
+	 * Don&#39;t delete instructions if you reloop over it later (otherwise you&#39;re bound to get errors)
+	 * @return InstructionList
+	 */
+	public InstructionList getInstructionList()
+	{
+		return il;
+	}
+
+	/**
+	 * Usefull if you modified the instruction list, and want to get the modified method.
+	 * @return The method
+	 */
+	public Method getMethod()
+	{
+		mg.setInstructionList(il);
+		mg.stripAttributes(true);
+		mg.setMaxLocals();
+		mg.setMaxStack();
+		return mg.getMethod();
+	}
+
+	/**
+	 * Get&#39;s the current index
+	 * @return current index
+	 */
+	public int getIndex() { return this.index; }
+
+	/**
+	 * Set&#39;s the current index
+	 * @param index Index to set to
+	 */
+	public void setIndex(int index) { this.index = index; }
+
+	/**
+	 * Get&#39;s the constant pool index, using a given constant tag and value.
+	 * @param tag Tag of the constant (Like Constants.CONSTANT_INTEGER)
+	 * @param value value to search for (Like new Double(3.4)), that way you can use primatives.
+	 * @return index of the constant or -1 if not found.
+	 */
+	public int getConstantPoolIndex(byte tag, Object value)
+	{
+		switch(tag)
+		{
+		case Constants.CONSTANT_Class:
+			if(value instanceof String)
+			{
+				return cp.lookupClass((String) value);
+			}
+			break;
+		case Constants.CONSTANT_Double:
+			if(value instanceof Double)
+			{
+				return cp.lookupDouble((Double) value);
+			}
+			break;
+		case Constants.CONSTANT_Float:
+			if(value instanceof Float)
+			{
+				return cp.lookupFloat((Float) value);
+			}
+			break;
+		case Constants.CONSTANT_Integer:
+			if(value instanceof Integer)
+			{
+				return cp.lookupInteger((Integer) value);
+			}
+			break;
+		case Constants.CONSTANT_InterfaceMethodref:
+			if(value instanceof MethodGen)
+			{
+				return cp.lookupInterfaceMethodref((MethodGen) value);
+			}
+			break;
+		case Constants.CONSTANT_Long:
+			if(value instanceof Long)
+			{
+				return cp.lookupLong((Long) value);
+			}
+			break;
+		case Constants.CONSTANT_Methodref:
+			if(value instanceof MethodGen)
+			{
+				return cp.lookupMethodref((MethodGen) value);
+			}
+			break;
+		case Constants.CONSTANT_String:
+			if(value instanceof String)
+			{
+				return cp.lookupString((String) value);
+			}
+			break;
+		case Constants.CONSTANT_Utf8:
+			if(value instanceof String)
+			{
+				return cp.lookupUtf8((String) value);
+			}
+		}
+
+		return -1;
+	}
+
+	/**
+	 * Get&#39;s the argument instructions of the current instruction.
+	 * First dimension will be the number of arguments.
+	 * Second dimension the instructions related to that argument.
+	 * &lt;p/&gt;
+	 * Example:
+	 * &lt;br&gt;
+	 * IfInstructions have two arguments. But one of them could be (GETSTATIC ICONST_M1 IXOR) etc.
+	 * @return
+	 */
+	public InstructionHandle[][] getArgumentInstructions()
+	{
+		int stackConsuming = this.handles[this.index].getInstruction().consumeStack(cp);
+		ArrayList&lt;InstructionHandle[]&gt; args = new ArrayList&lt;InstructionHandle[]&gt;();
+		int t_index = this.index;
+
+		while(stackConsuming &gt; 0)
+		{
+			ArrayList&lt;InstructionHandle&gt; instructions = new ArrayList&lt;InstructionHandle&gt;();
+			
+			int t_consuming = 0;
+			while(t_consuming &gt;= 0)
+			{
+				//Previous instruction
+				t_index--;
+				if(t_index &lt; 0) throw new RuntimeException(&quot;Stack calculation error! More produced then consumed.&quot;);
+				
+				int produceStack = this.handles[t_index].getInstruction().produceStack(cp);
+				int consumeStack = this.handles[t_index].getInstruction().consumeStack(cp);
+
+				if(produceStack == Constants.UNDEFINED || consumeStack == Constants.UNDEFINED) throw new RuntimeException(&quot;Undefined instruction error!&quot;);
+				if(produceStack == Constants.UNPREDICTABLE || consumeStack == Constants.UNPREDICTABLE) throw new RuntimeException(&quot;Unpredictable stack error!&quot;);
+				
+				instructions.add(this.handles[t_index]);
+				t_consuming -= produceStack;
+				t_consuming += consumeStack;
+			}
+			stackConsuming += t_consuming;
+			args.add(instructions.toArray(new InstructionHandle[0]));
+		}
+
+		//Inverse arrays!
+		InstructionHandle[][] values = args.toArray(new InstructionHandle[0][]);
+		InstructionHandle[][] returnValues = new InstructionHandle[values.length][];
+
+		for(int off = 0; off &lt; values.length; off++)
+		{
+			int vOff = values.length - off - 1;
+			returnValues[off] = new InstructionHandle[values[vOff].length];
+
+			for(int off2 = 0; off2 &lt; values[vOff].length; off2++)
+			{
+				int vOff2 = values[vOff].length - off2 - 1;
+				returnValues[off][off2] = values[vOff][vOff2];
+			}
+		}
+
+		return returnValues;
+	}
+
+	/**
+	 * Get&#39;s the current instruction
+	 * @return The current instruction or null if none
+	 */
+	public Instruction current()
+	{
+		if(this.index &lt; 0 || this.index &gt;= handles.length) return null;
+		return this.handles[this.index].getInstruction();
+	}
+
+	/**
+	 * Get&#39;s the current instruction handle.
+	 * Usefull for getting the target etc,
+	 * because bcel doesn&#39;t copy it, into the instruction.
+	 * @return The current instruction handle or null if none
+	 */
+	public InstructionHandle currentHandle()
+	{
+		if(this.index &lt; 0 || this.index &gt;= handles.length) return null;
+		return this.handles[this.index];
+	}
+
+	/**
+	 * Get&#39;s the next instruction
+	 * @return The next instruction or null if none
+	 */
+	public Instruction next()
+	{
+		this.index++;
+		return current();
+	}
+
+	/**
+	 * Get&#39;s previous instruction or null if none
+	 * @return
+	 */
+	public Instruction previous()
+	{
+		this.index--;
+		return current();
+	}
+
+	/**
+	 * Get&#39;s the next instruction, using the given type.
+	 * Like next(AALOAD.class) will return an AALOAD instruction!
+	 * @param type the type of the instruction to find (like AALOAD.class)
+	 * @return The next instruction, using the given type or null if none
+	 */
+	public &lt;T&gt; T next(Class&lt;T&gt; type)
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(type.isAssignableFrom(this.handles[off].getInstruction().getClass()))
+			{
+				this.index = off;
+				return type.cast(this.handles[off].getInstruction());
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Get&#39;s the previous instruction, using the given type.
+	 * Like previous(AALOAD.class) will return an AALOAD instruction!
+	 * @param type the type of the instruction to find (like AALOAD.class)
+	 * @return The previous instruction, using the given type or null if none
+	 */
+	public &lt;T&gt; T previous(Class&lt;T&gt; type)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(type.isAssignableFrom(this.handles[off].getInstruction().getClass()))
+			{
+				this.index = off;
+				return type.cast(this.handles[off].getInstruction());
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Get&#39;s the target of the current instruction
+	 * @return Index of the target, or -1 if none!
+	 */
+	public int getTargetIndex()
+	{
+		if(current() == null) return -1;
+		if(!(this.handles[this.index] instanceof BranchHandle)) return -1;
+
+		InstructionHandle target = ((BranchHandle) this.handles[this.index]).getTarget();
+		if(target == null) return -1;
+
+		for(int hOff = 0; hOff &lt; this.handles.length; hOff++)
+		{
+			if(this.handles[hOff].equals(target)) return hOff;
+		}
+
+		return -1;
+	}
+
+	/**
+	 * Get&#39;s the next constantpool instruction using the given index
+	 * @param index Index to search for
+	 * @return the found CPInstruction or null
+	 */
+	public CPInstruction nextConstantPoolInstruction(int index)
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof CPInstruction)
+			{
+				if(((CPInstruction) this.handles[off].getInstruction()).getIndex() == index)
+				{
+					this.index = off;
+					return (CPInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get&#39;s the previous constantpool instruction using the given index
+	 * @param index Index to search for
+	 * @return the found CPInstruction or null
+	 */
+	public CPInstruction previousConstantPoolInstruction(int index)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof CPInstruction)
+			{
+				if(((CPInstruction) this.handles[off].getInstruction()).getIndex() == index)
+				{
+					this.index = off;
+					return (CPInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get&#39;s the next Local Variable Instruction, using given index and name
+	 * @param index Index of the local variabel
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return the LocalVariableInstruction or null
+	 */
+	public LocalVariableInstruction nextLocalVariableInstruction(int index, short name )
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof LocalVariableInstruction)
+			{
+				LocalVariableInstruction lvi = (LocalVariableInstruction) this.handles[off].getInstruction();
+				if((name == 0 || lvi.getOpcode() == name) &amp;&amp; lvi.getIndex() == index)
+				{
+					this.index = off;
+					return (LocalVariableInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+	/**
+	 * Get&#39;s the next local variable instruction, using the given instruction&#39;s index and name
+	 * @param i The instruction containing the index
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return The local variable instruction or null
+	 * @see nextLocalVariableInstruction(int index, String name)
+	 */
+	public LocalVariableInstruction nextLocalVariableInstruction(Instruction i, short name)
+	{
+		if(!(i instanceof LocalVariableInstruction)) return null;
+		return nextLocalVariableInstruction(((LocalVariableInstruction) i).getIndex(), name);
+	}
+
+	/**
+	 * Get&#39;s the previous Local Variable Instruction, using given index and name
+	 * @param index Index of the local variabel
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return the LocalVariableInstruction or null
+	 */
+	public LocalVariableInstruction previousLocalVariableInstruction(int index, short name)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof LocalVariableInstruction)
+			{
+				LocalVariableInstruction lvi = (LocalVariableInstruction) this.handles[off].getInstruction();
+				if((name == 0 || lvi.getOpcode() == name) &amp;&amp; lvi.getIndex() == index)
+				{
+					this.index = off;
+					return (LocalVariableInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+	/**
+	 * Get&#39;s the previous local variable instruction, using the given instruction&#39;s index and name
+	 * @param i The instruction containing the index
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return The local variable instruction or null
+	 * @see previousLocalVariableInstruction(int index, String name)
+	 */
+	public LocalVariableInstruction previousLocalVariableInstruction(Instruction i, short name)
+	{
+		if(!(i instanceof LocalVariableInstruction)) return null;
+		return previousLocalVariableInstruction(((LocalVariableInstruction) i).getIndex(), name);
+	}
+
+	/**
+	 * Get&#39;s the next CheckCast using given object type.
+	 * @param type ObjectType to search for. Using null, will return null!
+	 * @return the found checkcast, or null if not found.
+	 */
+	public CHECKCAST nextCheckCast(ObjectType type)
+	{
+		if(type == null) return null;
+
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(handles[off].getInstruction() instanceof CHECKCAST &amp;&amp; 
+					((CHECKCAST) this.handles[off].getInstruction()).getLoadClassType(this.cp).equals(type))
+			{
+				this.index = off;
+				return (CHECKCAST) this.handles[off].getInstruction();
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get&#39;s the previous CheckCast using given object type.
+	 * @param type ObjectType to search for. Using null, will return null!
+	 * @return the found checkcast, or null if not found.
+	 */
+	public CHECKCAST previousCheckCast(ObjectType type)
+	{
+		if(type == null) return null;
+
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() instanceof CHECKCAST &amp;&amp; 
+					((CHECKCAST) this.handles[off].getInstruction()).getLoadClassType(this.cp).equals(type))
+			{
+				this.index = off;
+				return (CHECKCAST) this.handles[off].getInstruction();
+			}
+		}
+
+		return null;
+	}
+}
+[/code]
+
+Example:
+[code]
+if(s.nextConstantPoolInstruction(s.getConstantPoolIndex(Constants.CONSTANT_String, &quot;js5crc&quot;)) == null) continue;
+if(s.nextCheckCast(new ObjectType(&quot;java.net.Socket&quot;)) == null) continue;
+if(s.next(INVOKEVIRTUAL.class) == null) continue;
+IfInstruction i = s.next(GETSTATIC.class);
+InstructionHandle[][] args = s.getArgumentInstructions();
+[/code]
+
+You may want to extend it a bit (search for numbers etc), cause I didn&#39;t need more then this so far.</description>
+    
+    <lastBuildDate>Wed, 15 Oct 2008 15:56:52 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@henry henry]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/henry">@henry</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“qauters, post:12, topic:235469”][quote author=Ollie link=topic=310539.msg2488988#msg2488988 date=1224002659]<br>
+i was thinking more along the lines of</p>
+<p>for(Instruction i = searcher.current; searcher.patternFound; i = searcher.lookup(“FieldInstruction ILOAD ALOAD”)) {<br>
+//…<br>
+searcher.patternFound((FieldInstruction)i, “client”);//method injects and finalises the forloop<br>
+}<br>
+[/quote]<br>
+How would you cast 3 instructions into 1 ^^. Also BCEL comes with an instruction finder which does it mostly like that, but also accepts basic regex.</p>
+<p>It’s kinda what you like really. Anyway I had to change it quite a lot for my move to ASM which I succeeded just a minute ago <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+BCEL gave me some weird error when hooking the HD client.<br>
+It managed to throw an invalid opcode exception when casting cg.replace(m, mg.getMethod()); where the mg.getMethod() is exactly the same as the m -.-</p>
+<p>[code]</p>
+<ul>
+<li>
+<p>Downloading RuneScape - took 9235ms.</p>
+</li>
+<li>
+<p>Deobfuscating RuneScape - took 531ms.</p>
+</li>
+<li>
+<p>Hooking RuneScape version: 513 - took 109ms.</p>
+</li>
+<li>
+<p>Dumping RuneScape.jar - took 266ms.</p>
+</li>
+<li>
+<p>Downloading Loader - took 12547ms.</p>
+</li>
+<li>
+<p>Deobfuscating Loader - took 0ms.</p>
+</li>
+<li>
+<p>Hooking Loader - took 0ms.</p>
+</li>
+<li>
+<p>Dumping Loader.jar - took 16ms.</p>
+</li>
+<li>
+<p>Downloading RuneScape HD - took 7093ms.</p>
+</li>
+<li>
+<p>Deobfuscating RuneScape HD - took 485ms.</p>
+</li>
+<li>
+<p>Hooking RuneScape HD version: 513 - took 109ms.</p>
+</li>
+<li>
+<p>Dumping RuneScape.jar - took 469ms.</p>
+</li>
+<li>
+<p>Downloading Loader HD - took 3656ms.</p>
+</li>
+<li>
+<p>Deobfuscating Loader HD - took 0ms.</p>
+</li>
+<li>
+<p>Hooking Loader - took 0ms.</p>
+</li>
+<li>
+<p>Dumping Loader.jar - took 31ms.<br>
+[/code][/quote]</p>
+</li>
+</ul>
+<p>Nice work with the HD, :).  I haven’t even looked at HD yet, but I plan on making my bot use HD (or atleast have support for it, IF I make one that is lol.)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/16</link>
+        <pubDate>Wed, 15 Oct 2008 15:56:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-16</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>your method looks very procedural and dire to use. you want something more dynamic and looks abit nicer to code.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/15</link>
+        <pubDate>Tue, 14 Oct 2008 23:06:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-15</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>It still remains a personal thing. It just depends on how you like to work, when writing transforms.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/14</link>
+        <pubDate>Tue, 14 Oct 2008 22:51:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-14</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>quaters it selects the first instruction, unless told otherwise</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/13</link>
+        <pubDate>Tue, 14 Oct 2008 22:37:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-13</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ollie, post:11, topic:235469”]i was thinking more along the lines of</p>
+<p>for(Instruction i = searcher.current; searcher.patternFound; i = searcher.lookup(“FieldInstruction ILOAD ALOAD”)) {<br>
+//…<br>
+searcher.patternFound((FieldInstruction)i, “client”);//method injects and finalises the forloop<br>
+}[/quote]<br>
+How would you cast 3 instructions into 1 ^^. Also BCEL comes with an instruction finder which does it mostly like that, but also accepts basic regex.</p>
+<p>It’s kinda what you like really. Anyway I had to change it quite a lot for my move to ASM which I succeeded just a minute ago <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+BCEL gave me some weird error when hooking the HD client.<br>
+It managed to throw an invalid opcode exception when casting cg.replace(m, mg.getMethod()); where the mg.getMethod() is exactly the same as the m -.-</p>
+<pre><code class="lang-auto"> - Downloading RuneScape - took 9235ms.
+ - Deobfuscating RuneScape - took 531ms.
+ - Hooking RuneScape version: 513 - took 109ms.
+ - Dumping RuneScape.jar - took 266ms.
+ - Downloading Loader - took 12547ms.
+ - Deobfuscating Loader - took 0ms.
+ - Hooking Loader - took 0ms.
+ - Dumping Loader.jar - took 16ms.
+
+ - Downloading RuneScape HD - took 7093ms.
+ - Deobfuscating RuneScape HD - took 485ms.
+ - Hooking RuneScape HD version: 513 - took 109ms.
+ - Dumping RuneScape.jar - took 469ms.
+ - Downloading Loader HD - took 3656ms.
+ - Deobfuscating Loader HD - took 0ms.
+ - Hooking Loader - took 0ms.
+ - Dumping Loader.jar - took 31ms.</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/12</link>
+        <pubDate>Tue, 14 Oct 2008 22:29:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-12</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>i was thinking more along the lines of</p>
+<p>for(Instruction i = searcher.current; searcher.patternFound; i = searcher.lookup(“FieldInstruction ILOAD ALOAD”)) {<br>
+//…<br>
+searcher.patternFound((FieldInstruction)i, “client”);//method injects and finalises the forloop<br>
+}</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/11</link>
+        <pubDate>Tue, 14 Oct 2008 16:44:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-11</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>I think s.next(FieldInstruction.class) is better then s.nextFieldInstruction(). Since you have to create tons of unneeded methods.<br>
+It’s a lot easier to implement in that way, since you call the same method. Ofcourse this instruction searcher was far from complete.<br>
+You would still have to implement the specific invoke instructions etc (search for signature/classname/methodname)</p>
+<p>But still BCEL is pretty messy itself, ASM is much cleaner and easier to use.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/10</link>
+        <pubDate>Mon, 13 Oct 2008 22:55:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-10</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>looks rather messy to implement, i prefer a simplistic way which maybe requires more thinking?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/9</link>
+        <pubDate>Mon, 13 Oct 2008 22:21:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-9</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“the bank, post:7, topic:235469”]+1<br>
+Also, one thing that I added to Silver Lining’s searcher (it is the one I use) is the ability to grab the class name and field name via a single method call.  I believe it looks something like this (from memory)</p>
+<p><code>
+public String getClassName() {
+   return ((FieldInstruction) current()).getClassName(cPool);
+}
+</code>I did that simply because it made the rest of the classes a little neater, and so I didn’t have to always cast to FieldInstruction whenever is came time to print the output.</p>
+<p>This of course will only work if the current instruction is a FieldInstruction, so about 90% of the time.[/quote]<br>
+Yea, but since you are using s.next(FieldInstruction.class), you already have a FieldInstruction. So you can just call fi.getClassName(cpg) without casting first.<br>
+Ofcourse, that didn’t work on Silver Lining’s one <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=6" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/8</link>
+        <pubDate>Tue, 07 Oct 2008 20:31:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-8</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@the_bank the bank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_bank">@the_bank</a> wrote:</p>
+          <blockquote>
+              <p>+1<br>
+Also, one thing that I added to Silver Lining’s searcher (it is the one I use) is the ability to grab the class name and field name via a single method call.  I believe it looks something like this (from memory)</p>
+<p><code>
+public String getClassName() {
+   return ((FieldInstruction) current()).getClassName(cPool);
+}
+</code>I did that simply because it made the rest of the classes a little neater, and so I didn’t have to always cast to FieldInstruction whenever is came time to print the output.</p>
+<p>This of course will only work if the current instruction is a FieldInstruction, so about 90% of the time.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/7</link>
+        <pubDate>Tue, 07 Oct 2008 20:28:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-7</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:5, topic:235469”]i like it, especially the generic method for next(Class type)</p>
+<p>i might as well post mines from ages ago, quite similar in some ways,<br>
+i actually have a TODO to try to add generic methods, i just casted the return values</p>
+<p>i use the linked list from InstructionHandle, while you use array indexing. any thoughts/comments?</p>
+<p>…[/quote]<br>
+It depends on how you use it, if you often store the current instruction and reset back to it, then array indexing is faster.<br>
+Every time you call getCurrentIndex, setCurrentIndex, setCurrent etc BCEL has to loop through all instructions. While indexing is just storing it.<br>
+As you don’t reset the position when a search fails, you have to do it manually. Which means a full loop every time.</p>
+<p>That’s why I like indexed one better. But it still remains a question of taste.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/6</link>
+        <pubDate>Tue, 07 Oct 2008 20:12:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-6</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>i like it, especially the generic method for next(Class type)</p>
+<p>i might as well post mines from ages ago, quite similar in some ways,<br>
+i actually have a TODO to try to add generic methods, i just casted the return values</p>
+<p>i use the linked list from InstructionHandle, while you use array indexing. any thoughts/comments?</p>
+<pre><code class="lang-auto">import org.apache.bcel.classfile.*;
+import org.apache.bcel.generic.*;
+import java.util.NoSuchElementException;
+
+/**
+ * a class which searches through instruction lists, has a lot of overloaded methods
+ * it saves its current position, so multiple calls of its method find differant instructions
+ * 
+ * for the methods which iterate (eg. nextFieldInstruction()), if they return dont find
+ * and return null, the current instruction will be at the first/last of the list, so more
+ * searching wont work, to save the current position, use getCurrentIndex()
+ * and setCurrentIndex(), or resetToStart() and resetToEnd()
+ * 
+ * for methods which iterate (eg. nextFieldInstruction()), they start searching from the next
+ * instruction, not the current one. so if you're at a field instruction, nextFieldInstruction wont
+ * find it, but carry on.
+ */
+public class InstructionSearcher {
+	
+	public static final byte MODE_START = 0x01;
+	public static final byte MODE_END = 0x02;
+	
+	protected InstructionList list;
+	protected InstructionHandle current;
+	protected ConstantPoolGen theCPool;
+	
+	/* Constructors */
+	/**
+	 * @param mode Whether to have the current be the first, or last in the list
+	 */
+	public InstructionSearcher(InstructionList list, ConstantPoolGen theCPool, byte mode) {
+		if(list == null)
+			throw new IllegalArgumentException("list cant be null");
+		if(theCPool == null)
+			throw new IllegalArgumentException("theCPool cant be null");
+		if(mode != MODE_START &amp;&amp; mode != MODE_END)
+			throw new IllegalArgumentException("mode has to be MODE_START or MODE_END");
+		current = (mode == MODE_START ? list.getStart() : list.getEnd()); 
+		this.list = list;
+		this.theCPool = theCPool;
+	}
+	
+	public InstructionSearcher(InstructionList list, ConstantPoolGen theCPool) {
+		this(list, theCPool, MODE_START);
+	}
+	
+	public InstructionSearcher(Method theMethod, String className, ConstantPoolGen theCPool, byte mode) {
+		this(new MethodGen(theMethod, className, theCPool).getInstructionList(), theCPool, mode);
+	}
+	
+	public InstructionSearcher(Method theMethod, String className, ConstantPoolGen theCPool) {
+		this(theMethod, className, theCPool, MODE_START);
+	}
+	
+	public InstructionSearcher(Method theMethod, ClassGen theClassGen, byte mode) {
+		this(theMethod, theClassGen.getClassName(), theClassGen.getConstantPool(), mode);
+	}
+
+	public InstructionSearcher(Method theMethod, ClassGen theClassGen) {
+		this(theMethod, theClassGen, MODE_START);
+	}
+	
+	/* Little useful methods */
+
+	public InstructionList getList() { return list; }
+	public ConstantPoolGen getConstantPoolGen() { return theCPool; }
+
+	public String toString() {
+		return getClass().getName() + " index = " + getCurrentIndex() + " current = " + current.getPosition() + ": " + current().toString(theCPool.getConstantPool());
+	}
+	
+	private boolean hasNext() {
+		return current != list.getEnd();
+	}
+	
+	private boolean hasPrev() {
+		return current != list.getStart();
+	}
+	
+	private void checkNext() {
+		if(!hasNext())
+			throw new NoSuchElementException("No more instructions in " + this);
+	}
+	
+	private void checkPrev() {
+		if(!hasPrev())
+			throw new NoSuchElementException("No more instructions in " + this);
+	}
+	
+	/* set/get methods */
+	/**
+	 * sets a new current, must be contained in the InstructionList
+	 */
+	public void setCurrent(InstructionHandle handle) {
+		if(!list.contains(handle))
+			throw new IllegalArgumentException("handle not contained in list");
+		current = handle;
+	}
+
+	/**
+	 * throws ArrayIndexOutOfBoundsException if needed
+	 */
+	public void setCurrentIndex(int index) {
+		setCurrent(list.getInstructionHandles()[index]);
+	}
+
+	/**
+	 * gets the index of the current instruction
+	 * uses a linear search
+	 */
+	public int getCurrentIndex() {
+		InstructionHandle c = list.getStart();
+		for(int f = 0;; f++, c = c.getNext()) {
+			if(c == current)
+				return f;
+			else
+			if(c == list.getEnd())
+				break;
+		}
+		throw new IndexOutOfBoundsException("current handle is not contained in list!");
+		//should be not possible
+	}
+	
+	public void resetToStart() {
+		current = list.getStart();
+	}
+	
+	public void resetToEnd() {
+		current = list.getEnd();
+	}
+	
+	public Instruction current() {
+		return current.getInstruction();
+	}
+	
+	public Instruction next() {
+		checkNext();
+		current = current.getNext();
+		return current.getInstruction();
+	}
+	
+	public Instruction prev() {
+		checkPrev();
+		current = current.getPrev();
+		return current.getInstruction();
+	}
+	
+	public Instruction next(int hopCount) {
+		for(int f = 1; f &lt; hopCount; f++)
+			next();
+		return next();
+	}
+	
+	public Instruction prev(int hopCount) {
+		for(int f = 1; f &lt; hopCount; f++)
+			prev();
+		return prev();
+	}
+	
+	/* Searching methods */
+	/**
+	 * Is passed to methods nextConstraint and prevConstraint.
+	 */
+	public static interface Constraint {
+		
+		boolean matches(InstructionHandle current, ConstantPoolGen theCPool);
+	}
+	
+	public Instruction nextConstraint(Constraint con) {
+		while(hasNext()) {
+			current = current.getNext();
+			if(con.matches(current, theCPool))
+				return current.getInstruction();
+		}
+		return null;
+	}
+	
+	public Instruction prevConstraint(Constraint con) {
+		while(hasPrev()) {
+			current = current.getPrev();
+			if(con.matches(current, theCPool))
+				return current.getInstruction();
+		}
+		return null;
+	}
+	
+	/**
+	 * starts at the beginning and searchs the entire InstructionList for
+	 * the Constraint, returns its index or -1 if not found
+	 */
+	public int containsConstraint(Constraint con) {
+		InstructionHandle c = list.getStart();
+		for(int f = 0;;f++, c = c.getNext()) {
+			if(con.matches(c, theCPool))
+				return f;
+			if(c == list.getEnd())
+				break;
+		}
+		return -1;
+	}
+	
+	/**
+	 * iterates until it finds the next instruction which is an instance of the param
+	 * or null if not found
+	 * note: it is not  Class&lt;? extends Instruction&gt; to allow for searching for
+	 * interfaces such as ConstantPushInstruction
+	 * @param instructionClass The class to check instance for
+	 */
+	public Instruction nextOfType(Class&lt;?&gt; instructionClass) {
+		//TODO try using generic methods here, it might work
+		while(hasNext()) {
+			Instruction i = next();
+			if(instructionClass.isInstance(i))
+				return i;
+		}
+		return null;
+	}
+	
+	/**
+	 * iterates until it finds the prev instruction which is an instance of the param
+	 * or null if not found
+	 * note: it is not  Class&lt;? extends Instruction&gt; to allow for searching for
+	 * interfaces such as ConstantPushInstruction
+	 * @param instructionClass The class to check instance for
+	 */
+	public Instruction prevOfType(Class&lt;?&gt; instructionClass) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(instructionClass.isInstance(i))
+				return i;
+		}
+		return null;
+	}
+	
+	/**
+	 * iterates until it finds the next fieldinstruction which points to the
+	 * constant pool index parameter
+	 */
+	public FieldInstruction nextFieldInstruction(int cpIndex) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof FieldInstruction &amp;&amp; ((FieldInstruction)i).getIndex() == cpIndex)
+				return (FieldInstruction)i;
+		}
+		return null;
+	}
+	
+	/**
+	 * iterates until it finds the prev fieldinstruction which points to the
+	 * constant pool index parameter
+	 */
+	public FieldInstruction prevFieldInstruction(int cpIndex) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof FieldInstruction &amp;&amp; ((FieldInstruction)i).getIndex() == cpIndex)
+				return (FieldInstruction)i;
+		}
+		return null;
+	}
+	
+	/**
+	 * iterates until it finds the next fieldinstruction which has the classname, 
+	 * fieldname and signature of the parameters, if the constant pool fieldref of those
+	 * parameters does not exist, null is returned
+	 */
+	public FieldInstruction nextFieldInstruction(String class_name, String field_name, String signature) {
+		int index = theCPool.lookupFieldref(class_name, field_name, signature);
+		if(index == -1)
+			return null;
+		return nextFieldInstruction(index);
+	}
+	
+	/**
+	 * iterates until it finds the prev fieldinstruction which has the classname, 
+	 * fieldname and signature of the parameters, if the constant pool fieldref of those
+	 * parameters does not exist, null is returned
+	 */
+	public FieldInstruction prevFieldInstruction(String class_name, String field_name, String signature) {
+		int index = theCPool.lookupFieldref(class_name, field_name, signature);
+		if(index == -1)
+			return null;
+		return prevFieldInstruction(index);
+	}
+	
+	/**
+	 * iterates until it finds the next fieldinstruction which has the type signature, 
+	 * of the parameter
+	 */
+	public FieldInstruction nextFieldInstruction(String typeSignature) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof FieldInstruction &amp;&amp; ((FieldInstruction)i).getType(theCPool).getSignature().equals(typeSignature))
+				return (FieldInstruction)i;
+		}
+		return null;
+	}
+	
+	/**
+	 * iterates until it finds the prev fieldinstruction which has the type signature, 
+	 * of the parameter
+	 */
+	public FieldInstruction prevFieldInstruction(String typeSignature) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof FieldInstruction &amp;&amp; ((FieldInstruction)i).getType(theCPool).getSignature().equals(typeSignature))
+				return (FieldInstruction)i;
+		}
+		return null;
+	}
+	
+	public FieldInstruction nextFieldInstruction(Type type) {
+		return nextFieldInstruction(type.getSignature());
+	}
+	
+	public FieldInstruction prevFieldInstruction(Type type) {
+		return prevFieldInstruction(type.getSignature());
+	}
+	
+	/**
+	 * iterates until it finds the next invokeinstruction which points to the
+	 * constant pool index parameter
+	 * note: this family of method doesnt have nextInvokeInstruction(ClassName, MethodName, Signature)
+	 * because INVOKEINTERFACE works slightly differantly, its better the user just does a lookupMethodref
+	 */
+	public InvokeInstruction nextInvokeInstruction(int cpIndex) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof InvokeInstruction &amp;&amp; ((InvokeInstruction)i).getIndex() == cpIndex)
+				return (InvokeInstruction)i;
+		}
+		return null;
+	}
+	
+	public InvokeInstruction prevInvokeInstruction(int cpIndex) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof InvokeInstruction &amp;&amp; ((InvokeInstruction)i).getIndex() == cpIndex)
+				return (InvokeInstruction)i;
+		}
+		return null;
+	}
+	
+	public InvokeInstruction nextInvokeInstruction(Type returnType) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof InvokeInstruction &amp;&amp; ((InvokeInstruction)i).getReturnType(theCPool).equals(returnType))
+				return (InvokeInstruction)i;
+		}
+		return null;
+	}
+	
+	public InvokeInstruction prevInvokeInstruction(Type returnType) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof InvokeInstruction &amp;&amp; ((InvokeInstruction)i).getReturnType(theCPool).equals(returnType))
+				return (InvokeInstruction)i;
+		}
+		return null;
+	}
+	
+	public ConstantPushInstruction nextConstantPushInstruction(Number value) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)i).getValue().equals(value))
+				return (ConstantPushInstruction)i;
+		}
+		return null;
+	}
+	
+	public ConstantPushInstruction prevConstantPushInstruction(Number value) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)i).getValue().equals(value))
+				return (ConstantPushInstruction)i;
+		}
+		return null;
+	}
+	
+	/**
+	 * finds the next LDC which has the value
+	 * it can be of type String, Integer, Float ect..
+	 */
+	public LDC nextLDC(Object value) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof LDC &amp;&amp; ((LDC)i).getValue(theCPool).equals(value))
+				return (LDC)i;
+		}
+		return null;
+	}
+	
+	public LDC prevLDC(Object value) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof LDC &amp;&amp; ((LDC)i).getValue(theCPool).equals(value))
+				return (LDC)i;
+		}
+		return null;
+	}
+	
+	public CPInstruction nextCPInstruction(int index) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof CPInstruction &amp;&amp; ((CPInstruction)i).getIndex() == index)
+				return (CPInstruction)i;
+		}
+		return null;
+	}
+	
+	public CPInstruction prevCPInstruction(int index) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof CPInstruction &amp;&amp; ((CPInstruction)i).getIndex() == index)
+				return (CPInstruction)i;
+		}
+		return null;
+	}
+	
+	public LocalVariableInstruction nextLocalVariableInstruction(int index) {
+		while(hasNext()) {
+			Instruction i = next();
+			if(i instanceof LocalVariableInstruction &amp;&amp; ((LocalVariableInstruction)i).getIndex() == index)
+				return (LocalVariableInstruction)i;
+		}
+		return null;
+	}
+	
+	public LocalVariableInstruction prevLocalVariableInstruction(int index) {
+		while(hasPrev()) {
+			Instruction i = prev();
+			if(i instanceof LocalVariableInstruction &amp;&amp; ((LocalVariableInstruction)i).getIndex() == index)
+				return (LocalVariableInstruction)i;
+		}
+		return null;
+	}
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/5</link>
+        <pubDate>Tue, 07 Oct 2008 17:04:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-5</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="235469">
+<div class="title">
+<div class="quote-controls"></div>
+ frank_:</div>
+<blockquote>
+<p>it is trying to do too much, it also looks terrible to use</p>
+</blockquote>
+</aside>
+<p>Why would that be, bcel is complicated. This makes it a hell lot easier.<br>
+Also it’s meant for people, who start their updater.<br>
+It’s a lot better then previous released instruction searchers.<br>
+Could you explain why you think s.nextFieldInstruction() is better then s.next(FieldInstruction.class). Cause you need tons of methods to find all of them.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/4</link>
+        <pubDate>Tue, 07 Oct 2008 16:35:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-4</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@Pwnd Pwnd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pwnd">@Pwnd</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:2, topic:235469”]it is trying to do too much, it also looks terrible to use[/quote]Look at BCEL in general; it’s fucking annoying to use.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/3</link>
+        <pubDate>Tue, 07 Oct 2008 15:57:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-3</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>it is trying to do too much, it also looks terrible to use</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/2</link>
+        <pubDate>Tue, 07 Oct 2008 15:42:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-2</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+      <item>
+        <title>[RELEASE] Instruction Searcher</title>
+        <dc:creator><![CDATA[@qauters qauters]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/qauters">@qauters</a> wrote:</p>
+          <blockquote>
+              <p>Since I’m moving to asm, this will be useless (well most of it).<br>
+It is a BCEL instruction searcher.<br>
+It has some nice features, which you haven’t seen before, just read information above methods to know how to use it.<br>
+If you got questions just ask</p>
+<pre><code class="lang-auto">/***********************************
+ * This is created by Qauters,			     *
+ * You may use it as long as you give credit!	*
+ ***********************************/
+package com.qp.rs.updater;
+
+import java.util.ArrayList;
+
+import org.apache.bcel.Constants;
+import org.apache.bcel.classfile.LocalVariable;
+import org.apache.bcel.classfile.Method;
+import org.apache.bcel.generic.BranchHandle;
+import org.apache.bcel.generic.CHECKCAST;
+import org.apache.bcel.generic.CPInstruction;
+import org.apache.bcel.generic.ClassGen;
+import org.apache.bcel.generic.ConstantPoolGen;
+import org.apache.bcel.generic.Instruction;
+import org.apache.bcel.generic.InstructionHandle;
+import org.apache.bcel.generic.InstructionList;
+import org.apache.bcel.generic.LocalVariableInstruction;
+import org.apache.bcel.generic.MethodGen;
+import org.apache.bcel.generic.ObjectType;
+
+/**
+ * This is an instruction searcher,
+ * use it to locate instructions in an easy way.
+ * 
+ * @author Bert
+ */
+public class QIS {
+	private int index = -1;
+	private ConstantPoolGen cp = null;
+	private MethodGen mg = null;
+	private InstructionList il = null;
+	private InstructionHandle[] handles = null;
+
+	/**
+	 * Constructs a new QIS
+	 * @param cg The ClassGen where the method belongs to.
+	 * @param m The Method to search in
+	 */
+	public QIS(ClassGen cg, Method m)
+	{
+		this.cp = cg.getConstantPool();
+		this.mg = new MethodGen(m, cg.getClassName(), cp);
+		this.il = this.mg.getInstructionList();
+		this.handles = this.il.getInstructionHandles();
+	}
+
+	/**
+	 * The current instruction list, usefull if you delete instructions.
+	 * Note: If you delete instructions, you may still find them when you search!!!
+	 * Don't delete instructions if you reloop over it later (otherwise you're bound to get errors)
+	 * @return InstructionList
+	 */
+	public InstructionList getInstructionList()
+	{
+		return il;
+	}
+
+	/**
+	 * Usefull if you modified the instruction list, and want to get the modified method.
+	 * @return The method
+	 */
+	public Method getMethod()
+	{
+		mg.setInstructionList(il);
+		mg.stripAttributes(true);
+		mg.setMaxLocals();
+		mg.setMaxStack();
+		return mg.getMethod();
+	}
+
+	/**
+	 * Get's the current index
+	 * @return current index
+	 */
+	public int getIndex() { return this.index; }
+
+	/**
+	 * Set's the current index
+	 * @param index Index to set to
+	 */
+	public void setIndex(int index) { this.index = index; }
+
+	/**
+	 * Get's the constant pool index, using a given constant tag and value.
+	 * @param tag Tag of the constant (Like Constants.CONSTANT_INTEGER)
+	 * @param value value to search for (Like new Double(3.4)), that way you can use primatives.
+	 * @return index of the constant or -1 if not found.
+	 */
+	public int getConstantPoolIndex(byte tag, Object value)
+	{
+		switch(tag)
+		{
+		case Constants.CONSTANT_Class:
+			if(value instanceof String)
+			{
+				return cp.lookupClass((String) value);
+			}
+			break;
+		case Constants.CONSTANT_Double:
+			if(value instanceof Double)
+			{
+				return cp.lookupDouble((Double) value);
+			}
+			break;
+		case Constants.CONSTANT_Float:
+			if(value instanceof Float)
+			{
+				return cp.lookupFloat((Float) value);
+			}
+			break;
+		case Constants.CONSTANT_Integer:
+			if(value instanceof Integer)
+			{
+				return cp.lookupInteger((Integer) value);
+			}
+			break;
+		case Constants.CONSTANT_InterfaceMethodref:
+			if(value instanceof MethodGen)
+			{
+				return cp.lookupInterfaceMethodref((MethodGen) value);
+			}
+			break;
+		case Constants.CONSTANT_Long:
+			if(value instanceof Long)
+			{
+				return cp.lookupLong((Long) value);
+			}
+			break;
+		case Constants.CONSTANT_Methodref:
+			if(value instanceof MethodGen)
+			{
+				return cp.lookupMethodref((MethodGen) value);
+			}
+			break;
+		case Constants.CONSTANT_String:
+			if(value instanceof String)
+			{
+				return cp.lookupString((String) value);
+			}
+			break;
+		case Constants.CONSTANT_Utf8:
+			if(value instanceof String)
+			{
+				return cp.lookupUtf8((String) value);
+			}
+		}
+
+		return -1;
+	}
+
+	/**
+	 * Get's the argument instructions of the current instruction.
+	 * First dimension will be the number of arguments.
+	 * Second dimension the instructions related to that argument.
+	 * &lt;p/&gt;
+	 * Example:
+	 * &lt;br&gt;
+	 * IfInstructions have two arguments. But one of them could be (GETSTATIC ICONST_M1 IXOR) etc.
+	 * @return
+	 */
+	public InstructionHandle[][] getArgumentInstructions()
+	{
+		int stackConsuming = this.handles[this.index].getInstruction().consumeStack(cp);
+		ArrayList&lt;InstructionHandle[]&gt; args = new ArrayList&lt;InstructionHandle[]&gt;();
+		int t_index = this.index;
+
+		while(stackConsuming &gt; 0)
+		{
+			ArrayList&lt;InstructionHandle&gt; instructions = new ArrayList&lt;InstructionHandle&gt;();
+			
+			int t_consuming = 0;
+			while(t_consuming &gt;= 0)
+			{
+				//Previous instruction
+				t_index--;
+				if(t_index &lt; 0) throw new RuntimeException("Stack calculation error! More produced then consumed.");
+				
+				int produceStack = this.handles[t_index].getInstruction().produceStack(cp);
+				int consumeStack = this.handles[t_index].getInstruction().consumeStack(cp);
+
+				if(produceStack == Constants.UNDEFINED || consumeStack == Constants.UNDEFINED) throw new RuntimeException("Undefined instruction error!");
+				if(produceStack == Constants.UNPREDICTABLE || consumeStack == Constants.UNPREDICTABLE) throw new RuntimeException("Unpredictable stack error!");
+				
+				instructions.add(this.handles[t_index]);
+				t_consuming -= produceStack;
+				t_consuming += consumeStack;
+			}
+			stackConsuming += t_consuming;
+			args.add(instructions.toArray(new InstructionHandle[0]));
+		}
+
+		//Inverse arrays!
+		InstructionHandle[][] values = args.toArray(new InstructionHandle[0][]);
+		InstructionHandle[][] returnValues = new InstructionHandle[values.length][];
+
+		for(int off = 0; off &lt; values.length; off++)
+		{
+			int vOff = values.length - off - 1;
+			returnValues[off] = new InstructionHandle[values[vOff].length];
+
+			for(int off2 = 0; off2 &lt; values[vOff].length; off2++)
+			{
+				int vOff2 = values[vOff].length - off2 - 1;
+				returnValues[off][off2] = values[vOff][vOff2];
+			}
+		}
+
+		return returnValues;
+	}
+
+	/**
+	 * Get's the current instruction
+	 * @return The current instruction or null if none
+	 */
+	public Instruction current()
+	{
+		if(this.index &lt; 0 || this.index &gt;= handles.length) return null;
+		return this.handles[this.index].getInstruction();
+	}
+
+	/**
+	 * Get's the current instruction handle.
+	 * Usefull for getting the target etc,
+	 * because bcel doesn't copy it, into the instruction.
+	 * @return The current instruction handle or null if none
+	 */
+	public InstructionHandle currentHandle()
+	{
+		if(this.index &lt; 0 || this.index &gt;= handles.length) return null;
+		return this.handles[this.index];
+	}
+
+	/**
+	 * Get's the next instruction
+	 * @return The next instruction or null if none
+	 */
+	public Instruction next()
+	{
+		this.index++;
+		return current();
+	}
+
+	/**
+	 * Get's previous instruction or null if none
+	 * @return
+	 */
+	public Instruction previous()
+	{
+		this.index--;
+		return current();
+	}
+
+	/**
+	 * Get's the next instruction, using the given type.
+	 * Like next(AALOAD.class) will return an AALOAD instruction!
+	 * @param type the type of the instruction to find (like AALOAD.class)
+	 * @return The next instruction, using the given type or null if none
+	 */
+	public &lt;T&gt; T next(Class&lt;T&gt; type)
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(type.isAssignableFrom(this.handles[off].getInstruction().getClass()))
+			{
+				this.index = off;
+				return type.cast(this.handles[off].getInstruction());
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Get's the previous instruction, using the given type.
+	 * Like previous(AALOAD.class) will return an AALOAD instruction!
+	 * @param type the type of the instruction to find (like AALOAD.class)
+	 * @return The previous instruction, using the given type or null if none
+	 */
+	public &lt;T&gt; T previous(Class&lt;T&gt; type)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(type.isAssignableFrom(this.handles[off].getInstruction().getClass()))
+			{
+				this.index = off;
+				return type.cast(this.handles[off].getInstruction());
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Get's the target of the current instruction
+	 * @return Index of the target, or -1 if none!
+	 */
+	public int getTargetIndex()
+	{
+		if(current() == null) return -1;
+		if(!(this.handles[this.index] instanceof BranchHandle)) return -1;
+
+		InstructionHandle target = ((BranchHandle) this.handles[this.index]).getTarget();
+		if(target == null) return -1;
+
+		for(int hOff = 0; hOff &lt; this.handles.length; hOff++)
+		{
+			if(this.handles[hOff].equals(target)) return hOff;
+		}
+
+		return -1;
+	}
+
+	/**
+	 * Get's the next constantpool instruction using the given index
+	 * @param index Index to search for
+	 * @return the found CPInstruction or null
+	 */
+	public CPInstruction nextConstantPoolInstruction(int index)
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof CPInstruction)
+			{
+				if(((CPInstruction) this.handles[off].getInstruction()).getIndex() == index)
+				{
+					this.index = off;
+					return (CPInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get's the previous constantpool instruction using the given index
+	 * @param index Index to search for
+	 * @return the found CPInstruction or null
+	 */
+	public CPInstruction previousConstantPoolInstruction(int index)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof CPInstruction)
+			{
+				if(((CPInstruction) this.handles[off].getInstruction()).getIndex() == index)
+				{
+					this.index = off;
+					return (CPInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get's the next Local Variable Instruction, using given index and name
+	 * @param index Index of the local variabel
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return the LocalVariableInstruction or null
+	 */
+	public LocalVariableInstruction nextLocalVariableInstruction(int index, short name )
+	{
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof LocalVariableInstruction)
+			{
+				LocalVariableInstruction lvi = (LocalVariableInstruction) this.handles[off].getInstruction();
+				if((name == 0 || lvi.getOpcode() == name) &amp;&amp; lvi.getIndex() == index)
+				{
+					this.index = off;
+					return (LocalVariableInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+	/**
+	 * Get's the next local variable instruction, using the given instruction's index and name
+	 * @param i The instruction containing the index
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return The local variable instruction or null
+	 * @see nextLocalVariableInstruction(int index, String name)
+	 */
+	public LocalVariableInstruction nextLocalVariableInstruction(Instruction i, short name)
+	{
+		if(!(i instanceof LocalVariableInstruction)) return null;
+		return nextLocalVariableInstruction(((LocalVariableInstruction) i).getIndex(), name);
+	}
+
+	/**
+	 * Get's the previous Local Variable Instruction, using given index and name
+	 * @param index Index of the local variabel
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return the LocalVariableInstruction or null
+	 */
+	public LocalVariableInstruction previousLocalVariableInstruction(int index, short name)
+	{
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() == null) continue; //instruction has been deleted!
+			
+			if(this.handles[off].getInstruction() instanceof LocalVariableInstruction)
+			{
+				LocalVariableInstruction lvi = (LocalVariableInstruction) this.handles[off].getInstruction();
+				if((name == 0 || lvi.getOpcode() == name) &amp;&amp; lvi.getIndex() == index)
+				{
+					this.index = off;
+					return (LocalVariableInstruction) this.handles[off].getInstruction();
+				}
+			}
+		}
+
+		return null;
+	}
+	/**
+	 * Get's the previous local variable instruction, using the given instruction's index and name
+	 * @param i The instruction containing the index
+	 * @param name Name of the instruction, or 0 if any (Constants.ILOAD etc)
+	 * @return The local variable instruction or null
+	 * @see previousLocalVariableInstruction(int index, String name)
+	 */
+	public LocalVariableInstruction previousLocalVariableInstruction(Instruction i, short name)
+	{
+		if(!(i instanceof LocalVariableInstruction)) return null;
+		return previousLocalVariableInstruction(((LocalVariableInstruction) i).getIndex(), name);
+	}
+
+	/**
+	 * Get's the next CheckCast using given object type.
+	 * @param type ObjectType to search for. Using null, will return null!
+	 * @return the found checkcast, or null if not found.
+	 */
+	public CHECKCAST nextCheckCast(ObjectType type)
+	{
+		if(type == null) return null;
+
+		for(int off = this.index + 1; off &lt; this.handles.length; off++)
+		{
+			if(handles[off].getInstruction() instanceof CHECKCAST &amp;&amp; 
+					((CHECKCAST) this.handles[off].getInstruction()).getLoadClassType(this.cp).equals(type))
+			{
+				this.index = off;
+				return (CHECKCAST) this.handles[off].getInstruction();
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get's the previous CheckCast using given object type.
+	 * @param type ObjectType to search for. Using null, will return null!
+	 * @return the found checkcast, or null if not found.
+	 */
+	public CHECKCAST previousCheckCast(ObjectType type)
+	{
+		if(type == null) return null;
+
+		for(int off = this.index - 1; off &gt;= 0; off--)
+		{
+			if(this.handles[off].getInstruction() instanceof CHECKCAST &amp;&amp; 
+					((CHECKCAST) this.handles[off].getInstruction()).getLoadClassType(this.cp).equals(type))
+			{
+				this.index = off;
+				return (CHECKCAST) this.handles[off].getInstruction();
+			}
+		}
+
+		return null;
+	}
+}</code></pre>
+<p>Example:</p>
+<pre><code class="lang-auto">if(s.nextConstantPoolInstruction(s.getConstantPoolIndex(Constants.CONSTANT_String, "js5crc")) == null) continue;
+if(s.nextCheckCast(new ObjectType("java.net.Socket")) == null) continue;
+if(s.next(INVOKEVIRTUAL.class) == null) continue;
+IfInstruction i = s.next(GETSTATIC.class);
+InstructionHandle[][] args = s.getArgumentInstructions();</code></pre>
+<p>You may want to extend it a bit (search for numbers etc), cause I didn’t need more then this so far.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/release-instruction-searcher/235469/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/release-instruction-searcher/235469/1</link>
+        <pubDate>Tue, 07 Oct 2008 15:37:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-235469-1</guid>
+        <source url="https://forum.moparisthebest.com/t/release-instruction-searcher/235469.rss">[RELEASE] Instruction Searcher</source>
+      </item>
+  </channel>
+</rss>

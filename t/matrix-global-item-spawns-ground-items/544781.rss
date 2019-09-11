@@ -1,0 +1,977 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Matrix] Global Item Spawns (Ground Items)</title>
+    <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781</link>
+    <description>Not sure if this released, but I made this (except for the World class method).
+
+GlobalItems class
+[code=java]
+package com.rs.utils;
+
+import com.rs.game.World;
+import com.rs.game.WorldTile;
+import com.rs.game.item.Item;
+
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+
+/**
+ * Created by Arham 4 on 7/9/14.
+ */
+public class GlobalItems {
+
+    public static final void init() {
+        if (!new File(&quot;data/items/packedItemSpawns&quot;).exists())
+            packItemSpawns();
+    }
+
+    private static final void packItemSpawns() {
+        Logger.log(&quot;GlobalItems&quot;, &quot;Packing item spawns...&quot;);
+        if (!new File(&quot;data/items/packedItemSpawns&quot;).mkdir())
+            throw new RuntimeException(&quot;Couldn&#39;t create packedItemSpawns directory.&quot;);
+        try {
+            BufferedReader in = new BufferedReader(new FileReader(&quot;data/items/unpackedItemSpawns.txt&quot;));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith(&quot;//&quot;))
+                    continue;
+                String[] splitedLine = line.split(&quot; - &quot;);
+                if (splitedLine.length != 3)
+                    throw new RuntimeException(&quot;Invalid Object Spawn line: &quot; + line);
+                String[] splitedLine2 = splitedLine[0].split(&quot; &quot;);
+                String[] splitedLine3 = splitedLine[1].split(&quot; &quot;);
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException(&quot;Invalid Object Spawn line: &quot; + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }
+    }
+
+    public static final void loadItemSpawns(int regionId) {
+        File file = new File(&quot;data/items/packedItemSpawns/&quot; + regionId + &quot;.os&quot;);
+        if (!file.exists())
+            return;
+        try {
+            RandomAccessFile in = new RandomAccessFile(file, &quot;r&quot;);
+            FileChannel channel = in.getChannel();
+            ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            while (buffer.hasRemaining()) {
+                int itemId = buffer.getShort() &amp; 0xffff;
+                int itemAmount = buffer.getShort() &amp; 0xffff;
+                int plane = buffer.get() &amp; 0xff;
+                int x = buffer.getShort() &amp; 0xffff;
+                int y = buffer.getShort() &amp; 0xffff;
+                int tick = buffer.getShort() &amp; 0xffff;
+                World.addGroundItem2(new Item(itemId, itemAmount), new WorldTile(x, y, plane), tick, true);
+            }
+            channel.close();
+            in.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static final void addItemSpawn(int itemId, int itemAmount, int regionId, WorldTile tile, int tick) {
+        try {
+            DataOutputStream out = new DataOutputStream(new FileOutputStream(&quot;data/items/packedItemSpawns/&quot; + regionId + &quot;.os&quot;, true));
+            out.writeShort(itemId);
+            out.writeShort(itemAmount);
+            out.writeByte(tile.getPlane());
+            out.writeShort(tile.getX());
+            out.writeShort(tile.getY());
+            out.writeShort(tick);
+            out.flush();
+            out.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private GlobalItems() {
+    }
+
+}
+[/code]
+
+WorldPacketsDecoder class
+[code=java]
+        } else if (packetId == DONE_LOADING_REGION_PACKET) {
+            GlobalItems.loadItemSpawns(player.getRegionId());
+[/code]
+Compare or replace your ITEM_TAKE_PACKET with mine:
+[code=java]
+       else if (packetId == ITEM_TAKE_PACKET) {
+            if (!player.hasStarted() || !player.clientHasLoadedMapRegion()
+                    || player.isDead())
+                return;
+            long currentTime = Utils.currentTimeMillis();
+            if (player.getLockDelay() &gt; currentTime)
+                // || player.getFreezeDelay() &gt;= currentTime)
+                return;
+            int y = stream.readUnsignedShort();
+            int x = stream.readUnsignedShortLE();
+            final int id = stream.readUnsignedShort();
+            boolean forceRun = stream.read128Byte() == 1;
+            final WorldTile tile = new WorldTile(x, y, player.getPlane());
+            final int regionId = tile.getRegionId();
+            if (!player.getMapRegionsIds().contains(regionId))
+                return;
+            final FloorItem item = World.getRegion(regionId).getGroundItem(id,
+                    tile, player);
+            if (item == null)
+                return;
+            player.stopAll(false);
+            if (forceRun)
+                player.setRun(forceRun);
+            player.setCoordsEvent(new CoordsEvent(tile, new Runnable() {
+                @Override
+                public void run() {
+                    final FloorItem item = World.getRegion(regionId)
+                            .getGroundItem(id, tile, player);
+                    if (item == null)
+                        return;
+                    if (item.isSpawned()) {
+                        WorldTasksManager.schedule(new WorldTask() {
+                            @Override
+                            public void run() {
+                                GlobalItems.loadItemSpawns(item.getTile().getRegionId());
+                                this.stop();
+                            }
+                        }, item.getTick());
+                    }
+                    player.setNextFaceWorldTile(tile);
+                    player.addWalkSteps(tile.getX(), tile.getY(), 1);
+                    World.removeGroundItem(player, item);
+                }
+            }, 1, 1));
+        }
+[/code]
+
+World class
+[code=java]
+    public static final void addGroundItem2(final Item item, final WorldTile tile, final int tick, final boolean spawned) {
+        FloorItem floorItem = World.getRegion(tile.getRegionId())
+                .getGroundItem(item.getId(), tile, null);
+        if (floorItem == null) {
+            floorItem = new FloorItem(item, tile, null, false, false, tick, spawned);
+            final Region region = getRegion(tile.getRegionId());
+            region.forceGetFloorItems().add(floorItem);
+            int regionId = tile.getRegionId();
+            for (Player player : players) {
+                if (player == null || !player.hasStarted() || player.hasFinished()
+                        || player.getPlane() != tile.getPlane()
+                        || !player.getMapRegionsIds().contains(regionId))
+                    continue;
+                player.getPackets().sendGroundItem(floorItem);
+            }
+        }
+    }
+[/code]
+
+FloorItem class
+[code=java]
+package com.rs.game.item;
+
+import com.rs.game.WorldTile;
+import com.rs.game.player.Player;
+
+@SuppressWarnings(&quot;serial&quot;)
+public class FloorItem extends Item {
+
+    private WorldTile tile;
+    private Player owner;
+    private boolean invisible;
+    private boolean grave;
+    private int tick;
+    private boolean spawned;
+
+    public FloorItem(int id) {
+        super(id);
+    }
+
+    @Override
+    public void setAmount(int amount) {
+        this.amount = amount;
+    }
+
+    public FloorItem(Item item, WorldTile tile, Player owner,
+                     boolean underGrave, boolean invisible) {
+        super(item.getId(), item.getAmount());
+        this.tile = tile;
+        this.owner = owner;
+        grave = underGrave;
+        this.invisible = invisible;
+    }
+
+    public FloorItem(Item item, WorldTile tile, Player owner,
+                     boolean underGrave, boolean invisible, int tick, boolean spawned) {
+        super(item.getId(), item.getAmount());
+        this.tile = tile;
+        this.owner = owner;
+        grave = underGrave;
+        this.invisible = invisible;
+        this.tick = tick;
+        this.spawned = spawned;
+    }
+
+    public WorldTile getTile() {
+        return tile;
+    }
+
+    public boolean isGrave() {
+        return grave;
+    }
+
+    public boolean isInvisible() {
+        return invisible;
+    }
+
+    public Player getOwner() {
+        return owner;
+    }
+
+    public void setInvisible(boolean invisible) {
+        this.invisible = invisible;
+    }
+
+    public boolean isSpawned() {
+        return spawned;
+    }
+
+    public int getTick() {
+        return tick;
+    }
+}
+[/code]
+
+Make a new txt file in data/items. Name it unpackedItemSpawns.txt. In it, add:
+[code]
+//itemID itemAmount - X Y PLANE - ticks
+[/code]
+
+[hr]
+
+EDIT: If you guys want a command to add (this is like the ;;spawn command, it doesnt write it to the packed or unpacked files, it makes a spawn.txt that you can cut and paste into your unpacked files).
+
+Command class
+[code]
+                case &quot;itemspawn&quot;:
+                    try {
+                        amount = 1;
+                        int tick = 20;
+                        if (cmd.length == 3)
+                            amount = Integer.parseInt(cmd[2]);
+                        if (cmd.length == 4) {
+                            amount = Integer.parseInt(cmd[2]);
+                            tick = Integer.parseInt(cmd[3]);
+                        }
+                        if (cmd.length &lt; 2) {
+                            player.getPackets().sendGameMessage(
+                                    &quot;Use: ::itemspawn itemid&quot;
+                            );
+                            return true;
+                        }
+                        try {
+                            if (GlobalItems.addSpawn(
+                                    player.getUsername(),
+                                    Integer.parseInt(cmd[1]), player, amount, tick
+                            )) {
+                                player.getPackets().sendGameMessage(&quot;Added spawn!&quot;);
+                                return true;
+                            }
+                        } catch (Throwable e) {
+                            e.printStackTrace();
+                        }
+                        player.getPackets().sendGameMessage(
+                                &quot;Failed removing spawn!&quot;
+                        );
+                        return true;
+                    } catch (NumberFormatException e) {
+                        player.getPackets().sendGameMessage(&quot;Use: ::itemspawn itemid&quot;);
+                    }
+                    return true;
+[/code]
+
+GlobalItems class
+[code]
+    public static boolean addSpawn(String username, int id, WorldTile tile, int amount, int tick) throws Throwable {
+        File file = new File(&quot;data/items/spawns.txt&quot;);
+        BufferedWriter writer = new BufferedWriter(new FileWriter(file, true));
+        writer.write(&quot;// &quot; + ItemDefinitions.getItemDefinitions(id).getName() + &quot;, added by: &quot; + username);
+        writer.newLine();
+        writer.flush();
+        writer.write(id + &quot; &quot; + amount + &quot; - &quot; + tile.getX() + &quot; &quot; + tile.getY() + &quot; &quot; + tile.getPlane() + &quot; - &quot; + tick);
+        writer.newLine();
+        writer.flush();
+        World.addGroundItem(new Item(id), tile);
+        return true;
+    }
+[/code]
+
+[b]The command can be either ;;itemspawn ITEMID, ;;itemspawn ITEMID ITEMAMOUNT, or ;;itemspawn ITEMID ITEMAMOUNT TICK.[/b]
+
+The result:
+[code]
+// Red spiders&#39; eggs, added by: arham_4
+223 - 3162 9891 0 - 20
+[/code]</description>
+    
+    <lastBuildDate>Sat, 12 Jul 2014 22:43:58 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Michael P, post:12, topic:544781”]Why is it an OS file?[/quote].object spawn?<br>
+File extension doesn’t mean much.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/13</link>
+        <pubDate>Sat, 12 Jul 2014 22:43:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-13</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@Michael_P1 Michael P]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/michael_p1">@Michael_P1</a> wrote:</p>
+          <blockquote>
+              <p>Why is it an OS file?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/12</link>
+        <pubDate>Sat, 12 Jul 2014 22:08:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-12</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Dan0194, post:10, topic:544781”][quote author=arham 4 link=topic=663658.msg4435593#msg4435593 date=1404994967]</p>
+<aside class="quote">
+<blockquote>
+<p>Change your format or serialize?</p>
+</blockquote>
+</aside>
+<p>I’m making it pack my txt file via region ID. When it’s packed, that method isn’t even looked at unless you remove your packedItemSpawns directory to pack it again.<br>
+[/quote]<br>
+So useless to add objects on the game so it saves to the txt file. Also don’t use txt use something like json or xml to load your stuff externally.[/quote]<br>
+I am not loading from the TXT, the TXT is the unpacked file, and it packs it (based on region ID) to a new directory.</p>
+<p><img src="http://puu.sh/a5jcs/7c73352c4f.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/11</link>
+        <pubDate>Thu, 10 Jul 2014 16:48:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-11</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@Dan0194 Dan0194]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan0194">@Dan0194</a> wrote:</p>
+          <blockquote>
+              <p>[quote author=arham 4 link=topic=663658.msg4435593#msg4435593 date=1404994967]</p>
+<aside class="quote" data-post="8" data-topic="544781">
+<div class="title">
+<div class="quote-controls"></div>
+ Pure_:</div>
+<blockquote>
+<p>Change your format or serialize?</p>
+</blockquote>
+</aside>
+<p>I’m making it pack my txt file via region ID. When it’s packed, that method isn’t even looked at unless you remove your packedItemSpawns directory to pack it again.</p>
+<p>[quote]</p>
+<p>So useless to add objects on the game so it saves to the txt file. Also don’t use txt use something like json or xml to load your stuff externally.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/10</link>
+        <pubDate>Thu, 10 Jul 2014 16:33:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-10</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="8" data-topic="544781">
+<div class="title">
+<div class="quote-controls"></div>
+ Pure_:</div>
+<blockquote>
+<p>Change your format or serialize?</p>
+</blockquote>
+</aside>
+<p>I’m making it pack my txt file via region ID. When it’s packed, that method isn’t even looked at unless you remove your packedItemSpawns directory to pack it again.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/9</link>
+        <pubDate>Thu, 10 Jul 2014 12:22:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-9</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>Change your format or serialize?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/8</link>
+        <pubDate>Thu, 10 Jul 2014 12:19:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-8</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Driman Rune, post:6, topic:544781”][quote author=arham 4 link=topic=663658.msg4435564#msg4435564 date=1404985530]</p>
+<aside class="quote">
+<blockquote>
+<p><code>        try {
+            BufferedReader in = new BufferedReader(new FileReader("data/items/unpackedItemSpawns.txt"));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith("//"))
+                    continue;
+                String[] splitedLine = line.split(" - ");
+                if (splitedLine.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                String[] splitedLine2 = splitedLine[0].split(" ");
+                String[] splitedLine3 = splitedLine[1].split(" ");
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }</code></p>
+<p>jesus fuc<span class="bbcode-b"></span>king christ</p>
+</blockquote>
+</aside>
+<p>?<br>
+[/quote]<br>
+He means that looks horrible.[/quote]<br>
+I know what he means. I don’t know how to write that better though (besides the naming).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/7</link>
+        <pubDate>Thu, 10 Jul 2014 10:53:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-7</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@Driman_Rune Driman Rune]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/driman_rune">@Driman_Rune</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:5, topic:544781”][quote author=lare69 link=topic=663658.msg4435525#msg4435525 date=1404969765]</p>
+<p><code>        try {
+            BufferedReader in = new BufferedReader(new FileReader("data/items/unpackedItemSpawns.txt"));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith("//"))
+                    continue;
+                String[] splitedLine = line.split(" - ");
+                if (splitedLine.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                String[] splitedLine2 = splitedLine[0].split(" ");
+                String[] splitedLine3 = splitedLine[1].split(" ");
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }</code></p>
+<p>jesus fuc<span class="bbcode-b"></span>king christ<br>
+[/quote]<br>
+?[/quote]<br>
+He means that looks horrible.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/6</link>
+        <pubDate>Thu, 10 Jul 2014 10:07:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-6</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:4, topic:544781”]<code>        try {
+            BufferedReader in = new BufferedReader(new FileReader("data/items/unpackedItemSpawns.txt"));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith("//"))
+                    continue;
+                String[] splitedLine = line.split(" - ");
+                if (splitedLine.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                String[] splitedLine2 = splitedLine[0].split(" ");
+                String[] splitedLine3 = splitedLine[1].split(" ");
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }</code></p>
+<p>jesus fuc<span class="bbcode-b"></span>king christ[/quote]<br>
+?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/5</link>
+        <pubDate>Thu, 10 Jul 2014 09:45:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-5</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p><code>        try {
+            BufferedReader in = new BufferedReader(new FileReader("data/items/unpackedItemSpawns.txt"));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith("//"))
+                    continue;
+                String[] splitedLine = line.split(" - ");
+                if (splitedLine.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                String[] splitedLine2 = splitedLine[0].split(" ");
+                String[] splitedLine3 = splitedLine[1].split(" ");
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }</code></p>
+<p>jesus fuc<span class="bbcode-b"></span>king christ</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/4</link>
+        <pubDate>Thu, 10 Jul 2014 05:22:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-4</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Driman Rune, post:2, topic:544781”]Da fudge?</p>
+<p>Normally in Winterlove bases(RuneSource, Project Insanity, Delta) it takes several lines of codes and a txt file, to make global items.[/quote]Another stupid comment from a stupid user.</p>
+<p>OP has them loading from files, respawning, verified etc.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/3</link>
+        <pubDate>Thu, 10 Jul 2014 01:30:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-3</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@Driman_Rune Driman Rune]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/driman_rune">@Driman_Rune</a> wrote:</p>
+          <blockquote>
+              <p>Da fuck?</p>
+<p>Normally in Winterlove bases(RuneSource, Project Insanity, Delta) it takes several lines of codes and a txt file, to make global items.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/2</link>
+        <pubDate>Wed, 09 Jul 2014 22:59:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-2</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+      <item>
+        <title>[Matrix] Global Item Spawns (Ground Items)</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>Not sure if this released, but I made this (except for the World class method).</p>
+<p>GlobalItems class</p>
+<pre><code class="lang-auto">package com.rs.utils;
+
+import com.rs.game.World;
+import com.rs.game.WorldTile;
+import com.rs.game.item.Item;
+
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+
+/**
+ * Created by Arham 4 on 7/9/14.
+ */
+public class GlobalItems {
+
+    public static final void init() {
+        if (!new File("data/items/packedItemSpawns").exists())
+            packItemSpawns();
+    }
+
+    private static final void packItemSpawns() {
+        Logger.log("GlobalItems", "Packing item spawns...");
+        if (!new File("data/items/packedItemSpawns").mkdir())
+            throw new RuntimeException("Couldn't create packedItemSpawns directory.");
+        try {
+            BufferedReader in = new BufferedReader(new FileReader("data/items/unpackedItemSpawns.txt"));
+            while (true) {
+                String line = in.readLine();
+                if (line == null)
+                    break;
+                if (line.startsWith("//"))
+                    continue;
+                String[] splitedLine = line.split(" - ");
+                if (splitedLine.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                String[] splitedLine2 = splitedLine[0].split(" ");
+                String[] splitedLine3 = splitedLine[1].split(" ");
+                if (splitedLine2.length != 2 &amp;&amp; splitedLine3.length != 3)
+                    throw new RuntimeException("Invalid Object Spawn line: " + line);
+                int itemId = Integer.parseInt(splitedLine2[0]);
+                int itemAmount = Integer.parseInt(splitedLine2[1]);
+                int tick = Integer.parseInt(splitedLine[2]);
+                WorldTile tile = new WorldTile(Integer.parseInt(splitedLine3[0]), Integer.parseInt(splitedLine3[1]), Integer.parseInt(splitedLine3[2]));
+                addItemSpawn(itemId, itemAmount, tile.getRegionId(), tile, tick);
+            }
+            in.close();
+        } catch (Throwable e) {
+            Logger.handle(e);
+        }
+    }
+
+    public static final void loadItemSpawns(int regionId) {
+        File file = new File("data/items/packedItemSpawns/" + regionId + ".os");
+        if (!file.exists())
+            return;
+        try {
+            RandomAccessFile in = new RandomAccessFile(file, "r");
+            FileChannel channel = in.getChannel();
+            ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            while (buffer.hasRemaining()) {
+                int itemId = buffer.getShort() &amp; 0xffff;
+                int itemAmount = buffer.getShort() &amp; 0xffff;
+                int plane = buffer.get() &amp; 0xff;
+                int x = buffer.getShort() &amp; 0xffff;
+                int y = buffer.getShort() &amp; 0xffff;
+                int tick = buffer.getShort() &amp; 0xffff;
+                World.addGroundItem2(new Item(itemId, itemAmount), new WorldTile(x, y, plane), tick, true);
+            }
+            channel.close();
+            in.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static final void addItemSpawn(int itemId, int itemAmount, int regionId, WorldTile tile, int tick) {
+        try {
+            DataOutputStream out = new DataOutputStream(new FileOutputStream("data/items/packedItemSpawns/" + regionId + ".os", true));
+            out.writeShort(itemId);
+            out.writeShort(itemAmount);
+            out.writeByte(tile.getPlane());
+            out.writeShort(tile.getX());
+            out.writeShort(tile.getY());
+            out.writeShort(tick);
+            out.flush();
+            out.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private GlobalItems() {
+    }
+
+}</code></pre>
+<p>WorldPacketsDecoder class</p>
+<pre><code class="lang-auto">        } else if (packetId == DONE_LOADING_REGION_PACKET) {
+            GlobalItems.loadItemSpawns(player.getRegionId());</code></pre>
+<p>Compare or replace your ITEM_TAKE_PACKET with mine:</p>
+<pre><code class="lang-auto">       else if (packetId == ITEM_TAKE_PACKET) {
+            if (!player.hasStarted() || !player.clientHasLoadedMapRegion()
+                    || player.isDead())
+                return;
+            long currentTime = Utils.currentTimeMillis();
+            if (player.getLockDelay() &gt; currentTime)
+                // || player.getFreezeDelay() &gt;= currentTime)
+                return;
+            int y = stream.readUnsignedShort();
+            int x = stream.readUnsignedShortLE();
+            final int id = stream.readUnsignedShort();
+            boolean forceRun = stream.read128Byte() == 1;
+            final WorldTile tile = new WorldTile(x, y, player.getPlane());
+            final int regionId = tile.getRegionId();
+            if (!player.getMapRegionsIds().contains(regionId))
+                return;
+            final FloorItem item = World.getRegion(regionId).getGroundItem(id,
+                    tile, player);
+            if (item == null)
+                return;
+            player.stopAll(false);
+            if (forceRun)
+                player.setRun(forceRun);
+            player.setCoordsEvent(new CoordsEvent(tile, new Runnable() {
+                @Override
+                public void run() {
+                    final FloorItem item = World.getRegion(regionId)
+                            .getGroundItem(id, tile, player);
+                    if (item == null)
+                        return;
+                    if (item.isSpawned()) {
+                        WorldTasksManager.schedule(new WorldTask() {
+                            @Override
+                            public void run() {
+                                GlobalItems.loadItemSpawns(item.getTile().getRegionId());
+                                this.stop();
+                            }
+                        }, item.getTick());
+                    }
+                    player.setNextFaceWorldTile(tile);
+                    player.addWalkSteps(tile.getX(), tile.getY(), 1);
+                    World.removeGroundItem(player, item);
+                }
+            }, 1, 1));
+        }</code></pre>
+<p>World class</p>
+<pre><code class="lang-auto">    public static final void addGroundItem2(final Item item, final WorldTile tile, final int tick, final boolean spawned) {
+        FloorItem floorItem = World.getRegion(tile.getRegionId())
+                .getGroundItem(item.getId(), tile, null);
+        if (floorItem == null) {
+            floorItem = new FloorItem(item, tile, null, false, false, tick, spawned);
+            final Region region = getRegion(tile.getRegionId());
+            region.forceGetFloorItems().add(floorItem);
+            int regionId = tile.getRegionId();
+            for (Player player : players) {
+                if (player == null || !player.hasStarted() || player.hasFinished()
+                        || player.getPlane() != tile.getPlane()
+                        || !player.getMapRegionsIds().contains(regionId))
+                    continue;
+                player.getPackets().sendGroundItem(floorItem);
+            }
+        }
+    }</code></pre>
+<p>FloorItem class</p>
+<pre><code class="lang-auto">package com.rs.game.item;
+
+import com.rs.game.WorldTile;
+import com.rs.game.player.Player;
+
+@SuppressWarnings("serial")
+public class FloorItem extends Item {
+
+    private WorldTile tile;
+    private Player owner;
+    private boolean invisible;
+    private boolean grave;
+    private int tick;
+    private boolean spawned;
+
+    public FloorItem(int id) {
+        super(id);
+    }
+
+    @Override
+    public void setAmount(int amount) {
+        this.amount = amount;
+    }
+
+    public FloorItem(Item item, WorldTile tile, Player owner,
+                     boolean underGrave, boolean invisible) {
+        super(item.getId(), item.getAmount());
+        this.tile = tile;
+        this.owner = owner;
+        grave = underGrave;
+        this.invisible = invisible;
+    }
+
+    public FloorItem(Item item, WorldTile tile, Player owner,
+                     boolean underGrave, boolean invisible, int tick, boolean spawned) {
+        super(item.getId(), item.getAmount());
+        this.tile = tile;
+        this.owner = owner;
+        grave = underGrave;
+        this.invisible = invisible;
+        this.tick = tick;
+        this.spawned = spawned;
+    }
+
+    public WorldTile getTile() {
+        return tile;
+    }
+
+    public boolean isGrave() {
+        return grave;
+    }
+
+    public boolean isInvisible() {
+        return invisible;
+    }
+
+    public Player getOwner() {
+        return owner;
+    }
+
+    public void setInvisible(boolean invisible) {
+        this.invisible = invisible;
+    }
+
+    public boolean isSpawned() {
+        return spawned;
+    }
+
+    public int getTick() {
+        return tick;
+    }
+}</code></pre>
+<p>Make a new txt file in data/items. Name it unpackedItemSpawns.txt. In it, add:</p>
+<pre><code class="lang-auto">//itemID itemAmount - X Y PLANE - ticks</code></pre>
+<p>[hr]</p>
+<p>EDIT: If you guys want a command to add (this is like the ;;spawn command, it doesnt write it to the packed or unpacked files, it makes a spawn.txt that you can cut and paste into your unpacked files).</p>
+<p>Command class</p>
+<pre><code class="lang-auto">                case "itemspawn":
+                    try {
+                        amount = 1;
+                        int tick = 20;
+                        if (cmd.length == 3)
+                            amount = Integer.parseInt(cmd[2]);
+                        if (cmd.length == 4) {
+                            amount = Integer.parseInt(cmd[2]);
+                            tick = Integer.parseInt(cmd[3]);
+                        }
+                        if (cmd.length &lt; 2) {
+                            player.getPackets().sendGameMessage(
+                                    "Use: ::itemspawn itemid"
+                            );
+                            return true;
+                        }
+                        try {
+                            if (GlobalItems.addSpawn(
+                                    player.getUsername(),
+                                    Integer.parseInt(cmd[1]), player, amount, tick
+                            )) {
+                                player.getPackets().sendGameMessage("Added spawn!");
+                                return true;
+                            }
+                        } catch (Throwable e) {
+                            e.printStackTrace();
+                        }
+                        player.getPackets().sendGameMessage(
+                                "Failed removing spawn!"
+                        );
+                        return true;
+                    } catch (NumberFormatException e) {
+                        player.getPackets().sendGameMessage("Use: ::itemspawn itemid");
+                    }
+                    return true;</code></pre>
+<p>GlobalItems class</p>
+<pre><code class="lang-auto">    public static boolean addSpawn(String username, int id, WorldTile tile, int amount, int tick) throws Throwable {
+        File file = new File("data/items/spawns.txt");
+        BufferedWriter writer = new BufferedWriter(new FileWriter(file, true));
+        writer.write("// " + ItemDefinitions.getItemDefinitions(id).getName() + ", added by: " + username);
+        writer.newLine();
+        writer.flush();
+        writer.write(id + " " + amount + " - " + tile.getX() + " " + tile.getY() + " " + tile.getPlane() + " - " + tick);
+        writer.newLine();
+        writer.flush();
+        World.addGroundItem(new Item(id), tile);
+        return true;
+    }</code></pre>
+<p><span class="bbcode-b">The command can be either ;;itemspawn ITEMID, ;;itemspawn ITEMID ITEMAMOUNT, or ;;itemspawn ITEMID ITEMAMOUNT TICK.</span></p>
+<p>The result:</p>
+<pre><code class="lang-auto">// Red spiders' eggs, added by: arham_4
+223 - 3162 9891 0 - 20</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781/1</link>
+        <pubDate>Wed, 09 Jul 2014 18:42:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544781-1</guid>
+        <source url="https://forum.moparisthebest.com/t/matrix-global-item-spawns-ground-items/544781.rss">[Matrix] Global Item Spawns (Ground Items)</source>
+      </item>
+  </channel>
+</rss>

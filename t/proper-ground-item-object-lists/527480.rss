@@ -1,0 +1,1667 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Proper Ground Item/Object Lists</title>
+    <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480</link>
+    <description>Those of you who need to do this on your base can use this as a model. There are two lists, a local list contained in the player object and a list contained in the world object.
+
+Refresh the synchronizer when the scene is being rebuild (aka region change).
+
+GroundItemList.java
+
+[code]
+/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the &quot;Software&quot;), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.Entity;
+import net.scapeemulator.game.model.player.Item;
+import net.scapeemulator.game.model.player.ItemDefinitions;
+import net.scapeemulator.game.model.Position;
+
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundItemList {
+
+    /**
+     * The UID counter for all the ground items that are created.
+     */
+    private static final AtomicInteger counter = new AtomicInteger(1);
+
+    /**
+     * The ground item stacks in this list.
+     */
+    private final Map&lt;Position, GroundItemStack&gt; stacks = new LinkedHashMap&lt;&gt;();
+
+    /**
+     * The list of listeners for this list.
+     */
+    private final List&lt;GroundItemListener&gt; listeners = new LinkedList&lt;&gt;();
+
+    /**
+     * The type of this list.
+     */
+    private final Type type;
+
+    /**
+     * Constructs a new [@link GroundItemList};
+     * @param type The type of the list.
+     */
+    public GroundItemList(Type type) {
+        this.type = type;
+    }
+
+    /**
+     * The two different scopes for a list.
+     */
+    public enum Type {
+        WORLD, LOCAL
+    }
+
+    /**
+     * The class that represents a stack of ground items at a specific location.
+     */
+    private class GroundItemStack {
+
+        /**
+         * The ground items that are contained in the stack.
+         */
+        private final List&lt;GroundItem&gt; groundItems = new LinkedList&lt;&gt;();
+
+        /**
+         * The position at which the stack is located at.
+         */
+        private final Position position;
+
+        /**
+         * Constructs a new {@link GroundItemStack};
+         * @param position  The position of the stack.
+         */
+        public GroundItemStack(Position position) {
+            this.position = position;
+        }
+
+        /**
+         * Appends a new ground item to the stack.
+         * @param itemId The id of the item to append.
+         * @param amount The amount of the item.
+         */
+        public void add(int itemId, int amount) {
+            if(ItemDefinitions.forId(itemId).isStackable()) {
+                for(GroundItem groundItem : groundItems) {
+                    if(groundItem.getItemId() != itemId) {
+                        continue;
+                    }
+
+                    /* update the ground item */
+                    groundItem.setAmount(groundItem.getAmount() + amount);
+
+                    return;
+                }
+            }
+
+            /* add the ground item to the ground item list */
+            GroundItem groundItem = new GroundItem(position, itemId, amount);
+            groundItem.setUid(counter.getAndIncrement());
+            groundItems.add(groundItem);
+
+            /* alert the listeners a new ground item was created */
+            for(GroundItemListener listener : listeners) {
+                listener.groundItemCreated(groundItem, type);
+            }
+        }
+
+        /**
+         * Gets if the stack is empty.
+         * @return If the ground item map is empty.
+         */
+        public boolean isEmpty() {
+            return groundItems.isEmpty();
+        }
+
+        /**
+         * Gets the ground item in the list with the specified item id.
+         * @param itemId The item id for the ground item to get.
+         * @return The found ground item.
+         */
+        public GroundItem get(int itemId) {
+            for(GroundItem groundItem : groundItems) {
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+                return groundItem;
+            }
+            return null;
+        }
+
+        /**
+         * Gets if the stack contains a ground item with the specified item id.
+         * @param itemId The item id for the ground item to check.
+         * @return If the ground item with the item id exists.
+         */
+        public boolean contains(int itemId) {
+            for(GroundItem groundItem : groundItems) {
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Removes a ground item from the stack.
+         * @param itemId The item id for the ground item to remove.
+         * @return The removed ground item.
+         */
+        public GroundItem remove(int itemId) {
+            Iterator&lt;GroundItem&gt; iterator = groundItems.iterator();
+            while(iterator.hasNext()) {
+
+                /* Get the next ground item */
+                GroundItem groundItem = iterator.next();
+
+                /* Check that its the ground item that we are looking for */
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+
+                /* Remove the ground item from the stack list */
+                iterator.remove();
+
+                /* Alert the listeners a ground item was removed */
+                for(GroundItemListener listener : listeners) {
+                    listener.groundItemRemoved(groundItem, type);
+                }
+
+                return groundItem;
+            }
+
+            return null;
+        }
+
+        /**
+         * Gets the ground items in the stack.
+         * @return The ground item list.
+         */
+        public List&lt;GroundItem&gt; getGroundItems() {
+            return groundItems;
+        }
+    }
+
+    /**
+     * The representation of a ground item for this list.
+     */
+    public class GroundItem extends Entity {
+
+        /**
+         * The unique id of the ground item.
+         */
+        private int uid;
+
+        /**
+         * The item id that the ground item represents.
+         */
+        private int itemId;
+
+        /**
+         * The amount of the item that the ground item represents.
+         */
+        private int amount;
+
+        public GroundItem(Position position, int itemId, int amount) {
+            this.position = position;
+            this.itemId = itemId;
+            this.amount = amount;
+        }
+
+        /**
+         * Sets the unique id.
+         * @param uid The unique id.
+         */
+        public void setUid(int uid) {
+            this.uid = uid;
+        }
+
+        /**
+         * Gets the unique id.
+         * @return The unique id.
+         */
+        public int getUid() {
+            return uid;
+        }
+
+        /**
+         * Sets the amount of the item.
+         * @param newAmount The new amount.
+         */
+        public void setAmount(int newAmount) {
+            if(newAmount != amount) {
+                int oldAmount = amount;
+                amount = newAmount;
+
+                for(GroundItemListener listener : listeners) {
+                    listener.groundItemUpdated(this, oldAmount, type);
+                }
+            }
+        }
+
+        /**
+         * Gets the id of the item that the ground item represents.
+         * @return The item id.
+         */
+        public int getItemId() {
+            return itemId;
+        }
+
+        /**
+         * Gets the amount of the item that the ground item represents.
+         * @return The item amount.
+         */
+        public int getAmount() {
+            return amount;
+        }
+
+        /**
+         * Converts the ground item to a immutable item.
+         * @return The created immutable item.
+         */
+        public Item toItem() {
+            return new Item(itemId, amount);
+        }
+    }
+
+    /**
+     * Adds a listener for the list.
+     */
+    public void addListener(GroundItemListener listener) {
+        listeners.add(listener);
+        fireEvents(listener);
+    }
+
+    /**
+     * Removes a listener from the list.
+     */
+    public void removeListener(GroundItemListener listener) {
+        listeners.remove(listener);
+    }
+
+    /**
+     * Fires a ground item created event for each ground item in the list.
+     */
+    public void fireEvents(GroundItemListener listener) {
+        for(Entry&lt;Position, GroundItemStack&gt; entry : stacks.entrySet()) {
+            for(GroundItem groundItem : entry.getValue().getGroundItems()) {
+                listener.groundItemCreated(groundItem, type);
+            }
+        }
+    }
+
+    /**
+     * Adds a ground item to the list.
+     * @param itemId The id of the item.
+     * @param amount The amount of the item.
+     * @param position The position of the ground item.
+     */
+    public void add(int itemId, int amount, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            stack = new GroundItemStack(position);
+            stacks.put(position, stack);
+        }
+        stack.add(itemId, amount);
+    }
+
+    /**
+     * Gets a ground item.
+     * @param itemId The item id.
+     * @param position The position of the item.
+     * @return The ground item.
+     */
+    public GroundItem get(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return null;
+        }
+        return stack.get(itemId);
+    }
+
+    /**
+     * Checks if the list contains a ground item.
+     * @param itemId The id of the item to check for.
+     * @param position The position of the item.
+     * @return If the ground item exists.
+     */
+    public boolean contains(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return false;
+        }
+        return stack.contains(itemId);
+    }
+
+    /**
+     * Removes a ground item.
+     * @param itemId The item id for the ground item.
+     * @param position The position of the ground item.
+     * @return The removed ground item.
+     */
+    public GroundItem remove(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return null;
+        }
+
+        GroundItem groundItem = stack.remove(itemId);
+
+        /* Remove the stack if its empty */
+        if(stack.isEmpty()) {
+            stacks.remove(position);
+        }
+
+        return groundItem;
+    }
+}
+[/code]
+
+GroundItemListener.java
+
+[code]
+/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the &quot;Software&quot;), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.item.GroundItemList.Type;
+import net.scapeemulator.game.model.item.GroundItemList.GroundItem;
+
+/**
+ * Created by Hadyn Richard
+ */
+public abstract class GroundItemListener {
+
+    public abstract void groundItemCreated(GroundItem groundItem, Type type);
+
+    public abstract void groundItemUpdated(GroundItem groundItem, int previousAmount, Type type);
+
+    public abstract void groundItemRemoved(GroundItem groundItem, Type type);
+}
+
+[/code]
+
+GroundItemSynchronizer.java
+
+[code]
+/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the &quot;Software&quot;), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.item.GroundItemList.Type;
+import net.scapeemulator.game.model.player.ItemDefinitions;
+import net.scapeemulator.game.model.Position;
+import net.scapeemulator.game.model.World;
+import net.scapeemulator.game.model.player.Player;
+import net.scapeemulator.game.msg.GroundItemCreateMessage;
+import net.scapeemulator.game.msg.PlacementCoordsMessage;
+import net.scapeemulator.game.msg.GroundItemRemoveMessage;
+import net.scapeemulator.game.msg.GroundItemUpdateMessage;
+import net.scapeemulator.game.model.item.GroundItemList.GroundItem;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundItemSynchronizer extends GroundItemListener {
+
+    /**
+     * The player to synchronize the ground items for.
+     */
+    private final Player player;
+
+    /**
+     * The ids of all the ground items that the synchronized has handled.
+     */
+    private final Set&lt;Integer&gt; uids = new HashSet&lt;&gt;();
+
+    /**
+     * Constructs a new {@link GroundItemSynchronizer};
+     * @param player The player to synchronize the ground items for.
+     */
+    public GroundItemSynchronizer(Player player) {
+        this.player = player;
+    }
+
+    @Override
+    public void groundItemCreated(GroundItem groundItem, Type type) {
+        Position position = groundItem.getPosition();
+        boolean bool = uids.contains(groundItem.getUid());
+        if(!bool &amp;&amp; player.getPosition().isWithinScene(position)) {
+            uids.add(groundItem.getUid());
+            sendPlacementCoords(position);
+            if(ItemDefinitions.forId(groundItem.getItemId()).isStackable()) {
+                GroundItemList list = getAlternateList(type);
+                if(list.contains(groundItem.getItemId(), groundItem.getPosition())) {
+                    int prevAmount = list.get(groundItem.getItemId(), groundItem.getPosition()).getAmount();
+                    int newAmount = groundItem.getAmount() + prevAmount;
+                    player.send(new GroundItemUpdateMessage(groundItem.getItemId(), newAmount, position, prevAmount));
+                    return;
+                }
+            }
+            player.send(new GroundItemCreateMessage(groundItem.getItemId(), groundItem.getAmount(), position));
+            return;
+        }
+
+        /* remove the ground item from the added list if its not longer in the scene */
+        if(bool) {
+            uids.remove(groundItem.getUid());
+        }
+    }
+
+    @Override
+    public void groundItemUpdated(GroundItemList.GroundItem groundItem, int previousAmount, Type type) {
+        Position position = groundItem.getPosition();
+        if(uids.contains(groundItem.getUid()) &amp;&amp; player.getPosition().isWithinScene(position)) {
+            sendPlacementCoords(position);
+            player.send(new GroundItemUpdateMessage(groundItem.getItemId(), groundItem.getAmount(), groundItem.getPosition(), previousAmount));
+        }
+    }
+
+    @Override
+    public void groundItemRemoved(GroundItem groundItem, Type type) {
+        if(uids.contains(groundItem.getUid())) {
+            Position position = groundItem.getPosition();
+            if(player.getPosition().isWithinScene(position)) {
+                sendPlacementCoords(position);
+                if(ItemDefinitions.forId(groundItem.getItemId()).isStackable()) {
+                    GroundItemList list = getAlternateList(type);
+                    if(list.contains(groundItem.getItemId(), groundItem.getPosition())) {
+                        int prevAmount = list.get(groundItem.getItemId(), groundItem.getPosition()).getAmount();
+                        int newAmount = groundItem.getAmount() + prevAmount;
+                        player.send(new GroundItemUpdateMessage(groundItem.getItemId(), newAmount, position, prevAmount));
+                        return;
+                    }
+                }
+                player.send(new GroundItemRemoveMessage(groundItem.getItemId(), groundItem.getPosition()));
+            }
+            uids.remove(groundItem.getUid());
+        }
+    }
+    
+    private void sendPlacementCoords(Position position) {
+        int localX = position.getLocalX(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        int localY = position.getLocalY(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        player.send(new PlacementCoordsMessage(localX, localY));
+    }
+    
+    private GroundItemList getAlternateList(Type type) {
+        switch(type) {
+           case LOCAL:
+               return World.getInstance().getGroundItems();
+           case WORLD:
+               return player.getGroundItems();
+           default:
+               throw new RuntimeException();
+        }
+    }
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Fri, 09 Aug 2013 22:38:08 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@south-park south-park]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/south-park">@south-park</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“kingman002, post:6, topic:527480”][quote author=Driman Rune link=topic=646231.msg4347166#msg4347166 date=1376062383]<br>
+I’m.<br>
+wordless.<br>
+[ img]<a href="http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg%5B/img%5D" rel="nofollow noopener">http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg[/img]</a></p>
+<p>[/quote]<br>
+Why? Because your leeched PI already has ground items.[/quote]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/7</link>
+        <pubDate>Fri, 09 Aug 2013 22:38:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-7</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@kingman002 kingman002]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kingman002">@kingman002</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Driman Rune, post:5, topic:527480”]I’m.<br>
+wordless.<br>
+[ img]<a href="http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg%5B/img%5D%5B/quote%5D" rel="nofollow noopener">http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg[/img][/quote]</a><br>
+Why? Because your leeched PI already has ground items.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/6</link>
+        <pubDate>Fri, 09 Aug 2013 16:14:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-6</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@Driman_Rune Driman Rune]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/driman_rune">@Driman_Rune</a> wrote:</p>
+          <blockquote>
+              <p>I’m.<br>
+wordless.<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg" title="I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg" rel="nofollow noopener"><img src="http://fc07.deviantart.net/fs50/f/2009/298/5/6/I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg" alt width="375" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">I__M_A_GOOFY_GOOBER_by_Red_Flare.jpg</span><span class="informations">936×1248</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/5</link>
+        <pubDate>Fri, 09 Aug 2013 15:33:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-5</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Here’s some more crud.</p>
+<p>GroundObjectList.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.object;
+
+import net.scapeemulator.game.model.Entity;
+import net.scapeemulator.game.model.Position;
+
+import java.util.Map.Entry;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundObjectList {
+
+    /**
+     * The UID counter for all the ground objects that are created.
+     */
+    private static final AtomicInteger counter = new AtomicInteger(1);
+
+    /**
+     * The mapping for all the tiles in this list.
+     */
+    private final Map&lt;Position, Tile&gt; tiles = new LinkedHashMap&lt;&gt;();
+
+    /**
+     * The list of listeners registered to the list.
+     */
+    private final List&lt;GroundObjectListener&gt; listeners = new LinkedList&lt;&gt;();
+
+    private class Tile {
+
+        /**
+         * The mapping for the objects that exist on the tile.
+         */
+        private Map&lt;ObjectGroup, GroundObject&gt; objects = new LinkedHashMap&lt;&gt;();
+
+        /**
+         * Constructs a new {@link Tile};
+         */
+        public Tile() {}
+
+        public boolean put(ObjectGroup group, GroundObject groundObject) {
+            /* Cannot contain multiple of the same group of object on a tile */
+            if(objects.containsKey(group)) {
+                return false;
+            }
+
+            /* Put the object into the mapping */
+            objects.put(group, groundObject);
+            groundObject.setUid(counter.incrementAndGet());
+
+            /* Update the listeners */
+            for(GroundObjectListener listener : listeners) {
+                listener.groundObjectUpdated(groundObject);
+            }
+            return true;
+        }
+        
+        public List&lt;GroundObject&gt; getGroundObjects() {
+            return new LinkedList(objects.values());
+        }
+
+        public boolean contains(int objectId) {
+            for(Entry&lt;ObjectGroup, GroundObject&gt; entry : objects.entrySet()) {
+                if(entry.getValue().getObjectId() == objectId) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void remove(ObjectGroup group) {
+            GroundObject groundObject = objects.remove(group);
+            if(groundObject != null) {
+
+                /* Update the listeners */
+                for(GroundObjectListener listener : listeners) {
+                    listener.groundItemRemoved(groundObject);
+                }
+            }
+        }
+    }
+
+    public class GroundObject extends Entity {
+        
+        private final int group;
+        private int objectId, type, rotation, uid;
+
+        public GroundObject(Position position, int objectId, int type, int rotation) {
+            this.position = position;
+            this.objectId = objectId;
+            this.type = type;
+            this.rotation = rotation;
+            group = ObjectGroup.OBJECT_GROUPS[type];
+        }
+
+        public void setObjectId(int objectId) {
+            this.objectId = objectId;
+
+            /* Update the listeners */
+            for(GroundObjectListener listener : listeners) {
+                listener.groundObjectUpdated(this);
+            }
+        }
+        
+        public int getObjectId() {
+            return objectId;
+        }
+        
+        public void setType(int type) {
+            if(group != ObjectGroup.OBJECT_GROUPS[type]) {
+                throw new IllegalArgumentException("cannot change the group");
+            }
+            this.type = type;
+
+            /* Alert the listeners */
+            for(GroundObjectListener listener : listeners) {
+                listener.groundObjectUpdated(this);
+            }
+        }
+        
+        public int getType() {
+            return type;
+        }
+
+        public void setRotation(int rotation) {
+            this.rotation = rotation;
+
+            /* Alert the listeners */
+            for(GroundObjectListener listener : listeners) {
+                listener.groundObjectUpdated(this);
+            }
+        }
+        
+        public int getRotation() {
+            return rotation;
+        }
+        
+        public void setUid(int uid) {
+            this.uid = uid;
+        }
+        
+        public int getUid() {
+            return uid;
+        }
+
+        public void animate(int animationId) {
+            /* Alert the listeners */
+            for(GroundObjectListener listener : listeners) {
+                listener.groundObjectAnimated(this, animationId);
+            }
+        }
+    }
+
+    public void addListener(GroundObjectListener listener) {
+        listeners.add(listener);
+        fireEvents(listener);
+    }
+
+    public void removeListener(GroundObjectListener listener) {
+        listeners.remove(listener);
+    }
+
+    /**
+     * Fires a ground item updated event for each spawned ground object.
+     */
+    public void fireEvents(GroundObjectListener listener) {
+        for(Entry&lt;Position, Tile&gt; entry : tiles.entrySet()) {
+            for(GroundObject groundObject : entry.getValue().getGroundObjects()) {
+                listener.groundObjectUpdated(groundObject);
+            }
+        }
+    }
+
+    public boolean put(Position position, int objectId, int type, int rotation) {
+        GroundObject groundObject = new GroundObject(position, objectId, type, rotation);
+        Tile tile = tiles.get(position);
+        if(tile == null) {
+            tile = new Tile();
+            tiles.put(position, tile);
+        }
+        return tile.put(ObjectGroup.get(type), groundObject);
+    }
+    
+    public boolean contains(int objectId, Position position) {
+        Tile tile = tiles.get(position);
+        if(tile == null) {
+            return false;
+        }
+        return tile.contains(objectId);
+    }
+    
+    public void remove(Position position, ObjectGroup group) {
+        Tile tile = tiles.get(position);
+        if(tile == null) {
+            return;
+        }
+        tile.remove(group);
+    }
+}
+</code></pre>
+<p>GroundObjectListener.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.object;
+
+import net.scapeemulator.game.model.object.GroundObjectList.GroundObject;
+
+/**
+ * Created by Hadyn Richard
+ */
+public abstract class GroundObjectListener {
+    
+    public abstract void groundObjectUpdated(GroundObject object);
+
+    public abstract void groundObjectAnimated(GroundObject object, int animationId);
+
+    public abstract void groundItemRemoved(GroundObject object);
+}
+</code></pre>
+<p>GroundObjectSynchronizer.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.object;
+
+import net.scapeemulator.game.model.Position;
+import net.scapeemulator.game.model.object.GroundObjectList.GroundObject;
+import net.scapeemulator.game.model.player.Player;
+import net.scapeemulator.game.msg.*;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundObjectSynchronizer extends GroundObjectListener {
+
+    private final Player player;
+    private final Set&lt;Integer&gt; uids = new HashSet&lt;&gt;();
+
+    public GroundObjectSynchronizer(Player player) {
+        this.player = player;
+    }
+    @Override
+    public void groundObjectUpdated(GroundObject object) {
+        Position position = object.getPosition();
+        boolean bool = uids.contains(object.getUid());
+        if(!bool &amp;&amp; player.getPosition().isWithinScene(position)) {
+            uids.add(object.getUid());
+            sendPlacementCoords(position);
+            player.send(new GroundObjectUpdateMessage(object.getPosition(), object.getObjectId(), object.getType(), object.getRotation()));
+            return;
+        }
+
+        /* remove the ground object from the added list if its not longer in the scene */
+        if(bool) {
+            uids.remove(object.getUid());
+        }
+    }
+
+    @Override
+    public void groundObjectAnimated(GroundObject object, int animationId) {
+        //To change body of implemented methods use File | Settings | File Templates.
+    }
+
+    @Override
+    public void groundItemRemoved(GroundObject object) {
+        if(uids.contains(object.getUid())) {
+            Position position = object.getPosition();
+            if(player.getPosition().isWithinScene(position)) {
+                sendPlacementCoords(position);
+                player.send(new GroundObjectRemoveMessage(object.getPosition(), object.getType(), object.getRotation()));
+            }
+            uids.remove(object.getUid());
+        }
+    }
+
+    private void sendPlacementCoords(Position position) {
+        int localX = position.getLocalX(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        int localY = position.getLocalY(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        player.send(new PlacementCoordsMessage(localX, localY));
+    }
+}
+</code></pre>
+<p>ObjectGroup.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.object;
+
+/**
+ * Created by Hadyn Richard
+ *
+ * Ground 2 is kinda wide. I THINK 'prop' is correct. Not, entirely, sure.
+ */
+public enum ObjectGroup {
+    
+    WALL(0), WALL_DECORATION(1), PROP(2), FLOOR_DECORATION(3);
+
+    /**
+     * The array of object group ids for their type.
+     */
+    public static final int[] OBJECT_GROUPS = new int[] { 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
+                                                          2, 2, 2, 2, 2, 2, 2, 3 };
+
+    /**
+     * The group id that the type belongs to.
+     */
+    private final int id;
+    
+    ObjectGroup(int id) {
+        this.id = id;
+    }
+    
+    public static ObjectGroup get(int type) {
+        int id = OBJECT_GROUPS[type];
+        for(ObjectGroup group : values()) {
+            if(group.id == id) {
+                return group;
+            }
+        }
+        throw new RuntimeException();
+    }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/4</link>
+        <pubDate>Fri, 09 Aug 2013 10:23:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-4</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@Ares1 Ares_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ares1">@Ares1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="2" data-topic="527480">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>Nice (even though I don’t know what to use this for lmao).</p>
+</blockquote>
+</aside>
+<p>As the title says ground items.  Nice job though looks very good.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/3</link>
+        <pubDate>Wed, 07 Aug 2013 22:02:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-3</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>Nice (even though I don’t know what to use this for lmao).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/2</link>
+        <pubDate>Wed, 07 Aug 2013 19:03:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-2</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+      <item>
+        <title>Proper Ground Item/Object Lists</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Those of you who need to do this on your base can use this as a model. There are two lists, a local list contained in the player object and a list contained in the world object.</p>
+<p>Refresh the synchronizer when the scene is being rebuild (aka region change).</p>
+<p>GroundItemList.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.Entity;
+import net.scapeemulator.game.model.player.Item;
+import net.scapeemulator.game.model.player.ItemDefinitions;
+import net.scapeemulator.game.model.Position;
+
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundItemList {
+
+    /**
+     * The UID counter for all the ground items that are created.
+     */
+    private static final AtomicInteger counter = new AtomicInteger(1);
+
+    /**
+     * The ground item stacks in this list.
+     */
+    private final Map&lt;Position, GroundItemStack&gt; stacks = new LinkedHashMap&lt;&gt;();
+
+    /**
+     * The list of listeners for this list.
+     */
+    private final List&lt;GroundItemListener&gt; listeners = new LinkedList&lt;&gt;();
+
+    /**
+     * The type of this list.
+     */
+    private final Type type;
+
+    /**
+     * Constructs a new [@link GroundItemList};
+     * @param type The type of the list.
+     */
+    public GroundItemList(Type type) {
+        this.type = type;
+    }
+
+    /**
+     * The two different scopes for a list.
+     */
+    public enum Type {
+        WORLD, LOCAL
+    }
+
+    /**
+     * The class that represents a stack of ground items at a specific location.
+     */
+    private class GroundItemStack {
+
+        /**
+         * The ground items that are contained in the stack.
+         */
+        private final List&lt;GroundItem&gt; groundItems = new LinkedList&lt;&gt;();
+
+        /**
+         * The position at which the stack is located at.
+         */
+        private final Position position;
+
+        /**
+         * Constructs a new {@link GroundItemStack};
+         * @param position  The position of the stack.
+         */
+        public GroundItemStack(Position position) {
+            this.position = position;
+        }
+
+        /**
+         * Appends a new ground item to the stack.
+         * @param itemId The id of the item to append.
+         * @param amount The amount of the item.
+         */
+        public void add(int itemId, int amount) {
+            if(ItemDefinitions.forId(itemId).isStackable()) {
+                for(GroundItem groundItem : groundItems) {
+                    if(groundItem.getItemId() != itemId) {
+                        continue;
+                    }
+
+                    /* update the ground item */
+                    groundItem.setAmount(groundItem.getAmount() + amount);
+
+                    return;
+                }
+            }
+
+            /* add the ground item to the ground item list */
+            GroundItem groundItem = new GroundItem(position, itemId, amount);
+            groundItem.setUid(counter.getAndIncrement());
+            groundItems.add(groundItem);
+
+            /* alert the listeners a new ground item was created */
+            for(GroundItemListener listener : listeners) {
+                listener.groundItemCreated(groundItem, type);
+            }
+        }
+
+        /**
+         * Gets if the stack is empty.
+         * @return If the ground item map is empty.
+         */
+        public boolean isEmpty() {
+            return groundItems.isEmpty();
+        }
+
+        /**
+         * Gets the ground item in the list with the specified item id.
+         * @param itemId The item id for the ground item to get.
+         * @return The found ground item.
+         */
+        public GroundItem get(int itemId) {
+            for(GroundItem groundItem : groundItems) {
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+                return groundItem;
+            }
+            return null;
+        }
+
+        /**
+         * Gets if the stack contains a ground item with the specified item id.
+         * @param itemId The item id for the ground item to check.
+         * @return If the ground item with the item id exists.
+         */
+        public boolean contains(int itemId) {
+            for(GroundItem groundItem : groundItems) {
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Removes a ground item from the stack.
+         * @param itemId The item id for the ground item to remove.
+         * @return The removed ground item.
+         */
+        public GroundItem remove(int itemId) {
+            Iterator&lt;GroundItem&gt; iterator = groundItems.iterator();
+            while(iterator.hasNext()) {
+
+                /* Get the next ground item */
+                GroundItem groundItem = iterator.next();
+
+                /* Check that its the ground item that we are looking for */
+                if(groundItem.getItemId() != itemId) {
+                    continue;
+                }
+
+                /* Remove the ground item from the stack list */
+                iterator.remove();
+
+                /* Alert the listeners a ground item was removed */
+                for(GroundItemListener listener : listeners) {
+                    listener.groundItemRemoved(groundItem, type);
+                }
+
+                return groundItem;
+            }
+
+            return null;
+        }
+
+        /**
+         * Gets the ground items in the stack.
+         * @return The ground item list.
+         */
+        public List&lt;GroundItem&gt; getGroundItems() {
+            return groundItems;
+        }
+    }
+
+    /**
+     * The representation of a ground item for this list.
+     */
+    public class GroundItem extends Entity {
+
+        /**
+         * The unique id of the ground item.
+         */
+        private int uid;
+
+        /**
+         * The item id that the ground item represents.
+         */
+        private int itemId;
+
+        /**
+         * The amount of the item that the ground item represents.
+         */
+        private int amount;
+
+        public GroundItem(Position position, int itemId, int amount) {
+            this.position = position;
+            this.itemId = itemId;
+            this.amount = amount;
+        }
+
+        /**
+         * Sets the unique id.
+         * @param uid The unique id.
+         */
+        public void setUid(int uid) {
+            this.uid = uid;
+        }
+
+        /**
+         * Gets the unique id.
+         * @return The unique id.
+         */
+        public int getUid() {
+            return uid;
+        }
+
+        /**
+         * Sets the amount of the item.
+         * @param newAmount The new amount.
+         */
+        public void setAmount(int newAmount) {
+            if(newAmount != amount) {
+                int oldAmount = amount;
+                amount = newAmount;
+
+                for(GroundItemListener listener : listeners) {
+                    listener.groundItemUpdated(this, oldAmount, type);
+                }
+            }
+        }
+
+        /**
+         * Gets the id of the item that the ground item represents.
+         * @return The item id.
+         */
+        public int getItemId() {
+            return itemId;
+        }
+
+        /**
+         * Gets the amount of the item that the ground item represents.
+         * @return The item amount.
+         */
+        public int getAmount() {
+            return amount;
+        }
+
+        /**
+         * Converts the ground item to a immutable item.
+         * @return The created immutable item.
+         */
+        public Item toItem() {
+            return new Item(itemId, amount);
+        }
+    }
+
+    /**
+     * Adds a listener for the list.
+     */
+    public void addListener(GroundItemListener listener) {
+        listeners.add(listener);
+        fireEvents(listener);
+    }
+
+    /**
+     * Removes a listener from the list.
+     */
+    public void removeListener(GroundItemListener listener) {
+        listeners.remove(listener);
+    }
+
+    /**
+     * Fires a ground item created event for each ground item in the list.
+     */
+    public void fireEvents(GroundItemListener listener) {
+        for(Entry&lt;Position, GroundItemStack&gt; entry : stacks.entrySet()) {
+            for(GroundItem groundItem : entry.getValue().getGroundItems()) {
+                listener.groundItemCreated(groundItem, type);
+            }
+        }
+    }
+
+    /**
+     * Adds a ground item to the list.
+     * @param itemId The id of the item.
+     * @param amount The amount of the item.
+     * @param position The position of the ground item.
+     */
+    public void add(int itemId, int amount, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            stack = new GroundItemStack(position);
+            stacks.put(position, stack);
+        }
+        stack.add(itemId, amount);
+    }
+
+    /**
+     * Gets a ground item.
+     * @param itemId The item id.
+     * @param position The position of the item.
+     * @return The ground item.
+     */
+    public GroundItem get(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return null;
+        }
+        return stack.get(itemId);
+    }
+
+    /**
+     * Checks if the list contains a ground item.
+     * @param itemId The id of the item to check for.
+     * @param position The position of the item.
+     * @return If the ground item exists.
+     */
+    public boolean contains(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return false;
+        }
+        return stack.contains(itemId);
+    }
+
+    /**
+     * Removes a ground item.
+     * @param itemId The item id for the ground item.
+     * @param position The position of the ground item.
+     * @return The removed ground item.
+     */
+    public GroundItem remove(int itemId, Position position) {
+        GroundItemStack stack = stacks.get(position);
+        if(stack == null) {
+            return null;
+        }
+
+        GroundItem groundItem = stack.remove(itemId);
+
+        /* Remove the stack if its empty */
+        if(stack.isEmpty()) {
+            stacks.remove(position);
+        }
+
+        return groundItem;
+    }
+}</code></pre>
+<p>GroundItemListener.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.item.GroundItemList.Type;
+import net.scapeemulator.game.model.item.GroundItemList.GroundItem;
+
+/**
+ * Created by Hadyn Richard
+ */
+public abstract class GroundItemListener {
+
+    public abstract void groundItemCreated(GroundItem groundItem, Type type);
+
+    public abstract void groundItemUpdated(GroundItem groundItem, int previousAmount, Type type);
+
+    public abstract void groundItemRemoved(GroundItem groundItem, Type type);
+}
+</code></pre>
+<p>GroundItemSynchronizer.java</p>
+<pre><code class="lang-auto">/**
+ * Copyright (c) 2012, Hadyn Richard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in 
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+ * THE SOFTWARE.
+ */
+
+package net.scapeemulator.game.model.item;
+
+import net.scapeemulator.game.model.item.GroundItemList.Type;
+import net.scapeemulator.game.model.player.ItemDefinitions;
+import net.scapeemulator.game.model.Position;
+import net.scapeemulator.game.model.World;
+import net.scapeemulator.game.model.player.Player;
+import net.scapeemulator.game.msg.GroundItemCreateMessage;
+import net.scapeemulator.game.msg.PlacementCoordsMessage;
+import net.scapeemulator.game.msg.GroundItemRemoveMessage;
+import net.scapeemulator.game.msg.GroundItemUpdateMessage;
+import net.scapeemulator.game.model.item.GroundItemList.GroundItem;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class GroundItemSynchronizer extends GroundItemListener {
+
+    /**
+     * The player to synchronize the ground items for.
+     */
+    private final Player player;
+
+    /**
+     * The ids of all the ground items that the synchronized has handled.
+     */
+    private final Set&lt;Integer&gt; uids = new HashSet&lt;&gt;();
+
+    /**
+     * Constructs a new {@link GroundItemSynchronizer};
+     * @param player The player to synchronize the ground items for.
+     */
+    public GroundItemSynchronizer(Player player) {
+        this.player = player;
+    }
+
+    @Override
+    public void groundItemCreated(GroundItem groundItem, Type type) {
+        Position position = groundItem.getPosition();
+        boolean bool = uids.contains(groundItem.getUid());
+        if(!bool &amp;&amp; player.getPosition().isWithinScene(position)) {
+            uids.add(groundItem.getUid());
+            sendPlacementCoords(position);
+            if(ItemDefinitions.forId(groundItem.getItemId()).isStackable()) {
+                GroundItemList list = getAlternateList(type);
+                if(list.contains(groundItem.getItemId(), groundItem.getPosition())) {
+                    int prevAmount = list.get(groundItem.getItemId(), groundItem.getPosition()).getAmount();
+                    int newAmount = groundItem.getAmount() + prevAmount;
+                    player.send(new GroundItemUpdateMessage(groundItem.getItemId(), newAmount, position, prevAmount));
+                    return;
+                }
+            }
+            player.send(new GroundItemCreateMessage(groundItem.getItemId(), groundItem.getAmount(), position));
+            return;
+        }
+
+        /* remove the ground item from the added list if its not longer in the scene */
+        if(bool) {
+            uids.remove(groundItem.getUid());
+        }
+    }
+
+    @Override
+    public void groundItemUpdated(GroundItemList.GroundItem groundItem, int previousAmount, Type type) {
+        Position position = groundItem.getPosition();
+        if(uids.contains(groundItem.getUid()) &amp;&amp; player.getPosition().isWithinScene(position)) {
+            sendPlacementCoords(position);
+            player.send(new GroundItemUpdateMessage(groundItem.getItemId(), groundItem.getAmount(), groundItem.getPosition(), previousAmount));
+        }
+    }
+
+    @Override
+    public void groundItemRemoved(GroundItem groundItem, Type type) {
+        if(uids.contains(groundItem.getUid())) {
+            Position position = groundItem.getPosition();
+            if(player.getPosition().isWithinScene(position)) {
+                sendPlacementCoords(position);
+                if(ItemDefinitions.forId(groundItem.getItemId()).isStackable()) {
+                    GroundItemList list = getAlternateList(type);
+                    if(list.contains(groundItem.getItemId(), groundItem.getPosition())) {
+                        int prevAmount = list.get(groundItem.getItemId(), groundItem.getPosition()).getAmount();
+                        int newAmount = groundItem.getAmount() + prevAmount;
+                        player.send(new GroundItemUpdateMessage(groundItem.getItemId(), newAmount, position, prevAmount));
+                        return;
+                    }
+                }
+                player.send(new GroundItemRemoveMessage(groundItem.getItemId(), groundItem.getPosition()));
+            }
+            uids.remove(groundItem.getUid());
+        }
+    }
+    
+    private void sendPlacementCoords(Position position) {
+        int localX = position.getLocalX(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        int localY = position.getLocalY(player.getLastKnownRegion().getCentralRegionX()) &amp; 0xfff8;
+        player.send(new PlacementCoordsMessage(localX, localY));
+    }
+    
+    private GroundItemList getAlternateList(Type type) {
+        switch(type) {
+           case LOCAL:
+               return World.getInstance().getGroundItems();
+           case WORLD:
+               return player.getGroundItems();
+           default:
+               throw new RuntimeException();
+        }
+    }
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480/1</link>
+        <pubDate>Wed, 07 Aug 2013 09:26:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527480-1</guid>
+        <source url="https://forum.moparisthebest.com/t/proper-ground-item-object-lists/527480.rss">Proper Ground Item/Object Lists</source>
+      </item>
+  </channel>
+</rss>

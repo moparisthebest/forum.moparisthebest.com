@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>317 Complete Login?</title>
+    <link>https://forum.moparisthebest.com/t/317-complete-login/551642</link>
+    <description>I&#39;ve come pretty far with writing the login sequence, however I am stuck. I&#39;ve been trying to reverse other sources, but they&#39;re all so unstructured and messy, but still trying to figure out what comes next.
+I assume I either need to read a packet and then respond with something or send the last packets for completing the login.
+However I&#39;m not sure about what I should expect to receive and what I should send (The order, the ids, structure etc.)
+
+I would like to know if any of you guys got the packet structures that I either need to send/receive + their order. I don&#39;t need the implementation / handling (Other than a short brief of what the packet is.)
+
+Here is my login sequence code (Writing my server in C#), so you can see where I am at the moment.
+[code]
+private static void HandleLogin(StreamableSocket client)
+		{
+			try
+			{
+				if (client.ReadByte() == 14)
+				{
+					long serverSessionKey = 0;
+					long clientSessionKey = 0;
+					
+					serverSessionKey = ((long)(Core.SafeRandom.Generator.Next() * 99999999D) &lt;&lt; 32)
+						+ (long)(Core.SafeRandom.Generator.Next() * 99999999D);
+					
+					byte nameBit = client.ReadByte();
+					
+					client.WriteZero(8); // ignored by the client ...
+					
+					// key-exchange
+					client.WriteSByte((sbyte)Enums.LoginResponse.ExchangeAuthentication);
+					client.WriteInt64(serverSessionKey);
+					
+					// login info beginning ...
+					byte loginType = client.ReadByte();
+					if (loginType != 16 &amp;&amp; loginType != 18)
+					{
+						client.Disconnect(string.Format(&quot;Invalid Login Packet (loginType = &#39;{0}&#39;)&quot;, loginType));
+						return;
+					}
+					
+					byte loginPacketSize = client.ReadByte();
+					
+					const byte expectedData1 = 255;
+					const ushort expectedData2 = 317;
+					
+					byte data1 = client.ReadByte();
+					ushort data2 = client.ReadUInt16(true); // Endian reverse
+					if (data1 != expectedData1 &amp;&amp; data2 != expectedData2 ||
+					    data1 == expectedData1 &amp;&amp; data2 != expectedData2 ||
+					    data1 != expectedData1 &amp;&amp; data2 == expectedData2)
+					{
+						client.Disconnect(string.Format(&quot;Invalid Login Packet (data1 = &#39;{0}&#39; data2 = &#39;{1}&#39;)&quot;, data1, data2));
+						return;
+					}
+					
+					int loginPacketCryptoSize = (int)(loginPacketSize - (36 + 1 + 1 + 2)) - 1;
+
+					byte version = client.ReadByte();
+					int[] crc = new int[9];
+					for (int i = 0; i &lt; crc.Length; i++)
+					{
+						crc[i] = client.ReadInt32();
+					}
+					
+					byte magic1 = client.ReadByte();
+					byte magic2 = client.ReadByte();
+					
+					if (magic2 != 10)
+					{
+						client.Disconnect(
+							string.Format(
+								&quot;Invalid Login Packet (loginPacketCryptoSize = &#39;{0}&#39; magic1 = &#39;{1}&#39; magic2 = &#39;{2}&#39;)&quot;,
+								loginPacketCryptoSize, magic1, magic2
+							)
+						);
+						return;
+					}
+					
+					clientSessionKey = client.ReadInt64();
+					long requeustedServerSessionKey = client.ReadInt64();
+					
+					if (requeustedServerSessionKey != serverSessionKey)
+					{
+						client.Disconnect(
+							string.Format(
+								&quot;Invalid Login Packet (serverSessionKey = &#39;{0}&#39; requeustedServerSessionKey = &#39;{1}&#39;)&quot;,
+								serverSessionKey, requeustedServerSessionKey
+							)
+						);
+						return;
+					}
+					
+					int userId = client.ReadInt32(true);
+					
+					string account = client.ReadString();
+					bool invalidName = !Kernel.ValidName(account);
+					string password = client.ReadString();
+					
+					Console.WriteLine(&quot;[&#39;{0}&#39;, &#39;{1}&#39;] is attemtping to login with &#39;{2}&#39;...&quot;, userId, account, password);
+					
+					var player = new Entities.Player(client);
+					Enums.LoginResponse response = Enums.LoginResponse.RejectedSession;
+					if (invalidName)
+						response = Enums.LoginResponse.InvalidUsernameOrPassword;
+					else
+					{
+						response = Database.PlayerDatabase.Authenticate(player, account, password);
+						
+						if (Kernel.Players.ContainsKey(player.UID))
+							response = Enums.LoginResponse.MultiLogin;
+						else if (!Kernel.Players.TryAdd(player.UID, player))
+							response = Enums.LoginResponse.BadSession;
+						else if (Kernel.Players.Count &gt; 1000)
+							response = Enums.LoginResponse.FullServer;
+					}
+					
+					if (response != Enums.LoginResponse.Success)
+					{
+						player.Client.WriteSByte((sbyte)response);
+						player.Client.WriteByte(0); // Not exposing rank ...
+						player.Client.WriteByte(0); // Not flagged ...
+						player.Client.Disconnect(&quot;Invalid Authentication&quot;);
+					}
+					else
+					{
+						if (loginType == 18)
+							response = Enums.LoginResponse.Reconnect;
+						
+						// Create cryptography ...
+						var sessionKey = new int[4];
+						sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+						sessionKey[1] = (int)clientSessionKey;
+						sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+						sessionKey[3] = (int)serverSessionKey;
+						player.Client.InCrypto = new Cryptography(sessionKey);
+						for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+						player.Client.OutCrypto = new Cryptography(sessionKey);
+						
+						player.Client.WriteSByte((sbyte)response);
+						if (response == Enums.LoginResponse.Success)
+						{
+							player.Client.WriteByte((byte)player.Rank);
+							player.Client.WriteByte(0); // Not flagged ...
+						}
+						
+						Console.WriteLine(&quot;&#39;{0}&#39; was successfully authenticated [Response = &#39;{1}&#39;] ...&quot;, player.Name, response);
+						
+						// ???
+					}
+				}
+				else
+				{
+					client.Disconnect(&quot;Invalid Login OP Code&quot;);
+				}
+			}
+			catch (Exception e)
+			{
+				// ...
+			}
+			// End of thread (All packets after login are done asynchronous.) ...
+		}
+[/code]
+
+If you need anymore information please let me know.
+I&#39;ll be trying to see what to do myself meanwhile! :)</description>
+    
+    <lastBuildDate>Sun, 24 May 2015 18:53:56 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/317-complete-login/551642.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>317 Complete Login?</title>
+        <dc:creator><![CDATA[@Bauzz Bauzz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bauzz">@Bauzz</a> wrote:</p>
+          <blockquote>
+              <p>I’ve come pretty far with writing the login sequence, however I am stuck. I’ve been trying to reverse other sources, but they’re all so unstructured and messy, but still trying to figure out what comes next.<br>
+I assume I either need to read a packet and then respond with something or send the last packets for completing the login.<br>
+However I’m not sure about what I should expect to receive and what I should send (The order, the ids, structure etc.)</p>
+<p>I would like to know if any of you guys got the packet structures that I either need to send/receive + their order. I don’t need the implementation / handling (Other than a short brief of what the packet is.)</p>
+<p>Here is my login sequence code (Writing my server in C#), so you can see where I am at the moment.</p>
+<pre><code class="lang-auto">private static void HandleLogin(StreamableSocket client)
+		{
+			try
+			{
+				if (client.ReadByte() == 14)
+				{
+					long serverSessionKey = 0;
+					long clientSessionKey = 0;
+					
+					serverSessionKey = ((long)(Core.SafeRandom.Generator.Next() * 99999999D) &lt;&lt; 32)
+						+ (long)(Core.SafeRandom.Generator.Next() * 99999999D);
+					
+					byte nameBit = client.ReadByte();
+					
+					client.WriteZero(8); // ignored by the client ...
+					
+					// key-exchange
+					client.WriteSByte((sbyte)Enums.LoginResponse.ExchangeAuthentication);
+					client.WriteInt64(serverSessionKey);
+					
+					// login info beginning ...
+					byte loginType = client.ReadByte();
+					if (loginType != 16 &amp;&amp; loginType != 18)
+					{
+						client.Disconnect(string.Format("Invalid Login Packet (loginType = '{0}')", loginType));
+						return;
+					}
+					
+					byte loginPacketSize = client.ReadByte();
+					
+					const byte expectedData1 = 255;
+					const ushort expectedData2 = 317;
+					
+					byte data1 = client.ReadByte();
+					ushort data2 = client.ReadUInt16(true); // Endian reverse
+					if (data1 != expectedData1 &amp;&amp; data2 != expectedData2 ||
+					    data1 == expectedData1 &amp;&amp; data2 != expectedData2 ||
+					    data1 != expectedData1 &amp;&amp; data2 == expectedData2)
+					{
+						client.Disconnect(string.Format("Invalid Login Packet (data1 = '{0}' data2 = '{1}')", data1, data2));
+						return;
+					}
+					
+					int loginPacketCryptoSize = (int)(loginPacketSize - (36 + 1 + 1 + 2)) - 1;
+
+					byte version = client.ReadByte();
+					int[] crc = new int[9];
+					for (int i = 0; i &lt; crc.Length; i++)
+					{
+						crc[i] = client.ReadInt32();
+					}
+					
+					byte magic1 = client.ReadByte();
+					byte magic2 = client.ReadByte();
+					
+					if (magic2 != 10)
+					{
+						client.Disconnect(
+							string.Format(
+								"Invalid Login Packet (loginPacketCryptoSize = '{0}' magic1 = '{1}' magic2 = '{2}')",
+								loginPacketCryptoSize, magic1, magic2
+							)
+						);
+						return;
+					}
+					
+					clientSessionKey = client.ReadInt64();
+					long requeustedServerSessionKey = client.ReadInt64();
+					
+					if (requeustedServerSessionKey != serverSessionKey)
+					{
+						client.Disconnect(
+							string.Format(
+								"Invalid Login Packet (serverSessionKey = '{0}' requeustedServerSessionKey = '{1}')",
+								serverSessionKey, requeustedServerSessionKey
+							)
+						);
+						return;
+					}
+					
+					int userId = client.ReadInt32(true);
+					
+					string account = client.ReadString();
+					bool invalidName = !Kernel.ValidName(account);
+					string password = client.ReadString();
+					
+					Console.WriteLine("['{0}', '{1}'] is attemtping to login with '{2}'...", userId, account, password);
+					
+					var player = new Entities.Player(client);
+					Enums.LoginResponse response = Enums.LoginResponse.RejectedSession;
+					if (invalidName)
+						response = Enums.LoginResponse.InvalidUsernameOrPassword;
+					else
+					{
+						response = Database.PlayerDatabase.Authenticate(player, account, password);
+						
+						if (Kernel.Players.ContainsKey(player.UID))
+							response = Enums.LoginResponse.MultiLogin;
+						else if (!Kernel.Players.TryAdd(player.UID, player))
+							response = Enums.LoginResponse.BadSession;
+						else if (Kernel.Players.Count &gt; 1000)
+							response = Enums.LoginResponse.FullServer;
+					}
+					
+					if (response != Enums.LoginResponse.Success)
+					{
+						player.Client.WriteSByte((sbyte)response);
+						player.Client.WriteByte(0); // Not exposing rank ...
+						player.Client.WriteByte(0); // Not flagged ...
+						player.Client.Disconnect("Invalid Authentication");
+					}
+					else
+					{
+						if (loginType == 18)
+							response = Enums.LoginResponse.Reconnect;
+						
+						// Create cryptography ...
+						var sessionKey = new int[4];
+						sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+						sessionKey[1] = (int)clientSessionKey;
+						sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+						sessionKey[3] = (int)serverSessionKey;
+						player.Client.InCrypto = new Cryptography(sessionKey);
+						for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+						player.Client.OutCrypto = new Cryptography(sessionKey);
+						
+						player.Client.WriteSByte((sbyte)response);
+						if (response == Enums.LoginResponse.Success)
+						{
+							player.Client.WriteByte((byte)player.Rank);
+							player.Client.WriteByte(0); // Not flagged ...
+						}
+						
+						Console.WriteLine("'{0}' was successfully authenticated [Response = '{1}'] ...", player.Name, response);
+						
+						// ???
+					}
+				}
+				else
+				{
+					client.Disconnect("Invalid Login OP Code");
+				}
+			}
+			catch (Exception e)
+			{
+				// ...
+			}
+			// End of thread (All packets after login are done asynchronous.) ...
+		}</code></pre>
+<p>If you need anymore information please let me know.<br>
+I’ll be trying to see what to do myself meanwhile! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-complete-login/551642/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-complete-login/551642/1</link>
+        <pubDate>Sun, 24 May 2015 18:53:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551642-1</guid>
+        <source url="https://forum.moparisthebest.com/t/317-complete-login/551642.rss">317 Complete Login?</source>
+      </item>
+  </channel>
+</rss>

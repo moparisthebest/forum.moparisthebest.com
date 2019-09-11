@@ -1,0 +1,787 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Task system problem</title>
+    <link>https://forum.moparisthebest.com/t/task-system-problem/544181</link>
+    <description>I&#39;m attempting to create a task system for an RSPS but I&#39;m running into a problem and I don&#39;t find what causes it.
+
+Everything runs fine until my walkToTask finishes. Then all active tasks shut down.
+
+TaskManager
+[code=java]
+package elysia.tasks;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import elysia.utilities.logging.LogTypes;
+import elysia.utilities.logging.Logger;
+
+public class TaskManager {
+	
+	/**
+	 * The task scheduler service.
+	 */
+	private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(1);
+	
+	
+	/**
+	 * Submits a new task to the scheduler service.
+	 * 
+	 * @param task The new task.
+	 */
+	public static void submitTask(final Task task) {
+		if (task.getCycleTime() &lt;= 0) {
+			Logger.print(LogTypes.INFO, &quot;Task delay must be positive.&quot;);
+			return;
+		}
+		if (task.getProperties().contains(TaskProperties.EXECUTE_INSTANTLY)) {
+			new Runnable() {
+				@Override
+				public void run() {
+					task.execute();
+				}
+			};
+			if (task.getProperties().contains(TaskProperties.EXECUTE_ONCE))
+				return;
+		}
+		SCHEDULER.scheduleAtFixedRate(task, 0, task.getCycleTime(), TimeUnit.MILLISECONDS);
+	}
+	
+}
+
+[/code]
+
+Task
+[code=java]
+package elysia.tasks;
+
+import java.util.LinkedList;
+import java.util.List;
+
+import elysia.Launcher;
+
+public abstract class Task implements Runnable {
+	
+	/**
+	 * The cycle time of the task.
+	 */
+	private final int cycleTime;
+	
+	/**
+	 * The task properties.
+	 */
+	private final List&lt;TaskProperties&gt; properties = new LinkedList&lt;&gt;();
+	
+	
+	/**
+	 * The constructor setting up the task.
+	 */
+	public Task() {
+		this(Launcher.getCycleTime());
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param cycleTime The cycle time for the task.
+	 */
+	public Task(int cycleTime) {
+		this(cycleTime, TaskProperties.DEFAULT);
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param properties The properties for the task.
+	 */
+	public Task(TaskProperties... properties) {
+		this(Launcher.getCycleTime(), properties);
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param cycleTime The cycle time for the task.
+	 * 
+	 * @param properties The task properties.
+	 */
+	public Task(int cycleTime, TaskProperties... properties) {
+		this.cycleTime = cycleTime;
+
+		for (TaskProperties property : properties)
+			this.properties.add(property);
+	}
+	
+	/**
+	 * Executes any task actions.
+	 */
+	protected abstract void execute();
+
+	@Override
+	public void run() {
+		execute();
+		
+		if (properties.contains(TaskProperties.EXECUTE_ONCE)) {
+			stop();
+			return;
+		}
+	}
+	
+	/**
+	 * Stops the task execution.
+	 */
+	public void stop() {
+		this.stop();
+	}
+	
+	
+	/**
+	 * Retrieves the cycle time of the task.
+	 * 
+	 * @return The cycle time.
+	 */
+	public int getCycleTime() {
+		return cycleTime;
+	}
+	
+	/**
+	 * Retrieves the task&#39;s properties.
+	 * 
+	 * @return The properties.
+	 */
+	public List&lt;TaskProperties&gt; getProperties() {
+		return properties;
+	}
+
+}
+
+[/code]
+
+WalkToTask
+[code=java]
+package elysia.tasks;
+
+import elysia.game.entities.Location;
+import elysia.game.entities.mobiles.players.Player2;
+
+public abstract class WalkToTask extends Task {
+
+	/**
+	 * The distance we can be away from the target location.
+	 */
+	private final int distance;
+	
+	/**
+	 * The player assigned to the event.
+	 */
+	private final Player2 player;
+	
+	/**
+	 * The target location to walk to.
+	 */
+	private final Location targetLocation;
+	
+	
+	/**
+	 * The constructor setting up the event.
+	 * 
+	 * @param player The player to follow.
+	 * 
+	 * @param targetLocation The location to walk to.
+	 */
+	public WalkToTask(Player2 player, Location targetLocation) {
+		this(player, targetLocation, 1);
+	}
+	
+	/**
+	 * The constructor setting up the event.
+	 * 
+	 * @param player The player to follow.
+	 * 
+	 * @param targetLocation The location to walk to.
+	 * 
+	 * @param distance The distance we can be away from the target location.
+	 */
+	public WalkToTask(Player2 player, Location targetLocation, int distance) {
+		super(300, TaskProperties.EXECUTE_INSTANTLY);
+		this.player = player;
+		this.targetLocation = targetLocation;
+		this.distance = distance;
+		player.setWalkToTask(this);
+	}
+	
+	/**
+	 * The acting we expect after reaching the target location.
+	 */
+	protected abstract void act();
+	
+	@Override
+	protected void execute() {
+		System.out.println(&quot;WalkToEvent: Execute&quot;);
+		player.getLocation().setLocation(new Location(player.getClient().absX, player.getClient().absY, player.getClient().heightLevel));
+		if (player.getLocation().withinDistance(targetLocation, distance)) {
+			try {
+			System.out.println(&quot;WalkToEvent: At Location&quot;);
+			act();
+			stop();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	/**
+	 * Retrieves the distance we can be away from the target location.
+	 * 
+	 * @return The distance.
+	 */
+	public int getDistance() {
+		return distance;
+	}
+	
+	/**
+	 * Retrieves the player to follow.
+	 * 
+	 * @return The player.
+	 */
+	public Player2 getPlayer() {
+		return player;
+	}
+	
+	/**
+	 * Retrieves the target location.
+	 * 
+	 * @return The location.
+	 */
+	public Location getTargetLocation() {
+		return targetLocation;
+	}
+	
+}
+[/code]
+
+
+In WalkToTask under execute:
+[code=java]
+ System.out.println(&quot;WalkToEvent: At Location&quot;);
+
+                        act();
+
+                        stop();
+[/code]
+
+When that part is executed all my active tasks stop, whether they are related to this one or not.</description>
+    
+    <lastBuildDate>Sat, 21 Jun 2014 23:00:40 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/task-system-problem/544181.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="10" data-topic="544181">
+<div class="title">
+<div class="quote-controls"></div>
+ lare69:</div>
+<blockquote>
+<p>Get the ScheduledFuture object that’s returned by schedule and use cancel(true) on it</p>
+</blockquote>
+</aside>
+<p>Yeah that was what I originally wanted to use (cancel(true))<br>
+but I wanted to try stopping the runnable so I didn’t have to go holding all the objects into a list.<br>
+Which I"ll have to do after all apparently.</p>
+<p>edit:<br>
+the this.stop call is kinda retarded lol, I never noticed that I was calling the method itself again</p>
+<p>edit2:<br>
+Would this be a good way of handling it? It works but I’m not sure if it’s a proper way of doing it or not.</p>
+<pre><code class="lang-auto">package elysia.tasks;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+
+import elysia.utilities.logging.LogTypes;
+import elysia.utilities.logging.Logger;
+
+public class TaskManager {
+	
+	/**
+	 * The task scheduler service.
+	 */
+	private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(1);
+	
+	/**
+	 * The map holding the active tasks.
+	 */
+	private static Map&lt;Task, ScheduledFuture&lt;Task&gt;&gt; futureTasks = new HashMap&lt;&gt;();
+	
+	
+	/**
+	 * Submits a new task to the scheduler service.
+	 * 
+	 * @param task The new task.
+	 */
+	@SuppressWarnings("unchecked")
+	public static void submitTask(final Task task) {
+		if (task.getCycleTime() &lt;= 0) {
+			Logger.print(LogTypes.INFO, "Task delay must be positive.");
+			return;
+		}
+		if (task.getProperties().contains(TaskProperties.EXECUTE_INSTANTLY)) {
+			new Runnable() {
+				@Override
+				public void run() {
+					task.execute();
+				}
+			};
+			if (task.getProperties().contains(TaskProperties.EXECUTE_ONCE))
+				return;
+		}
+		futureTasks.put(task, (ScheduledFuture&lt;Task&gt;) SCHEDULER.scheduleAtFixedRate(task, 0, task.getCycleTime(), TimeUnit.MILLISECONDS));
+	}
+	
+	/**
+	 * Stops the running task.
+	 * 
+	 * @param task The task to stop.
+	 */
+	public static void stop(Task task) {
+		for (Entry&lt;Task, ScheduledFuture&lt;Task&gt;&gt; entry : futureTasks.entrySet()) {
+			if (entry.getKey() == task)
+				entry.getValue().cancel(true);
+		}
+	}
+	
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/11</link>
+        <pubDate>Sat, 21 Jun 2014 23:00:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-11</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Get the ScheduledFuture object that’s returned by schedule and use cancel(true) on it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/10</link>
+        <pubDate>Sat, 21 Jun 2014 22:48:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-10</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Protosstribe object]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/protosstribe">@Protosstribe</a> wrote:</p>
+          <blockquote>
+              <p>Yeah, it very well could be. But stopping the Thread wouldn’t really work out very well, considering the Executor API usually reuses the Threads that executes Runnables or Callables. He should have called cancel() on the ScheduledFuture that is returned by the scheduleAtFixedRate(Runnable, long, TimeUnit) method provided by ScheduledExecutorService.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/9</link>
+        <pubDate>Sat, 21 Jun 2014 21:12:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-9</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“object, post:6, topic:544181”]But Runnable does not even have a stop() method. ;)[/quote]So he probably wanted to stop the thread with that method, noticed super.stop had a red line under it, and then changed to this.stop thinking that would fix it ;D</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/8</link>
+        <pubDate>Sat, 21 Jun 2014 20:47:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-8</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:3, topic:544181”][quote author=Ashi link=topic=663063.msg4431355#msg4431355 date=1403378590]<br>
+You need to cache the task otherwise you’re just using a single instance to run everything and went that thread/task stops so will everything else.</p>
+<p>You can also use a factory to handle the tasks.<br>
+[/quote]<br>
+Could you maybe be more clear about how I would go about caching a task, I honestly have no clue what I’m supposed to do now.[/quote]<br>
+Add the tasks to an arraylist or something to cache it. Make sure you actually create a new object for each task so it doesn’t close every other task.</p>
+<p>You don’t have to actually cache the tasks but it’ll just make it easier for you to manage them all.</p>
+<p>Edit: I was being a retard lmao, was commenting on my phone and didn’t see everything properly.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/7</link>
+        <pubDate>Sat, 21 Jun 2014 20:45:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-7</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Protosstribe object]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/protosstribe">@Protosstribe</a> wrote:</p>
+          <blockquote>
+              <p>But Runnable does not even have a stop() method. <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/6</link>
+        <pubDate>Sat, 21 Jun 2014 20:42:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-6</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>I <span class="bbcode-i">think</span> he meant to call super.stop</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/5</link>
+        <pubDate>Sat, 21 Jun 2014 20:23:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-5</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Protosstribe object]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/protosstribe">@Protosstribe</a> wrote:</p>
+          <blockquote>
+              <p>RandQm: Why are you calling this.stop() in the stop() method? It would just create an infinite loop via recursion.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/4</link>
+        <pubDate>Sat, 21 Jun 2014 20:20:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-4</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ashi, post:2, topic:544181”]You need to cache the task otherwise you’re just using a single instance to run everything and went that thread/task stops so will everything else.</p>
+<p>You can also use a factory to handle the tasks.[/quote]<br>
+Could you maybe be more clear about how I would go about caching a task, I honestly have no clue what I’m supposed to do now.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/3</link>
+        <pubDate>Sat, 21 Jun 2014 20:15:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-3</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>You should cache the task and not just use one task otherwise you’re just using a single instance to run everything and went that thread/task stops so will everything else.</p>
+<p>You can also use a factory to handle the tasks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/2</link>
+        <pubDate>Sat, 21 Jun 2014 19:23:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-2</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+      <item>
+        <title>Task system problem</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>I’m attempting to create a task system for an RSPS but I’m running into a problem and I don’t find what causes it.</p>
+<p>Everything runs fine until my walkToTask finishes. Then all active tasks shut down.</p>
+<p>TaskManager</p>
+<pre><code class="lang-auto">package elysia.tasks;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import elysia.utilities.logging.LogTypes;
+import elysia.utilities.logging.Logger;
+
+public class TaskManager {
+	
+	/**
+	 * The task scheduler service.
+	 */
+	private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(1);
+	
+	
+	/**
+	 * Submits a new task to the scheduler service.
+	 * 
+	 * @param task The new task.
+	 */
+	public static void submitTask(final Task task) {
+		if (task.getCycleTime() &lt;= 0) {
+			Logger.print(LogTypes.INFO, "Task delay must be positive.");
+			return;
+		}
+		if (task.getProperties().contains(TaskProperties.EXECUTE_INSTANTLY)) {
+			new Runnable() {
+				@Override
+				public void run() {
+					task.execute();
+				}
+			};
+			if (task.getProperties().contains(TaskProperties.EXECUTE_ONCE))
+				return;
+		}
+		SCHEDULER.scheduleAtFixedRate(task, 0, task.getCycleTime(), TimeUnit.MILLISECONDS);
+	}
+	
+}
+</code></pre>
+<p>Task</p>
+<pre><code class="lang-auto">package elysia.tasks;
+
+import java.util.LinkedList;
+import java.util.List;
+
+import elysia.Launcher;
+
+public abstract class Task implements Runnable {
+	
+	/**
+	 * The cycle time of the task.
+	 */
+	private final int cycleTime;
+	
+	/**
+	 * The task properties.
+	 */
+	private final List&lt;TaskProperties&gt; properties = new LinkedList&lt;&gt;();
+	
+	
+	/**
+	 * The constructor setting up the task.
+	 */
+	public Task() {
+		this(Launcher.getCycleTime());
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param cycleTime The cycle time for the task.
+	 */
+	public Task(int cycleTime) {
+		this(cycleTime, TaskProperties.DEFAULT);
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param properties The properties for the task.
+	 */
+	public Task(TaskProperties... properties) {
+		this(Launcher.getCycleTime(), properties);
+	}
+	
+	/**
+	 * The constructor setting up the task.
+	 * 
+	 * @param cycleTime The cycle time for the task.
+	 * 
+	 * @param properties The task properties.
+	 */
+	public Task(int cycleTime, TaskProperties... properties) {
+		this.cycleTime = cycleTime;
+
+		for (TaskProperties property : properties)
+			this.properties.add(property);
+	}
+	
+	/**
+	 * Executes any task actions.
+	 */
+	protected abstract void execute();
+
+	@Override
+	public void run() {
+		execute();
+		
+		if (properties.contains(TaskProperties.EXECUTE_ONCE)) {
+			stop();
+			return;
+		}
+	}
+	
+	/**
+	 * Stops the task execution.
+	 */
+	public void stop() {
+		this.stop();
+	}
+	
+	
+	/**
+	 * Retrieves the cycle time of the task.
+	 * 
+	 * @return The cycle time.
+	 */
+	public int getCycleTime() {
+		return cycleTime;
+	}
+	
+	/**
+	 * Retrieves the task's properties.
+	 * 
+	 * @return The properties.
+	 */
+	public List&lt;TaskProperties&gt; getProperties() {
+		return properties;
+	}
+
+}
+</code></pre>
+<p>WalkToTask</p>
+<pre><code class="lang-auto">package elysia.tasks;
+
+import elysia.game.entities.Location;
+import elysia.game.entities.mobiles.players.Player2;
+
+public abstract class WalkToTask extends Task {
+
+	/**
+	 * The distance we can be away from the target location.
+	 */
+	private final int distance;
+	
+	/**
+	 * The player assigned to the event.
+	 */
+	private final Player2 player;
+	
+	/**
+	 * The target location to walk to.
+	 */
+	private final Location targetLocation;
+	
+	
+	/**
+	 * The constructor setting up the event.
+	 * 
+	 * @param player The player to follow.
+	 * 
+	 * @param targetLocation The location to walk to.
+	 */
+	public WalkToTask(Player2 player, Location targetLocation) {
+		this(player, targetLocation, 1);
+	}
+	
+	/**
+	 * The constructor setting up the event.
+	 * 
+	 * @param player The player to follow.
+	 * 
+	 * @param targetLocation The location to walk to.
+	 * 
+	 * @param distance The distance we can be away from the target location.
+	 */
+	public WalkToTask(Player2 player, Location targetLocation, int distance) {
+		super(300, TaskProperties.EXECUTE_INSTANTLY);
+		this.player = player;
+		this.targetLocation = targetLocation;
+		this.distance = distance;
+		player.setWalkToTask(this);
+	}
+	
+	/**
+	 * The acting we expect after reaching the target location.
+	 */
+	protected abstract void act();
+	
+	@Override
+	protected void execute() {
+		System.out.println("WalkToEvent: Execute");
+		player.getLocation().setLocation(new Location(player.getClient().absX, player.getClient().absY, player.getClient().heightLevel));
+		if (player.getLocation().withinDistance(targetLocation, distance)) {
+			try {
+			System.out.println("WalkToEvent: At Location");
+			act();
+			stop();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	/**
+	 * Retrieves the distance we can be away from the target location.
+	 * 
+	 * @return The distance.
+	 */
+	public int getDistance() {
+		return distance;
+	}
+	
+	/**
+	 * Retrieves the player to follow.
+	 * 
+	 * @return The player.
+	 */
+	public Player2 getPlayer() {
+		return player;
+	}
+	
+	/**
+	 * Retrieves the target location.
+	 * 
+	 * @return The location.
+	 */
+	public Location getTargetLocation() {
+		return targetLocation;
+	}
+	
+}</code></pre>
+<p>In WalkToTask under execute:</p>
+<pre><code class="lang-auto"> System.out.println("WalkToEvent: At Location");
+
+                        act();
+
+                        stop();</code></pre>
+<p>When that part is executed all my active tasks stop, whether they are related to this one or not.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-problem/544181/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-problem/544181/1</link>
+        <pubDate>Sat, 21 Jun 2014 19:14:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544181-1</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-problem/544181.rss">Task system problem</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,328 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>2D spatial indexing using morton codes and BST</title>
+    <link>https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696</link>
+    <description>Might be useful for some.
+
+About a month ago I had to solve an engineering problem where I had to efficiently find elements within a 2D coordinate space. This is the solution I created that followed in the footsteps of this paper written by Tropf and Herzog located [url=http://www.vision-tools.com/h-tropf/multidimensionalrangequery.pdf]here[/url] . Instead of using BIGMIN, and MAX I aggregated pages.
+
+This implementation utilizes TreeMap. Searches over ranges which have absolute coordinates and dimensions that are powers of two are very efficient. Searches over spaces up to densities of 5.0 entries/unit yield benchmarks of approximately 1 MS.
+
+[url=https://en.wikipedia.org/wiki/Z-order_curve]Z-Order Curves[/url]
+
+I left out the multimap which stored entities at specific coordinate spaces, you can either use that solution or lookup at those coordinates using the BST.
+
+Another optimization depending on your use may be to use this structure where a lookup is responsible for a certain space so that there are less entries to search through. Although for my situation, it wasn&#39;t much of an issue with the amount of expected entries.
+
+[code=java]
+private TreeMap&lt;Integer, Set&lt;T&gt;&gt; lookup = new TreeMap&lt;&gt;();
+
+public Set&lt;T&gt; get(int x, int z, int width, int length) {
+  Set&lt;T&gt; results = new HashSet&lt;&gt;();
+
+  // Calculate the maximum page size of pages that may be contained within the area.
+  // This is provided from the rectangle search area. Ceiling of log2(n).
+  int maximumPageSizeN = Math.max(log2(width), log2(length));
+  searchPages(results, x, z, x + width - 1, z + length - 1,
+          x, z, x + width, z + length, maximumPageSizeN);
+  return results;
+}
+
+private void searchPages(Set&lt;T&gt; results, int searchX, int searchY,
+                         int maximumSearchX, int maximumSearchY,
+                         int boundsX, int boundsY, int maximumBoundsX, int maximumBoundsY,
+                         int pageSizeN) {
+  // Search within the pages for the bounded area for the provided size.
+  for (int pageX = searchX &gt;&gt; pageSizeN; pageX &lt;= maximumSearchX &gt;&gt; pageSizeN; pageX++) {
+    for (int pageY = searchY &gt;&gt; pageSizeN; pageY &lt;= maximumSearchY &gt;&gt; pageSizeN; pageY++) {
+      int absolutePageX = pageX &lt;&lt; pageSizeN;
+      int absolutePageY = pageY &lt;&lt; pageSizeN;
+      int pageSize = 1 &lt;&lt; pageSizeN;
+
+      // Check and see if the specified page is within the boundaries of the area we are
+      // searching for. If so then we can assume then that is a partition of the area
+      // we are searching through.
+      if (isContainedWithin(absolutePageX, absolutePageY,
+              absolutePageX + pageSize - 1, absolutePageY + pageSize - 1,
+              boundsX, boundsY, maximumBoundsX, maximumBoundsY)) {
+        aggregateSubmap(results, absolutePageX, absolutePageY,
+                absolutePageX + pageSize - 1, absolutePageY + pageSize - 1);
+        continue;
+      }
+
+      // Special case for page sizes of a boundary of one:
+      // - Check for intersections, intersections can then be divided into special cases depending
+      //   on the intersection area.
+      // - If the page intersects with the boundary, and it is a partial z-order curve then
+      //   query the subset of the elements for the continuity.
+      // - If the page is not a partial z-order curve then for each element query the element
+      //   at the given coordinates.
+      if (pageSizeN == 1) {
+        if (isIntersecting(absolutePageX, absolutePageY, absolutePageX + pageSize,
+                absolutePageY + pageSize, boundsX, boundsY, maximumBoundsX, maximumBoundsY)) {
+
+          // Case One: Horizontal.
+          // Case Two: Vertical.
+          // Case Three: Corner.
+          if (absolutePageX &gt;= boundsX &amp;&amp; absolutePageX + 1 &lt; maximumBoundsX) {
+            if (absolutePageY &lt; boundsY) {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + i, absolutePageY + 1));
+              }
+            } else {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + i, absolutePageY));
+              }
+            }
+          } else if (absolutePageY &gt;= boundsY &amp;&amp; absolutePageY + 1 &lt; maximumBoundsY) {
+            if (absolutePageX &lt; boundsX) {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + 1, absolutePageY + i));
+              }
+            } else {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX, absolutePageY + i));
+              }
+            }
+          } else {
+            // Left quadrant/Right quadrant.
+            if (absolutePageX &lt; boundsX) {
+              // Bottom left corner/Top left corner.
+              if (absolutePageY &lt; boundsY) {
+                results.addAll(getElements(boundsX, boundsY));
+              } else {
+                results.addAll(getElements(boundsX, maximumBoundsY - 1));
+              }
+            } else {
+              // Bottom right corner/Top right corner.
+              if (absolutePageY &lt; boundsY) {
+                results.addAll(getElements(maximumBoundsX - 1, boundsY));
+              } else {
+                results.addAll(getElements(maximumBoundsX - 1, maximumBoundsY - 1));
+              }
+            }
+          }
+        }
+      } else {
+        // Search all subpages of this page for pages that may intersect with or be contained
+        // in the search boundaries.
+        searchPages(results, absolutePageX, absolutePageY, absolutePageX + pageSize - 1,
+                absolutePageY + pageSize - 1, boundsX, boundsY,
+                maximumBoundsX, maximumBoundsY, pageSizeN - 1);
+      }
+    }
+  }
+}
+
+private void aggregateSubmap(Set&lt;T&gt; results, int fromX, int fromZ, int toX, int toZ) {
+  int fromCode = MortonCode.encode2(fromX, fromZ);
+  int toCode = MortonCode.encode2(toX, toZ);
+  NavigableMap&lt;Integer, Set&lt;T&gt;&gt; map = lookup.subMap(fromCode, true, toCode, true);
+  for (Set&lt;T&gt; set : map.values()) {
+    results.addAll(set);
+  }
+}
+
+private static boolean isContainedWithin(int x, int z, int maximumX, int maximumY, int boundsX,
+                                         int boundsZ, int maximumBoundsX, int maximumBoundsZ) {
+
+  return x &gt;= boundsX &amp;&amp; z &gt;= boundsZ &amp;&amp; x &lt; maximumBoundsX &amp;&amp; z &lt; maximumBoundsZ &amp;&amp;
+          maximumX &gt;= boundsX &amp;&amp; maximumY &gt;= boundsZ &amp;&amp; maximumX &lt; maximumBoundsX
+          &amp;&amp; maximumY &lt; maximumBoundsZ;
+}
+
+private static boolean isIntersecting(int x, int z, int maximumX, int maximumY, int boundsX,
+                                      int boundsY, int maximumBoundsX, int maximumBoundsY) {
+  return (x &gt;= boundsX &amp;&amp; x &lt; maximumBoundsX || maximumX &gt; boundsX &amp;&amp; maximumX - 1 &lt; maximumBoundsX) &amp;&amp;
+          (z &gt;= boundsY &amp;&amp; z &lt; maximumBoundsY || maximumY &gt; boundsY &amp;&amp; maximumY - 1 &lt; maximumBoundsY);
+}
+
+// ceil(log2(x))
+private static int log2(int x) {
+  return 32 - Integer.numberOfLeadingZeros(x - 1);
+}
+[/code]</description>
+    
+    <lastBuildDate>Thu, 11 Feb 2016 04:00:21 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>2D spatial indexing using morton codes and BST</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Yes. They are usually harder to implement, and rebalancing the tree is very difficult. I have not compared speeds. I’d imagine this technique is faster. If I get the chance I’ll check! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/3</link>
+        <pubDate>Thu, 11 Feb 2016 04:00:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554696-3</guid>
+        <source url="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696.rss">2D spatial indexing using morton codes and BST</source>
+      </item>
+      <item>
+        <title>2D spatial indexing using morton codes and BST</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>Interesting problem. I’m currently reading the paper now but I noticed this statement: “The k-d tree has been known to be well adapted to range searching. Unfortunately, there is one disadvantage: there is no technique known to rebalance the trees when inserting or deleting an element.” (Page 1 of the PDF). Now that those exist, have you gotten the chance to try them? If so, were there any major speed differences?</p>
+<p>PS: For anybody wanting to choose the BST option, you would be better off using an AVL tree since balance is important for fast-lookups.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/2</link>
+        <pubDate>Thu, 11 Feb 2016 03:38:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554696-2</guid>
+        <source url="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696.rss">2D spatial indexing using morton codes and BST</source>
+      </item>
+      <item>
+        <title>2D spatial indexing using morton codes and BST</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Might be useful for some.</p>
+<p>About a month ago I had to solve an engineering problem where I had to efficiently find elements within a 2D coordinate space. This is the solution I created that followed in the footsteps of this paper written by Tropf and Herzog located <a href="http://www.vision-tools.com/h-tropf/multidimensionalrangequery.pdf" data-bbcode="true" rel="nofollow noopener">here</a> . Instead of using BIGMIN, and MAX I aggregated pages.</p>
+<p>This implementation utilizes TreeMap. Searches over ranges which have absolute coordinates and dimensions that are powers of two are very efficient. Searches over spaces up to densities of 5.0 entries/unit yield benchmarks of approximately 1 MS.</p>
+<p><a href="https://en.wikipedia.org/wiki/Z-order_curve" data-bbcode="true" rel="nofollow noopener">Z-Order Curves</a></p>
+<p>I left out the multimap which stored entities at specific coordinate spaces, you can either use that solution or lookup at those coordinates using the BST.</p>
+<p>Another optimization depending on your use may be to use this structure where a lookup is responsible for a certain space so that there are less entries to search through. Although for my situation, it wasn’t much of an issue with the amount of expected entries.</p>
+<pre><code class="lang-auto">private TreeMap&lt;Integer, Set&lt;T&gt;&gt; lookup = new TreeMap&lt;&gt;();
+
+public Set&lt;T&gt; get(int x, int z, int width, int length) {
+  Set&lt;T&gt; results = new HashSet&lt;&gt;();
+
+  // Calculate the maximum page size of pages that may be contained within the area.
+  // This is provided from the rectangle search area. Ceiling of log2(n).
+  int maximumPageSizeN = Math.max(log2(width), log2(length));
+  searchPages(results, x, z, x + width - 1, z + length - 1,
+          x, z, x + width, z + length, maximumPageSizeN);
+  return results;
+}
+
+private void searchPages(Set&lt;T&gt; results, int searchX, int searchY,
+                         int maximumSearchX, int maximumSearchY,
+                         int boundsX, int boundsY, int maximumBoundsX, int maximumBoundsY,
+                         int pageSizeN) {
+  // Search within the pages for the bounded area for the provided size.
+  for (int pageX = searchX &gt;&gt; pageSizeN; pageX &lt;= maximumSearchX &gt;&gt; pageSizeN; pageX++) {
+    for (int pageY = searchY &gt;&gt; pageSizeN; pageY &lt;= maximumSearchY &gt;&gt; pageSizeN; pageY++) {
+      int absolutePageX = pageX &lt;&lt; pageSizeN;
+      int absolutePageY = pageY &lt;&lt; pageSizeN;
+      int pageSize = 1 &lt;&lt; pageSizeN;
+
+      // Check and see if the specified page is within the boundaries of the area we are
+      // searching for. If so then we can assume then that is a partition of the area
+      // we are searching through.
+      if (isContainedWithin(absolutePageX, absolutePageY,
+              absolutePageX + pageSize - 1, absolutePageY + pageSize - 1,
+              boundsX, boundsY, maximumBoundsX, maximumBoundsY)) {
+        aggregateSubmap(results, absolutePageX, absolutePageY,
+                absolutePageX + pageSize - 1, absolutePageY + pageSize - 1);
+        continue;
+      }
+
+      // Special case for page sizes of a boundary of one:
+      // - Check for intersections, intersections can then be divided into special cases depending
+      //   on the intersection area.
+      // - If the page intersects with the boundary, and it is a partial z-order curve then
+      //   query the subset of the elements for the continuity.
+      // - If the page is not a partial z-order curve then for each element query the element
+      //   at the given coordinates.
+      if (pageSizeN == 1) {
+        if (isIntersecting(absolutePageX, absolutePageY, absolutePageX + pageSize,
+                absolutePageY + pageSize, boundsX, boundsY, maximumBoundsX, maximumBoundsY)) {
+
+          // Case One: Horizontal.
+          // Case Two: Vertical.
+          // Case Three: Corner.
+          if (absolutePageX &gt;= boundsX &amp;&amp; absolutePageX + 1 &lt; maximumBoundsX) {
+            if (absolutePageY &lt; boundsY) {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + i, absolutePageY + 1));
+              }
+            } else {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + i, absolutePageY));
+              }
+            }
+          } else if (absolutePageY &gt;= boundsY &amp;&amp; absolutePageY + 1 &lt; maximumBoundsY) {
+            if (absolutePageX &lt; boundsX) {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX + 1, absolutePageY + i));
+              }
+            } else {
+              for (int i = 0; i &lt; 2; i++) {
+                results.addAll(getElements(absolutePageX, absolutePageY + i));
+              }
+            }
+          } else {
+            // Left quadrant/Right quadrant.
+            if (absolutePageX &lt; boundsX) {
+              // Bottom left corner/Top left corner.
+              if (absolutePageY &lt; boundsY) {
+                results.addAll(getElements(boundsX, boundsY));
+              } else {
+                results.addAll(getElements(boundsX, maximumBoundsY - 1));
+              }
+            } else {
+              // Bottom right corner/Top right corner.
+              if (absolutePageY &lt; boundsY) {
+                results.addAll(getElements(maximumBoundsX - 1, boundsY));
+              } else {
+                results.addAll(getElements(maximumBoundsX - 1, maximumBoundsY - 1));
+              }
+            }
+          }
+        }
+      } else {
+        // Search all subpages of this page for pages that may intersect with or be contained
+        // in the search boundaries.
+        searchPages(results, absolutePageX, absolutePageY, absolutePageX + pageSize - 1,
+                absolutePageY + pageSize - 1, boundsX, boundsY,
+                maximumBoundsX, maximumBoundsY, pageSizeN - 1);
+      }
+    }
+  }
+}
+
+private void aggregateSubmap(Set&lt;T&gt; results, int fromX, int fromZ, int toX, int toZ) {
+  int fromCode = MortonCode.encode2(fromX, fromZ);
+  int toCode = MortonCode.encode2(toX, toZ);
+  NavigableMap&lt;Integer, Set&lt;T&gt;&gt; map = lookup.subMap(fromCode, true, toCode, true);
+  for (Set&lt;T&gt; set : map.values()) {
+    results.addAll(set);
+  }
+}
+
+private static boolean isContainedWithin(int x, int z, int maximumX, int maximumY, int boundsX,
+                                         int boundsZ, int maximumBoundsX, int maximumBoundsZ) {
+
+  return x &gt;= boundsX &amp;&amp; z &gt;= boundsZ &amp;&amp; x &lt; maximumBoundsX &amp;&amp; z &lt; maximumBoundsZ &amp;&amp;
+          maximumX &gt;= boundsX &amp;&amp; maximumY &gt;= boundsZ &amp;&amp; maximumX &lt; maximumBoundsX
+          &amp;&amp; maximumY &lt; maximumBoundsZ;
+}
+
+private static boolean isIntersecting(int x, int z, int maximumX, int maximumY, int boundsX,
+                                      int boundsY, int maximumBoundsX, int maximumBoundsY) {
+  return (x &gt;= boundsX &amp;&amp; x &lt; maximumBoundsX || maximumX &gt; boundsX &amp;&amp; maximumX - 1 &lt; maximumBoundsX) &amp;&amp;
+          (z &gt;= boundsY &amp;&amp; z &lt; maximumBoundsY || maximumY &gt; boundsY &amp;&amp; maximumY - 1 &lt; maximumBoundsY);
+}
+
+// ceil(log2(x))
+private static int log2(int x) {
+  return 32 - Integer.numberOfLeadingZeros(x - 1);
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696/1</link>
+        <pubDate>Thu, 11 Feb 2016 00:34:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554696-1</guid>
+        <source url="https://forum.moparisthebest.com/t/2d-spatial-indexing-using-morton-codes-and-bst/554696.rss">2D spatial indexing using morton codes and BST</source>
+      </item>
+  </channel>
+</rss>

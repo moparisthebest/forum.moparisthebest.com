@@ -1,0 +1,847 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Rapidshare API</title>
+    <link>https://forum.moparisthebest.com/t/rapidshare-api/347653</link>
+    <description>http://rapidshare.com/dev.html
+
+Saw this, haven&#39;t seen any-one post about it before! I&#39;m going to write a remote download script so my unix box can init downloads when i&#39;m at work by passing it a link :)
+
+here is an example of the api in use:
+
+[code]#!/usr/bin/perl
+
+# Version 2.2.4 (9th May 2009)
+# RapidShare AG OpenSource Perl Uploader. For non-commercial use only. All rights reserved. USE AT YOUR OWN RISK!
+
+# Features:
+# - Uploading to free, collector&#39;s zone and premium zone.
+# - Supports MD5 check after uploads to check if the upload worked.
+# - Supports upload resume to continue aborted uploads. Upload needs to be completed within 24 hours.
+# - Supports new RealFolders for premium and collector&#39;s accounts.
+# - Supports uploading whole directories in RealFolders.
+# - Supports update modes and trash modes to update remote files without changing file IDs.
+
+# Syntax: rsapiresume.pl &lt;filename/folder&gt; &lt;free|prem|col&gt; [login] [password] [updatemode] [trashmode]
+
+# Update=0: Traditional uploading. No duplicate checking.
+# Update=1: The lowest file ID duplicate will be overwritten if MD5 differs. Other duplicates will be handled using the trash flag.
+
+# Trash=0: No trashing.
+# Trash=1: Files will be moved to trash RealFolder (999)
+# Trash=2: Files will be DELETED! (not undoable)
+
+# To upload a file, put this script on a Linux machine with perl installed and use the following syntax:
+# perl rsapiresume.pl mytestfile.rar free        (this uploads mytestfile.rar as a free user)
+# perl rsapiresume.pl archive.rar prem 334 test  (this uploads archive.rar to the premium zone of login 334 with password test)
+# perl rsapiresume.pl a.rar col testuser mypw    (this uploads a.rar to the collector&#39;s zone of login testuser with password mypw)
+
+# perl rsapiresume.pl prem myfolder 334 mypw 1 1
+# This uploads the folder myfolder and all subfolders to the premium zone of login 334 with password mypw.
+# Update=1 will not upload files already existing with same md5. Existing but different files will be overwritten without
+# changing the download link. Multiple duplicates will be moved to the RealFolder 999 (Trash), because we set the trash value to 1.
+
+use strict;
+use warnings;
+use Digest::MD5(&quot;md5_hex&quot;);
+use Fcntl;
+use IO::Socket;
+use LWP::Simple;
+
+my ($FILE, $TYPE, $LOGIN, $PASSWORD, $UPDATEMODE, %ESCAPES, $TRASHMODE, %PARENTANDNAME_REALFOLDER);
+
+$/ = undef;
+$SIG{PIPE} = $SIG{HUP} = &#39;IGNORE&#39;;
+$FILE = $ARGV[0] || &quot;&quot;;
+$TYPE = $ARGV[1] || &quot;&quot;;
+$LOGIN = $ARGV[2] || &quot;&quot;;
+$PASSWORD = $ARGV[3] || &quot;&quot;;
+$UPDATEMODE = $ARGV[4] || 0;
+$TRASHMODE = $ARGV[5] || 0;
+
+unless ($TYPE) { die &quot;Syntax: $0 &lt;filename/folder&gt; &lt;free|prem|col&gt; [login] [password] [updatemode] [trashmode]\n&quot; }
+unless (-e $FILE) { die &quot;File not found.\n&quot; }
+
+if (-d $FILE) {
+  unless ($LOGIN and $PASSWORD) { die &quot;Folder upload not supported for anonymous uploads.\n&quot; }
+
+  print &quot;Counting all folders and files in $FILE...\n&quot;;
+  my ($numfiles, $numfolders, $numbytes) = &amp;countfiles($FILE);
+  printf(&quot;You want to upload $numfiles files in $numfolders folders having $numbytes bytes (%.2f MB)\n&quot;, $numbytes / 1000000);
+  if ($numfiles &gt; 1000) { die &quot;More than 1000 files? You should not do that...\n&quot; }
+  if ($numfolders &gt; 100) { die &quot;More than 100 folders? You should not do that...\n&quot; }
+  if ($numbytes &gt; 100_000_000_000) { die &quot;More than 100 Gigabytes? You should not do that...\n&quot; }
+
+  print &quot;Uploading folder $FILE...\n&quot;;
+  &amp;listrealfolders($TYPE, $LOGIN, $PASSWORD);
+  &amp;uploadfolder($FILE, $TYPE, $LOGIN, $PASSWORD);
+} else {
+  &amp;uploadfile($FILE, $TYPE, $LOGIN, $PASSWORD);
+}
+
+print &quot;All done.\n&quot;;
+exit;
+
+
+
+
+
+sub countfiles {
+  my $dir = shift || die;
+
+  my ($filename, $numfiles, $numfolders, $numbytes, $subnumfiles, $subnumfolders, $subnumbytes);
+
+  foreach $filename (glob(&quot;$dir/*&quot;)) {
+    if ($filename =~ /\.uploaddata$/) { next }
+
+    if (-d $filename) {
+      ($subnumfiles, $subnumfolders, $subnumbytes) = &amp;countfiles($filename);
+      $numfiles += $subnumfiles;
+      $numfolders++;
+      $numbytes += $subnumbytes;
+    } else {
+      $numfiles++;
+      $numbytes += -s $filename || 0;
+    }
+  }
+
+  return ($numfiles || 0, $numfolders || 0, $numbytes || 0);
+}
+
+
+
+
+
+sub uploadfolder {
+  my $file = shift || die;
+  my $type = shift || die;
+  my $login = shift || &quot;&quot;;
+  my $password = shift || &quot;&quot;;
+  my $parent = shift || 0;
+
+  my ($realfolder, $filename, $htmllogin, $htmlpassword, $htmlname, $mode);
+
+  $realfolder = $PARENTANDNAME_REALFOLDER{&quot;$parent,$file&quot;} || 0;
+  $mode = &quot;existed&quot;;
+
+  unless ($realfolder) {
+    $htmllogin = &amp;htmlencode($login);
+    $htmlpassword = &amp;htmlencode($password);
+    $htmlname = &amp;htmlencode($file);
+    $realfolder = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=addrealfolder_v1&amp;type=$type&amp;login=$htmllogin&amp;password=$htmlpassword&amp;name=$htmlname&amp;parent=$parent&quot;) || &quot;&quot;;
+    if (not $realfolder or $realfolder =~ /^ERROR: /) { die &quot;API Error occured: $realfolder\n&quot; }
+    $mode = &quot;created&quot;;
+    unless ($realfolder =~ /^\d+$/) { die &quot;Error adding RealFolder: $realfolder\n&quot; }
+  }
+
+  print &quot;Folder $file resolved to ID $realfolder ($mode)\n&quot;;
+
+  foreach $filename (glob(&quot;$file/*&quot;)) {
+    if ($filename =~ /\.uploaddata$/) { next }
+    if (-d $filename) { &amp;uploadfolder($filename, $type, $login, $password, $realfolder) } else { &amp;uploadfile($filename, $type, $login, $password, $realfolder) }
+  }
+
+  return &quot;&quot;;
+}
+
+
+
+
+
+sub listrealfolders {
+  my $type = shift || die;
+  my $login = shift || die;
+  my $password = shift || die;
+
+  my ($htmllogin, $htmlpassword, $result, $realfolder, $parent, $name);
+
+  $htmllogin = &amp;htmlencode($login);
+  $htmlpassword = &amp;htmlencode($password);
+
+  $result = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listrealfolders_v1&amp;login=$htmllogin&amp;password=$htmlpassword&amp;type=$type&quot;) || &quot;&quot;;
+  if (not $result or $result =~ /^ERROR: /) { die &quot;API Error occured: $result\n&quot; }
+
+  foreach (split(/\n/, $result)) {
+    ($realfolder, $parent, $name) = split(/,/, $_, 3);
+    $PARENTANDNAME_REALFOLDER{&quot;$parent,$name&quot;} = $realfolder;
+  }
+
+  return &quot;&quot;;
+}
+
+
+
+
+
+sub finddupes {
+  my $type = shift || die;
+  my $login = shift || die;
+  my $password = shift || die;
+  my $realfolder = shift || 0;
+  my $filename = shift || &quot;&quot;;
+
+  my ($header, $result, $htmllogin, $htmlpassword, $htmlfilename, $fileid, $size, $killcode, $md5hex, $serverid);
+
+  $htmllogin = &amp;htmlencode($login);
+  $htmlpassword = &amp;htmlencode($password);
+  $htmlfilename = &amp;htmlencode($filename);
+  $result = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listfiles_v1&amp;login=$htmllogin&amp;password=$htmlpassword&amp;type=$type&amp;realfolder=$realfolder&amp;filename=$htmlfilename&amp;fields=size,killcode,serverid,md5hex&amp;order=fileid&quot;) || &quot;&quot;;
+
+  if (not $result or $result =~ /^ERROR: /) { die &quot;API Error occured: $result\n&quot; }
+  if ($result eq &quot;NONE&quot;) { print &quot;FINDDUPES: No dupe detected.\n&quot;; return (0,0,0,0,0) }
+
+  foreach (split(/\n/, $result)) {
+    unless ($_ =~ /^(\d+),(\d+),(\d+),(\d+),(\w+)/) { die &quot;FINDDUPES: Unexpected result: $result\n&quot; }
+    unless ($fileid) { $fileid = $1; $size = $2; $killcode = $3; $serverid = $4; $md5hex = lc($5); next }
+    print &quot;FINDDUPES: Deleting dupe $1\n&quot;;
+    &amp;deletefile($1, $3);
+  }
+
+  return ($fileid, $size, $killcode, $serverid, $md5hex);
+}
+
+
+
+
+
+sub deletefile {
+  my $fileid = shift || die;
+  my $killcode = shift || die;
+
+  if ($TRASHMODE == 1) {
+    print &quot;DELETEFILE: Moving file $fileid to trash RealFolder 999.\n&quot;;
+    my $result = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=movefilestorealfolder_v1&amp;files=f$fileid&quot;.&quot;k$killcode&amp;realfolder=999&quot;) || &quot;&quot;;
+    if ($result ne &quot;OK&quot;) { die &quot;DELETEFILE: Unexpected server reply: $result\n&quot; }
+  }
+
+  elsif ($TRASHMODE == 2) {
+    print &quot;DELETEFILE: DELETING file $fileid.\n&quot;;
+    my $result = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=deletefiles_v1&amp;files=f$fileid&quot;.&quot;k$killcode&quot;) || &quot;&quot;;
+    if ($result ne &quot;OK&quot;) { die &quot;DELETEFILE: Unexpected server reply: $result\n&quot; }
+  }
+
+  else {
+    print &quot;DELETEFILE: Doing nothing with file $fileid, because trash mode is 0.\n&quot;;
+  }
+
+  return &quot;&quot;;
+}
+
+
+
+
+
+sub uploadfile {
+  my $file = shift || die;
+  my $type = shift || die;
+  my $login = shift || &quot;&quot;;
+  my $password = shift || &quot;&quot;;
+  my $realfolder = shift || 0;
+
+  my ($size, $filecontent, $md5hex, $size2, $uploadserver, $cursize, $dupefileid, $dupesize, $dupekillcode, $dupemd5hex);
+
+# This chapter checks the file and calculates the MD5HEX of the existing local file.
+  $size = -s $file || die &quot;File $file is empty or does not exist!\n&quot;;
+  print &quot;File $file\n$size has byte. Full file MD5 is... &quot;;
+  open(FH, $file) || die &quot;Unable to open file: $!\n&quot;;
+  binmode(FH);
+  $filecontent = &lt;FH&gt;;
+  close(FH);
+  $md5hex = md5_hex($filecontent);
+  $size2 = length($filecontent);
+  print &quot;$md5hex\n&quot;;
+  unless ($size == $size2) { die &quot;Strange error: $size byte found, but only $size2 byte analyzed?\n&quot; }
+
+  if ($UPDATEMODE and $login and $password) {
+    ($dupefileid, $dupesize, $dupekillcode, $uploadserver, $dupemd5hex) = &amp;finddupes($type, $login, $password, $realfolder, $file);
+    if ($md5hex eq $dupemd5hex) { print &quot;FILE ALREADY UP TO DATE! Server rs$uploadserver.rapidshare.com in file ID $dupefileid.\n\n&quot;; return &quot;&quot; }
+    if ($dupefileid) { print &quot;UPDATING FILE $dupefileid on server rs$uploadserver.rapidshare.com ($type)\n&quot; }
+  }
+
+  unless ($uploadserver) {
+    print &quot;Getting a free upload server...\n&quot;;
+    $uploadserver = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=nextuploadserver_v1&quot;) || &quot;&quot;;
+    if (not $uploadserver or $uploadserver =~ /^ERROR: /) { die &quot;API Error occured: $uploadserver\n&quot; }
+    print &quot;Uploading to rs$uploadserver.rapidshare.com ($type)\n&quot;;
+  }
+
+  $cursize = 0;
+  while ($cursize &lt; $size) { $cursize = &amp;uploadchunk($file, $type, $login, $password, $realfolder, $md5hex, $size, $cursize, &quot;rs$uploadserver.rapidshare.com:80&quot;, $dupefileid, $dupekillcode) }
+
+  return &quot;&quot;;
+}
+
+
+
+
+
+sub uploadchunk {
+  my $file = shift || die;
+  my $type = shift || die;
+  my $login = shift || &quot;&quot;;
+  my $password = shift || &quot;&quot;;
+  my $realfolder = shift || 0;
+  my $md5hex = shift || die;
+  my $size = shift || die;
+  my $cursize = shift || 0;
+  my $fulluploadserver = shift || die;
+  my $replacefileid = shift || 0;
+  my $replacekillcode = shift || 0;
+  my $bodtype = shift || 0;
+
+  my ($uploaddata, $wantchunksize, $fh, $socket, $boundary, $contentheader, $contenttail, $contentlength, $header, $chunks, $chunksize,
+$bufferlen, $buffer, $result, $fileid, $complete, $resumed, $filename, $killcode, $remotemd5hex, $chunkmd5hex);
+
+  if (-e &quot;$file.uploaddata&quot;) {
+    open(I, &quot;$file.uploaddata&quot;) or die &quot;Unable to open file: $!\n&quot;;
+    ($fulluploadserver, $fileid, $killcode) = split(/\n/, &lt;I&gt;);
+    print &quot;RESUMING UPLOAD! Uploadserver=$fulluploadserver\nFile-ID=$fileid\nKillcode=$killcode\n&quot;;
+    close(I);
+    print &quot;Requesting authorization for upload resume...\n&quot;;
+    $cursize = get(&quot;http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=checkincomplete_v1&amp;fileid=$fileid&amp;killcode=$killcode&quot;) || &quot;&quot;;
+    unless ($cursize =~ /^\d+$/) { die &quot;Unable to resume! Please delete $file.uploaddata or try again.\n&quot; }
+    print &quot;The upload stopped at $cursize on server $fulluploadserver.\n&quot;;
+    $resumed = 1;
+  }
+
+  $wantchunksize = 1000000;
+
+  if ($size &gt; $wantchunksize) {
+    $chunks = 1;
+    $chunksize = $size - $cursize;
+    if ($chunksize &gt; $wantchunksize) { $chunksize = $wantchunksize } else { $complete = 1 }
+  } else {
+    $chunks = 0;
+    $chunksize = $size;
+  }
+
+  print &quot;Upload chunk is $chunksize byte starting at $cursize.\n&quot;;
+
+  sysopen($fh, $file, O_RDONLY) || die &quot;Unable to open file: $!\n&quot;;
+  $filename = $file =~ /[\/\\]([^\/\\]+)$/ ? $1 : $file;
+  $socket = IO::Socket::INET-&gt;new(PeerAddr =&gt; $fulluploadserver) || die &quot;Unable to open socket: $!\n&quot;;
+  $boundary = &quot;---------------------632865735RS4EVER5675865&quot;;
+  $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;rsapi_v1&quot;\r\n\r\n1\r\n|;
+
+  if ($resumed) {
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;fileid&quot;\r\n\r\n$fileid\r\n|;
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;killcode&quot;\r\n\r\n$killcode\r\n|;
+    if ($complete) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;complete&quot;\r\n\r\n1\r\n| }
+  } else {
+    if ($type eq &quot;prem&quot; and $login and $password) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;login&quot;\r\n\r\n$login\r\n| }
+    if ($type eq &quot;col&quot; and $login and $password) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;freeaccountid&quot;\r\n\r\n$login\r\n| }
+
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;password&quot;\r\n\r\n$password\r\n|;
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;realfolder&quot;\r\n\r\n$realfolder\r\n|;
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;replacefileid&quot;\r\n\r\n$replacefileid\r\n|;
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;replacekillcode&quot;\r\n\r\n$replacekillcode\r\n|;
+    $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;bodtype&quot;\r\n\r\n$bodtype\r\n|;
+
+    if ($chunks) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;incomplete&quot;\r\n\r\n1\r\n| }
+  }
+
+  $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=&quot;filecontent&quot;; filename=&quot;$filename&quot;\r\n\r\n|;
+  $contenttail = &quot;\r\n$boundary--\r\n&quot;;
+  $contentlength = length($contentheader) + $chunksize + length($contenttail);
+
+  if ($resumed) {
+    $header = qq|POST /cgi-bin/uploadresume.cgi HTTP/1.0\r\nContent-Type: multipart/form-data; boundary=$boundary\r\nContent-Length: $contentlength\r\n\r\n|;
+  } else {
+    $header = qq|POST /cgi-bin/upload.cgi HTTP/1.0\r\nContent-Type: multipart/form-data; boundary=$boundary\r\nContent-Length: $contentlength\r\n\r\n|;
+  }
+
+  print $socket &quot;$header$contentheader&quot;;
+
+  sysseek($fh, $cursize, 0);
+  $bufferlen = sysread($fh, $buffer, $wantchunksize) || 0;
+  unless ($bufferlen) { die &quot;Error while reading file: $!\n&quot; }
+  $chunkmd5hex = md5_hex($buffer);
+  print &quot;Sending $bufferlen byte...\n&quot;;
+  $cursize += $bufferlen;
+  print $socket $buffer;
+  print $socket $contenttail;
+  print &quot;Reading server response...\n&quot;;
+  ($result) = &lt;$socket&gt; =~ /\r\n\r\n(.+)/s;
+  unless ($result) { die &quot;Ooops! Did not receive any valid server results?\n&quot; }
+
+  if ($resumed) {
+    if ($complete) {
+      if ($result =~ /^COMPLETE,(\w+)/) {
+        print &quot;Upload completed! Remote MD5=$1 Local MD5=$md5hex\n&quot;;
+        if ($md5hex ne $1) { die &quot;MD5 CHECK NOT PASSED!\n&quot; }
+        print &quot;MD5 check passed. Upload OK! Saving status to rsapiuploads.txt\n\n&quot;;
+        unlink(&quot;$file.uploaddata&quot;);
+      } else {
+        die &quot;Unexpected server response!\n&quot;;
+      }
+    } else {
+      if ($result =~ /^CHUNK,(\d+),(\w+)/) {
+        print &quot;Chunk upload completed! $1 byte uploaded.\nRemote MD5=$2 Local MD5=$chunkmd5hex\n\n&quot;;
+        if ($2 ne $chunkmd5hex) { die &quot;CHUNK MD5 CHECK NOT PASSED!\n&quot; }
+      } else {
+        die &quot;Unexpected server response!\n\n$result\n&quot;;
+      }
+    }
+  } else {
+    if ($result =~ /files\/(\d+)/) { $fileid = $1 } else { die &quot;Server result did not contain a file ID.\n$result&quot; }
+    unless ($result =~ /File1\.3=(\d+)/ and $1 == $cursize) { die &quot;Server did not save all data we sent.\n$result&quot; }
+    unless ($result =~ /File1\.2=.+?killcode=(\d+)/) { die &quot;Server did not send our killcode.\n$result&quot; }
+    $killcode = $1;
+    unless ($result =~ /File1\.4=(\w+)/) { die &quot;Server did not send the remote MD5 sum.\n&quot; }
+    $remotemd5hex = lc($1);
+
+    if ($chunks) {
+      if ($result !~ /File1\.5=Incomplete/) { die &quot;Server did not acknowledge the incomplete upload request.\n&quot; }
+      print &quot;Chunk upload completed! $cursize byte uploaded.\nRemote MD5=$remotemd5hex Local MD5=$chunkmd5hex\n&quot;;
+      if ($remotemd5hex ne $chunkmd5hex) { die &quot;CHUNK MD5 CHECK NOT PASSED!\n&quot; }
+      print &quot;Upload OK! Saving to rsapiuploads.txt and resuming upload...\n\n&quot;;
+      open(O, &quot;&gt;$file.uploaddata&quot;) or die &quot;Unable to save upload server: $!\n&quot;;
+      print O &quot;$fulluploadserver\n$fileid\n$killcode\n&quot;;
+      close(O);
+    } else {
+      if ($result !~ /File1\.5=Completed/) { die &quot;Server did not acknowledge the completed upload request.\n&quot; }
+      if ($md5hex ne $remotemd5hex) { die &quot;FINAL MD5 CHECK NOT PASSED! LOCAL=$md5hex REMOTE=$remotemd5hex\n&quot; }
+      print &quot;FINAL MD5 check passed. Upload OK! Saving status to rsapiuploads.txt\n$result&quot;;
+    }
+
+    open(O,&quot;&gt;&gt;rsapiuploads.txt&quot;) or die &quot;Unable to save to rsapiuploads.txt: $!\n&quot;;
+    print O $chunks ? &quot;Initialized chunk upload for file $file.\n$result&quot; : &quot;Uploaded file $file.\n$result&quot;;
+    close(O);
+  }
+
+  return $cursize;
+}
+
+
+
+
+
+sub htmlencode {
+  my $text = shift || &quot;&quot;;
+
+  unless (%ESCAPES) {
+    for (0 .. 255) { $ESCAPES{chr($_)} = sprintf(&quot;%%%02X&quot;, $_) }
+  }
+
+  $text =~ s/(.)/$ESCAPES{$1}/g;
+
+  return $text;
+}
+[/code]</description>
+    
+    <lastBuildDate>Thu, 08 Jul 2010 08:56:45 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@xEnt xEnt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xent">@xEnt</a> wrote:</p>
+          <blockquote>
+              <p>rapidshare is garbage with their new plans now. everyone movin to megaupload/hotfile</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/6</link>
+        <pubDate>Thu, 08 Jul 2010 08:56:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-6</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Javafire, post:4, topic:347653”]rapidshare is garbage, hotfile is nicer.[/quote]All those websites are garbage for the pirate-type of filesharing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/5</link>
+        <pubDate>Wed, 07 Jul 2010 22:11:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-5</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@Javafire Javafire]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/javafire">@Javafire</a> wrote:</p>
+          <blockquote>
+              <p>rapidshare is garbage, hotfile is nicer.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/4</link>
+        <pubDate>Wed, 07 Jul 2010 20:56:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-4</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@chri5 chri5]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chri5">@chri5</a> wrote:</p>
+          <blockquote>
+              <p>plowshare</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/3</link>
+        <pubDate>Wed, 07 Jul 2010 06:22:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-3</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>how elegant as well as bad perl can be at the same time</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/2</link>
+        <pubDate>Tue, 06 Jul 2010 22:50:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-2</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+      <item>
+        <title>Rapidshare API</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://rapidshare.com/dev.html" class="onebox" target="_blank" rel="nofollow noopener">http://rapidshare.com/dev.html</a></p>
+<p>Saw this, haven’t seen any-one post about it before! I’m going to write a remote download script so my unix box can init downloads when i’m at work by passing it a link <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>here is an example of the api in use:</p>
+<p>[code]#!/usr/bin/perl</p>
+<h1>Version 2.2.4 (9th May 2009)</h1>
+<h1>RapidShare AG OpenSource Perl Uploader. For non-commercial use only. All rights reserved. USE AT YOUR OWN RISK!</h1>
+<h1>Features:</h1>
+<h1>- Uploading to free, collector’s zone and premium zone.</h1>
+<h1>- Supports MD5 check after uploads to check if the upload worked.</h1>
+<h1>- Supports upload resume to continue aborted uploads. Upload needs to be completed within 24 hours.</h1>
+<h1>- Supports new RealFolders for premium and collector’s accounts.</h1>
+<h1>- Supports uploading whole directories in RealFolders.</h1>
+<h1>- Supports update modes and trash modes to update remote files without changing file IDs.</h1>
+<h1>Syntax: rsapiresume.pl &lt;filename/folder&gt; &lt;free|prem|col&gt; [login] [password] [updatemode] [trashmode]</h1>
+<h1>Update=0: Traditional uploading. No duplicate checking.</h1>
+<h1>Update=1: The lowest file ID duplicate will be overwritten if MD5 differs. Other duplicates will be handled using the trash flag.</h1>
+<h1>Trash=0: No trashing.</h1>
+<h1>Trash=1: Files will be moved to trash RealFolder (999)</h1>
+<h1>Trash=2: Files will be DELETED! (not undoable)</h1>
+<h1>To upload a file, put this script on a Linux machine with perl installed and use the following syntax:</h1>
+<h1>perl rsapiresume.pl mytestfile.rar free        (this uploads mytestfile.rar as a free user)</h1>
+<h1>perl rsapiresume.pl archive.rar prem 334 test  (this uploads archive.rar to the premium zone of login 334 with password test)</h1>
+<h1>perl rsapiresume.pl a.rar col testuser mypw    (this uploads a.rar to the collector’s zone of login testuser with password mypw)</h1>
+<h1>perl rsapiresume.pl prem myfolder 334 mypw 1 1</h1>
+<h1>This uploads the folder myfolder and all subfolders to the premium zone of login 334 with password mypw.</h1>
+<h1>Update=1 will not upload files already existing with same md5. Existing but different files will be overwritten without</h1>
+<h1>changing the download link. Multiple duplicates will be moved to the RealFolder 999 (Trash), because we set the trash value to 1.</h1>
+<p>use strict;<br>
+use warnings;<br>
+use Digest::MD5(“md5_hex”);<br>
+use Fcntl;<br>
+use IO::Socket;<br>
+use LWP::Simple;</p>
+<p>my ($FILE, $TYPE, $LOGIN, $PASSWORD, $UPDATEMODE, %ESCAPES, $TRASHMODE, %PARENTANDNAME_REALFOLDER);</p>
+<p>$/ = undef;<br>
+$SIG{PIPE} = $SIG{HUP} = ‘IGNORE’;<br>
+$FILE = $ARGV[0] || “”;<br>
+$TYPE = $ARGV[1] || “”;<br>
+$LOGIN = $ARGV[2] || “”;<br>
+$PASSWORD = $ARGV[3] || “”;<br>
+$UPDATEMODE = $ARGV[4] || 0;<br>
+$TRASHMODE = $ARGV[5] || 0;</p>
+<p>unless ($TYPE) { die “Syntax: $0 &lt;filename/folder&gt; &lt;free|prem|col&gt; [login] [password] [updatemode] [trashmode]\n” }<br>
+unless (-e $FILE) { die “File not found.\n” }</p>
+<p>if (-d $FILE) {<br>
+unless ($LOGIN and $PASSWORD) { die “Folder upload not supported for anonymous uploads.\n” }</p>
+<p>print “Counting all folders and files in $FILE…\n”;<br>
+my ($numfiles, $numfolders, $numbytes) = &amp;countfiles($FILE);<br>
+printf(“You want to upload $numfiles files in $numfolders folders having $numbytes bytes (%.2f MB)\n”, $numbytes / 1000000);<br>
+if ($numfiles &gt; 1000) { die “More than 1000 files? You should not do that…\n” }<br>
+if ($numfolders &gt; 100) { die “More than 100 folders? You should not do that…\n” }<br>
+if ($numbytes &gt; 100_000_000_000) { die “More than 100 Gigabytes? You should not do that…\n” }</p>
+<p>print “Uploading folder $FILE…\n”;<br>
+&amp;listrealfolders($TYPE, $LOGIN, $PASSWORD);<br>
+&amp;uploadfolder($FILE, $TYPE, $LOGIN, $PASSWORD);<br>
+} else {<br>
+&amp;uploadfile($FILE, $TYPE, $LOGIN, $PASSWORD);<br>
+}</p>
+<p>print “All done.\n”;<br>
+exit;</p>
+<p>sub countfiles {<br>
+my $dir = shift || die;</p>
+<p>my ($filename, $numfiles, $numfolders, $numbytes, $subnumfiles, $subnumfolders, $subnumbytes);</p>
+<p>foreach $filename (glob("$dir/*")) {<br>
+if ($filename =~ /.uploaddata$/) { next }</p>
+<pre><code>if (-d $filename) {
+  ($subnumfiles, $subnumfolders, $subnumbytes) = &amp;countfiles($filename);
+  $numfiles += $subnumfiles;
+  $numfolders++;
+  $numbytes += $subnumbytes;
+} else {
+  $numfiles++;
+  $numbytes += -s $filename || 0;
+}
+</code></pre>
+<p>}</p>
+<p>return ($numfiles || 0, $numfolders || 0, $numbytes || 0);<br>
+}</p>
+<p>sub uploadfolder {<br>
+my $file = shift || die;<br>
+my $type = shift || die;<br>
+my $login = shift || “”;<br>
+my $password = shift || “”;<br>
+my $parent = shift || 0;</p>
+<p>my ($realfolder, $filename, $htmllogin, $htmlpassword, $htmlname, $mode);</p>
+<p>$realfolder = $PARENTANDNAME_REALFOLDER{"$parent,$file"} || 0;<br>
+$mode = “existed”;</p>
+<p>unless ($realfolder) {<br>
+$htmllogin = &amp;htmlencode($login);<br>
+$htmlpassword = &amp;htmlencode($password);<br>
+$htmlname = &amp;htmlencode($file);<br>
+$realfolder = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=addrealfolder_v1&amp;type=%24type&amp;login=%24htmllogin&amp;password=%24htmlpassword&amp;name=%24htmlname&amp;parent=%24parent" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=addrealfolder_v1&amp;type=$type&amp;login=$htmllogin&amp;password=$htmlpassword&amp;name=$htmlname&amp;parent=$parent</a>”) || “”;<br>
+if (not $realfolder or $realfolder =~ /^ERROR: /) { die “API Error occured: $realfolder\n” }<br>
+$mode = “created”;<br>
+unless ($realfolder =~ /^\d+$/) { die “Error adding RealFolder: $realfolder\n” }<br>
+}</p>
+<p>print “Folder $file resolved to ID $realfolder ($mode)\n”;</p>
+<p>foreach $filename (glob("$file/*")) {<br>
+if ($filename =~ /.uploaddata$/) { next }<br>
+if (-d $filename) { &amp;uploadfolder($filename, $type, $login, $password, $realfolder) } else { &amp;uploadfile($filename, $type, $login, $password, $realfolder) }<br>
+}</p>
+<p>return “”;<br>
+}</p>
+<p>sub listrealfolders {<br>
+my $type = shift || die;<br>
+my $login = shift || die;<br>
+my $password = shift || die;</p>
+<p>my ($htmllogin, $htmlpassword, $result, $realfolder, $parent, $name);</p>
+<p>$htmllogin = &amp;htmlencode($login);<br>
+$htmlpassword = &amp;htmlencode($password);</p>
+<p>$result = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listrealfolders_v1&amp;login=%24htmllogin&amp;password=%24htmlpassword&amp;type=%24type" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listrealfolders_v1&amp;login=$htmllogin&amp;password=$htmlpassword&amp;type=$type</a>”) || “”;<br>
+if (not $result or $result =~ /^ERROR: /) { die “API Error occured: $result\n” }</p>
+<p>foreach (split(/\n/, $result)) {<br>
+($realfolder, $parent, $name) = split(/,/, $_, 3);<br>
+$PARENTANDNAME_REALFOLDER{"$parent,$name"} = $realfolder;<br>
+}</p>
+<p>return “”;<br>
+}</p>
+<p>sub finddupes {<br>
+my $type = shift || die;<br>
+my $login = shift || die;<br>
+my $password = shift || die;<br>
+my $realfolder = shift || 0;<br>
+my $filename = shift || “”;</p>
+<p>my ($header, $result, $htmllogin, $htmlpassword, $htmlfilename, $fileid, $size, $killcode, $md5hex, $serverid);</p>
+<p>$htmllogin = &amp;htmlencode($login);<br>
+$htmlpassword = &amp;htmlencode($password);<br>
+$htmlfilename = &amp;htmlencode($filename);<br>
+$result = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listfiles_v1&amp;login=%24htmllogin&amp;password=%24htmlpassword&amp;type=%24type&amp;realfolder=%24realfolder&amp;filename=%24htmlfilename&amp;fields=size,killcode,serverid,md5hex&amp;order=fileid" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=listfiles_v1&amp;login=$htmllogin&amp;password=$htmlpassword&amp;type=$type&amp;realfolder=$realfolder&amp;filename=$htmlfilename&amp;fields=size,killcode,serverid,md5hex&amp;order=fileid</a>”) || “”;</p>
+<p>if (not $result or $result =~ /^ERROR: /) { die “API Error occured: $result\n” }<br>
+if ($result eq “NONE”) { print “FINDDUPES: No dupe detected.\n”; return (0,0,0,0,0) }</p>
+<p>foreach (split(/\n/, $result)) {<br>
+unless ($_ =~ /^(\d+),(\d+),(\d+),(\d+),(\w+)/) { die “FINDDUPES: Unexpected result: $result\n” }<br>
+unless ($fileid) { $fileid = $1; $size = $2; $killcode = $3; $serverid = $4; $md5hex = lc($5); next }<br>
+print “FINDDUPES: Deleting dupe $1\n”;<br>
+&amp;deletefile($1, $3);<br>
+}</p>
+<p>return ($fileid, $size, $killcode, $serverid, $md5hex);<br>
+}</p>
+<p>sub deletefile {<br>
+my $fileid = shift || die;<br>
+my $killcode = shift || die;</p>
+<p>if ($TRASHMODE == 1) {<br>
+print “DELETEFILE: Moving file $fileid to trash RealFolder 999.\n”;<br>
+my $result = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=movefilestorealfolder_v1&amp;files=f%24fileid%22.%22k%24killcode&amp;realfolder=999" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=movefilestorealfolder_v1&amp;files=f$fileid"."k$killcode&amp;realfolder=999</a>”) || “”;<br>
+if ($result ne “OK”) { die “DELETEFILE: Unexpected server reply: $result\n” }<br>
+}</p>
+<p>elsif ($TRASHMODE == 2) {<br>
+print “DELETEFILE: DELETING file $fileid.\n”;<br>
+my $result = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=deletefiles_v1&amp;files=f%24fileid%22.%22k%24killcode" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=deletefiles_v1&amp;files=f$fileid"."k$killcode</a>”) || “”;<br>
+if ($result ne “OK”) { die “DELETEFILE: Unexpected server reply: $result\n” }<br>
+}</p>
+<p>else {<br>
+print “DELETEFILE: Doing nothing with file $fileid, because trash mode is 0.\n”;<br>
+}</p>
+<p>return “”;<br>
+}</p>
+<p>sub uploadfile {<br>
+my $file = shift || die;<br>
+my $type = shift || die;<br>
+my $login = shift || “”;<br>
+my $password = shift || “”;<br>
+my $realfolder = shift || 0;</p>
+<p>my ($size, $filecontent, $md5hex, $size2, $uploadserver, $cursize, $dupefileid, $dupesize, $dupekillcode, $dupemd5hex);</p>
+<h1>This chapter checks the file and calculates the MD5HEX of the existing local file.</h1>
+<p>$size = -s $file || die “File $file is empty or does not exist!\n”;<br>
+print "File $file\n$size has byte. Full file MD5 is… ";<br>
+open(FH, $file) || die “Unable to open file: $!\n”;<br>
+binmode(FH);<br>
+$filecontent = ;<br>
+close(FH);<br>
+$md5hex = md5_hex($filecontent);<br>
+$size2 = length($filecontent);<br>
+print “$md5hex\n”;<br>
+unless ($size == $size2) { die “Strange error: $size byte found, but only $size2 byte analyzed?\n” }</p>
+<p>if ($UPDATEMODE and $login and $password) {<br>
+($dupefileid, $dupesize, $dupekillcode, $uploadserver, $dupemd5hex) = &amp;finddupes($type, $login, $password, $realfolder, $file);<br>
+if ($md5hex eq $dupemd5hex) { print “FILE ALREADY UP TO DATE! Server <a href="http://rs%24uploadserver.rapidshare.com" rel="nofollow noopener">rs$uploadserver.rapidshare.com</a> in file ID $dupefileid.\n\n”; return “” }<br>
+if ($dupefileid) { print “UPDATING FILE $dupefileid on server <a href="http://rs%24uploadserver.rapidshare.com" rel="nofollow noopener">rs$uploadserver.rapidshare.com</a> ($type)\n” }<br>
+}</p>
+<p>unless ($uploadserver) {<br>
+print “Getting a free upload server…\n”;<br>
+$uploadserver = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=nextuploadserver_v1" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=nextuploadserver_v1</a>”) || “”;<br>
+if (not $uploadserver or $uploadserver =~ /^ERROR: /) { die “API Error occured: $uploadserver\n” }<br>
+print “Uploading to <a href="http://rs%24uploadserver.rapidshare.com" rel="nofollow noopener">rs$uploadserver.rapidshare.com</a> ($type)\n”;<br>
+}</p>
+<p>$cursize = 0;<br>
+while ($cursize &lt; $size) { $cursize = &amp;uploadchunk($file, $type, $login, $password, $realfolder, $md5hex, $size, $cursize, “<a href="http://rs:80%24uploadserver.rapidshare.com" rel="nofollow noopener">rs:80$uploadserver.rapidshare.com</a>”, $dupefileid, $dupekillcode) }</p>
+<p>return “”;<br>
+}</p>
+<p>sub uploadchunk {<br>
+my $file = shift || die;<br>
+my $type = shift || die;<br>
+my $login = shift || “”;<br>
+my $password = shift || “”;<br>
+my $realfolder = shift || 0;<br>
+my $md5hex = shift || die;<br>
+my $size = shift || die;<br>
+my $cursize = shift || 0;<br>
+my $fulluploadserver = shift || die;<br>
+my $replacefileid = shift || 0;<br>
+my $replacekillcode = shift || 0;<br>
+my $bodtype = shift || 0;</p>
+<p>my ($uploaddata, $wantchunksize, $fh, $socket, $boundary, $contentheader, $contenttail, $contentlength, $header, $chunks, $chunksize,<br>
+$bufferlen, $buffer, $result, $fileid, $complete, $resumed, $filename, $killcode, $remotemd5hex, $chunkmd5hex);</p>
+<p>if (-e “$file.uploaddata”) {<br>
+open(I, “$file.uploaddata”) or die “Unable to open file: $!\n”;<br>
+($fulluploadserver, $fileid, $killcode) = split(/\n/, <i>);<br>
+print “RESUMING UPLOAD! Uploadserver=$fulluploadserver\nFile-ID=$fileid\nKillcode=$killcode\n”;<br>
+close(I);<br>
+print “Requesting authorization for upload resume…\n”;<br>
+$cursize = get(“<a href="http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=checkincomplete_v1&amp;fileid=%24fileid&amp;killcode=%24killcode" rel="nofollow noopener">http://api.rapidshare.com/cgi-bin/rsapi.cgi?sub=checkincomplete_v1&amp;fileid=$fileid&amp;killcode=$killcode</a>”) || “”;<br>
+unless ($cursize =~ /^\d+$/) { die “Unable to resume! Please delete $file.uploaddata or try again.\n” }<br>
+print “The upload stopped at $cursize on server $fulluploadserver.\n”;<br>
+$resumed = 1;<br>
+}</i></p>
+<p>$wantchunksize = 1000000;</p>
+<p>if ($size &gt; $wantchunksize) {<br>
+$chunks = 1;<br>
+$chunksize = $size - $cursize;<br>
+if ($chunksize &gt; $wantchunksize) { $chunksize = $wantchunksize } else { $complete = 1 }<br>
+} else {<br>
+$chunks = 0;<br>
+$chunksize = $size;<br>
+}</p>
+<p>print “Upload chunk is $chunksize byte starting at $cursize.\n”;</p>
+<p>sysopen($fh, $file, O_RDONLY) || die “Unable to open file: $!\n”;<br>
+$filename = $file =~ /<a>/\</a>$/ ? $1 : $file;<br>
+$socket = IO::Socket::INET-&gt;new(PeerAddr =&gt; $fulluploadserver) || die “Unable to open socket: $!\n”;<br>
+$boundary = “---------------------632865735RS4EVER5675865”;<br>
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“rsapi_v1”\r\n\r\n1\r\n|;</p>
+<p>if ($resumed) {<br>
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“fileid”\r\n\r\n$fileid\r\n|;<br>
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“killcode”\r\n\r\n$killcode\r\n|;<br>
+if ($complete) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“complete”\r\n\r\n1\r\n| }<br>
+} else {<br>
+if ($type eq “prem” and $login and $password) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“login”\r\n\r\n$login\r\n| }<br>
+if ($type eq “col” and $login and $password) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“freeaccountid”\r\n\r\n$login\r\n| }</p>
+<pre><code>$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="password"\r\n\r\n$password\r\n|;
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="realfolder"\r\n\r\n$realfolder\r\n|;
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="replacefileid"\r\n\r\n$replacefileid\r\n|;
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="replacekillcode"\r\n\r\n$replacekillcode\r\n|;
+$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="bodtype"\r\n\r\n$bodtype\r\n|;
+
+if ($chunks) { $contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name="incomplete"\r\n\r\n1\r\n| }
+</code></pre>
+<p>}</p>
+<p>$contentheader .= qq|$boundary\r\nContent-Disposition: form-data; name=“filecontent”; filename="$filename"\r\n\r\n|;<br>
+$contenttail = “\r\n$boundary–\r\n”;<br>
+$contentlength = length($contentheader) + $chunksize + length($contenttail);</p>
+<p>if ($resumed) {<br>
+$header = qq|POST /cgi-bin/uploadresume.cgi HTTP/1.0\r\nContent-Type: multipart/form-data; boundary=$boundary\r\nContent-Length: $contentlength\r\n\r\n|;<br>
+} else {<br>
+$header = qq|POST /cgi-bin/upload.cgi HTTP/1.0\r\nContent-Type: multipart/form-data; boundary=$boundary\r\nContent-Length: $contentlength\r\n\r\n|;<br>
+}</p>
+<p>print $socket “$header$contentheader”;</p>
+<p>sysseek($fh, $cursize, 0);<br>
+$bufferlen = sysread($fh, $buffer, $wantchunksize) || 0;<br>
+unless ($bufferlen) { die “Error while reading file: $!\n” }<br>
+$chunkmd5hex = md5_hex($buffer);<br>
+print “Sending $bufferlen byte…\n”;<br>
+$cursize += $bufferlen;<br>
+print $socket $buffer;<br>
+print $socket $contenttail;<br>
+print “Reading server response…\n”;<br>
+($result) = &lt;$socket&gt; =~ /\r\n\r\n(.+)/s;<br>
+unless ($result) { die “Ooops! Did not receive any valid server results?\n” }</p>
+<p>if ($resumed) {<br>
+if ($complete) {<br>
+if ($result =~ /^COMPLETE,(\w+)/) {<br>
+print “Upload completed! Remote MD5=$1 Local MD5=$md5hex\n”;<br>
+if ($md5hex ne $1) { die “MD5 CHECK NOT PASSED!\n” }<br>
+print “MD5 check passed. Upload OK! Saving status to rsapiuploads.txt\n\n”;<br>
+unlink("$file.uploaddata");<br>
+} else {<br>
+die “Unexpected server response!\n”;<br>
+}<br>
+} else {<br>
+if ($result =~ /^CHUNK,(\d+),(\w+)/) {<br>
+print “Chunk upload completed! $1 byte uploaded.\nRemote MD5=$2 Local MD5=$chunkmd5hex\n\n”;<br>
+if ($2 ne $chunkmd5hex) { die “CHUNK MD5 CHECK NOT PASSED!\n” }<br>
+} else {<br>
+die “Unexpected server response!\n\n$result\n”;<br>
+}<br>
+}<br>
+} else {<br>
+if ($result =~ /files/(\d+)/) { $fileid = $1 } else { die “Server result did not contain a file ID.\n$result” }<br>
+unless ($result =~ /File1.3=(\d+)/ and $1 == $cursize) { die “Server did not save all data we sent.\n$result” }<br>
+unless ($result =~ /File1.2=.+?killcode=(\d+)/) { die “Server did not send our killcode.\n$result” }<br>
+$killcode = $1;<br>
+unless ($result =~ /File1.4=(\w+)/) { die “Server did not send the remote MD5 sum.\n” }<br>
+$remotemd5hex = lc($1);</p>
+<pre><code>if ($chunks) {
+  if ($result !~ /File1\.5=Incomplete/) { die "Server did not acknowledge the incomplete upload request.\n" }
+  print "Chunk upload completed! $cursize byte uploaded.\nRemote MD5=$remotemd5hex Local MD5=$chunkmd5hex\n";
+  if ($remotemd5hex ne $chunkmd5hex) { die "CHUNK MD5 CHECK NOT PASSED!\n" }
+  print "Upload OK! Saving to rsapiuploads.txt and resuming upload...\n\n";
+  open(O, "&gt;$file.uploaddata") or die "Unable to save upload server: $!\n";
+  print O "$fulluploadserver\n$fileid\n$killcode\n";
+  close(O);
+} else {
+  if ($result !~ /File1\.5=Completed/) { die "Server did not acknowledge the completed upload request.\n" }
+  if ($md5hex ne $remotemd5hex) { die "FINAL MD5 CHECK NOT PASSED! LOCAL=$md5hex REMOTE=$remotemd5hex\n" }
+  print "FINAL MD5 check passed. Upload OK! Saving status to rsapiuploads.txt\n$result";
+}
+
+open(O,"&gt;&gt;rsapiuploads.txt") or die "Unable to save to rsapiuploads.txt: $!\n";
+print O $chunks ? "Initialized chunk upload for file $file.\n$result" : "Uploaded file $file.\n$result";
+close(O);
+</code></pre>
+<p>}</p>
+<p>return $cursize;<br>
+}</p>
+<p>sub htmlencode {<br>
+my $text = shift || “”;</p>
+<p>unless (%ESCAPES) {<br>
+for (0 … 255) { $ESCAPES{chr($<em>)} = sprintf("%%%02X", $</em>) }<br>
+}</p>
+<p>$text =~ s/(.)/$ESCAPES{$1}/g;</p>
+<p>return $text;<br>
+}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rapidshare-api/347653/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rapidshare-api/347653/1</link>
+        <pubDate>Tue, 06 Jul 2010 20:45:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-347653-1</guid>
+        <source url="https://forum.moparisthebest.com/t/rapidshare-api/347653.rss">Rapidshare API</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,1258 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI]Full NPC and stall thieving</title>
+    <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997</link>
+    <description>Credits to Dr house from r-s, as we will be using his skill system!
+
+I am programming somewhat of a remake and this is my current thieving.
+ 
+Features:
+
+[ul][li]Disappearing items on stalls[/li]
+[li]Proper respawn times[/li]
+[li]Stunning[/li]
+[li]All proper requirements/experience[/li][/ul]
+
+
+[u][b]Skill handler -[/b][/u]
+[b]Credits to Dr House[/b]
+Add into skills package:
+[code]
+package server.model.players.skills;
+
+import server.model.players.*;
+import server.Config;
+import server.util.Misc;
+import server.event.*
+
+public class SkillHandler {
+
+	private static final int SKILLING_XP = 1;
+	public static final int AGILITY_XP =  SKILLING_XP;
+	public static final int PRAYER_XP = SKILLING_XP;
+	public static final int MINING_XP = SKILLING_XP;
+	public static final int COOKING_XP = SKILLING_XP;
+	public static final int RUNECRAFTING_XP = SKILLING_XP;
+	public static final int WOODCUTTING_XP = SKILLING_XP;
+	public static final int THIEVING_XP = SKILLING_XP;
+	public static final int HERBLORE_XP = SKILLING_XP;
+	public static final int FISHING_XP = SKILLING_XP;
+	public static final int FLETCHING_XP = SKILLING_XP;
+	public static final int FIREMAKING_XP = SKILLING_XP;
+
+	public static boolean noInventorySpace(Client c, String skill) {
+		if (c.getItems().freeSlots() == 0) {
+			c.sendMessage(&quot;You haven&#39;t got enough inventory space to continue &quot;+skill+&quot;!&quot;);
+			c.getPA().sendStatement(&quot;You haven&#39;t got enough inventory space to continue &quot;+skill+&quot;!&quot;);
+			return false;
+		}
+		return true;
+	}
+
+	public static boolean view190 = true;
+
+	public static void resetPlayerSkillVariables(Client c) {
+		for(int i = 0; i &lt; 20; i++) {
+			if(c.playerSkilling[i]) {
+				for(int l = 0; l &lt; 15; l++) {
+					c.playerSkillProp[i][l] = -1;
+				}
+			}
+		}
+	}
+
+	public static boolean hasRequiredLevel(final Client c, int id, int lvlReq, String skill, String event) {
+		if(c.playerLevel[id] &lt; lvlReq) {
+			c.sendMessage(&quot;You haven&#39;t got high enough &quot;+skill+&quot; level to &quot;+event+&quot;&quot;);
+			c.sendMessage(&quot;You at least need the &quot;+skill+&quot; level of &quot;+ lvlReq +&quot;.&quot;);
+			c.getPA().sendStatement(&quot;You haven&#39;t got high enough &quot;+skill+&quot; level to &quot;+event+&quot;!&quot;);
+			return false;
+		}
+		return true;
+	}
+
+	public static void deleteTime(Client c) {
+		c.doAmount--;
+	}
+}[/code]
+
+Into PA class:
+[code]
+	public void sendStatement(String s) {
+		sendFrame126(s, 357);
+		sendFrame126(&quot;Click here to continue&quot;, 358);
+		sendFrame164(356);
+	}
+[/code]
+
+Into ObjectHandler class:
+[code]
+	public void createAnObject(Client c, int id, int x, int y) {
+		Objects OBJECT = new Objects(id, x, y, 0, 0, 10, 0);
+		if(id == -1) {
+			removeObject(OBJECT);
+		} else {
+			addObject(OBJECT);
+		}
+		Server.objectHandler.placeObject(OBJECT);
+	}
+
+	public void createAnObject(Client c, int id, int x, int y, int face) {
+		Objects OBJECT = new Objects(id, x, y, 0, face, 10, 0);
+		if(id == -1) {
+			removeObject(OBJECT);
+		} else {
+			addObject(OBJECT);
+		}
+		Server.objectHandler.placeObject(OBJECT);
+	}
+[/code]
+
+Into player class:
+[code]
+	public int[][] playerSkillProp = new int[20][15];
+	public boolean[] playerSkilling = new boolean[20];
+	public boolean stopPlayerSkill;
+	public int doAmount;
+[/code]
+
+Walking packet:
+Import:
+[code]import server.model.players.skills.*;
+[/code]
+
+and above:
+[code]if(c.freezeTimer &gt; 0) {
+[/code]
+
+add:
+[code]
+		if(c.stopPlayerSkill) {
+			SkillHandler.resetPlayerSkillVariables(c);
+			c.stopPlayerSkill = false;
+		}[/code]
+
+[u][b]Thieving[/b][/u]
+
+Replace your thieving class with:
+[code]
+
+package server.model.players.skills;
+
+import server.Server;
+import server.util.Misc;
+import server.model.npcs.NPCHandler;
+import server.model.players.Client;
+import server.event.*;
+
+/**
+* @Author leetyo
+*/
+ 
+public class Thieving extends SkillHandler {
+
+	
+	public static void stealFromStall(final Client c, final int id, int amount, int xp, int level, final int i, final int x, final int y, final int face) {
+		if (System.currentTimeMillis() - c.lastThieve &lt; 2500)
+			return;
+		if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+			c.sendMessage(&quot;You can&#39;t steal from a stall while in combat!&quot;);
+			return;	
+		}
+		if (c.playerLevel[c.playerThieving] &gt;= level) {
+			if (c.getItems().addItem(id,amount)) {
+				c.startAnimation(832);
+				c.getPA().addSkillXP(xp * THIEVING_XP, c.playerThieving);
+				c.lastThieve = System.currentTimeMillis();
+				c.sendMessage(&quot;You steal some coins.&quot;);
+
+				Server.objectHandler.createAnObject(c, 634, x, y, face);
+
+				CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+					@Override
+					public void execute(CycleEventContainer container) {
+						Server.objectHandler.createAnObject(c, i, x, y, face);
+						container.stop();
+					}
+					@Override
+					public void stop() {
+
+					}
+				}, getRespawnTime(c, i));
+			}
+		} else {
+			c.sendMessage(&quot;You must have a thieving level of &quot; + level + &quot; to thieve from this stall.&quot;);
+		}
+	}
+	private static int getRespawnTime(Client c, int i) {
+		switch (i) {
+			case 2561: return 4;	//BAKER
+			case 2560: return 12;	//SILK
+			case 7053: return 17;	//SEED
+			case 2563: return 25;	//FUR
+			case 2565: return 50;	//SILVER
+			case 2564: return 130;	//SPICE
+			case 2562: return 500;	//GEM
+			case 14011: return 5;	//JUG
+			default: return 5;
+		}
+}
+
+	
+	private static int[][] pickpocket = {
+		/*Men/Women*/
+		{1, 1, 8, 5, 3, 10, 20, 30},//man
+		{2, 1, 8, 8, 3, 10, 20, 30},//man
+		{3, 1, 8, 3, 3, 10, 20, 30},//man
+		{4, 1, 8, 9, 3, 10, 20, 30},//man
+		{5, 1, 8, 12, 3, 10, 20, 30},//female
+		{6, 1, 8, 4, 3, 10, 20, 30},//female
+		{3223, 1, 8, 2, 3, 10, 20, 30},//man
+		{3224, 1, 8, 15, 3, 10, 20, 30},//man
+		{3226, 1, 8, 6, 3, 10, 20, 30},//man
+		{3227, 1, 8, 3, 3, 10, 20, 30},//man
+		{3915, 1, 8, 4, 3, 10, 20, 30},//man
+		{3225, 10, 15, 2, 3, 20, 30, 40},//man
+		/*Guards*/
+		{32, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2699, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2701, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2702, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2703, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3228, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3229, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3230, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3231, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3232, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3233, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3241, 40, 47, 30, 3, 50, 60, 70},//guard
+		{7, 10, 15, 9, 3, 20, 30, 40},//farmer
+		{9, 40, 47, 30, 3, 50, 60, 70},//guard
+		{15, 25, 26, 18, 3, 35, 45, 55},//warriorwomen
+		{20, 70, 151, 80, 8, 80, 90, 99},//paladin
+		{2256, 70, 151, 80, 8, 80, 90, 99},//paladin
+		{21, 80, 275, 214, 8, 90, 95, 99},//hero
+		{23, 55, 84, 50, 7, 65, 75, 85},//knightofardougne
+		{26, 55, 84, 50, 7, 65, 75, 85},//knightofardougne
+		{18, 25, 26, 23, 3, 35, 45, 55},//alkharid
+		{2234, 38, 43, 23, 7, 48, 58, 68},//masterfarmer	
+		{2235, 38, 43, 23, 7, 48, 58, 68},//masterfarmer
+	};
+
+	public static boolean pickpocketNPC(Client c, int npc) {
+		for(int i = 0; i &lt; pickpocket.length; i++) {
+			if(npc == pickpocket[i][0]) {
+				return true;
+			}
+		}
+		return false;
+	}
+	public static void pickpocketAttempt(final Client c, int npcId) {
+		if (System.currentTimeMillis() - c.lastThieve &lt; 2000 || c.playerStun) {
+			return;
+		}
+		if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+			c.sendMessage(&quot;You can&#39;t pickpocket while in combat!&quot;);
+			return;	
+		}
+		for(int i = 0; i &lt; pickpocket.length; i++) {
+			if (npcId == pickpocket[i][0]) {
+				if (!hasRequiredLevel(c, 17, pickpocket[i][1], &quot;thieving&quot;, &quot;pickpocket this&quot;)) {
+					return;
+				}
+				c.sendMessage(&quot;You attempt to pickpocket the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;...&quot;);
+				c.startAnimation(881);
+				if (Misc.random(c.playerLevel[17] + 5) &lt;  Misc.random(pickpocket[i][1])) {
+					thievingFail(c, i);
+				} else {
+					thievingSuccess(c, i);
+				}
+				c.lastThieve = System.currentTimeMillis();
+				}
+			}
+		}
+	private static void thievingFail(final Client c, final int i) {
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				NPCHandler.npcs[i].forceChat(&quot;HEY! What are you doing?&quot;);
+				c.setHitDiff(pickpocket[i][4]);
+				c.setHitUpdateRequired(true);
+				c.playerLevel[3] -= pickpocket[i][4];
+				c.getPA().refreshSkill(3);
+				
+				
+				c.gfx100(80);
+				c.startAnimation(404);
+				
+				c.lastThieve = System.currentTimeMillis() + 7500;
+				c.sendMessage(&quot;...you fail to pickpocket the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;!&quot;);
+				if(c.playerRights == 0) {
+					c.playerStun = true;
+				}
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 2);
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				c.playerStun = false;
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 13);
+	}
+
+	private static void thievingSuccess(final Client c, final int i) {
+		int loot = pickpocket[i][3];
+		int chance = Misc.random(20);
+		String message = &quot;...You successfully pickpocket the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;.&quot;;
+		if(chance == 1) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][5]) {
+				loot = pickpocket[i][3] * 2;
+				message = &quot;You steal a double loot from the the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;!&quot;;
+			}
+		} else if(chance == 5) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][6]) {
+				loot = pickpocket[i][3] * 3;
+				message = &quot;You steal a triple loot from the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;!&quot;;
+			}
+		} else if(chance == 10) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][7]) {
+				loot = pickpocket[i][3] * 4;
+				message = &quot;You steal a trebble loot from the &quot;+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +&quot;!&quot;;
+			}
+		}
+		final int loot2 = loot;
+		final String message2 = message;
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				c.sendMessage(message2);
+				c.getPA().addSkillXP(pickpocket[i][2] * THIEVING_XP, 17);
+				c.getItems().addItem(995, loot2);
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 2);
+	}
+}
+
+[/code]
+
+Actionhandler class:
+secondclickobject:
+[code]
+		/*Thieving*/
+		case 2565://silver
+			Thieving.stealFromStall(c, 442, 1, 54, 50, objectType,obX,obY,2);
+			break;
+		case 2564://spice
+			Thieving.stealFromStall(c, 2007, 1, 81, 65, objectType,obX,obY,0);
+			break;
+		case 2563://fur
+			Thieving.stealFromStall(c, 948, 1, 35, 36, objectType,obX,obY,3);
+			break;
+		case 2562://gem
+			Thieving.stealFromStall(c, 1607, 1, 16, 75, objectType,obX,obY,3);
+			break;
+		case 2561://bakers
+			Thieving.stealFromStall(c, 1891, 1, 16, 5, objectType,obX,obY, obX == 2667 ? 3 : 1);
+			break;
+		case 2560://silk
+			Thieving.stealFromStall(c, 950, 1, 24, 20, objectType,obX,obY, obX == 2662 ? 2 : 1);
+			break;	
+		case 14011://wine
+			Thieving.stealFromStall(c, 1993, 1, 10, 1, objectType,obX,obY, 3);
+			break;
+		case 7053://seed
+			Thieving.stealFromStall(c, 5101, 4, 18, 10, objectType,obX,obY, obX == 3079 ? 2 : 1);
+			break;
+		
+[/code]
+
+Still in objecthandler, find:
+[code]secondClickNpc[/code]
+
+add:
+[code]
+	if(Thieving.pickpocketNPC(c, npcType)) {
+			Thieving.attemptToPickpocket(c, npcType);
+			return;
+		}
+[/code]
+
+Happy thieving!</description>
+    
+    <lastBuildDate>Mon, 31 Oct 2011 21:07:22 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>Don’t release others work without their permission.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/13</link>
+        <pubDate>Mon, 31 Oct 2011 21:07:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-13</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://www.rune-server.org/runescape-development/rs2-server/tutorials/302061-pi-fletching-mining-firemaking-fishing-more.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs2-server/tutorials/302061-pi-fletching-mining-firemaking-fishing-more.html</a></p>
+<p>[code=java]package server.model.players.skills;</p>
+<p>import server.Server;<br>
+import server.util.Misc;<br>
+import server.model.npcs.<em>;<br>
+import server.model.players.Client;<br>
+import server.event.</em>;<br>
+import server.*;</p>
+<pre><code>/**
+ * Class Thieving
+ * Handles Thieving
+ * @author PapaDoc
+ * 00:28 01/09/2010
+ */
+</code></pre>
+<p>public class Thieving extends SkillHandler {</p>
+<pre><code>public static void stealFromStall(final Client c, final int id, int amount, int xp, int level, final int i, final int x, final int y, final int face) {
+	if (System.currentTimeMillis() - c.lastThieve &lt; 2500)
+		return;
+	if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+		c.sendMessage("You can't steal from a stall while in combat!");
+		return;	
+	}
+	if (c.playerLevel[c.playerThieving] &gt;= level) {
+		if (c.getItems().addItem(id,amount)) {
+			c.startAnimation(832);
+			c.getPA().addSkillXP(xp * THIEVING_XP, c.playerThieving);
+			c.lastThieve = System.currentTimeMillis();
+			c.sendMessage("You steal some coins.");
+
+			Server.objectHandler.createAnObject(c, 634, x, y, face);
+
+			CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+				@Override
+				public void execute(CycleEventContainer container) {
+					Server.objectHandler.createAnObject(c, i, x, y, face);
+					container.stop();
+				}
+				@Override
+				public void stop() {
+
+				}
+			}, getRespawnTime(c, i));
+		}
+	} else {
+		c.sendMessage("You must have a thieving level of " + level + " to thieve from this stall.");
+	}
+}
+
+private static int getRespawnTime(Client c, int i) {
+	switch (i) {
+		case 2561: return 4;	//BAKER
+		case 2560: return 12;	//SILK
+		case 7053: return 17;	//SEED
+		case 2563: return 25;	//FUR
+		case 2565: return 50;	//SILVER
+		case 2564: return 130;	//SPICE
+		case 2562: return 500;	//GEM
+		case 14011: return 5;	//JUG
+		default: return 5;
+	}
+}
+
+private static int[][] pickpocket = {
+	{1, 1, 8, 1000, 3, 10, 20, 30},
+	{2, 1, 8, 1000, 3, 10, 20, 30},
+	{3, 1, 8, 1000, 3, 10, 20, 30},
+	***, 1, 8, 1000, 3, 10, 20, 30},
+	{5, 1, 8, 1000, 3, 10, 20, 30},
+	{6, 1, 8, 1000, 3, 10, 20, 30},
+	{3223, 1, 8, 1000, 3, 10, 20, 30},
+	{3224, 1, 8, 1000, 3, 10, 20, 30},
+	{3226, 1, 8, 1000, 3, 10, 20, 30},
+	{3227, 1, 8, 1000, 3, 10, 20, 30},
+	{3915, 1, 8, 1000, 3, 10, 20, 30},
+	{7, 10, 15, 10000, 3, 20, 30, 40},
+	{9, 40, 47, 12000, 3, 50, 60, 70},
+	{15, 25, 26, 15000, 3, 35, 45, 55},
+	{20, 70, 151, 60000, 8, 80, 90, 99},
+	{2256, 70, 151, 60000, 8, 80, 90, 99},
+	{21, 80, 275, 130000, 8, 90, 95, 99},
+	{23, 55, 84, 10000, 7, 65, 75, 85},
+	{26, 55, 84, 10000, 7, 65, 75, 85},
+	{18, 25, 26, 12000, 3, 35, 45, 55},
+	{3225, 10, 15, 10000, 3, 20, 30, 40},
+	{2234, 38, 43, 20000, 7, 48, 58, 68},	
+	{2235, 38, 43, 20000, 7, 48, 58, 68},
+	{32, 40, 47, 12000, 3, 50, 60, 70},
+	{296, 40, 47, 12000, 3, 50, 60, 70},
+	{297, 40, 47, 12000, 3, 50, 60, 70},
+	{298, 40, 47, 12000, 3, 50, 60, 70},
+	{299, 40, 47, 12000, 3, 50, 60, 70},
+	{2699, 40, 47, 12000, 3, 50, 60, 70},
+	{2701, 40, 47, 12000, 3, 50, 60, 70},
+	{2702, 40, 47, 12000, 3, 50, 60, 70},
+	{2703, 40, 47, 12000, 3, 50, 60, 70},
+	{3228, 40, 47, 12000, 3, 50, 60, 70},
+	{3229, 40, 47, 12000, 3, 50, 60, 70},
+	{3230, 40, 47, 12000, 3, 50, 60, 70},
+	{3231, 40, 47, 12000, 3, 50, 60, 70},
+	{3232, 40, 47, 12000, 3, 50, 60, 70},
+	{3233, 40, 47, 12000, 3, 50, 60, 70},
+	{3241, 40, 47, 12000, 3, 50, 60, 70},
+	{4307, 40, 47, 12000, 3, 50, 60, 70},
+	{4308, 40, 47, 12000, 3, 50, 60, 70},
+	{4309, 40, 47, 12000, 3, 50, 60, 70},
+	{4310, 40, 47, 12000, 3, 50, 60, 70},
+	{4311, 40, 47, 12000, 3, 50, 60, 70},
+	{5919, 40, 47, 12000, 3, 50, 60, 70},
+	{5920, 40, 47, 12000, 3, 50, 60, 70},
+};
+
+public static boolean pickpocketNPC(Client c, int npc) {
+	for(int i = 0; i &lt; pickpocket.length; i++) {
+		if(npc == pickpocket[i][0]) {
+			return true;
+		}
+	}
+	return false;
+}
+
+private static void failThieve(final Client c, final int i) {
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+		@Override
+		public void execute(CycleEventContainer container) {
+			c.setHitDiff(pickpocket[i][4]);
+			c.setHitUpdateRequired(true);
+			c.playerLevel[3] -= pickpocket[i][4];
+			c.getPA().refreshSkill(3);
+
+			c.gfx100(80);
+			c.startAnimation(404);
+
+			c.lastThieve = System.currentTimeMillis() + 7500;
+			c.sendMessage("...you fail to pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!");
+			if(c.playerRights == 0) {
+				c.playerStun = true;
+			}
+			container.stop();
+		}
+
+		@Override
+		public void stop() {
+
+		}
+	}, 2);
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+		@Override
+		public void execute(CycleEventContainer container) {
+			c.playerStun = false;
+			container.stop();
+		}
+
+		@Override
+		public void stop() {
+
+		}
+	}, 13);
+}
+
+private static void completeThieve(final Client c, final int i) {
+	int loot = pickpocket[i][3];
+	int chance = Misc.random(20);
+	String message = "...You successfully pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +".";
+	if(chance == 1) {
+		if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][5]) {
+			loot = pickpocket[i][3] * 2;
+			message = "You steal a double loot from the the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+		}
+	} else if(chance == 5) {
+		if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][6]) {
+			loot = pickpocket[i][3] * 3;
+			message = "You steal a triple loot from the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+		}
+	} else if(chance == 10) {
+		if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][7]) {
+			loot = pickpocket[i][3] * 4;
+			message = "You steal a trebble loot from the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+		}
+	}
+	final int loot2 = loot;
+	final String message2 = message;
+	CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+		@Override
+		public void execute(CycleEventContainer container) {
+			c.sendMessage(message2);
+			c.getPA().addSkillXP(pickpocket[i][2] * THIEVING_XP, 17);
+			c.getItems().addItem(995, loot2);
+			container.stop();
+		}
+
+		@Override
+		public void stop() {
+
+		}
+	}, 2);
+}
+
+public static void attemptToPickpocket(final Client c, int npcId) {
+	if (System.currentTimeMillis() - c.lastThieve &lt; 2000 || c.playerStun) {
+		return;
+	}
+	if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+		c.sendMessage("You can't pickpocket while in combat!");
+		return;	
+	}
+	for(int i = 0; i &lt; pickpocket.length; i++) {
+		if (npcId == pickpocket[i][0]) {
+			if (!hasRequiredLevel(c, 17, pickpocket[i][1], "thieving", "pickpocket this")) {
+				return;
+			}
+			c.sendMessage("You attempt to pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"...");
+			c.startAnimation(881);
+			if (Misc.random(c.playerLevel[17] + 5) &lt;  Misc.random(pickpocket[i][1])) {
+				failThieve(c, i);
+			} else {
+				completeThieve(c, i);
+			}
+			c.lastThieve = System.currentTimeMillis();
+		}
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>All you did was rename some things, and fix up the array.  Give proper credits and ^, you’re a fucking shithead for believing him, and your ‘teaching of conventions and shit’ is horrible.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/12</link>
+        <pubDate>Mon, 31 Oct 2011 02:32:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-12</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@Kakapo Kakapo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kakapo">@Kakapo</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:10, topic:419997”][quote author=LeetYO link=topic=522554.msg3800280#msg3800280 date=1319952428]<br>
+[size=18pt]Credits to Dr house from r-s, as I stole his skilling.[/size]</p>
+<p>I am programming somewhat of a remake and this is my current thieving.</p>
+<p>Features:</p>
+<p>[ul][li]Disappearing items on stalls[/li]<br>
+[li]Proper respawn times[/li]<br>
+[li]Stunning[/li]<br>
+[li]All proper requirements/experience[/li][/ul]</p>
+<p><span class="bbcode-u"><span class="bbcode-b">Skill handler -</span></span><br>
+Credits to Dr House for EVERYTHING<br>
+[/quote]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Woulden’t using arrays be more stable and better, and on top of arrays, Enums?</p>
+</blockquote>
+</aside>
+<p>[size=18pt]I did for pick pocketing.[/size]</p>
+</blockquote>
+</aside>
+<p>Fixed.</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Woulden’t using arrays be more stable and better, and on top of arrays, Enums?</p>
+</blockquote>
+</aside>
+<p>[size=18pt]Dr. House did for pick pocketing, not my choice.[/size]</p>
+</blockquote>
+</aside>
+<p>Way to fucking allocate about 500k bytes.</p>
+<p>/Request to lock until credits are given correctly fucking dumb bitch.[/quote]</p>
+<p>You’re an idiot. I watched him over team viewer making this when i taught him how to use conventions and shit <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/11</link>
+        <pubDate>Mon, 31 Oct 2011 02:25:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-11</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“LeetYO, post:1, topic:419997”][size=18pt]Credits to Dr house from r-s, as I stole his skilling.[/size]</p>
+<p>I am programming somewhat of a remake and this is my current thieving.</p>
+<p>Features:</p>
+<p>[ul][li]Disappearing items on stalls[/li]<br>
+[li]Proper respawn times[/li]<br>
+[li]Stunning[/li]<br>
+[li]All proper requirements/experience[/li][/ul]</p>
+<p><span class="bbcode-u"><span class="bbcode-b">Skill handler -</span></span><br>
+Credits to Dr House for EVERYTHING[/quote]</p>
+<p>[quote=“LeetYO, post:2, topic:420000”][quote author=RiiPiiNFtW link=topic=522554.msg3800312#msg3800312 date=1319955999]<br>
+Woulden’t using arrays be more stable and better, and on top of arrays, Enums?<br>
+[/quote]</p>
+<p>[size=18pt]I did for pick pocketing.[/size][/quote]<br>
+Fixed.</p>
+<p>[quote=“LeetYO, post:2, topic:420000”][quote author=RiiPiiNFtW link=topic=522554.msg3800312#msg3800312 date=1319955999]<br>
+Woulden’t using arrays be more stable and better, and on top of arrays, Enums?<br>
+[/quote]</p>
+<p>[size=18pt]Dr. House did for pick pocketing, not my choice.[/size][/quote]</p>
+<p>Way to fucking allocate about 500k bytes.</p>
+<p>/Request to lock until credits are given correctly fucking dumb bitch.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/10</link>
+        <pubDate>Sun, 30 Oct 2011 23:38:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-10</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@A_New_LIght A New LIght]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/a_new_light">@A_New_LIght</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xxxtilllyxxx, post:6, topic:419997”]How can you hate enums??? Half my skills are enums lmao.[/quote]enums can be confusing if you haven’t worked with them a lot <img src="https://forum.moparisthebest.com/images/emoji/twitter/confused.png?v=5" title=":confused:" class="emoji" alt=":confused:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/9</link>
+        <pubDate>Sun, 30 Oct 2011 21:09:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-9</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@Kakapo Kakapo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kakapo">@Kakapo</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="3" data-topic="420000">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/leetyo/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar">
+</div>
+<blockquote>
+<p>You were complaining about my conventions the other day, lol&lt;3</p>
+</blockquote>
+</aside>
+<p>I said it was good, your conventions look like that chicken and rice you made &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/8</link>
+        <pubDate>Sun, 30 Oct 2011 18:29:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-8</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@k1ng0frs k1ng0frs]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k1ng0frs">@k1ng0frs</a> wrote:</p>
+          <blockquote>
+              <p>Good job</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/7</link>
+        <pubDate>Sun, 30 Oct 2011 18:00:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-7</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@xxxtilllyxxx xxxtilllyxxx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xxxtilllyxxx">@xxxtilllyxxx</a> wrote:</p>
+          <blockquote>
+              <p>How can you hate enums??? Half my skills are enums lmao.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/6</link>
+        <pubDate>Sun, 30 Oct 2011 14:03:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-6</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@A_New_LIght A New LIght]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/a_new_light">@A_New_LIght</a> wrote:</p>
+          <blockquote>
+              <p>I hate enums so good job lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/5</link>
+        <pubDate>Sun, 30 Oct 2011 10:30:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-5</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@Kakapo Kakapo]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kakapo">@Kakapo</a> wrote:</p>
+          <blockquote>
+              <p>Good for a newbcake &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/4</link>
+        <pubDate>Sun, 30 Oct 2011 08:55:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-4</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@RiiPiiNFtW RiiPiiNFtW]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/riipiinftw">@RiiPiiNFtW</a> wrote:</p>
+          <blockquote>
+              <p>Woulden’t using arrays be more stable and better, and on top of arrays, Enums?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/3</link>
+        <pubDate>Sun, 30 Oct 2011 06:26:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-3</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@RiiPiiNFtW RiiPiiNFtW]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/riipiinftw">@RiiPiiNFtW</a> wrote:</p>
+          <blockquote>
+              <p>Your conventions are terrible.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/2</link>
+        <pubDate>Sun, 30 Oct 2011 06:08:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-2</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+      <item>
+        <title>[PI]Full NPC and stall thieving</title>
+        <dc:creator><![CDATA[@LeetYO LeetYO]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/leetyo">@LeetYO</a> wrote:</p>
+          <blockquote>
+              <p>Credits to Dr house from r-s, as we will be using his skill system!</p>
+<p>I am programming somewhat of a remake and this is my current thieving.</p>
+<p>Features:</p>
+<p>[ul][li]Disappearing items on stalls[/li]<br>
+[li]Proper respawn times[/li]<br>
+[li]Stunning[/li]<br>
+[li]All proper requirements/experience[/li][/ul]</p>
+<p><span class="bbcode-u"><span class="bbcode-b">Skill handler -</span></span><br>
+<span class="bbcode-b">Credits to Dr House</span><br>
+Add into skills package:</p>
+<pre><code class="lang-auto">package server.model.players.skills;
+
+import server.model.players.*;
+import server.Config;
+import server.util.Misc;
+import server.event.*
+
+public class SkillHandler {
+
+	private static final int SKILLING_XP = 1;
+	public static final int AGILITY_XP =  SKILLING_XP;
+	public static final int PRAYER_XP = SKILLING_XP;
+	public static final int MINING_XP = SKILLING_XP;
+	public static final int COOKING_XP = SKILLING_XP;
+	public static final int RUNECRAFTING_XP = SKILLING_XP;
+	public static final int WOODCUTTING_XP = SKILLING_XP;
+	public static final int THIEVING_XP = SKILLING_XP;
+	public static final int HERBLORE_XP = SKILLING_XP;
+	public static final int FISHING_XP = SKILLING_XP;
+	public static final int FLETCHING_XP = SKILLING_XP;
+	public static final int FIREMAKING_XP = SKILLING_XP;
+
+	public static boolean noInventorySpace(Client c, String skill) {
+		if (c.getItems().freeSlots() == 0) {
+			c.sendMessage("You haven't got enough inventory space to continue "+skill+"!");
+			c.getPA().sendStatement("You haven't got enough inventory space to continue "+skill+"!");
+			return false;
+		}
+		return true;
+	}
+
+	public static boolean view190 = true;
+
+	public static void resetPlayerSkillVariables(Client c) {
+		for(int i = 0; i &lt; 20; i++) {
+			if(c.playerSkilling[i]) {
+				for(int l = 0; l &lt; 15; l++) {
+					c.playerSkillProp[i][l] = -1;
+				}
+			}
+		}
+	}
+
+	public static boolean hasRequiredLevel(final Client c, int id, int lvlReq, String skill, String event) {
+		if(c.playerLevel[id] &lt; lvlReq) {
+			c.sendMessage("You haven't got high enough "+skill+" level to "+event+"");
+			c.sendMessage("You at least need the "+skill+" level of "+ lvlReq +".");
+			c.getPA().sendStatement("You haven't got high enough "+skill+" level to "+event+"!");
+			return false;
+		}
+		return true;
+	}
+
+	public static void deleteTime(Client c) {
+		c.doAmount--;
+	}
+}[/code]
+
+Into PA class:
+[code]
+	public void sendStatement(String s) {
+		sendFrame126(s, 357);
+		sendFrame126("Click here to continue", 358);
+		sendFrame164(356);
+	}
+[/code]
+
+Into ObjectHandler class:
+[code]
+	public void createAnObject(Client c, int id, int x, int y) {
+		Objects OBJECT = new Objects(id, x, y, 0, 0, 10, 0);
+		if(id == -1) {
+			removeObject(OBJECT);
+		} else {
+			addObject(OBJECT);
+		}
+		Server.objectHandler.placeObject(OBJECT);
+	}
+
+	public void createAnObject(Client c, int id, int x, int y, int face) {
+		Objects OBJECT = new Objects(id, x, y, 0, face, 10, 0);
+		if(id == -1) {
+			removeObject(OBJECT);
+		} else {
+			addObject(OBJECT);
+		}
+		Server.objectHandler.placeObject(OBJECT);
+	}
+[/code]
+
+Into player class:
+[code]
+	public int[][] playerSkillProp = new int[20][15];
+	public boolean[] playerSkilling = new boolean[20];
+	public boolean stopPlayerSkill;
+	public int doAmount;
+[/code]
+
+Walking packet:
+Import:
+[code]import server.model.players.skills.*;</code></pre>
+<p>and above:</p>
+<p><code>if(c.freezeTimer &gt; 0) {
+</code></p>
+<p>add:</p>
+<p><code>
+		if(c.stopPlayerSkill) {
+			SkillHandler.resetPlayerSkillVariables(c);
+			c.stopPlayerSkill = false;
+		}</code></p>
+<p><span class="bbcode-u"><span class="bbcode-b">Thieving</span></span></p>
+<p>Replace your thieving class with:</p>
+<pre><code class="lang-auto">
+package server.model.players.skills;
+
+import server.Server;
+import server.util.Misc;
+import server.model.npcs.NPCHandler;
+import server.model.players.Client;
+import server.event.*;
+
+/**
+* @Author leetyo
+*/
+ 
+public class Thieving extends SkillHandler {
+
+	
+	public static void stealFromStall(final Client c, final int id, int amount, int xp, int level, final int i, final int x, final int y, final int face) {
+		if (System.currentTimeMillis() - c.lastThieve &lt; 2500)
+			return;
+		if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+			c.sendMessage("You can't steal from a stall while in combat!");
+			return;	
+		}
+		if (c.playerLevel[c.playerThieving] &gt;= level) {
+			if (c.getItems().addItem(id,amount)) {
+				c.startAnimation(832);
+				c.getPA().addSkillXP(xp * THIEVING_XP, c.playerThieving);
+				c.lastThieve = System.currentTimeMillis();
+				c.sendMessage("You steal some coins.");
+
+				Server.objectHandler.createAnObject(c, 634, x, y, face);
+
+				CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+					@Override
+					public void execute(CycleEventContainer container) {
+						Server.objectHandler.createAnObject(c, i, x, y, face);
+						container.stop();
+					}
+					@Override
+					public void stop() {
+
+					}
+				}, getRespawnTime(c, i));
+			}
+		} else {
+			c.sendMessage("You must have a thieving level of " + level + " to thieve from this stall.");
+		}
+	}
+	private static int getRespawnTime(Client c, int i) {
+		switch (i) {
+			case 2561: return 4;	//BAKER
+			case 2560: return 12;	//SILK
+			case 7053: return 17;	//SEED
+			case 2563: return 25;	//FUR
+			case 2565: return 50;	//SILVER
+			case 2564: return 130;	//SPICE
+			case 2562: return 500;	//GEM
+			case 14011: return 5;	//JUG
+			default: return 5;
+		}
+}
+
+	
+	private static int[][] pickpocket = {
+		/*Men/Women*/
+		{1, 1, 8, 5, 3, 10, 20, 30},//man
+		{2, 1, 8, 8, 3, 10, 20, 30},//man
+		{3, 1, 8, 3, 3, 10, 20, 30},//man
+		{4, 1, 8, 9, 3, 10, 20, 30},//man
+		{5, 1, 8, 12, 3, 10, 20, 30},//female
+		{6, 1, 8, 4, 3, 10, 20, 30},//female
+		{3223, 1, 8, 2, 3, 10, 20, 30},//man
+		{3224, 1, 8, 15, 3, 10, 20, 30},//man
+		{3226, 1, 8, 6, 3, 10, 20, 30},//man
+		{3227, 1, 8, 3, 3, 10, 20, 30},//man
+		{3915, 1, 8, 4, 3, 10, 20, 30},//man
+		{3225, 10, 15, 2, 3, 20, 30, 40},//man
+		/*Guards*/
+		{32, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2699, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2701, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2702, 40, 47, 30, 3, 50, 60, 70},//guard
+		{2703, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3228, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3229, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3230, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3231, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3232, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3233, 40, 47, 30, 3, 50, 60, 70},//guard
+		{3241, 40, 47, 30, 3, 50, 60, 70},//guard
+		{7, 10, 15, 9, 3, 20, 30, 40},//farmer
+		{9, 40, 47, 30, 3, 50, 60, 70},//guard
+		{15, 25, 26, 18, 3, 35, 45, 55},//warriorwomen
+		{20, 70, 151, 80, 8, 80, 90, 99},//paladin
+		{2256, 70, 151, 80, 8, 80, 90, 99},//paladin
+		{21, 80, 275, 214, 8, 90, 95, 99},//hero
+		{23, 55, 84, 50, 7, 65, 75, 85},//knightofardougne
+		{26, 55, 84, 50, 7, 65, 75, 85},//knightofardougne
+		{18, 25, 26, 23, 3, 35, 45, 55},//alkharid
+		{2234, 38, 43, 23, 7, 48, 58, 68},//masterfarmer	
+		{2235, 38, 43, 23, 7, 48, 58, 68},//masterfarmer
+	};
+
+	public static boolean pickpocketNPC(Client c, int npc) {
+		for(int i = 0; i &lt; pickpocket.length; i++) {
+			if(npc == pickpocket[i][0]) {
+				return true;
+			}
+		}
+		return false;
+	}
+	public static void pickpocketAttempt(final Client c, int npcId) {
+		if (System.currentTimeMillis() - c.lastThieve &lt; 2000 || c.playerStun) {
+			return;
+		}
+		if(c.underAttackBy &gt; 0 || c.underAttackBy2 &gt; 0) {
+			c.sendMessage("You can't pickpocket while in combat!");
+			return;	
+		}
+		for(int i = 0; i &lt; pickpocket.length; i++) {
+			if (npcId == pickpocket[i][0]) {
+				if (!hasRequiredLevel(c, 17, pickpocket[i][1], "thieving", "pickpocket this")) {
+					return;
+				}
+				c.sendMessage("You attempt to pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"...");
+				c.startAnimation(881);
+				if (Misc.random(c.playerLevel[17] + 5) &lt;  Misc.random(pickpocket[i][1])) {
+					thievingFail(c, i);
+				} else {
+					thievingSuccess(c, i);
+				}
+				c.lastThieve = System.currentTimeMillis();
+				}
+			}
+		}
+	private static void thievingFail(final Client c, final int i) {
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				NPCHandler.npcs[i].forceChat("HEY! What are you doing?");
+				c.setHitDiff(pickpocket[i][4]);
+				c.setHitUpdateRequired(true);
+				c.playerLevel[3] -= pickpocket[i][4];
+				c.getPA().refreshSkill(3);
+				
+				
+				c.gfx100(80);
+				c.startAnimation(404);
+				
+				c.lastThieve = System.currentTimeMillis() + 7500;
+				c.sendMessage("...you fail to pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!");
+				if(c.playerRights == 0) {
+					c.playerStun = true;
+				}
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 2);
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				c.playerStun = false;
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 13);
+	}
+
+	private static void thievingSuccess(final Client c, final int i) {
+		int loot = pickpocket[i][3];
+		int chance = Misc.random(20);
+		String message = "...You successfully pickpocket the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +".";
+		if(chance == 1) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][5]) {
+				loot = pickpocket[i][3] * 2;
+				message = "You steal a double loot from the the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+			}
+		} else if(chance == 5) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][6]) {
+				loot = pickpocket[i][3] * 3;
+				message = "You steal a triple loot from the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+			}
+		} else if(chance == 10) {
+			if (c.playerLevel[c.playerAgility] &gt;= pickpocket[i][7]) {
+				loot = pickpocket[i][3] * 4;
+				message = "You steal a trebble loot from the "+ Server.npcHandler.getNpcListName(pickpocket[i][0]) +"!";
+			}
+		}
+		final int loot2 = loot;
+		final String message2 = message;
+		CycleEventHandler.getSingleton().addEvent(c, new CycleEvent() {
+			@Override
+			public void execute(CycleEventContainer container) {
+				c.sendMessage(message2);
+				c.getPA().addSkillXP(pickpocket[i][2] * THIEVING_XP, 17);
+				c.getItems().addItem(995, loot2);
+				container.stop();
+			}
+
+			@Override
+			public void stop() {
+
+			}
+		}, 2);
+	}
+}
+</code></pre>
+<p>Actionhandler class:<br>
+secondclickobject:</p>
+<pre><code class="lang-auto">		/*Thieving*/
+		case 2565://silver
+			Thieving.stealFromStall(c, 442, 1, 54, 50, objectType,obX,obY,2);
+			break;
+		case 2564://spice
+			Thieving.stealFromStall(c, 2007, 1, 81, 65, objectType,obX,obY,0);
+			break;
+		case 2563://fur
+			Thieving.stealFromStall(c, 948, 1, 35, 36, objectType,obX,obY,3);
+			break;
+		case 2562://gem
+			Thieving.stealFromStall(c, 1607, 1, 16, 75, objectType,obX,obY,3);
+			break;
+		case 2561://bakers
+			Thieving.stealFromStall(c, 1891, 1, 16, 5, objectType,obX,obY, obX == 2667 ? 3 : 1);
+			break;
+		case 2560://silk
+			Thieving.stealFromStall(c, 950, 1, 24, 20, objectType,obX,obY, obX == 2662 ? 2 : 1);
+			break;	
+		case 14011://wine
+			Thieving.stealFromStall(c, 1993, 1, 10, 1, objectType,obX,obY, 3);
+			break;
+		case 7053://seed
+			Thieving.stealFromStall(c, 5101, 4, 18, 10, objectType,obX,obY, obX == 3079 ? 2 : 1);
+			break;
+		</code></pre>
+<p>Still in objecthandler, find:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>add:</p>
+<pre><code class="lang-auto">	if(Thieving.pickpocketNPC(c, npcType)) {
+			Thieving.attemptToPickpocket(c, npcType);
+			return;
+		}</code></pre>
+<p>Happy thieving!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997/1</link>
+        <pubDate>Sun, 30 Oct 2011 05:27:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-419997-1</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-full-npc-and-stall-thieving/419997.rss">[PI]Full NPC and stall thieving</source>
+      </item>
+  </channel>
+</rss>

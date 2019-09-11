@@ -1,0 +1,957 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+    <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841</link>
+    <description>[center][img]http://img72.imageshack.us/img72/8937/31263228.png[/img]
+
+[b]- Gnome Agility Course
+- Barbarian Agility Course
+- Partly Pyramid Agility Course[/b]
+[size=7pt][i]I don&#39;t find the 4-5-6 floor coords to finish the pyramid. Also rolling stoned aren&#39;t added.[/i][/size][/center]
+
+
+note: This contains a ticket system, I added barbarian and pyramid tickets to, feel free to remove of course.
+To get the barbarian and pyramid tickets since they aren&#39;t in the server:
+[b]Client Sided[/b]: open class8.java
+Add this with your customs: [b](don&#39;t forget to compile your client)[/b]
+http://pastebin.com/zZwegRQy
+
+and in your item.cfg
+[code]
+item = 7810	Barbarian_Agility_Ticket	An_Agility_Ticket.	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+item = 7811	Pyramid_Agility_Ticket	An_Agility_Ticket.	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+[/code]
+
+
+[b]Now go server sided, we are going to add the agility courses.[/b]
+[size=7pt][i]If you don&#39;t have grahams task manager implanted in your server.
+Do so since this is needed to make the animations fit correctly when using toX &amp; toY[/i][/size]
+
+
+[b]First make a new java file and call it &quot;AgilityHandler&quot;
+and add this code to it. 
+Information is added in the code itself, if you don&#39;t understand something, don&#39;t hesitate to ask![/b]
+[code=java]
+public class AgilityHandler { //2547 - 3569 | intrance barbarian
+
+	Client c;
+	
+	public AgilityHandler (Client c) {
+		this.c = c;
+	}
+	
+	public int neededX, neededY;
+	public double expAdded;
+	public boolean isPassing = false;
+	int crossEmote;
+	int expRate = 8; //The experiences are real runescape ones, this is to control how many times you want to multiply them.
+	long agilityTimer;
+
+	/**
+	 * @param walkX = How many xcoords the player must move
+	 * @param walkY = How many ycoords the player must move
+	 * @param needX = Where the player should be when done crossing the obstacle (xCoord)
+	 * @param needY = Where the player should be when done crossing the obstacle (yCoord)
+	 * @param Emote = The emote obviously the player will be doing when crossing the obstacle
+	 * @param Exp = The amount of experience added when finishing an obstacle
+	 * @Info: This method is to control when the player has to cross an obstacle but doesn&#39;t change height.
+	 */
+	void prepareCrossing (int walkX, int walkY, int needX, int needY, int Emote, double Exp) {
+			if (System.currentTimeMillis() - c.lastAction &gt; agilityTimer) {
+				agilityTimer = 2000;
+				crossEmote = Emote;
+				neededX = needX;
+				neededY = needY;
+				expAdded = Exp;
+				isPassing = true;
+				crossingProcess(walkX, walkY);
+		}
+	}
+	
+	/**
+	 * @param walkX = same as above
+	 * @param walkY = same as above
+	 * @Info: This is the crossing of the obstacle itself.
+	 */
+	void crossingProcess (int walkX, int walkY) {
+		if (isPassing == true) {
+			walkToSpot(walkX, walkY);
+			c.WalkToEmote(crossEmote);
+			c.lastAction = System.currentTimeMillis();
+		}
+	}
+	
+	/**
+	 * @param neededX
+	 * @param neededY
+	 * @param getHeight = the height the player will be on after finishing the obstacle
+	 * @param Emote
+	 * @param Exp
+	 * @Info: This is when the player does have to change height. 
+	 */
+	void prepareClimbing (int neededX, int neededY, int getHeight, int Emote, double Exp) {
+			if (System.currentTimeMillis() - c.lastAction &gt; agilityTimer &amp;&amp; isPassing == false) {
+				agilityTimer = 2000;
+				c.setAnimation(Emote);
+				expAdded = Exp;
+				isPassing = true;
+				climbingProcess(neededX, neededY, getHeight);
+		}
+	}
+	
+	/**
+	 * @param neededX
+	 * @param neededY
+	 * @param getHeight
+	 * @Info: The actual climbing/changing height. We use the task system to delay the changing of height since
+	 * this causes that the player does his emote when already crossed the obstacle instead of while.
+	 */
+	void climbingProcess(final int neededX, final int neededY, final int getHeight) {
+		if (isPassing) {
+			ServerConstants.getTaskScheduler().schedule(new Task(1, false) {
+				@Override
+				protected void execute() {
+					c.toX = neededX;
+					c.toY = neededY;
+					c.heightLevel = getHeight;
+					isPassing = false;
+					c.lastAction = System.currentTimeMillis();
+					stop();
+				}
+			});
+		}
+	}
+	
+	/**
+	 * Resetting the crossing obstacle action and adding the experience.
+	 */
+	public void resetAgility () {
+		c.addSkillXP(((int)expAdded) * expRate, 16);
+		isPassing = false;
+		neededX = 0;
+		neededY = 0;
+		//c.forceReset();
+		c.resetAnimation();
+		c.StopWalkToEmote();
+		c.updateRequired = true;
+		c.appearanceUpdateRequired = true;
+	}
+	
+	/**
+	 * This is just custom by me, do with it what you want.
+	 * I made it so player with a higher agility level also get more tickets.
+	 */
+	void calculateTickets () {
+		int id = 0; //this is to control which type of tickets must be added. This checks in what agility area the player is.
+		c.acc.barbarianProgress = 0;
+		c.acc.gnomeProgress = 0;
+
+		if (inGnomeAgility()) //check
+			id = 2996;
+		else if (inBarbarianAgility()) //check
+			id = 7810;
+		else if (inPyramidAgility()) //check
+			id = 7811;
+	
+		if (c.playerLevel[16] &lt; 10)
+			c.addItem(id, 1);
+		if (c.playerLevel[16] &gt;= 10 &amp;&amp; c.playerLevel[16] &lt; 20)
+			c.addItem(id, 2);
+		if (c.playerLevel[16] &gt;= 20 &amp;&amp; c.playerLevel[16] &lt; 30)
+			c.addItem(id, 3);
+		if (c.playerLevel[16] &gt;= 30 &amp;&amp; c.playerLevel[16] &lt; 50)
+			c.addItem(id, 5);
+		if (c.playerLevel[16] &gt;= 50 &amp;&amp; c.playerLevel[16] &lt; 65)
+			c.addItem(id, 7);
+		if (c.playerLevel[16] &gt;= 65 &amp;&amp; c.playerLevel[16] &lt; 80)
+			c.addItem(id, 10);
+		if (c.playerLevel[16] &gt;= 80 &amp;&amp; c.playerLevel[16] &lt; 92)
+			c.addItem(id, 15);
+		if (c.playerLevel[16] &gt;= 92 &amp;&amp; c.playerLevel[16] &lt; 99)
+			c.addItem(id, 20);
+		if (c.playerLevel[16] &gt;= 99)
+			c.addItem(id, 25);
+	}
+	
+	/**
+	 * These give the area of an agility course
+	 */
+	public boolean inGnomeAgility() {
+		return (c.absX &gt;= 2468 &amp;&amp; c.absX &lt;= 2491  &amp;&amp; c.absY &gt;= 3413 &amp;&amp; c.absY &lt;= 3441);
+	}
+	public boolean inBarbarianAgility() {
+		return (c.absX &gt;= 2527 &amp;&amp; c.absX &lt;= 2556  &amp;&amp; c.absY &gt;= 3540 &amp;&amp; c.absY &lt;= 3574);
+	}
+	public boolean inPyramidAgility() {
+		return (c.absX &gt;= 3352 &amp;&amp; c.absX &lt;= 3377  &amp;&amp; c.absY &gt;= 2829 &amp;&amp; c.absY &lt;= 2854);
+	}
+	
+	/**
+	 * This is to control the walking when crossing an obstacle.
+	 */
+	public void walkToSpot(int i, int j) {
+        Player.newWalkCmdSteps = 0;
+        if(++Player.newWalkCmdSteps &gt; 50)
+        	Player.newWalkCmdSteps = 0;
+        int k = c.absX + i;
+        	k -= c.mapRegionX * 8;
+        	Player.newWalkCmdX[0] = Player.newWalkCmdY[0] = Player.tmpNWCX[0] = Player.tmpNWCY[0] = 0;
+        int l = c.absY + j;
+        	l -= c.mapRegionY * 8;
+        	c.isRunning2 = false;
+        	c.isRunning = false;
+        for(c.i = 0; c.i &lt; Player.newWalkCmdSteps; c.i++) {
+        	Player.newWalkCmdX[c.i] += k;
+        	Player.newWalkCmdY[c.i] += l;
+        }
+        c.lastWalk = System.currentTimeMillis();
+        c.walkDelay = 1;
+        c.poimiY = l;
+        c.poimiX = k;
+    }
+}
+[/code]
+
+
+
+[b]Save and close and make another java file called &quot;AgilityCourses&quot;
+Add this code to it, [/b] [size=7pt]need to use pastebin due character limit[/size]
+http://pastebin.com/aV8Mvwdz
+[b]
+Save and close[/b]
+
+
+
+[b]Now we must declare these objects in our object clicking packet to make them work. 
+So our action actually happens when clicking on the object.
+Therefor open the file where your packets are located. In a normal delta this should be client.java
+Search for:[/b] 
+[code=java]case 132:[/code]
+
+You should see something like this:
+[code=java]
+case 132:
+			int objectX = inStream.readSignedWordBigEndianA();
+			int objectID = inStream.readUnsignedWord();
+			int objectY = inStream.readUnsignedWordA();
+			int face = 0;
+			int face2 = 0;
+			int GateID = 1;
+			if (!validClient)
+				break;
+			if (!antiHax())
+				break;
+			if (debug || (playerRights &gt; 1)) {
+				println(&quot;serverobjs size &quot; + ServerConstants.objects.size());
+				println_debug(&quot;Object Click: X = &quot; + objectX + &quot;, Y = &quot; + objectY + &quot;, objectID = &quot; + objectID);
+			}
+			int xDiff = Math.abs(absX - objectX);
+			int yDiff = Math.abs(absY - objectY);
+			resetAction(false);
+			TurnPlayerTo(objectX, objectY);
+			updateRequired = true;
+			appearanceUpdateRequired = true;
+			long time2 = System.currentTimeMillis();
+			if (time2 - globalCooldown[0] &lt;= 50) {
+				sM(&quot;Action throttled... please wait longer before acting!&quot;);
+				break;
+			}
+			if ((xDiff &gt; 5) || (yDiff &gt; 5)) {
+				break;
+			}
+[/code]
+
+
+[b]Right under that last bracket add this:[/b]
+[code=java]
+for (int agilityObject : c.acc.agilityObstacles) {
+				if (objectID == agilityObject) {
+					c.acc.handleAgilityObstacles(objectID);
+				}
+			}
+[/code]
+
+What we did here is saying:
+if the objects id clicked, is an id from the array in our agility class,
+then we must check for the action they should execute which is also controlled in our agility class.
+
+
+
+[b]Now go to the top of your client class and right under:[/b]
+[code=java]
+public class Client extends Player implements Runnable {
+[/code]
+
+[b]Add this: (this is to call our classes)[/b]
+[code=java]
+	public AgilityHandler handleagility = new AgilityHandler(this);
+	public AgilityCourses acc = new AgilityCourses(this);
+[/code]
+
+
+[b]Now search for this:[/b]
+[code=java]
+boolean process()
+[/code]
+
+[b]In there add this:[/b]
+[code=java]
+if (handleagility.inGnomeAgility() || handleagility.inBarbarianAgility() || handleagility.inPyramidAgility()) {
+			followID = 0;
+			if (handleagility.isPassing == true)
+				isRunning = false;
+			if (absX == handleagility.neededX &amp;&amp; absY == handleagility.neededY) {
+				handleagility.resetAgility();
+			}
+		}
+[/code]
+
+This checks all the time if the player is in one of the agility areas.
+When he is it makes that you can&#39;t follow players within that area.
+When the player is busy with crossing an obstacle it makes that the player isn&#39;t running, so the emote can be properly executed,
+and he shouldn&#39;t be able to run while crossing an object anyways.
+Then when the player is done crossing the objects (when he&#39;s on the supposed X and Y coordinate)
+it resets agility.
+
+[b]Save and close[/b]
+
+
+
+Now we need to do one more thing, this is to make that the player can&#39;t start running [b]WHILE[/b] crossing the objects,
+for the same reason as above.
+[b]Open your clickingMost class and search for:[/b]
+[code=java]
+case 153:
+[/code]
+
+It should look similar to this:
+[code=java]
+		case 153:
+			if (c.playerEnergy &gt; 0) {
+				c.isRunning2 = true;
+				c.isRunning = true;
+			}
+			break;
+[/code]
+
+
+[b]Replace it by this:[/b]
+[code=java]
+		case 153:
+			if (c.handleagility.isPassing)
+				return;
+			if (c.playerEnergy &gt; 0) {
+				c.isRunning2 = true;
+				c.isRunning = true;
+			}
+			break;
+[/code]
+
+So when the player hits the button to toggle running,
+it will check if he&#39;s crossing an obstacle. If he is it will not toggle running.
+
+
+
+
+[shadow=red,left][b]That should be it, for any question please reply.
+[u]For haters:[/u]
+- conventions are bad
+- using process is bad
+- to much code
+
+I know this ^ I just started writing this from zero and didn&#39;t look for improvements yet.
+I don&#39;t stop you from doing it.
+I&#39;m done for today and decided to release this as tutorial, since it&#39;s still a lot better than most servers,
+if they even have agility working.[/b][/shadow]
+
+
+
+[size=18pt][b]~ BUGFIX ~[/b][/size]
+
+[b]Bug:[/b] When the player is crossing an object he can get stuck.
+[b]Example:[/b] When the player is crossing a log and clicks in the middle of the log, the player will be stuck on that spot.
+
+[b]Fix:[/b]
+  1. Open the file where your packets are located, in a normal delta this is the client class.
+  2. Search for packet 98 which is the forced walking packet.
+  Search: 
+  [code=java]case 98:[/code]
+
+  3. Add this to the packet:
+  [code=java]			if (c.getAgilityHandler().isPassing) {
+				return;
+			}[/code]
+
+  4. Save and compile, bug fixed. If you find other bugs please let me know.
+
+
+
+
+Credits:
+Me
+Delta
+Google for emote id data</description>
+    
+    <lastBuildDate>Wed, 23 May 2012 07:53:03 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“MrFun, post:32, topic:436841”]Thanks but I don’t know where to add this</p>
+<pre><code class="lang-auto">        public AgilityHandler handleagility = new AgilityHandler(this);
+        public AgilityCourses acc = new AgilityCourses(this);
+</code></pre>
+<p>I got lost when you said add that in “public class client extends Player implements Runnable {” because i don’t know where to put it.[/quote]</p>
+<p>client.java</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/33</link>
+        <pubDate>Wed, 23 May 2012 07:53:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-33</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@MrFun MrFun]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mrfun">@MrFun</a> wrote:</p>
+          <blockquote>
+              <p>Thanks but I don’t know where to add this</p>
+<pre><code class="lang-auto">        public AgilityHandler handleagility = new AgilityHandler(this);
+        public AgilityCourses acc = new AgilityCourses(this);
+</code></pre>
+<p>I got lost when you said add that in “public class client extends Player implements Runnable {” because i don’t know where to put it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/32</link>
+        <pubDate>Tue, 22 May 2012 23:35:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-32</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="30" data-topic="436841">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/loveandpower/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Loveandpower:</div>
+<blockquote>
+<p>You should   do the  werewolf agility one. I am only person who I know of who  have made it. It is quite fun and when I hosted my last  server people got a kick out of it.</p>
+</blockquote>
+</aside>
+<p>I even never heard about that one</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/31</link>
+        <pubDate>Sun, 13 May 2012 00:10:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-31</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>You should   do the  werewolf agility one. I am only person who I know of who  have made it. It is quite fun and when I hosted my last  server people got a kick out of it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/30</link>
+        <pubDate>Sat, 12 May 2012 23:57:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-30</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lostmyphat, post:28, topic:436841”]<code>if ((objectID == ****)) {
+				toX = absX;
+				toY = absY;
+				c.isRunning = true;
+		}</code></p>
+<p>There ya go shortened, was to lazy to add the whole crossing the log part[/quote]<br>
+whatthefuck?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/29</link>
+        <pubDate>Sat, 12 May 2012 17:44:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-29</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@lostmyphat lostmyphat]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lostmyphat">@lostmyphat</a> wrote:</p>
+          <blockquote>
+              <p><code>if ((objectID == ****)) {
+				toX = absX;
+				toY = absY;
+				c.isRunning = true;
+		}</code></p>
+<p>There ya go shortened, was to lazy to add the whole crossing the log part</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/28</link>
+        <pubDate>Sat, 12 May 2012 03:16:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-28</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[size=18pt]<span class="bbcode-b">~ BUGFIX ~</span>[/size]</p>
+<p><span class="bbcode-b">Bug:</span> When the player is crossing an object he can get stuck.<br>
+<span class="bbcode-b">Example:</span> When the player is crossing a log and clicks in the middle of the log, the player will be stuck on that spot.</p>
+<p><span class="bbcode-b">Fix:</span></p>
+<ol>
+<li>Open the file where your packets are located, in a normal delta this is the client class.</li>
+<li>Search for packet 98 which is the forced walking packet.<br>
+Search:</li>
+</ol>
+<pre><code class="lang-auto"></code></pre>
+<ol start="3">
+<li>Add this to the packet:</li>
+</ol>
+<p><code>			if (c.getAgilityHandler().isPassing) {
+				return;
+			}</code></p>
+<ol start="4">
+<li>Save and compile, bug fixed. If you find other bugs please let me know.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/27</link>
+        <pubDate>Fri, 11 May 2012 20:47:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-27</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Now down to the package c does not exist error &gt;.&gt;</p>
+<p>Hmm I tried deleting c.acc. and it came up with another error.<br>
+and I also tried deleting just acc. and another error.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/26</link>
+        <pubDate>Mon, 07 May 2012 03:01:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-26</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:24, topic:436841”][quote author=RandQm link=topic=539555.msg3989516#msg3989516 date=1336358596]</p>
+<aside class="quote">
+<blockquote>
+<p>Hmm I’m going to have to look around for WalkToEmote. Seems I don’t have it. Now what about the package c does not exist error?</p>
+</blockquote>
+</aside>
+<p>Are you sure you declared it in the client class? (part of the tutorial)<br>
+public AgilityCourseShit acc = new AgilityCourseShit(this);<br>
+[/quote]</p>
+<p>Yes actually I did that this time xD</p>
+<pre><code class="lang-auto">public class client extends Player implements Runnable {
+public static int Waiters = 0;
+public int dclaws = 0;
+public int pkPoints = 0;
+public AgilityHandler handleagility = new AgilityHandler(this);
+public AgilityCourses acc = new AgilityCourses(this);</code></pre>
+<p>Seems of the like 15 servers I have (only use one. keep others for no reason) only one had the walktoemote, and it was PI so I have no use for it in my delta. do you possibly have it?[/quote]</p>
+<p>Here ya go</p>
+<pre><code class="lang-auto">public void WalkToEmote(int id) {
+		playerSEW = id;
+	}</code></pre>
+<pre><code class="lang-auto">	public void StopWalkToEmote() {
+		playerSEW = 0x333;
+	}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/25</link>
+        <pubDate>Mon, 07 May 2012 02:50:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-25</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:23, topic:436841”][quote author=sk8rdude461 link=topic=539555.msg3989514#msg3989514 date=1336358469]<br>
+Hmm I’m going to have to look around for WalkToEmote. Seems I don’t have it. Now what about the package c does not exist error?<br>
+[/quote]</p>
+<p>Are you sure you declared it in the client class? (part of the tutorial)<br>
+public AgilityCourseShit acc = new AgilityCourseShit(this);[/quote]</p>
+<p>Yes actually I did that this time xD</p>
+<pre><code class="lang-auto">public class client extends Player implements Runnable {
+public static int Waiters = 0;
+public int dclaws = 0;
+public int pkPoints = 0;
+public AgilityHandler handleagility = new AgilityHandler(this);
+public AgilityCourses acc = new AgilityCourses(this);</code></pre>
+<p>Seems of the like 15 servers I have (only use one. keep others for no reason) only one had the walktoemote, and it was PI so I have no use for it in my delta. do you possibly have it?</p>
+<p>Edit: hopefully i got this in in time.<br>
+Found a (stop)walktoemote void that works.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/24</link>
+        <pubDate>Mon, 07 May 2012 02:46:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-24</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="22" data-topic="436841">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sk8rdude461/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sk8rdude461:</div>
+<blockquote>
+<p>Hmm I’m going to have to look around for WalkToEmote. Seems I don’t have it. Now what about the package c does not exist error?</p>
+</blockquote>
+</aside>
+<p>Are you sure you declared it in the client class? (part of the tutorial)<br>
+public AgilityCourseShit acc = new AgilityCourseShit(this);</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/23</link>
+        <pubDate>Mon, 07 May 2012 02:43:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-23</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Hmm I’m going to have to look around for WalkToEmote. Seems I don’t have it. Now what about the package c does not exist error?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/22</link>
+        <pubDate>Mon, 07 May 2012 02:41:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-22</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:20, topic:436841”]<img src="http://dl.dropbox.com/u/31065410/4.png" alt width="" height=""></p>
+<p>Down to 6 errors…[/quote]<br>
+You still didn’t change serverconstants to server<br>
+and Misc to misc</p>
+<p>also you don’t have the walktoemote void in your client class,<br>
+either it’s declared with different capitals, or you don’t have it, so then I guess you should rip it from another server, since most should have it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/21</link>
+        <pubDate>Mon, 07 May 2012 02:25:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-21</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p><img src="http://dl.dropbox.com/u/31065410/4.png" alt width="" height=""></p>
+<p>Down to 6 errors…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/20</link>
+        <pubDate>Mon, 07 May 2012 02:19:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-20</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:18, topic:436841”][quote author=RandQm link=topic=539555.msg3989490#msg3989490 date=1336356280]</p>
+<aside class="quote">
+<blockquote>
+<p>12 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+I did add the task system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://dl.dropbox.com/u/31065410/2.png" data-bbcode="true" rel="nofollow noopener">http://dl.dropbox.com/u/31065410/2.png</a></p>
+</blockquote>
+</aside>
+<p>use an IDE<br>
+[/quote]</p>
+<p>Added the wrong pic btw. Damn my dropbox xD<br>
+IDE’s don’t like me <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+Edited above pic.[/quote]</p>
+<p>You have to change Client c to client c without capital.<br>
+It calls your client class, since yours is probably without a capital you also have to write it without capital here.</p>
+<p>Same for Misc  you will have to write it without capital, “misc”</p>
+<p>“ServerConstants” should be changed to “server”</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/19</link>
+        <pubDate>Mon, 07 May 2012 02:13:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-19</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:17, topic:436841”][quote author=sk8rdude461 link=topic=539555.msg3989482#msg3989482 date=1336355318]<br>
+12 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+I did add the task system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://dl.dropbox.com/u/31065410/2.png" data-bbcode="true" rel="nofollow noopener">http://dl.dropbox.com/u/31065410/2.png</a><br>
+[/quote]<br>
+use an IDE[/quote]</p>
+<p>Added the wrong pic btw. Damn my dropbox xD<br>
+IDE’s don’t like me <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+Edited above pic.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/18</link>
+        <pubDate>Mon, 07 May 2012 02:12:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-18</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:16, topic:436841”]12 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+I did add the task system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://dl.dropbox.com/u/31065410/2.png" data-bbcode="true" rel="nofollow noopener">http://dl.dropbox.com/u/31065410/2.png</a>[/quote]<br>
+use an IDE</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/17</link>
+        <pubDate>Mon, 07 May 2012 02:04:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-17</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>12 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"><br>
+I did add the task system <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><img src="http://dl.dropbox.com/u/31065410/3.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/16</link>
+        <pubDate>Mon, 07 May 2012 01:48:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-16</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="14" data-topic="436841">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/neroxx/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> neroxx:</div>
+<blockquote>
+<p>Really good job RandQm! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> but, what delta server you use?</p>
+</blockquote>
+</aside>
+<p>Cleaned spades-scape</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/15</link>
+        <pubDate>Wed, 21 Mar 2012 20:01:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-15</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@neroxx neroxx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/neroxx">@neroxx</a> wrote:</p>
+          <blockquote>
+              <p>Really good job RandQm! <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> but, what delta server you use?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/14</link>
+        <pubDate>Wed, 21 Mar 2012 16:19:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-14</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@FFkingdom FFkingdom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ffkingdom">@FFkingdom</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:12, topic:436841”][quote author=FFkingdom link=topic=539555.msg3951260#msg3951260 date=1332295882]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>This would be amazing to have especially since I have managed to open all courses but Brimhaven as of now. But whom ever had the client before me removed the class pages to the client side, so I cannot edit anything over there &gt;&lt;. But it looks really good!</p>
+</blockquote>
+</aside>
+<p>Why would you need client side?<br>
+That’s only for the ticket system,<br>
+you can easily remove it or use something else as currency</p>
+</blockquote>
+</aside>
+<p>Actually what I was setting up was a way in which it would provide X-amount of tickets on the final obstacle in each course, and then have someone allow the trades for the tickets in the proper interface etc. Right now I am working out the means in which you will only get them by going through each course properly. I liked the idea of rewarding for Agility since I am going to be a server where running is constant (HATE walking lmfao) so there would be no means of gaining Agility otherwise. And for some reason no one I have played with in other games likes training Agility. I kind of figured it was because most of these games released only has 2-3 courses completed. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+[/quote]<br>
+This is what mine does,<br>
+it only rewards when completing the course correctly[/quote]<br>
+That’s what I meant lol. Like if it were the gnome, you would cross the log, up the net, up the tree, cross the rope, down the tree, over the net, through the pipe and there is where you get the ticket. I almost have it for the werewolf atm, and will be implementing it into the others after I fix my little farming problem lmfao.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/13</link>
+        <pubDate>Wed, 21 Mar 2012 03:04:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-13</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“FFkingdom, post:11, topic:436841”][quote author=RandQm link=topic=539555.msg3951245#msg3951245 date=1332294573]</p>
+<aside class="quote">
+<blockquote>
+<p>This would be amazing to have especially since I have managed to open all courses but Brimhaven as of now. But whom ever had the client before me removed the class pages to the client side, so I cannot edit anything over there &gt;&lt;. But it looks really good!</p>
+</blockquote>
+</aside>
+<p>Why would you need client side?<br>
+That’s only for the ticket system,<br>
+you can easily remove it or use something else as currency<br>
+[/quote]<br>
+Actually what I was setting up was a way in which it would provide X-amount of tickets on the final obstacle in each course, and then have someone allow the trades for the tickets in the proper interface etc. Right now I am working out the means in which you will only get them by going through each course properly. I liked the idea of rewarding for Agility since I am going to be a server where running is constant (HATE walking lmfao) so there would be no means of gaining Agility otherwise. And for some reason no one I have played with in other games likes training Agility. I kind of figured it was because most of these games released only has 2-3 courses completed. :)[/quote]<br>
+This is what mine does,<br>
+it only rewards when completing the course correctly</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/12</link>
+        <pubDate>Wed, 21 Mar 2012 02:37:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-12</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@FFkingdom FFkingdom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ffkingdom">@FFkingdom</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“RandQm, post:10, topic:436841”][quote author=FFkingdom link=topic=539555.msg3951174#msg3951174 date=1332291124]<br>
+This would be amazing to have especially since I have managed to open all courses but Brimhaven as of now. But whom ever had the client before me removed the class pages to the client side, so I cannot edit anything over there &gt;&lt;. But it looks really good!<br>
+[/quote]<br>
+Why would you need client side?<br>
+That’s only for the ticket system,<br>
+you can easily remove it or use something else as currency[/quote]<br>
+Actually what I was setting up was a way in which it would provide X-amount of tickets on the final obstacle in each course, and then have someone allow the trades for the tickets in the proper interface etc. Right now I am working out the means in which you will only get them by going through each course properly. I liked the idea of rewarding for Agility since I am going to be a server where running is constant (HATE walking lmfao) so there would be no means of gaining Agility otherwise. And for some reason no one I have played with in other games likes training Agility. I kind of figured it was because most of these games released only has 2-3 courses completed. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/11</link>
+        <pubDate>Wed, 21 Mar 2012 02:11:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-11</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="9" data-topic="436841">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ffkingdom/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> FFkingdom:</div>
+<blockquote>
+<p>This would be amazing to have especially since I have managed to open all courses but Brimhaven as of now. But whom ever had the client before me removed the class pages to the client side, so I cannot edit anything over there &gt;&lt;. But it looks really good!</p>
+</blockquote>
+</aside>
+<p>Why would you need client side?<br>
+That’s only for the ticket system,<br>
+you can easily remove it or use something else as currency</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/10</link>
+        <pubDate>Wed, 21 Mar 2012 01:49:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-10</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+      <item>
+        <title>[Delta] Ultimate Agility Tutorial [3 courses]</title>
+        <dc:creator><![CDATA[@FFkingdom FFkingdom]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ffkingdom">@FFkingdom</a> wrote:</p>
+          <blockquote>
+              <p>This would be amazing to have especially since I have managed to open all courses but Brimhaven as of now. But whom ever had the client before me removed the class pages to the client side, so I cannot edit anything over there &gt;&lt;. But it looks really good!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841/9</link>
+        <pubDate>Wed, 21 Mar 2012 00:52:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436841-9</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-ultimate-agility-tutorial-3-courses/436841.rss">[Delta] Ultimate Agility Tutorial [3 courses]</source>
+      </item>
+  </channel>
+</rss>

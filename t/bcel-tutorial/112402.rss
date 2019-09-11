@@ -1,0 +1,882 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Bcel Tutorial</title>
+    <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402</link>
+    <description>This is a tutorial about the [url=http://jakarta.apache.org/bcel/]Bytecode Engineering Library[/url], this is a group of classes which help you view and change java bytecode.
+It can read and write this bytecode in a object-oriented java sort-of-way, so normal people like us can edit bytecode in a simpler way,
+
+You probably all want to make bots for runescape, and I bet you&#39;ll all be annoyed and angry when I go on about detectable things, or not related to runescape at all.
+well listen to this, have you ever seen that film called &quot;The Karate Kid&quot;, an old karate teacher tells his student to run around doing chores, cutting the grass, sweeping the floor, painting the fence. Eventually he gets really annoyed and asks the teacher why he makes him do that stuff.
+Mr. Miyagi: &quot;listen Daniel-san, you have learned defensive blocks while painting my fence&quot; (not the exact dialog, but you get the idea) Moral of the story: Everything I teach you has a purpose, even if you dont see it immediately.
+
+For this tutorial, you should know about java, and I really suggest you read up a little about bytecode, no 12-month crash course is needed, just a look around on google or something. Find out what the Constant Pool is, read up on the Stack-Machine idea and how the JVM uses it, find out what instructions are, maybe get a bytecode viewer and see what some simple classes look like in it.
+It would also be good if you had a java decompiler, I recommend [url=http://www.kpdus.com/jad.html]Jad[/url] for this since it decompiles a class as much as it can, even if there are mistakes (doesnt crash like JODE). Knowing a little bit about deobs and the rs2 client is useful, but not nesseccary.
+
+in terms of capibilites, I like to think of bcel as a little like Reflection, but works in a differant way, and can do more things (reflection just tells the JVM what to do)
+for example, java.lang.[b]Class[/b] is mostly used as the starting point for reflection, in bcel, its equivalent is org.apache.bcel.classfile.[b]JavaClass[/b]
+
+so a good place to start would be with the JavaClass class, this class is an Immutable object, we&#39;ll get on to editing it later.
+its in the package org.apache.bcel.classfile, this package normally has things about examining and viewing bytecode, not so much editing it.
+
+these are the constructors
+[code]
+JavaClass(int class_name_index, int superclass_name_index, String file_name, int major, int minor, int access_flags, ConstantPool constant_pool, int[] interfaces, Field[] fields, Method[] methods, Attribute[] attributes)
+          Constructor gets all contents as arguments.
+JavaClass(int class_name_index, int superclass_name_index, String file_name, int major, int minor, int access_flags, ConstantPool constant_pool, int[] interfaces, Field[] fields, Method[] methods, Attribute[] attributes, byte source)
+          Constructor gets all contents as arguments.
+[/code]
+
+ugly arn&#39;t they? and i know you&#39;re thinking it all looks really complicated, but we&#39;re not going be using them
+theres other ways of getting a JavaClass instance, the best right now would be the org.apache.bcel.Repository
+this has many static methods for handling classes, the most useful one for us is 
+lookupClass(String class_name) JavaClass
+this looks for the named class in your classpath (when you set -cp on the command line)
+
+a useful method with JavaClass, is the dump(String) void, this creates a file and places the class in it, its normally used so when you finish, you can put the class back where you found it.
+
+remember how org.apache.bcel.classfile was for examining bytecode? well org.apache.bcel.generic is for changing it.
+the most important class in this is ClassGen, this one is not immutable, so you can mess around with it how much you want, which is of course the whole point.
+
+it has a few constructors, but the only ones which really matters is
+[code]
+ClassGen(JavaClass clazz)
+          Initialize with existing class.
+[/code]
+
+quite simple, you have a JavaClass, you use that to make a ClassGen from it. ClassGen also has the method getJavaClass(), which you will be using once you finish.
+
+quite a lot of bcel programs look something like this
+[code]
+import org.apache.bcel.Repository;
+import org.apache.bcel.classfile.JavaClass;
+import org.apache.bcel.generic.ClassGen;
+import java.io.IOException;
+
+public class SomeBcelClass {
+
+	public static void main(String[] args) {
+
+		ClassGen myClassGen;
+
+		try {
+			JavaClass myClass = Repository.lookupClass(&quot;MyClass&quot;);
+			myClassGen = new ClassGen(myClass);
+		}
+		catch(ClassNotFoundException ex) {
+			ex.printStackTrace();
+			return;
+		}
+
+		//this is where you mess around with the classes
+
+		try {
+			myClassGen.getJavaClass().dump(&quot;MyClass.class&quot;);
+		}
+		catch(IOException ex) {
+			ex.printStackTrace();
+		}
+	}
+}
+[/code]
+
+so there&#39;s your first bcel program, doesn&#39;t do much, only loads the class, then dumps it again. If you want to edit stuff, you put your stuff on my comment there.
+
+As there is JavaClass which is immutable, with its mutable ClassGen, there is also Method and MethodGen, and Field and FieldGen.
+
+First off, to get the constant pool, call aClassGen.getConstantPool(), that returns an object of type ConstantPoolGen
+
+to find our Method object, I normally just iterate through all of them, something like
+[code]
+Method mainMethod = null;
+for(Method m : theClass.getMethods())
+	if(m.getName().equals(&quot;main&quot;)) {
+		mainMethod = m;
+		System.out.println(&quot;Found main Method&quot;);
+		break;
+	}
+[/code]
+
+Lets say you want to change the instructions in a method, for that you&#39;d need the MethodGen, this is its constructor
+[code]
+MethodGen(Method m, String class_name, ConstantPoolGen cp) 
+[/code]
+We should get our MethodGen object
+
+[code]
+ConstantPoolGen theCPool = theClassGen.getConstantPool();
+MethodGen mainMethodGen = new MethodGen(mainMethod,theClassGen.getClassName(),theCPool);
+[/code]
+
+
+SIMPLE INSERTING INSTRUCTIONS
+
+Now we get to a good part, you know how stuff in java is broken down into instructions, they store their stuff in the stack. 
+In bcel, they are represented by objects of type Instruction, an abstract class, all instructions actually have their own class, there is also a InstructionHandle class, this is like a referance to an Instruction.
+Well, each method has its own store of instructions, there is a special object for that, called InstructionList, its a bit like a glorified Instruction[], (really its an array of InstructionHandle)
+
+Lets start a challange now, lets insert our own instruction in a class,
+when I make something with bcel, I always try it on my own class, then try it on the real client
+
+[code]
+public class SomeClass {
+
+	public static void main(String[] args) {
+
+		String myStr = &quot;Boo!&quot;;
+		System.out.println(myStr);
+	}
+}
+[/code]
+
+The task is to add my own method in there, to examine that string,
+Something like this I hope
+
+[code]
+String myStr = &quot;Boo!&quot;;
+Bot.examineString(myStr);
+System.out.println(myStr);
+[/code]
+
+first off, lets have a look at the bytecode for the original method, im using JBE, but you can use anything that can view the bytecode, a lot of people use CFParse as well
+
+[img]http://img524.imageshack.us/img524/8302/insertinstructionbytecota5.png[/img]
+
+As you can see, the ldc pushes &quot;Boo!&quot;, stores it, gets System.out, loads the string again, and invokes PrintStream.println(),
+so what we need to do is insert our own instruction to invoke our own method, it will have a single parameter, the String myStr, it will take it from the stack, so its important to give back to the stack as well, so the method also has to return a string which is placed back on the stack.
+
+This is the class we&#39;ll use, the only reason iv placed the System.out.println there, is so I can check it works.
+[code]
+public class Bot {
+
+	public static String examineString(String str) {
+		System.out.println(&quot;called examineString(&quot;+str+&quot;)&quot;);
+		return str;
+	}
+}
+[/code]
+
+Remember InstructionList, these contain all the instruction in that method, we need to find the right one, then insert our own thing
+To get an object of type InstructionList, call aMethodGen.getInstructionList(); we should iterate through that list and look for any sort of pattern.
+The instruction I&#39;m going to insert behind is the InvokeVirtual which calls PrintStream.println()
+
+[code]
+Instruction getFieldInstruction = null;
+InstructionHandle[] iHandles = iList.getInstructionHandles();
+for(int f=0;f&lt;iHandles.length;f++) {
+	if(iHandles[f].getInstruction() instanceof INVOKEVIRTUAL) {
+		getFieldInstruction = iHandles[f].getInstruction();
+		System.out.println(&quot;found the invoke virtual&quot;);
+		break;
+	}
+}
+[/code]
+
+So now we have the instruction from the method, lets create our own instruction to insert.
+We need to make an InvokeStatic, to call Bot.examineString(), bcel has a little tool for this, the InstructionFactory class, this class creates instruction for us, but it also needs access to the ClassGen and ConstantPoolGen of the instruction.
+
+There is a class called Type, this represents a type of variable, which can be a primative type, null, array type or object type. Type itself is an abstract class, its decendants are the real stuff.
+
+The method we&#39;ll use is createInvoke(), this asks for the name of the class which contains the method, the name of the method, the type it returns, an array of types for the parameters, and the kind of invoke.
+for the kind of invoke, we look in the org.apache.bcel.Constants class, it contains many static methods, the one which intrest us the most are INVOKESTATIC, INVOKEVIRTUAL and INVOKESPECIAL, for our purpose, we shall use InvokeStatic.
+the Type class already has a constant which represents String, we can just use Type.STRING,
+
+so the next part of our code will be a little like this
+[code]
+InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+InvokeInstruction callStringExamine = iFactory.createInvoke(&quot;Bot&quot;,&quot;examineString&quot;,Type.STRING,new Type[]{Type.STRING},Constants.INVOKESTATIC);
+[/code]
+
+So now we have our instruction-to-be-inserted, and the instruction we&#39;ll insert it behind. The InstructionList class has a method just for that insert(Instruction,Instruction);
+so we call
+iList.insert(getFieldInstruction,callStringExamine);
+
+Next call aMethodGen.setInstructionList, to replace the list there with your modified one
+[code]
+mainMethodGen.setInstructionList(iList);
+[/code]
+
+then there are these &quot;clean-up&quot; methods, I admit I dont know why they are used, but everyone else uses them, I find it hard to belive they are wasting their time, so here they are
+[code]
+iList.setPositions();
+mainMethodGen.setMaxStack();
+mainMethodGen.setMaxLocals();
+mainMethodGen.removeLineNumbers();
+[/code]
+
+finally, we have to replace our modified method, with the method that was already there, we use ClassGen.replaceMethod
+theClassGen.replaceMethod(mainMethod,mainMethodGen.getMethod());
+
+Now we&#39;ll compile and run, we use Jad to decompile the dumped class, and see whats happened, it now looks like this
+
+[code]
+// Decompiled by Jad v1.5.8f. Copyright 2001 Pavel Kouznetsov.
+// Jad home page: http://www.kpdus.com/jad.html
+// Decompiler options: packimports(3) nonlb 
+// Source File Name:   SomeClass.java
+
+import java.io.PrintStream;
+
+public class SomeClass {
+
+	public SomeClass() {
+	}
+
+	public static void main(String arg0[]) {
+		String s = &quot;Boo!&quot;;
+		System.out.println(Bot.examineString(s));
+	}
+}
+[/code]
+
+some people get surprised that the inserted method turns out like that, System.out.println(Bot.examineString(s)); but when you think about it, it makes total sence, the java language doesnt have a stack, the only way it would fit is if it was inside the same line.
+
+we have total control by simply changing the method Bot.examineString(), but right now it only prints out a message to let us know it was called,
+This setup has many possibilities, we could examine that string, perhaps fill our own variables, this sounds useless now because its a string, but I&#39;v used exactly the same technique in making a hp announcer bot, except it examined an Entity instead and took its hp.
+we could also change the object, here we could return some other string, the main() method would print out something totally different to what the author intended, we can use the same idea on the RS2 client.
+
+MORE ADVANCED INSERTING INSTRUCTIONS
+
+Now in the previous part, we took our information from things which were already on the stack, but sometimes we need more information,
+for example, we want to draw something, for that we need to Graphics object, and the x and y.
+heres the class we will be working on
+
+[code]
+import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.image.BufferedImage;
+
+public class PushClass {
+
+	private static int x;
+	private static int y;
+
+	public static void main(String[] args) {
+
+		BufferedImage img = new BufferedImage(500,500,BufferedImage.TYPE_INT_RGB);
+		Graphics g = img.getGraphics();
+		x = 50;
+		y = 50;
+
+		g.setColor(Color.RED);
+		g.drawString(&quot;Hey guys&quot;,x,y);
+
+		System.out.println(&quot;g.color = &quot;+g.getColor().toString()+&quot; x = &quot;+x+&quot; y = &quot;+y);
+	}
+}
+[/code]
+
+lets add this here
+
+[code]
+g.drawString(&quot;Hey guys&quot;,x,y);
+Bot.drawSomething(g,x,y);
+System.out.println(&quot;g.color = &quot;+g.getColor().toString()+&quot; x = &quot;+x+&quot; y = &quot;+y);
+[/code]
+
+To do this, we&#39;ll have to push the variables onto the stack,
+
+First off, lets have a look at the bytecode of main(), specifically around that part from getGraphics() to drawString()
+[img]http://img501.imageshack.us/img501/6171/insertpushinstructionhd5.png[/img]
+
+As you can see, the graphics object is stored in the local variable number of 2 (see the astore_2 and aload_2), the x and y are pushed with GetStatic
+we need to get our InstructionFactory like before, create all the pushes, and finally put an InvokeStatic to our method
+
+to push the graphics object, we need the instruction ALOAD, and the number where that object is stored, in this case 2.
+InstructionFactory has the method createLoad(Type,int) for this purpose, to get the type, we can call Type.getType(Graphics.class)
+
+[code]
+InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+Instruction loadGraphics = iFactory.createLoad(Type.getType(Graphics.class),2);
+Instruction pushX = iFactory.createGetStatic(theClassGen.getClassName(),&quot;x&quot;,Type.INT);
+Instruction pushY = iFactory.createGetStatic(theClassGen.getClassName(),&quot;y&quot;,Type.INT);
+Instruction callHook = iFactory.createInvoke(&quot;Bot&quot;,&quot;drawSomething&quot;,Type.VOID,new Type[]{Type.getType(Graphics.class),Type.INT,Type.INT},Constants.INVOKESTATIC);
+[/code]
+
+then we can just insert them in as before,
+note: getStaticOut is an instruction which gets System.out
+[code]
+iList.insert(getStaticOut,loadGraphics);
+iList.insert(getStaticOut,pushX);
+iList.insert(getStaticOut,pushY);
+iList.insert(getStaticOut,callHook);
+[/code]
+
+compile, run and decompile, the code looks like this
+[code]
+g.setColor(Color.RED);
+g.drawString(&quot;Hey guys&quot;, x, y);
+Bot.drawSomething(g, x, y);
+System.out.println((new StringBuilder()).append(&quot;g.color = &quot;).append(g.getColor().toString()).append(&quot; x = &quot;).append(x).append(&quot; y = &quot;).append(y).toString());
+[/code]
+
+you might notice that our instruction is there on its own, we dont need to return anything, it returns void.
+
+CAUSING A CLIENT TO CONNECT
+
+now we can put our bcel knowledge into some (almost) useful work, 
+you know when starting a client through main(), it tries to connect to localhost, here is the specific line
+[code]
+rd.m = &quot;127.0.0.1&quot;;
+[/code]
+
+in this, we&#39;re going to try to replace it so it says this,
+[code]
+rd.m = Bot.getWebAddress();
+[/code]
+
+lets think about this in terms of bytecode for a minuite, 
+there must be something which pushes &quot;127.0.0.1&quot; onto the stack, then something which stores it, so if you replaced the push &quot;127.0.0.1&quot; with our own thing, it would store what we control into the field.
+the instruction which pushes strings is called ldc, in bcel, there is the LDC class,
+remember how InstructionList is really a glorified InstructionHandle[], well MethodGen actually contains only instruction handles, so you can easily change what those handles contain, to replace one instruction with another, get the instruction handle, and call setInstruction(Instruction).
+so we should get the InstructionHandle of the ldc, then replace it with our own method which returns a string
+to find the instruction handle, we iterate through iList.getInstructionHandles() and find the LDC, but theres loads of LDCs, we should check what value is contained in them, is we type-cast the Instruction to a LDC, we can call getValue(ConstantPoolGen) to find out
+
+the ldc insturction handle finding would look something like this
+[code]
+InstructionHandle ldcHandle = null;
+InstructionHandle[] iHandles = iList.getInstructionHandles();
+for(int f=0;f&lt;iHandles.length;f++)
+	if(iHandles[f].getInstruction() instanceof LDC &amp;&amp; ((LDC)iHandles[f].getInstruction()).getValue(theCPool).equals(&quot;127.0.0.1&quot;)) {
+		ldcHandle = iHandles[f];
+		System.out.println(&quot;Found the LDC which pushes \&quot;127.0.0.1\&quot; onto the stack&quot;);
+		break;
+	}
+[/code]
+
+then we&#39;ll create the instruction which will be replacing it
+[code]
+InvokeInstruction getWebAddressCall = iFactory.createInvoke(&quot;Bot&quot;,&quot;getWebAddress&quot;,Type.STRING,Type.NO_ARGS,Constants.INVOKESTATIC);
+[/code]
+
+and we replace it
+[code]
+ldcHandle.setInstruction(getWebAddressCall);
+System.out.println(&quot;Replaced the instruction&quot;);
+[/code]
+
+then compile, run and decompile, you get this
+[code]
+rd.m = Bot.getWebAddress();
+[/code]
+
+run the client, hey prestio, it connects!
+
+USING INTERFACES AS HOOKS IN A CLIENT
+
+you know how in deobs, you change the names of classes when you find out what they do, so like wB or Class33_Sub2_Sub3_Sub4 becomes Entity, when you find some fields, you rename them, like hf or anInt454 becomes currentHp.
+But in bcel, we dont have that luxury, because any renaming is detectable, however, there are other ways to change what a class is, by implementing an interface
+
+if you have a class called ClassNameWhichMakesNoSence, that implements ActionListener, it is perfectly legal to do
+ActionListener al = new ClassNameWhichMakesNoSence(), but the only method you can legally call is actionPerformed(ActionEvent)
+
+the idea is, we make an interface with a name that makes sence, and some methods we can use, for example, I&#39;m calling it entity, and a method it has is getCurrentHp()
+this would be my Entity hook,
+[code]
+public interface Entity {
+
+	public int getCurrentHp();
+}
+[/code]
+
+and this is a pretend rs2 client class, with all the meaningless names
+
+[code]
+//this class is like one from the rs2 client
+public class wB {
+
+	public int kg; //current hp field
+}
+[/code]
+
+well for our bot, we will use bcel to make the source file look something like this
+
+[code]
+public class wB implements Entity {
+
+	public int kg;
+
+	public int getCurrentHp() {
+		return kg;
+	}
+}
+[/code]
+
+this means it makes much more sence when writing a bot, you can just call anEntity.getCurrentHp(), instead of awB.kg, it also doesnt need to be changed with updates, you only change the actual client, not the code which uses it.
+so now you hopefully understand why we add interfaces to classes, you know the why, lets look at the how.
+
+adding your interface is quite simple, call addInterface(String) on an instance of ClassGen
+we now have to add the method, for this, we&#39;ll use the MethodGen class, we use this really big long constructor</description>
+    
+    <lastBuildDate>Mon, 21 Sep 2015 21:53:19 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Zoso1 Zoso_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zoso1">@Zoso1</a> wrote:</p>
+          <blockquote>
+              <p>This is honestly one of the best ones I’ve seen. I learned a lot, 10/10</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/56">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/56</link>
+        <pubDate>Mon, 21 Sep 2015 21:53:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-56</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Entropy Entropy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/entropy">@Entropy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Rix_, post:53, topic:112402”][quote author=Entropy link=topic=160681.msg3726609#msg3726609 date=1314310580]<br>
+Good tutorial. But now, ASM is 30% faster then BCEL.<br>
+[/quote]<br>
+46% of statistics are also made up. Javassist can also <a href="http://www.moparisthebest.com/smf/index.php?topic=155681.0" data-bbcode="true" rel="nofollow noopener">perform better</a> than BCEL too.</p>
+<p>At the end of the day, does speed really matter in the context of RuneScape cheating? I don’t think so.[/quote]</p>
+<p>I do think so, especially if you plan on running multiple bot clients at once.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/55">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/55</link>
+        <pubDate>Sun, 28 Aug 2011 16:02:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-55</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>was written in 2007.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/54">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/54</link>
+        <pubDate>Sun, 28 Aug 2011 10:31:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-54</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Rixxx Rix_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rixxx">@Rixxx</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="52" data-topic="112402">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/entropy/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Entropy:</div>
+<blockquote>
+<p>Good tutorial. But now, ASM is 30% faster then BCEL.</p>
+</blockquote>
+</aside>
+<p>46% of statistics are also made up. Javassist can also <a href="http://www.moparisthebest.com/smf/index.php?topic=155681.0" data-bbcode="true" rel="nofollow noopener">perform better</a> than BCEL too.</p>
+<p>At the end of the day, does speed really matter in the context of RuneScape cheating? I don’t think so.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/53">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/53</link>
+        <pubDate>Fri, 26 Aug 2011 07:16:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-53</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Entropy Entropy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/entropy">@Entropy</a> wrote:</p>
+          <blockquote>
+              <p>Good tutorial. But now, ASM is 30% faster then BCEL.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/52">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/52</link>
+        <pubDate>Thu, 25 Aug 2011 22:16:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-52</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>theres no such thing, you use the fully qualified class name</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/51">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/51</link>
+        <pubDate>Wed, 03 Dec 2008 17:09:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-51</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Very nice. I just have one question. How do i inject an import statement into a class file?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/50">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/50</link>
+        <pubDate>Wed, 03 Dec 2008 03:27:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-50</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Yz85Racer Yz85Racer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yz85racer">@Yz85Racer</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="48" data-topic="112402">
+<div class="title">
+<div class="quote-controls"></div>
+ tony_:</div>
+<blockquote>
+<p>Idk just felt like stating  it’s slow…</p>
+</blockquote>
+</aside>
+<p>Speed != Usability.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/49">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/49</link>
+        <pubDate>Mon, 01 Dec 2008 05:59:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-49</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@tony3 tony_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tony3">@tony3</a> wrote:</p>
+          <blockquote>
+              <p>Idk just felt like stating  it’s slow…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/48">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/48</link>
+        <pubDate>Sun, 30 Nov 2008 11:00:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-48</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“tony_, post:46, topic:112402”]Bcel is slow…[/quote]And this matters how?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/47">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/47</link>
+        <pubDate>Sun, 30 Nov 2008 10:06:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-47</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@tony3 tony_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tony3">@tony3</a> wrote:</p>
+          <blockquote>
+              <p>Bcel is slow…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/46">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/46</link>
+        <pubDate>Sat, 29 Nov 2008 23:10:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-46</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@PeeHPee PeeHPee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peehpee">@PeeHPee</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Thug-life, post:44, topic:112402”][quote author=PeeHPee link=topic=160681.msg2365072#msg2365072 date=1217892873]<br>
+<a href="http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html" rel="nofollow noopener">http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html</a> not saying you’re a leecher, just saying he might be.<br>
+[/quote]<br>
+Read the credits at the bottom of that page:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Credits-Yakman[/quote]</p>
+</blockquote>
+</aside>
+<p>Sorry, didn’t read the full page :\</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/45</link>
+        <pubDate>Tue, 05 Aug 2008 18:05:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-45</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@tL tL]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tl">@tL</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="43" data-topic="112402">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/peehpee/40/5_6bca9977b612b7aeef77ba1ec1cd67b3.png" class="avatar"> PeeHPee:</div>
+<blockquote>
+<p><a href="http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html" rel="nofollow noopener">http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html</a> not saying you’re a leecher, just saying he might be.</p>
+</blockquote>
+</aside>
+<p>Read the credits at the bottom of that page:</p>
+<blockquote>Credits-Yakman</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/44</link>
+        <pubDate>Mon, 04 Aug 2008 23:37:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-44</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@PeeHPee PeeHPee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peehpee">@PeeHPee</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html" rel="nofollow noopener">http://www.smfsupport.com/support/java/bcel_tutorial-t5178.0.html</a> not saying you’re a leecher, just saying he might be.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/43</link>
+        <pubDate>Mon, 04 Aug 2008 23:34:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-43</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@surfer25 surfer25]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/surfer25">@surfer25</a> wrote:</p>
+          <blockquote>
+              <p>lol i like the karate kid quote <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/42</link>
+        <pubDate>Sat, 15 Mar 2008 13:23:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-42</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“planplan, post:40, topic:112402”]HOlyhell!! lel</p>
+<p>never knew Byte Code Engineering Library would be this hard![/quote]Actually it’s really easy to use.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/41</link>
+        <pubDate>Tue, 13 Nov 2007 00:15:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-41</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@planplan planplan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/planplan">@planplan</a> wrote:</p>
+          <blockquote>
+              <p>HOlyhell!! lel</p>
+<p>never knew Byte Code Engineering Library would be this hard!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/40</link>
+        <pubDate>Thu, 20 Sep 2007 01:27:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-40</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@XharveyX XharveyX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xharveyx">@XharveyX</a> wrote:</p>
+          <blockquote>
+              <p>I learned a new baby, bcel. Lol with my short memory ill forget buy tommorow.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/39</link>
+        <pubDate>Wed, 19 Sep 2007 02:47:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-39</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Pwnd Pwnd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pwnd">@Pwnd</a> wrote:</p>
+          <blockquote>
+              <p>Rofl, I seriously went to lay in bed and I was thinking about it.</p>
+<p>And I literally /forhead’d, but was to lazy to get up and say “DUH”.</p>
+<p>Thanks :]<br>
+I’ll see if I can get this now.[br][size=1]Posted on: September 18, 2007, 10:06:59 AM[/size][hr]<code>if (handle.getInstruction() instanceof GETSTATIC &amp;&amp; ((GETSTATIC) handle.getInstruction()).getSignature(cp).equals("Ljava/io/PrintStream;")) {
+                    System.out.println("Found the correct instruction to insert behind!");</code></p>
+<p>Seemed sufficient :]</p>
+<p>Edit: Although it isn’t replacing the method with mine ;|</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/38</link>
+        <pubDate>Tue, 18 Sep 2007 22:29:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-38</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>that insert method places an intruction before one other instruction which is already in the instruction list, you need the referance to the already inserted instruction to tell the method where to insert it.<br>
+so my stuff would insert those things just before the GETSTATIC “System.out” instruction</p>
+<p>so it would be a bit like this</p>
+<p>bipush 30<br>
+sipush 300<br>
+iadd<br>
+getstatic “System.out”<br>
+ldc “some string”<br>
+invokevirtual “PrintStream.println(Ljava/lang/String;)V”</p>
+<p>after inserting you get</p>
+<p>bipush 30<br>
+sipush 300<br>
+iadd<br>
+<span class="bbcode-b">aload 2</span><br>
+<span class="bbcode-b">iload 3</span><br>
+<span class="bbcode-b">iload 4</span><br>
+<span class="bbcode-b">invokestatic "Bot.graphicsHook(Ljava/awt/Graphics;II)V</span><br>
+getstatic “System.out”<br>
+ldc “some string”<br>
+invokevirtual “PrintStream.println(Ljava/lang/String;)V”</p>
+<p>might have gotten some signatures wrong or the names of stuff, cause im doing it in the quick post box</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/37</link>
+        <pubDate>Tue, 18 Sep 2007 12:26:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-37</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Pwnd Pwnd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pwnd">@Pwnd</a> wrote:</p>
+          <blockquote>
+              <blockquote>Then we can just insert them in as before,
+note: getStaticOut is an instruction which gets System.out
+[code]iList.insert(getStaticOut,loadGraphics);
+iList.insert(getStaticOut,pushX);
+iList.insert(getStaticOut,pushY);
+iList.insert(getStaticOut,callHook);[/code]</blockquote>
+<p>I got stuck there.<br>
+I don’t understand why you need the getStaticOut.<br>
+I could be totally wrong about it, but yano, I really didn’t understand that.[br][size=1]Posted on: September 17, 2007, 10:41:36 PM[/size][hr][quote=“z33, post:30, topic:112402”]wtf is wrong with the way u speak ?<br>
+Not like he invented the method its been around for 6 years<br>
+and if you read 3-4 pages from books like Covert Java / Core Java 2, Volume II and couple of things that other ppl say about it u could do whats exlpained above with much less effort<br>
+without wanting to punch authors face cuz of his geek like writing, with worlds like “challenge” lol ? and other shit i don’t want to get in to…[/quote]And lets look at the way you type.  You type like a moron.  You, actually, type against the rules of this forum.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/36</link>
+        <pubDate>Tue, 18 Sep 2007 11:25:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-36</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@ripzone Triton]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ripzone">@ripzone</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for all the effort in making this excelent tutorial.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/35</link>
+        <pubDate>Mon, 20 Aug 2007 14:50:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-35</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“z33, post:30, topic:112402”]wtf is wrong with the way u speak ?<br>
+Not like he invented the method its been around for 6 years<br>
+and if you read 3-4 pages from books like Covert Java / Core Java 2, Volume II and couple of things that other ppl say about it u could do whats exlpained above with much less effort<br>
+without wanting to punch authors face cuz of his geek like writing, with worlds like “challenge” lol ? and other shit i don’t want to get in to…[/quote]</p>
+<p>The way he speaks? He uses proper english grammar, something you don’t seem to understand. This is not aimed for Java newbies, it’s aimed for BCEL newbies, so why the hell explain how to make a batch file? Before you come here bitching, have something to bitch about.</p>
+<p>And very nice tutorial <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/34</link>
+        <pubDate>Sat, 04 Aug 2007 01:15:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-34</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@SnowX1 SnowX_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/snowx1">@SnowX1</a> wrote:</p>
+          <blockquote>
+              <p>always wanted to learn BCEL but never got round to it, might start now  :rolleyes: , looks like a very nice tutorial from what i read, thanks yakman.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/33</link>
+        <pubDate>Sat, 04 Aug 2007 01:11:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-33</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+      <item>
+        <title>Bcel Tutorial</title>
+        <dc:creator><![CDATA[@I_Am_Olan14 I Am Olan14]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/i_am_olan14">@I_Am_Olan14</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="31" data-topic="112402">
+<div class="title">
+<div class="quote-controls"></div>
+ Mod Taharok:</div>
+<blockquote>
+<p>z33, he is helping people on this website by explaining the basics of BCEL as well as explaining what it has to do with <span class="bbcode-b">RS Client Hacking</span>. May I ask what is wrong with that?</p>
+</blockquote>
+</aside>
+<p><img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=6" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-tutorial/112402/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-tutorial/112402/32</link>
+        <pubDate>Fri, 03 Aug 2007 23:47:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-112402-32</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-tutorial/112402.rss">Bcel Tutorial</source>
+      </item>
+  </channel>
+</rss>

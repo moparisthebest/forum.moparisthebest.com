@@ -1,0 +1,660 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+    <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463</link>
+    <description>This is part two of an introductory article to template metaprogramming in C++11. Today, I&#39;ll be talking about the lambda and apply metafunctions, and constructing lists as a series of pairs.
+
+[size=14pt][b]Lists[/b][/size]
+
+The compile-time meta-lists being introduced here provide the fundamental building blocks for capturing types in a heterogeneous data structure; transforming and iterating over lists provide useful application, especially in an area such as dimensional analysis (a topic covered in the next article). Much like their run-time relatives, these compile-time (or meta) lists will operate in a similar way, and will be constructed as such. Lists are a fundamental data structure in functional programming languages, such as LISP, which is derived from [b]LIS[/b]t [b]P[/b]rocessing.
+
+The fundamental building block for constructing a list in Scheme is using `cons` which is a function that creates a pair. For example, `(cons 1 2)` pairs the integers 1 and 2 into a single, immutable data object. `cons` can also contain other `cons` objects as such: `(cons (cons 1 2) (cons 3 4))`. So with this idea, it turns out making lists are easy! If you pair a value and another list -- in that order -- continuously, then you are constructing a list. Building a list of the integers 1, 2, and 3 can be accomplished like so:
+[code=scheme]
+(cons 1 (cons 2 (cons 3 &#39;())))[/code]
+Note that the `&#39;()` in the last pair simply denotes an empty list, or in the context of `cons`, an empty pair.
+
+To implement this basic structure in a C++ template metaprogram, there are two things we need to do:
+
+[ul][li]Implement a `cons` metafunction that accepts two types as a pair.[/li]
+[li]Denote an empty list, or in other words, an empty pair.[/li][/ul]
+
+
+We&#39;ll follow the above list of steps in order: starting with `cons`. If we want to withhold the property that lists are heterogeneous, we can&#39;t specify a requirement for either types given to the metafunction. Luckily this is something we don&#39;t have to worry about by default. The [i]head[/i] of the pair will be the first element, and the [i]tail[/i] will be the second element.
+[code=cpp]
+template &lt;typename h, typename t&gt;
+struct cons {
+  using type = cons&lt;h, t&gt;;
+  using head = h;
+  using tail = t;
+};[/code]
+We can make sure this works by trying to access the values of each element like so:
+[code=cpp]
+cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::head::value // == 1
+cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::tail::value // == 2[/code]
+It works! So what happens when we pair a value and another pair?
+[code=cpp]
+cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::tail::tail::value // == 3[/code]
+Just as we&#39;d expect. However, notice how ugly this has become! To make meta-cons more familiar to seasoned Schemers (and other functional programming aficionados), let&#39;s implement the `car` and `cdr` metafunctions.
+
+In Scheme, the `car` and `cdr` functions work in the following way:
+[code=scheme]
+(car (cons 1 2)) ; == 1
+(cdr (cons 1 2)) ; == 2[/code]
+As you can see here, `car` gets the first element (what we&#39;re calling the head here) and `cdr` gets the second element (what we&#39;re calling the tail). So why are they named the way they are you might ask? [b]Current Address Register[/b] and [b]Current Decrement Register[/b] are what car and cdr actually mean; you can read up on some history and more about these interesting functions [url=https://en.wikipedia.org/wiki/CAR_and_CDR]here[/url].
+
+Defining `car` and `cdr` is easy since we are just accessing head and tail elements:
+[code=cpp]
+struct car_f {
+  template &lt;typename cons&gt;
+  struct apply {
+    using type = typename cons::type::head;
+  };
+};
+
+template &lt;typename cons&gt;
+struct car : car_f::template apply&lt;cons&gt; {};
+
+struct cdr_f {
+  template &lt;typename cons&gt;
+  struct apply {
+    using type = typename cons::type::tail::type;
+  };
+};
+
+template &lt;typename cons&gt;
+struct cdr : cdr_f::template apply&lt;cons&gt; {};[/code]
+It should be obvious where we are accessing the head and tail for each metafunction, however you may have also noticed there is a lot more going on than just defining two metafunctions.
+
+What we&#39;ve got here are two [b]metafunction classes[/b]: `car_f` and `cdr_f`. `car` and `cdr` both forward to their respective metafunction classes, which means we can either choose between:
+[code=cpp]
+car&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::type::value // == 1, OR
+car_f::template apply&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::type::value // == 1[/code]
+I think you&#39;d agree the first form is more readable; this is a common pattern and one of the reasons the `car` and `cdr` metafunctions are defined here. So now that we&#39;ve seen metafunction classes, let&#39;s formalize them.
+
+A [b]metafunction class[/b] is a type which wraps a metafunction, conventionally named, apply. I will explain why metafunction classes are useful when we get to transforming lists.
+
+Since we checked to make sure `car` does what it should, let&#39;s make sure `cdr` does too:
+[code=cpp]
+cdr&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;&gt;::type::value // == 2
+cdr&lt;cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;&gt;::type // == cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;[/code]
+
+Wow! We got so much done it would be best to continue with the second item on the list: empty pairs. With the way we have defined pairs and getting elements of a pair, we want to produce an error if we try to `car` or `cdr` on a pair that is empty. To do this, we&#39;ll define a simple `empty` type whose value is itself:
+[code=cpp]
+struct empty {
+  using type = empty;
+  using value = empty;
+};
+
+car&lt;empty&gt;::type // COMPILER ERROR
+cdr&lt;empty&gt;::type // COMPILER ERROR[/code]
+Trying it out, we get compiler errors, which is what we want!
+
+[size=12pt][b]list and list_c[/b][/size]
+
+Okay, so we&#39;ve got lists working but there&#39;s a noticeable limitation... readability. In Scheme, it&#39;s a similar problem but not as bad as the metaprograms we&#39;ve been working with. Why not abstract away the idea that a list is a sequence of pairs? Instead of having to pair a value and a list, we should be able to represent a list in a way that reads each of elements instead of exposing the underlying implementation details. To do this I&#39;m going to introduce the `list` metafunction, which behaves the same as its Scheme equivalent:
+[code=scheme]
+(list 1 2 3) ; == (cons 1 (cons 2 (cons 3 &#39;())))
+(list) ; == &#39;()[/code]
+Remember that a list is constructed by pairs, so the approach we can take to constructing a list metafunction is that each of its elements is going to be at the head of a pair, and the tail will be a list of the rest; recursively defined. With that idea in mind, the beginning implementation of `list` looks like:
+[code=cpp]
+template &lt;typename first, typename ...rest&gt;
+struct list : std::conditional&lt;
+  sizeof...(rest) == 0,
+  cons&lt;first, empty&gt;,
+  cons&lt;first, typename list&lt;rest...&gt;::type&gt;
+&gt;::type {};[/code]
+Okay, so this is quite a handful to deal with all at once, but let me explain each part step-by-step.
+
+[ul][li]`template &lt;typename first, typename ...rest&gt;`. The second template argument is [i]variadic[/i], which makes this a [b]variadic template[/b]. Variadic templates are a C++11 feature which allows templates to accept a variable number of arguments. In this case, the size of our list won&#39;t be immediately known until the developer (that&#39;s you!) instantiates the template. As the name might suggest, this will contain the rest of the list&#39;s elements.[/li]
+[li]`struct list : std::conditional&lt; ... &gt;::type {};`. Here we forward to `std::conditional`, which is a part of the standard C++11 type_traits library and works like an if-else statement, where the first argument is the [i]conditional[/i], the second argument is the type to return if the conditional is true, and the third argument is the type to return if it&#39;s false.[/li]
+[li]`sizeof...(rest) == 0`. The `sizeof` here gets the number of elements in the `rest` parameter. The ellipses syntax is used to [i]expand[/i] a variadic template parameter; in this case we need to expand the `rest` parameter in order to get its size. Thus, our conditional is the number of the rest of elements in the list.[/li]
+[li]`cons&lt;first, empty&gt;`. If the number of the rest of elements is zero, we have reached the last element in the list and so we pair it with the empty list to indicate it&#39;s the end.[/li]
+[li]`cons&lt;first, typename list&lt;rest...&gt;::type&gt;`. Else, we pair the first element we have with the rest of the list recursively.[/li][/ul]
+
+We now have the ability to do:
+[code=cpp]
+list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;::type // == cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, cons&lt;int_&lt;3&gt;, empty&gt;&gt;&gt;
+car&lt;list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::type::value // == 1
+cdr&lt;list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::type // == cons&lt;int_&lt;2&gt;, cons&lt;int_&lt;3&gt;, empty&gt;&gt;
+list&lt;&gt;::type // COMPILER ERROR[/code]
+Notice that `list&lt;&gt;` produces a compiler error. We could let this slide, but we&#39;ve been consistent with how lists work in Scheme, and it just so happens that `(list) =&gt; &#39;()`. To handle the special cae of being given an empty list, we can use [b]template specialization[/b]:
+[code=cpp]
+template &lt;&gt;
+struct list&lt;empty&gt; : empty {};[/code]
+Trying to compile this still won&#39;t work since the compiler will complain that instantiating `list&lt;&gt;` doesn&#39;t have enough arguments. This is because we initially defined `list` as having a required `first` parameter. Making it a default parameter will solve this particular problem. Thus, our complete implementation of a list looks like:
+[code=cpp]
+template &lt;typename first = empty, typename ...rest&gt;
+struct list : std::conditional&lt;
+  sizeof...(rest) == 0,
+  cons&lt;first, empty&gt;,
+  cons&lt;first, typename list&lt;rest...&gt;::type&gt;
+&gt;::type {};
+
+template &lt;&gt;
+struct list&lt;empty&gt; : empty {};[/code]
+This is good, but just not good enough. Those integral constant wrappers make the list very ugly, so let&#39;s clean it up a bit:
+[code=cpp]
+template &lt;typename T, T N&gt;
+struct type_ {
+  using type = type_&lt;T, N&gt;;
+  using value_type = T;
+  static constexpr T value = N;
+  using next = type_&lt;T, N + 1&gt;;
+  using prev = type_&lt;T, N - 1&gt;;
+};
+
+template &lt;typename T, T ...elements&gt;
+struct list_c : list&lt;type_&lt;T, elements&gt;...&gt; {};
+
+list_c&lt;int, 1, 2, 3&gt;::type // == list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;
+car&lt;list_c&lt;int, 1, 2, 3&gt;&gt;::type::value // == 1
+cdr&lt;list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;
+list_c&lt;int&gt;::type // == list&lt;&gt; == empty[/code]
+Much better.
+
+[size=12pt][b]Transformations[/b][/size]
+
+In this subsection I&#39;ll show you how to transform our list implementation by creating a `map` metafunction:
+[code=cpp]
+struct map_f {
+  template &lt;typename fn, typename list&gt;
+  struct apply : cons&lt;
+    typename fn::template apply&lt;typename car&lt;list&gt;::type&gt;,
+    map_f::template apply&lt;fn, typename cdr&lt;list&gt;::type&gt;
+  &gt; {};
+};
+
+template &lt;typename fn, typename list&gt;
+struct map : map_f::template apply&lt;fn, list&gt; {};[/code]
+Essentially, `map_f` takes a metafunction and a list, and iterates over each element in the list by applying `fn` to it, given the current element as an argument to the function. This works in the same way as Scheme&#39;s `map`:
+[code=scheme]
+(map (lambda (e) (+ e 1)) (list 1 2 3)) ; == (list 2 3 4)[/code]
+Demonstrating with the above metafunction:
+[code=cpp]
+struct inc_f {
+  template &lt;typename n&gt;
+  struct apply : int_&lt;n::value + 1&gt; {};
+};
+
+map&lt;inc_f, list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list_c&lt;int, 2, 3, 4&gt;[/code]
+Earlier I did promise to talk about why metafunction classes are useful, and here is why. What happens if we define `inc_f` as the following?
+[code=cpp]
+template &lt;typename n&gt;
+struct inc_f : int_&lt;n::value + 1&gt; {};[/code]
+If we try and pass this `inc_f` to map, we get a compiler error. The reason this doesn&#39;t work is because `inc_f` is a [i]class template[/i]! Since it is a class template, it requires template parameters, which we can&#39;t give it until we have list elements. In order to make inc_f a type, which can be passed to `map`, we wrap its implementation within a type. Since the original definition of inc_f isn&#39;t a template, it is a regular class -- a type. The implementation of `inc_f` is wrapped inside its type as a metafunction, which is callable using the `T::template apply&lt; ... &gt;` syntax (where T is a metafunction class). In order to stay consistent with the way metafunction classes have their inner metafunctions called, it is a convention to name the inner metafunction [i]apply[/i].
+
+[size=14pt][b]The apply metafunction[/b][/size]
+
+`apply` will be defined the same way as applying a single element list in Scheme to keep its implementation simple. If you&#39;d like, you can implement its full Scheme equivalent as an exercise similar to how `map` was implemented.
+
+The goal of `apply` here is the following:
+[code=cpp]
+apply&lt;FN, ARGS&gt;::type::value // == FN(ARGS...)[/code]
+Here is what its implementation looks like:
+[code=cpp]
+struct apply_f {
+  template &lt;template &lt;typename...&gt; class F, typename ...args&gt;
+  struct apply : F&lt;typename args::type...&gt; {};
+};
+
+template &lt;template &lt;typename...&gt; class F, typename ...args&gt;
+struct apply : apply_f::template apply&lt;F, args...&gt; {};[/code]
+Everything here should be familiar except the template parameter syntax looks different. The syntax of `template &lt;typename...&gt; class F` is called a [b]template template[/b]. Essentially, it allows you to pass templates as an argument to another template. This idea is the basis for implementing lambda and allowing metafunctions to be passed as types.
+
+[size=14pt][b]The lambda metafunction[/b][/size]
+
+The `lambda` metafunction allows you to give it another metafunction, and returns it as a metafunction class. This is useful when trying to pass a metafunction to another without the redundancy of having to define a metafunction class, possibly polluting its namespace. Here&#39;s an example of lambda in action:
+[code=cpp]
+template &lt;typename n&gt;
+struct inc_f : int_&lt;n::value + 1&gt; {};
+
+map&lt;lambda&lt;inc_f&gt;, list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list_c&lt;int, 2, 3, 4&gt;[/code]
+Lambdas can also be applied as regular metafunction classes:
+[code=cpp]
+lambda&lt;inc&gt;::template apply&lt;int_&lt;0&gt;&gt;::type::value // == 1[/code]
+The definition of `lambda` is as follows:
+[code=cpp]
+template &lt;template &lt;typename...&gt; class F&gt;
+struct lambda {
+  template &lt;typename ...args&gt;
+  struct apply : apply_f::template apply&lt;F, args...&gt; {};
+};[/code]</description>
+    
+    <lastBuildDate>Sun, 19 Jul 2015 20:40:53 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>yep, unfortunately.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/10</link>
+        <pubDate>Sun, 19 Jul 2015 20:40:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-10</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:7, topic:552463”]<img src="http://i.imgur.com/55s6OyC.jpg" alt width="417" height="407"></p>
+<p>mfw c++ template abuse[/quote]</p>
+<p>Might be “abuse” but still the only way to metaprogram in C++.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/9</link>
+        <pubDate>Sun, 19 Jul 2015 20:25:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-9</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“justaguy, post:6, topic:552463”][quote author=Taharok link=topic=671381.msg4489855#msg4489855 date=1436938876]<br>
+May I make a request for a reduce/fold function, next? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> Any anything else about functional languages, as I’m not very familiar.<br>
+[/quote]</p>
+<p>Almost forgot about your request! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> It was a good exercise, but here you go:</p>
+<p>[code=cpp]<br>
+struct foldr_f {<br>
+template &lt;typename fn, typename base, typename list&gt;<br>
+struct apply : fn::template apply&lt;<br>
+typename car::type,<br>
+typename foldr_f::template apply&lt;fn, base, typename cdr::type&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename fn, typename base&gt;<br>
+struct apply&lt;fn, base, empty&gt; : base {};<br>
+};</p>
+<p>template &lt;typename fn, typename base, typename list&gt;<br>
+struct foldr : foldr_f::template apply&lt;fn, base, list&gt; {};</p>
+<p>struct foldl_f {<br>
+template &lt;typename fn, typename acc, typename list&gt;<br>
+struct apply : foldl_f::template apply&lt;<br>
+fn,<br>
+typename fn::template apply&lt;acc, typename car::type&gt;::type,<br>
+typename cdr::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename fn, typename acc&gt;<br>
+struct apply&lt;fn, acc, empty&gt; : acc {};<br>
+};</p>
+<p>template &lt;typename fn, typename acc, typename list&gt;<br>
+struct foldl : foldl_f::template apply&lt;fn, acc, list&gt; {};</p>
+<p>foldl&lt;lambda, int_&lt;0&gt;, list_c&lt;int,1,2,3&gt;&gt;::type::value // == 6<br>
+foldr&lt;lambda, int_&lt;1&gt;, list_c&lt;int,1,2,3&gt;&gt;::type::value // == 7[/code][/quote]</p>
+<p>Awesome, thank you!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/8</link>
+        <pubDate>Sun, 19 Jul 2015 19:39:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-8</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p><img src="http://i.imgur.com/55s6OyC.jpg" alt width="417" height="407"></p>
+<p>mfw c++ template abuse</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/7</link>
+        <pubDate>Sun, 19 Jul 2015 18:52:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-7</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="552463">
+<div class="title">
+<div class="quote-controls"></div>
+ Taharok:</div>
+<blockquote>
+<p>May I make a request for a reduce/fold function, next? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> Any anything else about functional languages, as I’m not very familiar.</p>
+</blockquote>
+</aside>
+<p>Almost forgot about your request! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> It was a good exercise, but here you go:</p>
+<p>[code=cpp]<br>
+struct foldr_f {<br>
+template &lt;typename fn, typename base, typename list&gt;<br>
+struct apply : fn::template apply&lt;<br>
+typename car::type,<br>
+typename foldr_f::template apply&lt;fn, base, typename cdr::type&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename fn, typename base&gt;<br>
+struct apply&lt;fn, base, empty&gt; : base {};<br>
+};</p>
+<p>template &lt;typename fn, typename base, typename list&gt;<br>
+struct foldr : foldr_f::template apply&lt;fn, base, list&gt; {};</p>
+<p>struct foldl_f {<br>
+template &lt;typename fn, typename acc, typename list&gt;<br>
+struct apply : foldl_f::template apply&lt;<br>
+fn,<br>
+typename fn::template apply&lt;typename car::type, acc&gt;::type,<br>
+typename cdr::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename fn, typename acc&gt;<br>
+struct apply&lt;fn, acc, empty&gt; : acc {};<br>
+};</p>
+<p>template &lt;typename fn, typename acc, typename list&gt;<br>
+struct foldl : foldl_f::template apply&lt;fn, acc, list&gt; {};</p>
+<p>foldl&lt;lambda, int_&lt;0&gt;, list_c&lt;int,1,2,3&gt;&gt;::type::value // == 6<br>
+foldr&lt;lambda, int_&lt;1&gt;, list_c&lt;int,1,2,3&gt;&gt;::type::value // == 7[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/6</link>
+        <pubDate>Sun, 19 Jul 2015 18:37:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-6</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:3, topic:552463”]Cool guide.</p>
+<p>While meta-programming in C++ is quite entertaining and, at times, a head scratcher - I don’t see any practical use for it. At least not in the sense of using lists, lambdas, and other functional programming characteristics since everything is computed at compile-time. Maybe I’m just missing the point; I have seen some interesting projects such as <a href="http://blog.mattbierner.com/stupid-template-tricks-snake/" data-bbcode="true" rel="nofollow noopener">a snake game.</a></p>
+<p><em>shrugs</em>[/quote]</p>
+<p>I think this sense comes from the tendency of TMP examples to be contrived. There is a lot of value in it, however. Using the compiler to evaluate something avoids the runtime having to evaluate it. This isn’t a perfect translation and does have tradeoffs (usually in the terms of development time, build time, and executable size), but it could have a very large impact on performance. Otherwise, sometimes you just absolutely need to use TMP because what you are trying to do cannot be done any other way (effectively).</p>
+<p>For instance, writing a meta reflection system in C++ can be done with templates and may involve some metaprogramming. It doesn’t absolutely require metaprogramming, but metaprogramming can simplify it and/or make it more streamlined to use or give more tools. Consider type introspection by itself. If you look at a lot of the templates in &lt;type_traits&gt; you will see metaprogramming being applied there.</p>
+<p>What justaguy is showing here is at a much deeper level than I’m used to seeing TMP being used for, but there’s great application there, as well. Example: I have a friend at school who implemented an optimized A* algorithm by precomputing some information about the specific types of grids being used for the pathfinding, which had an amazing impact on performance for the runtime.</p>
+<p>I think the bigger argument is whether TMP or templates in general are a good approach for solving these particular generic programming problems, or if other solutions may be better (such as external code generation). Templates have the convenience of (usually) being portable, as they are built into the language itself. They have the minus of easily exploding in complexity and, therefore, be horrible to maintain. Some compilers also do a very poor job at handling complex template codebases, and therefore build times are concern. Either way, it’s an interesting debate and it’s something I really want to go into more detail on someday.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/5</link>
+        <pubDate>Fri, 17 Jul 2015 04:41:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-5</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imthenull, post:3, topic:552463”]Cool guide.</p>
+<p>While meta-programming in C++ is quite entertaining and, at times, a head scratcher - I don’t see any practical use for it. At least not in the sense of using lists, lambdas, and other functional programming characteristics since everything is computed at compile-time. Maybe I’m just missing the point; I have seen some interesting projects such as <a href="http://blog.mattbierner.com/stupid-template-tricks-snake/" data-bbcode="true" rel="nofollow noopener">a snake game.</a></p>
+<p><em>shrugs</em>[/quote]</p>
+<p>Part 3 will discuss dimensional analysis which will require a sequence (such as a list) to hold units’ values.</p>
+<aside class="quote" data-post="2" data-topic="552463">
+<div class="title">
+<div class="quote-controls"></div>
+ Taharok:</div>
+<blockquote>
+<p>I have to say, <span class="bbcode-b">fantastic</span> job. Seriously, well done. I just skimmed it and I learned a lot of stuff. I need to read this a few more times. I love the perspective of teaching templates from a functional language perspective. Also, serious kudos for covering template lambdas. Please keep the tutorials coming! May I make a request for a reduce/fold function, next? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> Any anything else about functional languages, as I’m not very familiar.</p>
+</blockquote>
+</aside>
+<p>As always, thanks for the feedback Taharok!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/4</link>
+        <pubDate>Thu, 16 Jul 2015 05:25:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-4</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@imthenull imthenull]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imthenull">@imthenull</a> wrote:</p>
+          <blockquote>
+              <p>Cool guide.</p>
+<p>While meta-programming in C++ is quite entertaining and, at times, a head scratcher - I don’t see any practical use for it. At least not in the sense of using lists, lambdas, and other functional programming characteristics since everything is computed at compile-time. Maybe I’m just missing the point; I have seen some interesting projects such as <a href="http://blog.mattbierner.com/stupid-template-tricks-snake/" data-bbcode="true" rel="nofollow noopener">a snake game.</a></p>
+<p><em>shrugs</em></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/3</link>
+        <pubDate>Thu, 16 Jul 2015 05:16:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-3</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@mod_taharok Taharok]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mod_taharok">@mod_taharok</a> wrote:</p>
+          <blockquote>
+              <p>I have to say, <span class="bbcode-b">fantastic</span> job. Seriously, well done. I just skimmed it and I learned a lot of stuff. I need to read this a few more times. I love the perspective of teaching templates from a functional language perspective. Also, serious kudos for covering template lambdas. Please keep the tutorials coming! May I make a request for a reduce/fold function, next? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"> Any anything else about functional languages, as I’m not very familiar.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/2</link>
+        <pubDate>Wed, 15 Jul 2015 05:41:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-2</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Lists, apply, and lambda</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>This is part two of an introductory article to template metaprogramming in C++11. Today, I’ll be talking about the lambda and apply metafunctions, and constructing lists as a series of pairs.</p>
+<p>[size=14pt]<span class="bbcode-b">Lists</span>[/size]</p>
+<p>The compile-time meta-lists being introduced here provide the fundamental building blocks for capturing types in a heterogeneous data structure; transforming and iterating over lists provide useful application, especially in an area such as dimensional analysis (a topic covered in the next article). Much like their run-time relatives, these compile-time (or meta) lists will operate in a similar way, and will be constructed as such. Lists are a fundamental data structure in functional programming languages, such as LISP, which is derived from <span class="bbcode-b">LIS</span>t <span class="bbcode-b">P</span>rocessing.</p>
+<p>The fundamental building block for constructing a list in Scheme is using <code>cons</code> which is a function that creates a pair. For example, <code>(cons 1 2)</code> pairs the integers 1 and 2 into a single, immutable data object. <code>cons</code> can also contain other <code>cons</code> objects as such: <code>(cons (cons 1 2) (cons 3 4))</code>. So with this idea, it turns out making lists are easy! If you pair a value and another list – in that order – continuously, then you are constructing a list. Building a list of the integers 1, 2, and 3 can be accomplished like so:</p>
+<p><code>
+(cons 1 (cons 2 (cons 3 '())))</code><br>
+Note that the <code>'()</code> in the last pair simply denotes an empty list, or in the context of <code>cons</code>, an empty pair.</p>
+<p>To implement this basic structure in a C++ template metaprogram, there are two things we need to do:</p>
+<p>[ul][li]Implement a <code>cons</code> metafunction that accepts two types as a pair.[/li]<br>
+[li]Denote an empty list, or in other words, an empty pair.[/li][/ul]</p>
+<p>We’ll follow the above list of steps in order: starting with <code>cons</code>. If we want to withhold the property that lists are heterogeneous, we can’t specify a requirement for either types given to the metafunction. Luckily this is something we don’t have to worry about by default. The <span class="bbcode-i">head</span> of the pair will be the first element, and the <span class="bbcode-i">tail</span> will be the second element.</p>
+<p><code>
+template &lt;typename h, typename t&gt;
+struct cons {
+  using type = cons&lt;h, t&gt;;
+  using head = h;
+  using tail = t;
+};</code><br>
+We can make sure this works by trying to access the values of each element like so:</p>
+<p><code>
+cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::head::value // == 1
+cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::tail::value // == 2</code><br>
+It works! So what happens when we pair a value and another pair?</p>
+<p><code>
+cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::tail::tail::value // == 3</code><br>
+Just as we’d expect. However, notice how ugly this has become! To make meta-cons more familiar to seasoned Schemers (and other functional programming aficionados), let’s implement the <code>car</code> and <code>cdr</code> metafunctions.</p>
+<p>In Scheme, the <code>car</code> and <code>cdr</code> functions work in the following way:</p>
+<p><code>
+(car (cons 1 2)) ; == 1
+(cdr (cons 1 2)) ; == 2</code><br>
+As you can see here, <code>car</code> gets the first element (what we’re calling the head here) and <code>cdr</code> gets the second element (what we’re calling the tail). So why are they named the way they are you might ask? <span class="bbcode-b">Current Address Register</span> and <span class="bbcode-b">Current Decrement Register</span> are what car and cdr actually mean; you can read up on some history and more about these interesting functions <a href="https://en.wikipedia.org/wiki/CAR_and_CDR" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+<p>Defining <code>car</code> and <code>cdr</code> is easy since we are just accessing head and tail elements:</p>
+<p>[code=cpp]<br>
+struct car_f {<br>
+template <br>
+struct apply {<br>
+using type = typename cons::type::head;<br>
+};<br>
+};</p>
+<p>template <br>
+struct car : car_f::template apply {};</p>
+<p>struct cdr_f {<br>
+template <br>
+struct apply {<br>
+using type = typename cons::type::tail::type;<br>
+};<br>
+};</p>
+<p>template <br>
+struct cdr : cdr_f::template apply {};[/code]<br>
+It should be obvious where we are accessing the head and tail for each metafunction, however you may have also noticed there is a lot more going on than just defining two metafunctions.</p>
+<p>What we’ve got here are two <span class="bbcode-b">metafunction classes</span>: <code>car_f</code> and <code>cdr_f</code>. <code>car</code> and <code>cdr</code> both forward to their respective metafunction classes, which means we can either choose between:</p>
+<p><code>
+car&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::type::value // == 1, OR
+car_f::template apply&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;::type::value // == 1</code><br>
+I think you’d agree the first form is more readable; this is a common pattern and one of the reasons the <code>car</code> and <code>cdr</code> metafunctions are defined here. So now that we’ve seen metafunction classes, let’s formalize them.</p>
+<p>A <span class="bbcode-b">metafunction class</span> is a type which wraps a metafunction, conventionally named, apply. I will explain why metafunction classes are useful when we get to transforming lists.</p>
+<p>Since we checked to make sure <code>car</code> does what it should, let’s make sure <code>cdr</code> does too:</p>
+<p><code>
+cdr&lt;cons&lt;int_&lt;1&gt;, int_&lt;2&gt;&gt;&gt;::type::value // == 2
+cdr&lt;cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;&gt;::type // == cons&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;</code></p>
+<p>Wow! We got so much done it would be best to continue with the second item on the list: empty pairs. With the way we have defined pairs and getting elements of a pair, we want to produce an error if we try to <code>car</code> or <code>cdr</code> on a pair that is empty. To do this, we’ll define a simple <code>empty</code> type whose value is itself:</p>
+<p>[code=cpp]<br>
+struct empty {<br>
+using type = empty;<br>
+using value = empty;<br>
+};</p>
+<p>car::type // COMPILER ERROR<br>
+cdr::type // COMPILER ERROR[/code]<br>
+Trying it out, we get compiler errors, which is what we want!</p>
+<p>[size=12pt]<span class="bbcode-b">list and list_c</span>[/size]</p>
+<p>Okay, so we’ve got lists working but there’s a noticeable limitation… readability. In Scheme, it’s a similar problem but not as bad as the metaprograms we’ve been working with. Why not abstract away the idea that a list is a sequence of pairs? Instead of having to pair a value and a list, we should be able to represent a list in a way that reads each of elements instead of exposing the underlying implementation details. To do this I’m going to introduce the <code>list</code> metafunction, which behaves the same as its Scheme equivalent:</p>
+<p><code>
+(list 1 2 3) ; == (cons 1 (cons 2 (cons 3 '())))
+(list) ; == '()</code><br>
+Remember that a list is constructed by pairs, so the approach we can take to constructing a list metafunction is that each of its elements is going to be at the head of a pair, and the tail will be a list of the rest; recursively defined. With that idea in mind, the beginning implementation of <code>list</code> looks like:</p>
+<p>[code=cpp]<br>
+template &lt;typename first, typename …rest&gt;<br>
+struct list : std::conditional&lt;<br>
+sizeof…(rest) == 0,<br>
+cons&lt;first, empty&gt;,<br>
+cons&lt;first, typename list&lt;rest…&gt;::type&gt;</p>
+<blockquote>
+<p>::type {};[/code]<br>
+Okay, so this is quite a handful to deal with all at once, but let me explain each part step-by-step.</p>
+</blockquote>
+<p>[ul][li]<code>template &lt;typename first, typename ...rest&gt;</code>. The second template argument is <span class="bbcode-i">variadic</span>, which makes this a <span class="bbcode-b">variadic template</span>. Variadic templates are a C++11 feature which allows templates to accept a variable number of arguments. In this case, the size of our list won’t be immediately known until the developer (that’s you!) instantiates the template. As the name might suggest, this will contain the rest of the list’s elements.[/li]<br>
+[li]<code>struct list : std::conditional&lt; ... &gt;::type {};</code>. Here we forward to <code>std::conditional</code>, which is a part of the standard C++11 type_traits library and works like an if-else statement, where the first argument is the <span class="bbcode-i">conditional</span>, the second argument is the type to return if the conditional is true, and the third argument is the type to return if it’s false.[/li]<br>
+[li]<code>sizeof...(rest) == 0</code>. The <code>sizeof</code> here gets the number of elements in the <code>rest</code> parameter. The ellipses syntax is used to <span class="bbcode-i">expand</span> a variadic template parameter; in this case we need to expand the <code>rest</code> parameter in order to get its size. Thus, our conditional is the number of the rest of elements in the list.[/li]<br>
+[li]<code>cons&lt;first, empty&gt;</code>. If the number of the rest of elements is zero, we have reached the last element in the list and so we pair it with the empty list to indicate it’s the end.[/li]<br>
+[li]<code>cons&lt;first, typename list&lt;rest...&gt;::type&gt;</code>. Else, we pair the first element we have with the rest of the list recursively.[/li][/ul]</p>
+<p>We now have the ability to do:</p>
+<p><code>
+list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;::type // == cons&lt;int_&lt;1&gt;, cons&lt;int_&lt;2&gt;, cons&lt;int_&lt;3&gt;, empty&gt;&gt;&gt;
+car&lt;list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::type::value // == 1
+cdr&lt;list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;&gt;::type // == cons&lt;int_&lt;2&gt;, cons&lt;int_&lt;3&gt;, empty&gt;&gt;
+list&lt;&gt;::type // COMPILER ERROR</code><br>
+Notice that <code>list&lt;&gt;</code> produces a compiler error. We could let this slide, but we’ve been consistent with how lists work in Scheme, and it just so happens that <code>(list) =&gt; '()</code>. To handle the special cae of being given an empty list, we can use <span class="bbcode-b">template specialization</span>:</p>
+<p><code>
+template &lt;&gt;
+struct list&lt;empty&gt; : empty {};</code><br>
+Trying to compile this still won’t work since the compiler will complain that instantiating <code>list&lt;&gt;</code> doesn’t have enough arguments. This is because we initially defined <code>list</code> as having a required <code>first</code> parameter. Making it a default parameter will solve this particular problem. Thus, our complete implementation of a list looks like:</p>
+<p>[code=cpp]<br>
+template &lt;typename first = empty, typename …rest&gt;<br>
+struct list : std::conditional&lt;<br>
+sizeof…(rest) == 0,<br>
+cons&lt;first, empty&gt;,<br>
+cons&lt;first, typename list&lt;rest…&gt;::type&gt;</p>
+<blockquote>
+<p>::type {};</p>
+</blockquote>
+<p>template &lt;&gt;<br>
+struct list : empty {};[/code]<br>
+This is good, but just not good enough. Those integral constant wrappers make the list very ugly, so let’s clean it up a bit:</p>
+<p>[code=cpp]<br>
+template &lt;typename T, T N&gt;<br>
+struct type_ {<br>
+using type = type_&lt;T, N&gt;;<br>
+using value_type = T;<br>
+static constexpr T value = N;<br>
+using next = type_&lt;T, N + 1&gt;;<br>
+using prev = type_&lt;T, N - 1&gt;;<br>
+};</p>
+<p>template &lt;typename T, T …elements&gt;<br>
+struct list_c : list&lt;type_&lt;T, elements&gt;…&gt; {};</p>
+<p>list_c&lt;int, 1, 2, 3&gt;::type // == list&lt;int_&lt;1&gt;, int_&lt;2&gt;, int_&lt;3&gt;&gt;<br>
+car&lt;list_c&lt;int, 1, 2, 3&gt;&gt;::type::value // == 1<br>
+cdr&lt;list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list&lt;int_&lt;2&gt;, int_&lt;3&gt;&gt;<br>
+list_c::type // == list&lt;&gt; == empty[/code]<br>
+Much better.</p>
+<p>[size=12pt]<span class="bbcode-b">Transformations</span>[/size]</p>
+<p>In this subsection I’ll show you how to transform our list implementation by creating a <code>map</code> metafunction:</p>
+<p>[code=cpp]<br>
+struct map_f {<br>
+template &lt;typename fn, typename list&gt;<br>
+struct apply : cons&lt;<br>
+typename fn::template apply&lt;typename car::type&gt;,<br>
+map_f::template apply&lt;fn, typename cdr::type&gt;</p>
+<blockquote>
+<p>{};<br>
+};</p>
+</blockquote>
+<p>template &lt;typename fn, typename list&gt;<br>
+struct map : map_f::template apply&lt;fn, list&gt; {};[/code]<br>
+Essentially, <code>map_f</code> takes a metafunction and a list, and iterates over each element in the list by applying <code>fn</code> to it, given the current element as an argument to the function. This works in the same way as Scheme’s <code>map</code>:</p>
+<p><code>
+(map (lambda (e) (+ e 1)) (list 1 2 3)) ; == (list 2 3 4)</code><br>
+Demonstrating with the above metafunction:</p>
+<p>[code=cpp]<br>
+struct inc_f {<br>
+template <br>
+struct apply : int_&lt;n::value + 1&gt; {};<br>
+};</p>
+<p>map&lt;inc_f, list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list_c&lt;int, 2, 3, 4&gt;[/code]<br>
+Earlier I did promise to talk about why metafunction classes are useful, and here is why. What happens if we define <code>inc_f</code> as the following?</p>
+<p><code>
+template &lt;typename n&gt;
+struct inc_f : int_&lt;n::value + 1&gt; {};</code><br>
+If we try and pass this <code>inc_f</code> to map, we get a compiler error. The reason this doesn’t work is because <code>inc_f</code> is a <span class="bbcode-i">class template</span>! Since it is a class template, it requires template parameters, which we can’t give it until we have list elements. In order to make inc_f a type, which can be passed to <code>map</code>, we wrap its implementation within a type. Since the original definition of inc_f isn’t a template, it is a regular class – a type. The implementation of <code>inc_f</code> is wrapped inside its type as a metafunction, which is callable using the <code>T::template apply&lt; ... &gt;</code> syntax (where T is a metafunction class). In order to stay consistent with the way metafunction classes have their inner metafunctions called, it is a convention to name the inner metafunction <span class="bbcode-i">apply</span>.</p>
+<p>[size=14pt]<span class="bbcode-b">The apply metafunction</span>[/size]</p>
+<p><code>apply</code> will be defined the same way as applying a single element list in Scheme to keep its implementation simple. If you’d like, you can implement its full Scheme equivalent as an exercise similar to how <code>map</code> was implemented.</p>
+<p>The goal of <code>apply</code> here is the following:</p>
+<p><code>
+apply&lt;FN, ARGS&gt;::type::value // == FN(ARGS...)</code><br>
+Here is what its implementation looks like:</p>
+<p>[code=cpp]<br>
+struct apply_f {<br>
+template &lt;template &lt;typename…&gt; class F, typename …args&gt;<br>
+struct apply : F {};<br>
+};</p>
+<p>template &lt;template &lt;typename…&gt; class F, typename …args&gt;<br>
+struct apply : apply_f::template apply&lt;F, args…&gt; {};[/code]<br>
+Everything here should be familiar except the template parameter syntax looks different. The syntax of <code>template &lt;typename...&gt; class F</code> is called a <span class="bbcode-b">template template</span>. Essentially, it allows you to pass templates as an argument to another template. This idea is the basis for implementing lambda and allowing metafunctions to be passed as types.</p>
+<p>[size=14pt]<span class="bbcode-b">The lambda metafunction</span>[/size]</p>
+<p>The <code>lambda</code> metafunction allows you to give it another metafunction, and returns it as a metafunction class. This is useful when trying to pass a metafunction to another without the redundancy of having to define a metafunction class, possibly polluting its namespace. Here’s an example of lambda in action:</p>
+<p>[code=cpp]<br>
+template <br>
+struct inc_f : int_&lt;n::value + 1&gt; {};</p>
+<p>map&lt;lambda&lt;inc_f&gt;, list_c&lt;int, 1, 2, 3&gt;&gt;::type // == list_c&lt;int, 2, 3, 4&gt;[/code]<br>
+Lambdas can also be applied as regular metafunction classes:</p>
+<p><code>
+lambda&lt;inc&gt;::template apply&lt;int_&lt;0&gt;&gt;::type::value // == 1</code><br>
+The definition of <code>lambda</code> is as follows:</p>
+<p><code>
+template &lt;template &lt;typename...&gt; class F&gt;
+struct lambda {
+  template &lt;typename ...args&gt;
+  struct apply : apply_f::template apply&lt;F, args...&gt; {};
+};</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463/1</link>
+        <pubDate>Wed, 15 Jul 2015 04:58:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552463-1</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-lists-apply-and-lambda/552463.rss">Introduction to C++ Metaprogramming: Lists, apply, and lambda</source>
+      </item>
+  </channel>
+</rss>

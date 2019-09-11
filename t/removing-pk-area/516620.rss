@@ -1,0 +1,775 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Removing pk area</title>
+    <link>https://forum.moparisthebest.com/t/removing-pk-area/516620</link>
+    <description>i&#39;m using a 614 pk server but how i make varrock big bank non pk area. this is what is in combat.java
+
+[code]package org.dementhium.model.combat;
+
+import org.dementhium.content.skills.Prayer;
+import org.dementhium.content.skills.magic.Spell;
+import org.dementhium.event.Tickable;
+import org.dementhium.identifiers.IdentifierManager;
+import org.dementhium.model.Location;
+import org.dementhium.model.Mob;
+import org.dementhium.model.World;
+import org.dementhium.model.combat.impl.RangedCombat;
+import org.dementhium.model.player.Bonuses;
+import org.dementhium.model.player.Player;
+import org.dementhium.model.player.Skills;
+import org.dementhium.net.ActionSender;
+import org.dementhium.util.Misc;
+
+/**
+ * 
+ * @author &#39;
+ * 
+ */
+public final class Combat {
+	//ACCURATE, AGGRESSIVE, CONTROLLED, DEFENSIVE, LONG_RANGE, NONE, RAPID
+	public static double styleBonus(Player src) {
+		if (src.getSettings() == null) {
+			return 1;
+		}
+		if (src.getSettings().getCombatType() == null) {
+			return 1;
+		}
+		switch (src.getSettings().getCombatType()) {
+		case ACCURATE:
+			return 1.025;
+		case AGGRESSIVE:
+			return 1.1;
+		case DEFENSIVE:
+		case LONG_RANGE:
+			return 0.9;
+		case RAPID:
+			return 0.825;
+		}
+		return 1;
+	}
+	public static double styleAccBonus(Player src) {
+		if (src.getSettings() == null) {
+			return 1;
+		}
+		if (src.getSettings().getCombatType() == null) {
+			return 1;
+		}
+		switch (src.getSettings().getCombatType()) {
+		case ACCURATE:
+			return 1.05;
+		case AGGRESSIVE:
+			return 0.91;
+		case DEFENSIVE:
+		case LONG_RANGE:
+			return 0.9;
+		case RAPID:
+			return 0.875;
+		}
+		return 1;
+	}
+
+	public static double getAccuracy(Player s, Player d, FightType type) {
+		double base = 1;
+		double off = 0;
+		double def = 0;
+		switch (type) {
+		default:
+		case MELEE:
+			off = Math.floor((Misc.random(s.getSkills().getLevel(type.getSkill()) + s.getSkills().getLevel(Skills.ATTACK) * 0.725)) * styleAccBonus(s));
+			def = Misc.random(d.getSkills().getLevel(Skills.DEFENCE));
+			base = 0.58 * (off / (def &gt; 0 ? def : 1));
+			break;
+		case RANGE:
+			off = Math.floor((Misc.random(s.getSkills().getLevel(type.getSkill()) + s.getSkills().getLevel(Skills.RANGE) * 0.725)) * styleAccBonus(s));
+			def = Misc.random(d.getSkills().getLevel(Skills.DEFENCE));
+			base = 0.53 * (off / (def &gt; 0 ? def : 1));
+			break;
+		case MAGIC:
+			off = s.getBonuses().getBonus(Bonuses.MAGIC_ATTACK) * styleBonus(s);
+			def = d.getBonuses().getBonus(Bonuses.MAGIC_DEFENCE);
+			base = (off * 1.1) / (def &gt; 0 ? def : 1);
+			if (base &lt; 0) {
+				base = Math.ceil(((1 - Math.abs(base - 1)) + 1.25));
+			}
+			if (base == 1) {
+				return 0.45;
+			}
+			break;
+		}
+		return base * 0.9;
+	}
+
+	public static int calculatePlayerHit(Player src, Mob victim, FightType type, Spell spell) {
+		if (src == null || victim == null || type == null) {
+			return 0;
+		}
+		if (src.isDead() || victim.isDead() || !src.isOnline()) {
+			return 0;
+		}
+		if (type.equals(FightType.MAGIC) &amp;&amp; spell == null) {
+			return 0;
+		}
+		int verdict = 0;
+		double effectiveStrength, baseDamage, maxHit;
+		if (victim instanceof Player) {
+			Player pv = (Player) victim;
+			switch (type) {
+			default:
+			case MELEE:
+				effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill())) * styleBonus(src);
+				baseDamage = 110 + effectiveStrength + ((src.getBonuses().getBonus(Bonuses.STRENGTH) / 8)
+						+ (effectiveStrength * src.getBonuses().getBonus(Bonuses.STRENGTH)) / 64);
+				maxHit = Math.floor(baseDamage);
+				break;
+			case RANGE:
+				effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill()) * 1024) * styleBonus(src);
+				baseDamage = 50 + ((effectiveStrength / 8) + (src.getBonuses().getBonus(Bonuses.RANGED) + 64)) / 64;
+				maxHit = Math.floor(baseDamage) * RangedCombat.getRangedBonus(src, true);
+				break;
+			case MAGIC:
+				effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill())) * styleBonus(src);
+				baseDamage = effectiveStrength + Misc.random(spell.getTrueMaxHit());
+				maxHit = Math.floor(baseDamage);
+				if (maxHit &gt; (spell.getMaxHit() * 10)) {
+					maxHit = spell.getMaxHit() * 10;
+				}
+				break;
+			}
+			double accuracy = getAccuracy(src, pv, type);
+			if (accuracy &lt; 10) {
+				verdict = accuracy &gt; 1 ? Misc.random(Math.ceil(maxHit * 1.125 * (accuracy &gt; 1.5 ? (src.getSettings().isUsingSpecial() ? 1.075 : 1.05) : accuracy))) : accuracy &lt; 0.5 ? 0 : Misc.random(Math.floor(maxHit * 0.7));
+			} else {
+				verdict = Misc.random(Math.ceil(maxHit * (src.getSettings().isUsingSpecial() ? 1.15 : 1.075)));
+			}
+
+			verdict *= CombatUtils.specialPower(src, src.getEquipment().getSlot(3));
+
+			if (spell != null) {
+				if (verdict &gt; (spell.getMaxHit() * 10))
+					verdict = spell.getMaxHit() * 10;
+			}
+			if (verdict &gt; maxHit &amp;&amp; (!src.getSettings().isUsingSpecial() || verdict &gt;= (maxHit * 1.25))) {
+				verdict = (int) Math.ceil(maxHit);
+			}
+			/*
+			 * Never let it be over the other player&#39;s hitpoints.
+			 */
+			if (verdict &gt; pv.getSkills().getHitPoints()) {
+				verdict = pv.getSkills().getHitPoints();
+			}
+
+			//src.sendMessage(&quot;EFFECTIVE: &quot; + Math.floor(effectiveStrength) + &quot; BASE: &quot; + baseDamage + &quot; MAX: &quot; + maxHit + &quot; ACCURACY: &quot; + Math.floor(accuracy) + &quot; VERDICT: &quot; + verdict);
+			return verdict;
+		}
+		return 0;
+	}
+
+	/**
+	 * 
+	 * @author 
+	 * 
+	 */
+	public static enum FightType {
+		RANGE(Skills.RANGE), 
+		MAGIC(Skills.MAGIC), 
+		MELEE(Skills.STRENGTH);
+
+		private final int skill;
+
+		private FightType(int skill) {
+			this.skill = skill;
+		}
+
+		public int getSkill() {
+			return skill;
+		}
+	}
+
+	public static enum CombatStyle {
+		CRUSH, DRAGON_FIRE, MAGIC, 
+		NONE, RANGED, SLASH,
+		STAB, CHOP, VENGEANCE, BLOCK
+	}
+	public static enum CombatType {
+		ACCURATE, AGGRESSIVE, CONTROLLED, DEFENSIVE, LONG_RANGE, NONE, RAPID
+	}
+
+	public static boolean canAttack(Mob mob, Mob victim) {
+		if (mob == null || victim == null) {
+			return false;
+		}
+		if (mob.isDead() || victim.isDead()) {
+			mob.resetCombat();
+			return false;
+		}
+		if (mob.isPlayer() &amp;&amp; victim.isPlayer() &amp;&amp; !CombatUtils.isDeepEnoughInWild(mob, victim)){
+			mob.resetCombat();
+			mob.getWalkingQueue().reset();
+			return false;
+		}
+		if (mob.isNPC()) {
+			if (mob.getNpc().isHidden()) {
+				mob.resetCombat();
+				mob.getWalkingQueue().reset();
+				return false;
+			}
+		}
+		if (mob.isNPC()) {
+			if (!mob.getNpc().isAttackable()) {
+				mob.resetCombat();
+				mob.getWalkingQueue().reset();
+				return false;
+			}
+		}
+		if (victim.isNPC()) {
+			if (!victim.getNpc().isAttackable()) {
+				mob.resetCombat();
+				mob.getWalkingQueue().reset();
+				return false;
+			}
+		}
+		if (victim.isNPC()) {
+			if (victim.getNpc().isHidden()) {
+				mob.resetCombat();
+				mob.getWalkingQueue().reset();
+				return false;
+			}
+		}
+		boolean moved = false;
+		if (mob.getLocation().equals(victim.getLocation()) &amp;&amp; !mob.getCombatState().isFrozen() &amp;&amp; !victim.getWalkingQueue().isMoving()) {
+			int random = Misc.random(3);
+			int moveX = mob.getLocation().getX(), moveY = mob.getLocation().getY();
+			switch(random) {
+			case 0:
+				moveX--;
+				break;
+			case 1:
+				moveY++;
+				break;
+			case 2:
+				moveX++;
+				break;
+			case 3:
+				moveY--;
+				break;
+			}
+			mob.getCombatState().setSpellDelay(mob.getCombatState().getSpellDelay() + 2);
+			mob.getCombatState().setAttackDelay(mob.getCombatState().getAttackDelay() + 2);
+			mob.getWalkingQueue().reset();
+			mob.getWalkingQueue().addClippedWalkingQueue(
+					moveX - (mob.getLocation().getRegionX() - 6) * 8, 
+					moveY - (mob.getLocation().getRegionY() - 6) * 8);
+			moved = true;
+		}
+		if (mob.getLocation().equals(victim.getLocation()) &amp;&amp; !moved &amp;&amp; !victim.isNPC()) {
+			return false;
+		}
+		if (mob.isPlayer() &amp;&amp; victim.isPlayer()) {
+			if (!mob.getPlayer().refreshAttackOptions() || !victim.getPlayer().refreshAttackOptions()) {
+				ActionSender.sendMessage(mob.getPlayer(), &quot;You cannot attack players outside of the wilderness!&quot;);
+				mob.resetCombat();
+				return false;
+			}
+			if (mob.inSafePK()) {
+				if (mob.getCombatState().inCombat() || victim.getCombatState().inCombat()) {
+					if (mob.getCombatState().getLastAttacker() != null) {
+						if (mob.getCombatState().getLastAttacker().getIndex() != victim.getIndex()) {
+							mob.getPlayer().sendMessage(&quot;You are already in combat!&quot;);
+							mob.resetCombat();
+							return false;
+						}
+					}
+					if (victim.getCombatState().getLastAttacker() != null) {
+						if (victim.getCombatState().getLastAttacker().getIndex() != mob.getIndex() &amp;&amp; !victim.getCombatState().getLastAttacker().isNPC())	 {
+							mob.getPlayer().sendMessage(&quot;That player is already in combat.&quot;);
+							mob.resetCombat();
+							return false;
+						}
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	public static void process(final Mob mob) {
+		final Mob victim = mob.getCombatState().getVictim();
+		if (!canAttack(mob, victim)) {
+			return;
+		}
+		final FightType type = mob.getFightType();
+		final CombatAction action = CombatAction.forType(mob, type);
+		if (!action.canAttack(mob, victim)) {
+			return;
+		}
+		mob.getCombatState().setLastAttacker(victim);
+		victim.getCombatState().setLastAttacker(mob);
+		boolean timerOver = type == FightType.MAGIC ? mob.getCombatState().getSpellDelay() == 0 : mob.getCombatState().getAttackDelay() == 0;
+		if (timerOver) {
+			mob.turnTo(victim); 
+			final CombatHit hit = action.hit(mob, victim);
+			if (hit != null) {
+				if (type.equals(FightType.MELEE)) {
+					if (hit.getTicks() &lt;= 1) {
+						victim.animate(victim.getDefenceAnimation());
+					} else {
+						World.getWorld().submit(new Tickable(hit.getTicks() - 1) {
+							@Override
+							public void execute() {
+								if (!victim.isAnimating()) {
+									victim.animate(victim.getDefenceAnimation());
+									if (victim.isPlayer()) {
+										if (victim.getPlayer().getPrayer().usingPrayer(1, Prayer.DEFLECT_MELEE)) {
+											victim.graphics(2230);
+										}
+									}
+								}
+								this.stop();
+							}
+						});
+					}
+				}
+				World.getWorld().submit(new Tickable(hit.getTicks()) {
+					@Override
+					public void execute() {
+						mob.getCombatState().setLastHit(hit.getDamage());
+						IdentifierManager.get(&quot;combat_after_effect&quot;).identify(mob, victim, hit, type);
+						victim.hit(hit.getDamage());
+						this.stop();
+					}
+				});
+			}
+		}
+	}
+
+	public static boolean diagonal(Location l, Location l1) {
+		int xDial = Math.abs(l.getX() - l1.getX());
+		int yDial = Math.abs(l.getY() - l1.getY());
+		return xDial == 1 &amp;&amp; yDial == 1;
+	}
+
+}
+[/code]</description>
+    
+    <lastBuildDate>Wed, 17 Apr 2013 17:30:53 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/removing-pk-area/516620.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Removing pk area</title>
+        <dc:creator><![CDATA[@beats beats]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/beats">@beats</a> wrote:</p>
+          <blockquote>
+              <p>oh lol for some reason it didnt take all</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/removing-pk-area/516620/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/removing-pk-area/516620/3</link>
+        <pubDate>Wed, 17 Apr 2013 17:30:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-516620-3</guid>
+        <source url="https://forum.moparisthebest.com/t/removing-pk-area/516620.rss">Removing pk area</source>
+      </item>
+      <item>
+        <title>Removing pk area</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“beats, post:1, topic:516620”]i’m using a 614 pk server but how i make varrock big bank non pk area. this is what is in combat.java</p>
+<p>[code]package org.dementhium.model.combat;</p>
+<p>import org.dementhium.content.skills.Prayer;<br>
+import org.dementhium.content.skills.magic.Spell;<br>
+import org.dementhium.event.Tickable;<br>
+import org.dementhium.identifiers.IdentifierManager;<br>
+import org.dementhium.model.Location;<br>
+import org.dementhium.model.Mob;<br>
+import org.dementhium.model.World;<br>
+import org.dementhium.model.combat.impl.RangedCombat;<br>
+import org.dementhium.model.player.Bonuses;<br>
+import org.dementhium.model.player.Player;<br>
+import org.dementhium.model.player.Skills;<br>
+import org.dementhium.net.ActionSender;<br>
+import org.dementhium.util.Misc;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<span class="mention">@author</span> 'Mystic Flow</li>
+<li>
+</li>
+</ul>
+<p>*/[/code][/quote]That’s just imports and a comment <span class="bbcode-u">HOW</span> do you want people to help<span class="bbcode-u"> YOU</span> LOL<br>
+Well i don’t think it has an advanced system like hyperion or so, so You should check for a booolean.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/removing-pk-area/516620/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/removing-pk-area/516620/2</link>
+        <pubDate>Tue, 16 Apr 2013 23:16:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-516620-2</guid>
+        <source url="https://forum.moparisthebest.com/t/removing-pk-area/516620.rss">Removing pk area</source>
+      </item>
+      <item>
+        <title>Removing pk area</title>
+        <dc:creator><![CDATA[@beats beats]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/beats">@beats</a> wrote:</p>
+          <blockquote>
+              <p>i’m using a 614 pk server but how i make varrock big bank non pk area. this is what is in combat.java</p>
+<p>[code]package org.dementhium.model.combat;</p>
+<p>import org.dementhium.content.skills.Prayer;<br>
+import org.dementhium.content.skills.magic.Spell;<br>
+import org.dementhium.event.Tickable;<br>
+import org.dementhium.identifiers.IdentifierManager;<br>
+import org.dementhium.model.Location;<br>
+import org.dementhium.model.Mob;<br>
+import org.dementhium.model.World;<br>
+import org.dementhium.model.combat.impl.RangedCombat;<br>
+import org.dementhium.model.player.Bonuses;<br>
+import org.dementhium.model.player.Player;<br>
+import org.dementhium.model.player.Skills;<br>
+import org.dementhium.net.ActionSender;<br>
+import org.dementhium.util.Misc;</p>
+<p>/**<br>
+*</p>
+<ul>
+<li>
+<span class="mention">@author</span> ’</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public final class Combat {<br>
+//ACCURATE, AGGRESSIVE, CONTROLLED, DEFENSIVE, LONG_RANGE, NONE, RAPID<br>
+public static double styleBonus(Player src) {<br>
+if (src.getSettings() == null) {<br>
+return 1;<br>
+}<br>
+if (src.getSettings().getCombatType() == null) {<br>
+return 1;<br>
+}<br>
+switch (src.getSettings().getCombatType()) {<br>
+case ACCURATE:<br>
+return 1.025;<br>
+case AGGRESSIVE:<br>
+return 1.1;<br>
+case DEFENSIVE:<br>
+case LONG_RANGE:<br>
+return 0.9;<br>
+case RAPID:<br>
+return 0.825;<br>
+}<br>
+return 1;<br>
+}<br>
+public static double styleAccBonus(Player src) {<br>
+if (src.getSettings() == null) {<br>
+return 1;<br>
+}<br>
+if (src.getSettings().getCombatType() == null) {<br>
+return 1;<br>
+}<br>
+switch (src.getSettings().getCombatType()) {<br>
+case ACCURATE:<br>
+return 1.05;<br>
+case AGGRESSIVE:<br>
+return 0.91;<br>
+case DEFENSIVE:<br>
+case LONG_RANGE:<br>
+return 0.9;<br>
+case RAPID:<br>
+return 0.875;<br>
+}<br>
+return 1;<br>
+}</p>
+<pre><code>public static double getAccuracy(Player s, Player d, FightType type) {
+	double base = 1;
+	double off = 0;
+	double def = 0;
+	switch (type) {
+	default:
+	case MELEE:
+		off = Math.floor((Misc.random(s.getSkills().getLevel(type.getSkill()) + s.getSkills().getLevel(Skills.ATTACK) * 0.725)) * styleAccBonus(s));
+		def = Misc.random(d.getSkills().getLevel(Skills.DEFENCE));
+		base = 0.58 * (off / (def &gt; 0 ? def : 1));
+		break;
+	case RANGE:
+		off = Math.floor((Misc.random(s.getSkills().getLevel(type.getSkill()) + s.getSkills().getLevel(Skills.RANGE) * 0.725)) * styleAccBonus(s));
+		def = Misc.random(d.getSkills().getLevel(Skills.DEFENCE));
+		base = 0.53 * (off / (def &gt; 0 ? def : 1));
+		break;
+	case MAGIC:
+		off = s.getBonuses().getBonus(Bonuses.MAGIC_ATTACK) * styleBonus(s);
+		def = d.getBonuses().getBonus(Bonuses.MAGIC_DEFENCE);
+		base = (off * 1.1) / (def &gt; 0 ? def : 1);
+		if (base &lt; 0) {
+			base = Math.ceil(((1 - Math.abs(base - 1)) + 1.25));
+		}
+		if (base == 1) {
+			return 0.45;
+		}
+		break;
+	}
+	return base * 0.9;
+}
+
+public static int calculatePlayerHit(Player src, Mob victim, FightType type, Spell spell) {
+	if (src == null || victim == null || type == null) {
+		return 0;
+	}
+	if (src.isDead() || victim.isDead() || !src.isOnline()) {
+		return 0;
+	}
+	if (type.equals(FightType.MAGIC) &amp;&amp; spell == null) {
+		return 0;
+	}
+	int verdict = 0;
+	double effectiveStrength, baseDamage, maxHit;
+	if (victim instanceof Player) {
+		Player pv = (Player) victim;
+		switch (type) {
+		default:
+		case MELEE:
+			effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill())) * styleBonus(src);
+			baseDamage = 110 + effectiveStrength + ((src.getBonuses().getBonus(Bonuses.STRENGTH) / 8)
+					+ (effectiveStrength * src.getBonuses().getBonus(Bonuses.STRENGTH)) / 64);
+			maxHit = Math.floor(baseDamage);
+			break;
+		case RANGE:
+			effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill()) * 1024) * styleBonus(src);
+			baseDamage = 50 + ((effectiveStrength / 8) + (src.getBonuses().getBonus(Bonuses.RANGED) + 64)) / 64;
+			maxHit = Math.floor(baseDamage) * RangedCombat.getRangedBonus(src, true);
+			break;
+		case MAGIC:
+			effectiveStrength = Math.floor(src.getSkills().getLevel(type.getSkill())) * styleBonus(src);
+			baseDamage = effectiveStrength + Misc.random(spell.getTrueMaxHit());
+			maxHit = Math.floor(baseDamage);
+			if (maxHit &gt; (spell.getMaxHit() * 10)) {
+				maxHit = spell.getMaxHit() * 10;
+			}
+			break;
+		}
+		double accuracy = getAccuracy(src, pv, type);
+		if (accuracy &lt; 10) {
+			verdict = accuracy &gt; 1 ? Misc.random(Math.ceil(maxHit * 1.125 * (accuracy &gt; 1.5 ? (src.getSettings().isUsingSpecial() ? 1.075 : 1.05) : accuracy))) : accuracy &lt; 0.5 ? 0 : Misc.random(Math.floor(maxHit * 0.7));
+		} else {
+			verdict = Misc.random(Math.ceil(maxHit * (src.getSettings().isUsingSpecial() ? 1.15 : 1.075)));
+		}
+
+		verdict *= CombatUtils.specialPower(src, src.getEquipment().getSlot(3));
+
+		if (spell != null) {
+			if (verdict &gt; (spell.getMaxHit() * 10))
+				verdict = spell.getMaxHit() * 10;
+		}
+		if (verdict &gt; maxHit &amp;&amp; (!src.getSettings().isUsingSpecial() || verdict &gt;= (maxHit * 1.25))) {
+			verdict = (int) Math.ceil(maxHit);
+		}
+		/*
+		 * Never let it be over the other player's hitpoints.
+		 */
+		if (verdict &gt; pv.getSkills().getHitPoints()) {
+			verdict = pv.getSkills().getHitPoints();
+		}
+
+		//src.sendMessage("EFFECTIVE: " + Math.floor(effectiveStrength) + " BASE: " + baseDamage + " MAX: " + maxHit + " ACCURACY: " + Math.floor(accuracy) + " VERDICT: " + verdict);
+		return verdict;
+	}
+	return 0;
+}
+
+/**
+ * 
+ * @author 
+ * 
+ */
+public static enum FightType {
+	RANGE(Skills.RANGE), 
+	MAGIC(Skills.MAGIC), 
+	MELEE(Skills.STRENGTH);
+
+	private final int skill;
+
+	private FightType(int skill) {
+		this.skill = skill;
+	}
+
+	public int getSkill() {
+		return skill;
+	}
+}
+
+public static enum CombatStyle {
+	CRUSH, DRAGON_FIRE, MAGIC, 
+	NONE, RANGED, SLASH,
+	STAB, CHOP, VENGEANCE, BLOCK
+}
+public static enum CombatType {
+	ACCURATE, AGGRESSIVE, CONTROLLED, DEFENSIVE, LONG_RANGE, NONE, RAPID
+}
+
+public static boolean canAttack(Mob mob, Mob victim) {
+	if (mob == null || victim == null) {
+		return false;
+	}
+	if (mob.isDead() || victim.isDead()) {
+		mob.resetCombat();
+		return false;
+	}
+	if (mob.isPlayer() &amp;&amp; victim.isPlayer() &amp;&amp; !CombatUtils.isDeepEnoughInWild(mob, victim)){
+		mob.resetCombat();
+		mob.getWalkingQueue().reset();
+		return false;
+	}
+	if (mob.isNPC()) {
+		if (mob.getNpc().isHidden()) {
+			mob.resetCombat();
+			mob.getWalkingQueue().reset();
+			return false;
+		}
+	}
+	if (mob.isNPC()) {
+		if (!mob.getNpc().isAttackable()) {
+			mob.resetCombat();
+			mob.getWalkingQueue().reset();
+			return false;
+		}
+	}
+	if (victim.isNPC()) {
+		if (!victim.getNpc().isAttackable()) {
+			mob.resetCombat();
+			mob.getWalkingQueue().reset();
+			return false;
+		}
+	}
+	if (victim.isNPC()) {
+		if (victim.getNpc().isHidden()) {
+			mob.resetCombat();
+			mob.getWalkingQueue().reset();
+			return false;
+		}
+	}
+	boolean moved = false;
+	if (mob.getLocation().equals(victim.getLocation()) &amp;&amp; !mob.getCombatState().isFrozen() &amp;&amp; !victim.getWalkingQueue().isMoving()) {
+		int random = Misc.random(3);
+		int moveX = mob.getLocation().getX(), moveY = mob.getLocation().getY();
+		switch(random) {
+		case 0:
+			moveX--;
+			break;
+		case 1:
+			moveY++;
+			break;
+		case 2:
+			moveX++;
+			break;
+		case 3:
+			moveY--;
+			break;
+		}
+		mob.getCombatState().setSpellDelay(mob.getCombatState().getSpellDelay() + 2);
+		mob.getCombatState().setAttackDelay(mob.getCombatState().getAttackDelay() + 2);
+		mob.getWalkingQueue().reset();
+		mob.getWalkingQueue().addClippedWalkingQueue(
+				moveX - (mob.getLocation().getRegionX() - 6) * 8, 
+				moveY - (mob.getLocation().getRegionY() - 6) * 8);
+		moved = true;
+	}
+	if (mob.getLocation().equals(victim.getLocation()) &amp;&amp; !moved &amp;&amp; !victim.isNPC()) {
+		return false;
+	}
+	if (mob.isPlayer() &amp;&amp; victim.isPlayer()) {
+		if (!mob.getPlayer().refreshAttackOptions() || !victim.getPlayer().refreshAttackOptions()) {
+			ActionSender.sendMessage(mob.getPlayer(), "You cannot attack players outside of the wilderness!");
+			mob.resetCombat();
+			return false;
+		}
+		if (mob.inSafePK()) {
+			if (mob.getCombatState().inCombat() || victim.getCombatState().inCombat()) {
+				if (mob.getCombatState().getLastAttacker() != null) {
+					if (mob.getCombatState().getLastAttacker().getIndex() != victim.getIndex()) {
+						mob.getPlayer().sendMessage("You are already in combat!");
+						mob.resetCombat();
+						return false;
+					}
+				}
+				if (victim.getCombatState().getLastAttacker() != null) {
+					if (victim.getCombatState().getLastAttacker().getIndex() != mob.getIndex() &amp;&amp; !victim.getCombatState().getLastAttacker().isNPC())	 {
+						mob.getPlayer().sendMessage("That player is already in combat.");
+						mob.resetCombat();
+						return false;
+					}
+				}
+			}
+		}
+	}
+	return true;
+}
+
+public static void process(final Mob mob) {
+	final Mob victim = mob.getCombatState().getVictim();
+	if (!canAttack(mob, victim)) {
+		return;
+	}
+	final FightType type = mob.getFightType();
+	final CombatAction action = CombatAction.forType(mob, type);
+	if (!action.canAttack(mob, victim)) {
+		return;
+	}
+	mob.getCombatState().setLastAttacker(victim);
+	victim.getCombatState().setLastAttacker(mob);
+	boolean timerOver = type == FightType.MAGIC ? mob.getCombatState().getSpellDelay() == 0 : mob.getCombatState().getAttackDelay() == 0;
+	if (timerOver) {
+		mob.turnTo(victim); 
+		final CombatHit hit = action.hit(mob, victim);
+		if (hit != null) {
+			if (type.equals(FightType.MELEE)) {
+				if (hit.getTicks() &lt;= 1) {
+					victim.animate(victim.getDefenceAnimation());
+				} else {
+					World.getWorld().submit(new Tickable(hit.getTicks() - 1) {
+						@Override
+						public void execute() {
+							if (!victim.isAnimating()) {
+								victim.animate(victim.getDefenceAnimation());
+								if (victim.isPlayer()) {
+									if (victim.getPlayer().getPrayer().usingPrayer(1, Prayer.DEFLECT_MELEE)) {
+										victim.graphics(2230);
+									}
+								}
+							}
+							this.stop();
+						}
+					});
+				}
+			}
+			World.getWorld().submit(new Tickable(hit.getTicks()) {
+				@Override
+				public void execute() {
+					mob.getCombatState().setLastHit(hit.getDamage());
+					IdentifierManager.get("combat_after_effect").identify(mob, victim, hit, type);
+					victim.hit(hit.getDamage());
+					this.stop();
+				}
+			});
+		}
+	}
+}
+
+public static boolean diagonal(Location l, Location l1) {
+	int xDial = Math.abs(l.getX() - l1.getX());
+	int yDial = Math.abs(l.getY() - l1.getY());
+	return xDial == 1 &amp;&amp; yDial == 1;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/removing-pk-area/516620/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/removing-pk-area/516620/1</link>
+        <pubDate>Tue, 16 Apr 2013 21:24:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-516620-1</guid>
+        <source url="https://forum.moparisthebest.com/t/removing-pk-area/516620.rss">Removing pk area</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,748 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Python &gt; Java Conversion</title>
+    <link>https://forum.moparisthebest.com/t/python-java-conversion/299365</link>
+    <description>Could someone please convert this from Python to Java please? It&#39;s not for myself, I need it for a friend.
+
+[code]import sys,struct,binascii
+
+class DrmException(Exception):
+	pass
+
+#implementation of Pukall Cipher 1
+def PC1(key, src, decryption=True):
+    sum1 = 0;
+    sum2 = 0;
+    keyXorVal = 0;
+    if len(key)!=16:
+        print &quot;Bad key length!&quot;
+        return None
+    wkey = []
+    for i in xrange(8):
+        wkey.append(ord(key[i*2])&lt;&lt;8 | ord(key[i*2+1]))
+
+    dst = &quot;&quot;
+    for i in xrange(len(src)):
+        temp1 = 0;
+        byteXorVal = 0;
+        for j in xrange(8):
+            temp1 ^= wkey[j]
+            sum2  = (sum2+j)*20021 + sum1
+            sum1  = (temp1*346)&amp;0xFFFF
+            sum2  = (sum2+sum1)&amp;0xFFFF
+            temp1 = (temp1*20021+1)&amp;0xFFFF
+            byteXorVal ^= temp1 ^ sum2
+        curByte = ord(src[i])
+        if not decryption:
+            keyXorVal = curByte * 257;
+        curByte = ((curByte ^ (byteXorVal &gt;&gt; 8)) ^ byteXorVal) &amp; 0xFF
+        if decryption:
+            keyXorVal = curByte * 257;
+        for j in xrange(8):
+            wkey[j] ^= keyXorVal;
+        dst+=chr(curByte)
+    return dst
+
+def checksumPid(s):
+	letters = &quot;ABCDEFGHIJKLMNPQRSTUVWXYZ123456789&quot;
+	crc = (~binascii.crc32(s,-1))&amp;0xFFFFFFFF 
+	crc = crc ^ (crc &gt;&gt; 16)
+	res = s
+	l = len(letters)
+	for i in (0,1):
+		b = crc &amp; 0xff
+		pos = (b // l) ^ (b % l)
+		res += letters[pos%l]
+		crc &gt;&gt;= 8
+	return res
+
+class DrmStripper:
+	def loadSection(self, section):	
+		if (section + 1 == self.num_sections):
+			endoff = len(self.data_file)
+		else:
+			endoff = self.sections[section + 1][0]
+		off = self.sections[section][0]
+		return self.data_file[off:endoff]
+
+	def patch(self, off, new):	
+		self.data_file = self.data_file[:off] + new + self.data_file[off+len(new):]
+
+	def patchSection(self, section, new, in_off = 0):
+		if (section + 1 == self.num_sections):
+			endoff = len(self.data_file)
+		else:
+			endoff = self.sections[section + 1][0]
+		off = self.sections[section][0]
+		assert off + in_off + len(new) &lt;= endoff
+		self.patch(off + in_off, new)
+
+	def parseDRM(self, data, count, pid):
+		pid = pid.ljust(16,&#39;\0&#39;)
+		keyvec1 = &quot;\x72\x38\x33\xB0\xB4\xF2\xE3\xCA\xDF\x09\x01\xD6\xE2\xE0\x3F\x96&quot;
+		temp_key = PC1(keyvec1, pid, False)
+		temp_key_sum = sum(map(ord,temp_key)) &amp; 0xff
+		found_key = None
+		for i in xrange(count):
+			verification, size, type, cksum, cookie = struct.unpack(&#39;&gt;LLLBxxx32s&#39;, data[i*0x30:i*0x30+0x30])
+			cookie = PC1(temp_key, cookie)
+			ver,flags,finalkey,expiry,expiry2 = struct.unpack(&#39;&gt;LL16sLL&#39;, cookie)
+			if verification == ver and cksum == temp_key_sum and (flags &amp; 0x1F) == 1:
+				found_key = finalkey
+				break
+		return found_key		
+
+
+	def __init__(self, data_file, pid):
+
+		if checksumPid(pid[0:-2]) != pid:
+			raise DrmException(&quot;invalid PID checksum&quot;)
+		pid = pid[0:-2]
+		
+		self.data_file = data_file
+		header = data_file[0:72]
+		if header[0x3C:0x3C+8] != &#39;BOOKMOBI&#39;:
+			raise DrmException(&quot;invalid file format&quot;)
+		self.num_sections, = struct.unpack(&#39;&gt;H&#39;, data_file[76:78])
+
+		self.sections = []
+		for i in xrange(self.num_sections):
+			offset, a1,a2,a3,a4 = struct.unpack(&#39;&gt;LBBBB&#39;, data_file[78+i*8:78+i*8+8])
+			flags, val = a1, a2&lt;&lt;16|a3&lt;&lt;8|a4
+			self.sections.append( (offset, flags, val) )
+
+		sect = self.loadSection(0)
+		records, = struct.unpack(&#39;&gt;H&#39;, sect[0x8:0x8+2])
+
+		crypto_type, = struct.unpack(&#39;&gt;H&#39;, sect[0xC:0xC+2])
+		if crypto_type != 2:
+			raise DrmException(&quot;invalid encryption type: %d&quot; % crypto_type)
+
+		# calculate the keys
+		drm_ptr, drm_count, drm_size, drm_flags = struct.unpack(&#39;&gt;LLLL&#39;, sect[0xA8:0xA8+16])
+		found_key = self.parseDRM(sect[drm_ptr:drm_ptr+drm_size], drm_count, pid)
+		if not found_key:
+			raise DrmException(&quot;no key found. maybe the PID is incorrect&quot;)
+
+		# kill the drm keys
+		self.patchSection(0, &quot;\0&quot; * drm_size, drm_ptr)
+		# kill the drm pointers
+		self.patchSection(0, &quot;\xff&quot; * 4 + &quot;\0&quot; * 12, 0xA8)
+		# clear the crypto type
+		self.patchSection(0, &quot;\0&quot; * 2, 0xC)
+
+		# decrypt sections
+		print &quot;Decrypting. Please wait...&quot;,
+		for i in xrange(1, records+1):
+			self.patchSection(i, PC1(found_key, self.loadSection(i)))
+		print &quot;done&quot;
+	def getResult(self):
+		return self.data_file
+
+if len(sys.argv)&lt;4:
+	print &quot;Removes protection from Mobipocket books&quot;
+	print &quot;Usage: mobidedrm infile.mobi outfile.mobi PID&quot;
+else:  
+	infile = sys.argv[1]
+	outfile = sys.argv[2]
+	pid = sys.argv[3]
+	data_file = file(infile, &#39;rb&#39;).read()
+	try:
+		file(outfile, &#39;wb&#39;).write(DrmStripper(data_file, pid).getResult())
+	except DrmException, e:
+		print &quot;Error: %s&quot; % e[/code]
+
+
+[code]import sys, binascii
+
+letters = &quot;ABCDEFGHIJKLMNPQRSTUVWXYZ123456789&quot;
+
+def crc32(s):
+  return (~binascii.crc32(s,-1))&amp;0xFFFFFFFF 
+
+def checksumPid(s):
+  crc = crc32(s)
+  crc = crc ^ (crc &gt;&gt; 16)
+  res = s
+  l = len(letters)
+  for i in (0,1):
+    b = crc &amp; 0xff
+    pos = (b // l) ^ (b % l)
+    res += letters[pos%l]
+    crc &gt;&gt;= 8
+
+  return res
+
+
+def pidFromSerial(s, l):
+  crc = crc32(s)
+  
+  arr1 = [0]*l
+  for i in xrange(len(s)):
+    arr1[i%l] ^= ord(s[i])
+
+  crc_bytes = [crc &gt;&gt; 24 &amp; 0xff, crc &gt;&gt; 16 &amp; 0xff, crc &gt;&gt; 8 &amp; 0xff, crc &amp; 0xff]
+  for i in xrange(l):
+    arr1[i] ^= crc_bytes[i&amp;3]
+
+  pid = &quot;&quot;
+  for i in xrange(l):
+    b = arr1[i] &amp; 0xff
+    pid+=letters[(b &gt;&gt; 7) + ((b &gt;&gt; 5 &amp; 3) ^ (b &amp; 0x1f))]
+
+  return pid
+
+if len(sys.argv)&gt;1:
+  pid = pidFromSerial(sys.argv[1],7)+&quot;*&quot;
+  print &quot;Mobipocked PID for Kindle serial# &quot;+sys.argv[1]+&quot; is &quot;+checksumPid(pid)
+else:
+  print &quot;Usage: kindlepid.py &lt;Kindle Serial Number&gt;&quot;
+[/code]</description>
+    
+    <lastBuildDate>Wed, 02 Sep 2009 22:11:58 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <p>ur stupid idiet</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/20</link>
+        <pubDate>Wed, 02 Sep 2009 22:11:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-20</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="18" data-topic="299365">
+<div class="title">
+<div class="quote-controls"></div>
+ Cowie`:</div>
+<blockquote>
+<p>ur stupid</p>
+</blockquote>
+</aside>
+<p>Not nearly as much as you lol pwned.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/19</link>
+        <pubDate>Wed, 02 Sep 2009 22:11:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-19</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <p>ur stupid</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/18</link>
+        <pubDate>Wed, 02 Sep 2009 21:27:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-18</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Cowie`, post:16, topic:299365”][quote author=oksuper_ link=topic=395681.msg2941620#msg2941620 date=1251924144]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>On the topic of python, pydasm is hawt!</p>
+</blockquote>
+</aside>
+<p><span class="bbcode-b">what</span></p>
+</blockquote>
+</aside>
+<p>pydasm, a python conversion of libdasm of some sort!<br>
+[/quote]</p>
+<p><span class="bbcode-b">I know what it is, but why the fuck would you randomly mention it</span>[/quote]</p>
+<p>Cause we were on the topic of python.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/17</link>
+        <pubDate>Wed, 02 Sep 2009 20:54:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-17</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“oksuper_, post:15, topic:299365”][quote author=Cowie` link=topic=395681.msg2941147#msg2941147 date=1251892854]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>On the topic of python, pydasm is hawt!</p>
+</blockquote>
+</aside>
+<p><span class="bbcode-b">what</span><br>
+[/quote]</p>
+<p>pydasm, a python conversion of libdasm of some sort![/quote]</p>
+<p><span class="bbcode-b">I know what it is, but why the fuck would you randomly mention it</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/16</link>
+        <pubDate>Wed, 02 Sep 2009 20:45:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-16</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Cowie`, post:14, topic:299365”][quote author=oksuper_ link=topic=395681.msg2941143#msg2941143 date=1251892216]<br>
+On the topic of python, pydasm is hawt!<br>
+[/quote]</p>
+<p><span class="bbcode-b">what</span>[/quote]</p>
+<p>pydasm, a python conversion of libdasm of some sort!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/15</link>
+        <pubDate>Wed, 02 Sep 2009 20:42:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-15</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="13" data-topic="299365">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>On the topic of python, pydasm is hawt!</p>
+</blockquote>
+</aside>
+<p><span class="bbcode-b">what</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/14</link>
+        <pubDate>Wed, 02 Sep 2009 12:00:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-14</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>On the topic of python, pydasm is hawt!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/13</link>
+        <pubDate>Wed, 02 Sep 2009 11:50:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-13</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@eVokki1 Cowie`]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evokki1">@eVokki1</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">nigga wuut</span></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/12</link>
+        <pubDate>Wed, 02 Sep 2009 10:29:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-12</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:10, topic:299365”]i really dont see why you dont do the conversion yourself, if you claim to know java. all of the algorithms are exactly the same, all you need to do is adjust the syntax (and use of libraries such as file interaction), and replace the use of binascii with the use of java’s standard crc32 class</p>
+<p>how about you try this yourself, and post any questions you have here[/quote]</p>
+<p>When did I claim to know Java?<br>
+But yeah I do a little bit, can’t do anything major yet, still learning.<br>
+I’ll try later tonight</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/11</link>
+        <pubDate>Wed, 02 Sep 2009 03:30:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-11</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>i really dont see why you dont do the conversion yourself, if you claim to know java. all of the algorithms are exactly the same, all you need to do is adjust the syntax (and use of libraries such as file interaction), and replace the use of binascii with the use of java’s standard crc32 class</p>
+<p>how about you try this yourself, and post any questions you have here</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/10</link>
+        <pubDate>Wed, 02 Sep 2009 02:55:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-10</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <p>It could be, but it’s not</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/9</link>
+        <pubDate>Wed, 02 Sep 2009 02:51:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-9</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>can it be that this friend of yours is actually you</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/8</link>
+        <pubDate>Wed, 02 Sep 2009 01:38:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-8</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <p>Yes but he doesn’t want to run Python inside of Java</p>
+<p>I have no idea why he wants it converted to Java, might be because he knows Java relatively well and can expand on it easily</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/7</link>
+        <pubDate>Tue, 01 Sep 2009 02:51:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-7</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>I’m with them^</p>
+<p>Python runs on more platforms than java does anyway.  Plus can’t you pretty much run them inside of java using jython?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/6</link>
+        <pubDate>Tue, 01 Sep 2009 02:28:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-6</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>Since making people’s lives more difficult is funny to me, why would your friend want to convert it to java?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/5</link>
+        <pubDate>Tue, 01 Sep 2009 02:26:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-5</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="3" data-topic="299365">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>Why would you want to convert to java?</p>
+</blockquote>
+</aside>
+<aside class="quote no-group quote-modified" data-post="1" data-topic="299365">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/933pm/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> 933pm:</div>
+<blockquote>
+<p>It’s not for myself, I need it for a friend.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/4</link>
+        <pubDate>Tue, 01 Sep 2009 01:49:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-4</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>Why would you want to convert to java?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/3</link>
+        <pubDate>Tue, 01 Sep 2009 01:47:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-3</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>Use Jython or something.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/2</link>
+        <pubDate>Tue, 01 Sep 2009 01:44:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-2</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+      <item>
+        <title>Python &gt; Java Conversion</title>
+        <dc:creator><![CDATA[@933pm 933pm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/933pm">@933pm</a> wrote:</p>
+          <blockquote>
+              <p>Could someone please convert this from Python to Java please? It’s not for myself, I need it for a friend.</p>
+<p>[code]import sys,struct,binascii</p>
+<p>class DrmException(Exception):<br>
+pass</p>
+<p><span class="hashtag">#implementation</span> of Pukall Cipher 1<br>
+def PC1(key, src, decryption=True):<br>
+sum1 = 0;<br>
+sum2 = 0;<br>
+keyXorVal = 0;<br>
+if len(key)!=16:<br>
+print “Bad key length!”<br>
+return None<br>
+wkey = []<br>
+for i in xrange(8):<br>
+wkey.append(ord(key[i*2])&lt;&lt;8 | ord(key[i*2+1]))</p>
+<pre><code>dst = ""
+for i in xrange(len(src)):
+    temp1 = 0;
+    byteXorVal = 0;
+    for j in xrange(8):
+        temp1 ^= wkey[j]
+        sum2  = (sum2+j)*20021 + sum1
+        sum1  = (temp1*346)&amp;0xFFFF
+        sum2  = (sum2+sum1)&amp;0xFFFF
+        temp1 = (temp1*20021+1)&amp;0xFFFF
+        byteXorVal ^= temp1 ^ sum2
+    curByte = ord(src[i])
+    if not decryption:
+        keyXorVal = curByte * 257;
+    curByte = ((curByte ^ (byteXorVal &gt;&gt; 8)) ^ byteXorVal) &amp; 0xFF
+    if decryption:
+        keyXorVal = curByte * 257;
+    for j in xrange(8):
+        wkey[j] ^= keyXorVal;
+    dst+=chr(curByte)
+return dst
+</code></pre>
+<p>def checksumPid(s):<br>
+letters = “ABCDEFGHIJKLMNPQRSTUVWXYZ123456789”<br>
+crc = (~binascii.crc32(s,-1))&amp;0xFFFFFFFF<br>
+crc = crc ^ (crc &gt;&gt; 16)<br>
+res = s<br>
+l = len(letters)<br>
+for i in (0,1):<br>
+b = crc &amp; 0xff<br>
+pos = (b // l) ^ (b % l)<br>
+res += letters[pos%l]<br>
+crc &gt;&gt;= 8<br>
+return res</p>
+<p>class DrmStripper:<br>
+def loadSection(self, section):	<br>
+if (section + 1 == self.num_sections):<br>
+endoff = len(self.data_file)<br>
+else:<br>
+endoff = self.sections[section + 1][0]<br>
+off = self.sections[section][0]<br>
+return self.data_file[off:endoff]</p>
+<pre><code>def patch(self, off, new):	
+	self.data_file = self.data_file[:off] + new + self.data_file[off+len(new):]
+
+def patchSection(self, section, new, in_off = 0):
+	if (section + 1 == self.num_sections):
+		endoff = len(self.data_file)
+	else:
+		endoff = self.sections[section + 1][0]
+	off = self.sections[section][0]
+	assert off + in_off + len(new) &lt;= endoff
+	self.patch(off + in_off, new)
+
+def parseDRM(self, data, count, pid):
+	pid = pid.ljust(16,'\0')
+	keyvec1 = "\x72\x38\x33\xB0\xB4\xF2\xE3\xCA\xDF\x09\x01\xD6\xE2\xE0\x3F\x96"
+	temp_key = PC1(keyvec1, pid, False)
+	temp_key_sum = sum(map(ord,temp_key)) &amp; 0xff
+	found_key = None
+	for i in xrange(count):
+		verification, size, type, cksum, cookie = struct.unpack('&gt;LLLBxxx32s', data[i*0x30:i*0x30+0x30])
+		cookie = PC1(temp_key, cookie)
+		ver,flags,finalkey,expiry,expiry2 = struct.unpack('&gt;LL16sLL', cookie)
+		if verification == ver and cksum == temp_key_sum and (flags &amp; 0x1F) == 1:
+			found_key = finalkey
+			break
+	return found_key		
+
+
+def __init__(self, data_file, pid):
+
+	if checksumPid(pid[0:-2]) != pid:
+		raise DrmException("invalid PID checksum")
+	pid = pid[0:-2]
+	
+	self.data_file = data_file
+	header = data_file[0:72]
+	if header[0x3C:0x3C+8] != 'BOOKMOBI':
+		raise DrmException("invalid file format")
+	self.num_sections, = struct.unpack('&gt;H', data_file[76:78])
+
+	self.sections = []
+	for i in xrange(self.num_sections):
+		offset, a1,a2,a3,a4 = struct.unpack('&gt;LBBBB', data_file[78+i*8:78+i*8+8])
+		flags, val = a1, a2&lt;&lt;16|a3&lt;&lt;8|a4
+		self.sections.append( (offset, flags, val) )
+
+	sect = self.loadSection(0)
+	records, = struct.unpack('&gt;H', sect[0x8:0x8+2])
+
+	crypto_type, = struct.unpack('&gt;H', sect[0xC:0xC+2])
+	if crypto_type != 2:
+		raise DrmException("invalid encryption type: %d" % crypto_type)
+
+	# calculate the keys
+	drm_ptr, drm_count, drm_size, drm_flags = struct.unpack('&gt;LLLL', sect[0xA8:0xA8+16])
+	found_key = self.parseDRM(sect[drm_ptr:drm_ptr+drm_size], drm_count, pid)
+	if not found_key:
+		raise DrmException("no key found. maybe the PID is incorrect")
+
+	# kill the drm keys
+	self.patchSection(0, "\0" * drm_size, drm_ptr)
+	# kill the drm pointers
+	self.patchSection(0, "\xff" * 4 + "\0" * 12, 0xA8)
+	# clear the crypto type
+	self.patchSection(0, "\0" * 2, 0xC)
+
+	# decrypt sections
+	print "Decrypting. Please wait...",
+	for i in xrange(1, records+1):
+		self.patchSection(i, PC1(found_key, self.loadSection(i)))
+	print "done"
+def getResult(self):
+	return self.data_file
+</code></pre>
+<p>if len(sys.argv)&lt;4:<br>
+print “Removes protection from Mobipocket books”<br>
+print “Usage: mobidedrm infile.mobi outfile.mobi PID”<br>
+else:<br>
+infile = sys.argv[1]<br>
+outfile = sys.argv[2]<br>
+pid = sys.argv[3]<br>
+data_file = file(infile, ‘rb’).read()<br>
+try:<br>
+file(outfile, ‘wb’).write(DrmStripper(data_file, pid).getResult())<br>
+except DrmException, e:<br>
+print “Error: %s” % e[/code]</p>
+<p>[code]import sys, binascii</p>
+<p>letters = “ABCDEFGHIJKLMNPQRSTUVWXYZ123456789”</p>
+<p>def crc32(s):<br>
+return (~binascii.crc32(s,-1))&amp;0xFFFFFFFF</p>
+<p>def checksumPid(s):<br>
+crc = crc32(s)<br>
+crc = crc ^ (crc &gt;&gt; 16)<br>
+res = s<br>
+l = len(letters)<br>
+for i in (0,1):<br>
+b = crc &amp; 0xff<br>
+pos = (b // l) ^ (b % l)<br>
+res += letters[pos%l]<br>
+crc &gt;&gt;= 8</p>
+<p>return res</p>
+<p>def pidFromSerial(s, l):<br>
+crc = crc32(s)</p>
+<p>arr1 = [0]*l<br>
+for i in xrange(len(s)):<br>
+arr1[i%l] ^= ord(s[i])</p>
+<p>crc_bytes = [crc &gt;&gt; 24 &amp; 0xff, crc &gt;&gt; 16 &amp; 0xff, crc &gt;&gt; 8 &amp; 0xff, crc &amp; 0xff]<br>
+for i in xrange(l):<br>
+arr1[i] ^= crc_bytes[i&amp;3]</p>
+<p>pid = “”<br>
+for i in xrange(l):<br>
+b = arr1[i] &amp; 0xff<br>
+pid+=letters[(b &gt;&gt; 7) + ((b &gt;&gt; 5 &amp; 3) ^ (b &amp; 0x1f))]</p>
+<p>return pid</p>
+<p>if len(sys.argv)&gt;1:<br>
+pid = pidFromSerial(sys.argv[1],7)+"*"<br>
+print "Mobipocked PID for Kindle serial# “+sys.argv[1]+” is "+checksumPid(pid)<br>
+else:<br>
+print "Usage: kindlepid.py "<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/python-java-conversion/299365/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/python-java-conversion/299365/1</link>
+        <pubDate>Tue, 01 Sep 2009 01:42:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-299365-1</guid>
+        <source url="https://forum.moparisthebest.com/t/python-java-conversion/299365.rss">Python &gt; Java Conversion</source>
+      </item>
+  </channel>
+</rss>

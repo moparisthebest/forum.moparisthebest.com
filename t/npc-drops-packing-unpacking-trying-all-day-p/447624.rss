@@ -1,0 +1,478 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>NPC Drops (Packing/Unpacking) Trying ALL DAY :p</title>
+    <link>https://forum.moparisthebest.com/t/npc-drops-packing-unpacking-trying-all-day-p/447624</link>
+    <description>So I woke up this morning and started to work on learning how to pack/unpack NPC drops. I think I&#39;m looking in the right areas, but I still don&#39;t understand. It&#39;s been about 8 hours of work now, and I just spent the last hour or so searching for answers.
+
+So I&#39;m in NPCDropLoader.java and NPCDrops.java
+
+In NPCDrops I have this.
+[code]
+private final static String PACKED_PATH = &quot;data/npcs/drops.d&quot;;[/code]
+I&#39;ve changed that around a bit, but I think that&#39;s what it was originally. Should this be changed at all? I was trying to copy the other packed files by making a .ncd just seeing if it would work.
+
+Now for the NPCDropLoader I have a lot of confusing stuff in here.
+[code]package com.rs.utils;
+
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+import java.util.HashMap;
+
+import com.rs.game.npc.Drop;
+
+public class NPCDrops {
+
+	//private final static String PACKED_PATH = &quot;data/npcs/packedDrops.d&quot;;
+	private final static String PACKED_PATH = &quot;data/npcs/packedDrops.ncd&quot;;
+	private final static String UNPACKED_PATH = &quot;data/npcs/unpackedDrops.ncd&quot;;
+	private static HashMap&lt;Integer, Drop[]&gt; npcDrops;
+
+	public static final void init() {
+		loadPackedNPCDrops();
+	}
+
+	public static Drop[] getDrops(int npcId) {
+		return npcDrops.get(npcId);
+	}
+
+	private static void loadPackedNPCDrops() {
+		try {
+			RandomAccessFile in = new RandomAccessFile(PACKED_PATH, &quot;r&quot;);
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			int dropSize = buffer.getShort() &amp; 0xffff;
+			npcDrops = new HashMap&lt;Integer, Drop[]&gt;(dropSize);
+			for (int i = 0; i &lt; dropSize; i++) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				Drop[] drops = new Drop[buffer.getShort() &amp; 0xffff];
+				for (int d = 0; d &lt; drops.length; d++) {
+					if (buffer.get() == 0)
+						drops[d] = new Drop(buffer.getShort() &amp; 0xffff,
+								buffer.getDouble(), buffer.getInt(),
+								buffer.getInt(), false);
+					else
+						drops[d] = new Drop(0, 0, 0, 0, true);
+
+				}
+				npcDrops.put(npcId, drops);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public static final void loadNPCDrops(int regionId) {
+		File file = new File(&quot;data/npcs/packedDrops/&quot; + regionId + &quot;.ns&quot;);
+		if (!file.exists())
+			return;
+		try {
+			RandomAccessFile in = new RandomAccessFile(file, &quot;r&quot;);
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			while (buffer.hasRemaining()) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				int plane = buffer.get() &amp; 0xff;
+				int x = buffer.getShort() &amp; 0xffff;
+				int y = buffer.getShort() &amp; 0xffff;
+				boolean hashExtraInformation = buffer.get() == 1;
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (hashExtraInformation) {
+					mapAreaNameHash = buffer.getInt();
+					canBeAttackFromOutOfArea = buffer.get() == 1;
+				}
+				World.spawnNPC(npcId, new WorldTile(x, y, plane),
+						mapAreaNameHash, canBeAttackFromOutOfArea);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public HashMap&lt;Integer, Drop[]&gt; getDropMap() {
+		return npcDrops;
+	}
+}[/code]
+I&#39;ve been adding stuff from NPCSpawns.java to try and copy how it packs and unpacks. It&#39;s obviously just a direct copy with some names changed, I really don&#39;t know what to do with it. :p You can also see the .ncd attempts, I don&#39;t know if the .d is necessary or just the problem.
+
+I have a .txt file I downloaded somewhere (deleted all drops from it except one), I called it unpackedDrops.txt because that&#39;s what everything else was.
+
+This is just NPCSpawns.java (the thing I&#39;m basing my ideas off of).
+[code]package com.rs.utils;
+
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+
+import com.rs.game.World;
+import com.rs.game.WorldTile;
+
+public final class NPCSpawns {
+
+	public static final void init() {
+		if (!new File(&quot;data/npcs/packedSpawns&quot;).exists())
+			packNPCSpawns();
+	}
+
+	public static final void packNPCSpawns() {
+		Logger.log(&quot;NPCSpawns&quot;, &quot;Packing npc spawns...&quot;);
+		if (!new File(&quot;data/npcs/packedSpawns&quot;).mkdir())
+			throw new RuntimeException(
+					&quot;Couldn&#39;t create packedSpawns directory.&quot;);
+		try {
+			BufferedReader in = new BufferedReader(new FileReader(
+					&quot;data/npcs/unpackedSpawnsList.txt&quot;));
+			while (true) {
+				String line = in.readLine();
+				if (line == null)
+					break;
+				if (line.startsWith(&quot;//&quot;))
+					continue;
+				String[] splitedLine = line.split(&quot; - &quot;, 2);
+				if (splitedLine.length != 2)
+					throw new RuntimeException(&quot;Invalid NPC Spawn line: &quot;
+							+ line);
+				int npcId = Integer.parseInt(splitedLine[0]);
+				String[] splitedLine2 = splitedLine[1].split(&quot; &quot;, 5);
+				if (splitedLine2.length != 3 &amp;&amp; splitedLine2.length != 5)
+					throw new RuntimeException(&quot;Invalid NPC Spawn line: &quot;
+							+ line);
+				WorldTile tile = new WorldTile(
+						Integer.parseInt(splitedLine2[0]),
+						Integer.parseInt(splitedLine2[1]),
+						Integer.parseInt(splitedLine2[2]));
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (splitedLine2.length == 5) {
+					mapAreaNameHash = Utils.getNameHash(splitedLine2[3]);
+					canBeAttackFromOutOfArea = Boolean
+							.parseBoolean(splitedLine2[4]);
+				}
+				addNPCSpawn(npcId, tile.getRegionId(), tile, mapAreaNameHash,
+						canBeAttackFromOutOfArea);
+			}
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public static final void loadNPCSpawns(int regionId) {
+		File file = new File(&quot;data/npcs/packedSpawns/&quot; + regionId + &quot;.ns&quot;);
+		if (!file.exists())
+			return;
+		try {
+			RandomAccessFile in = new RandomAccessFile(file, &quot;r&quot;);
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			while (buffer.hasRemaining()) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				int plane = buffer.get() &amp; 0xff;
+				int x = buffer.getShort() &amp; 0xffff;
+				int y = buffer.getShort() &amp; 0xffff;
+				boolean hashExtraInformation = buffer.get() == 1;
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (hashExtraInformation) {
+					mapAreaNameHash = buffer.getInt();
+					canBeAttackFromOutOfArea = buffer.get() == 1;
+				}
+				World.spawnNPC(npcId, new WorldTile(x, y, plane),
+						mapAreaNameHash, canBeAttackFromOutOfArea);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	private static final void addNPCSpawn(int npcId, int regionId,
+			WorldTile tile, int mapAreaNameHash,
+			boolean canBeAttackFromOutOfArea) {
+		try {
+			DataOutputStream out = new DataOutputStream(new FileOutputStream(
+					&quot;data/npcs/packedSpawns/&quot; + regionId + &quot;.ns&quot;, true));
+			out.writeShort(npcId);
+			out.writeByte(tile.getPlane());
+			out.writeShort(tile.getX());
+			out.writeShort(tile.getY());
+			out.writeBoolean(mapAreaNameHash != -1);
+			if (mapAreaNameHash != -1) {
+				out.writeInt(mapAreaNameHash);
+				out.writeBoolean(canBeAttackFromOutOfArea);
+			}
+			out.flush();
+			out.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	private NPCSpawns() {
+	}
+}
+[/code]
+I heard there&#39;s a way to hardcode drops, but I can&#39;t find any way to do that. Also something about a GUI, which I have the files for but there&#39;s nothing to run them with. Not really sure what that&#39;s about.
+
+Source is NRS3server 667. I don&#39;t really expect anyone to help me (every thread I&#39;ve seen has no one helping), but I figured I&#39;d have one up while I continue trying to figure this out.</description>
+    
+    <lastBuildDate>Sun, 01 Jul 2012 01:39:55 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/npc-drops-packing-unpacking-trying-all-day-p/447624.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>NPC Drops (Packing/Unpacking) Trying ALL DAY :p</title>
+        <dc:creator><![CDATA[@USKO USKO]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/usko">@USKO</a> wrote:</p>
+          <blockquote>
+              <p>So I woke up this morning and started to work on learning how to pack/unpack NPC drops. I think I’m looking in the right areas, but I still don’t understand. It’s been about 8 hours of work now, and I just spent the last hour or so searching for answers.</p>
+<p>So I’m in NPCDropLoader.java and NPCDrops.java</p>
+<p>In NPCDrops I have this.</p>
+<pre><code class="lang-auto">private final static String PACKED_PATH = "data/npcs/drops.d";[/code]
+I've changed that around a bit, but I think that's what it was originally. Should this be changed at all? I was trying to copy the other packed files by making a .ncd just seeing if it would work.
+
+Now for the NPCDropLoader I have a lot of confusing stuff in here.
+[code]package com.rs.utils;
+
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+import java.util.HashMap;
+
+import com.rs.game.npc.Drop;
+
+public class NPCDrops {
+
+	//private final static String PACKED_PATH = "data/npcs/packedDrops.d";
+	private final static String PACKED_PATH = "data/npcs/packedDrops.ncd";
+	private final static String UNPACKED_PATH = "data/npcs/unpackedDrops.ncd";
+	private static HashMap&lt;Integer, Drop[]&gt; npcDrops;
+
+	public static final void init() {
+		loadPackedNPCDrops();
+	}
+
+	public static Drop[] getDrops(int npcId) {
+		return npcDrops.get(npcId);
+	}
+
+	private static void loadPackedNPCDrops() {
+		try {
+			RandomAccessFile in = new RandomAccessFile(PACKED_PATH, "r");
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			int dropSize = buffer.getShort() &amp; 0xffff;
+			npcDrops = new HashMap&lt;Integer, Drop[]&gt;(dropSize);
+			for (int i = 0; i &lt; dropSize; i++) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				Drop[] drops = new Drop[buffer.getShort() &amp; 0xffff];
+				for (int d = 0; d &lt; drops.length; d++) {
+					if (buffer.get() == 0)
+						drops[d] = new Drop(buffer.getShort() &amp; 0xffff,
+								buffer.getDouble(), buffer.getInt(),
+								buffer.getInt(), false);
+					else
+						drops[d] = new Drop(0, 0, 0, 0, true);
+
+				}
+				npcDrops.put(npcId, drops);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public static final void loadNPCDrops(int regionId) {
+		File file = new File("data/npcs/packedDrops/" + regionId + ".ns");
+		if (!file.exists())
+			return;
+		try {
+			RandomAccessFile in = new RandomAccessFile(file, "r");
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			while (buffer.hasRemaining()) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				int plane = buffer.get() &amp; 0xff;
+				int x = buffer.getShort() &amp; 0xffff;
+				int y = buffer.getShort() &amp; 0xffff;
+				boolean hashExtraInformation = buffer.get() == 1;
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (hashExtraInformation) {
+					mapAreaNameHash = buffer.getInt();
+					canBeAttackFromOutOfArea = buffer.get() == 1;
+				}
+				World.spawnNPC(npcId, new WorldTile(x, y, plane),
+						mapAreaNameHash, canBeAttackFromOutOfArea);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public HashMap&lt;Integer, Drop[]&gt; getDropMap() {
+		return npcDrops;
+	}
+}[/code]
+I've been adding stuff from NPCSpawns.java to try and copy how it packs and unpacks. It's obviously just a direct copy with some names changed, I really don't know what to do with it. :p You can also see the .ncd attempts, I don't know if the .d is necessary or just the problem.
+
+I have a .txt file I downloaded somewhere (deleted all drops from it except one), I called it unpackedDrops.txt because that's what everything else was.
+
+This is just NPCSpawns.java (the thing I'm basing my ideas off of).
+[code]package com.rs.utils;
+
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
+
+import com.rs.game.World;
+import com.rs.game.WorldTile;
+
+public final class NPCSpawns {
+
+	public static final void init() {
+		if (!new File("data/npcs/packedSpawns").exists())
+			packNPCSpawns();
+	}
+
+	public static final void packNPCSpawns() {
+		Logger.log("NPCSpawns", "Packing npc spawns...");
+		if (!new File("data/npcs/packedSpawns").mkdir())
+			throw new RuntimeException(
+					"Couldn't create packedSpawns directory.");
+		try {
+			BufferedReader in = new BufferedReader(new FileReader(
+					"data/npcs/unpackedSpawnsList.txt"));
+			while (true) {
+				String line = in.readLine();
+				if (line == null)
+					break;
+				if (line.startsWith("//"))
+					continue;
+				String[] splitedLine = line.split(" - ", 2);
+				if (splitedLine.length != 2)
+					throw new RuntimeException("Invalid NPC Spawn line: "
+							+ line);
+				int npcId = Integer.parseInt(splitedLine[0]);
+				String[] splitedLine2 = splitedLine[1].split(" ", 5);
+				if (splitedLine2.length != 3 &amp;&amp; splitedLine2.length != 5)
+					throw new RuntimeException("Invalid NPC Spawn line: "
+							+ line);
+				WorldTile tile = new WorldTile(
+						Integer.parseInt(splitedLine2[0]),
+						Integer.parseInt(splitedLine2[1]),
+						Integer.parseInt(splitedLine2[2]));
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (splitedLine2.length == 5) {
+					mapAreaNameHash = Utils.getNameHash(splitedLine2[3]);
+					canBeAttackFromOutOfArea = Boolean
+							.parseBoolean(splitedLine2[4]);
+				}
+				addNPCSpawn(npcId, tile.getRegionId(), tile, mapAreaNameHash,
+						canBeAttackFromOutOfArea);
+			}
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	public static final void loadNPCSpawns(int regionId) {
+		File file = new File("data/npcs/packedSpawns/" + regionId + ".ns");
+		if (!file.exists())
+			return;
+		try {
+			RandomAccessFile in = new RandomAccessFile(file, "r");
+			FileChannel channel = in.getChannel();
+			ByteBuffer buffer = channel.map(MapMode.READ_ONLY, 0,
+					channel.size());
+			while (buffer.hasRemaining()) {
+				int npcId = buffer.getShort() &amp; 0xffff;
+				int plane = buffer.get() &amp; 0xff;
+				int x = buffer.getShort() &amp; 0xffff;
+				int y = buffer.getShort() &amp; 0xffff;
+				boolean hashExtraInformation = buffer.get() == 1;
+				int mapAreaNameHash = -1;
+				boolean canBeAttackFromOutOfArea = true;
+				if (hashExtraInformation) {
+					mapAreaNameHash = buffer.getInt();
+					canBeAttackFromOutOfArea = buffer.get() == 1;
+				}
+				World.spawnNPC(npcId, new WorldTile(x, y, plane),
+						mapAreaNameHash, canBeAttackFromOutOfArea);
+			}
+			channel.close();
+			in.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	private static final void addNPCSpawn(int npcId, int regionId,
+			WorldTile tile, int mapAreaNameHash,
+			boolean canBeAttackFromOutOfArea) {
+		try {
+			DataOutputStream out = new DataOutputStream(new FileOutputStream(
+					"data/npcs/packedSpawns/" + regionId + ".ns", true));
+			out.writeShort(npcId);
+			out.writeByte(tile.getPlane());
+			out.writeShort(tile.getX());
+			out.writeShort(tile.getY());
+			out.writeBoolean(mapAreaNameHash != -1);
+			if (mapAreaNameHash != -1) {
+				out.writeInt(mapAreaNameHash);
+				out.writeBoolean(canBeAttackFromOutOfArea);
+			}
+			out.flush();
+			out.close();
+		} catch (Throwable e) {
+			Logger.handle(e);
+		}
+	}
+
+	private NPCSpawns() {
+	}
+}</code></pre>
+<p>I heard there’s a way to hardcode drops, but I can’t find any way to do that. Also something about a GUI, which I have the files for but there’s nothing to run them with. Not really sure what that’s about.</p>
+<p>Source is NRS3server 667. I don’t really expect anyone to help me (every thread I’ve seen has no one helping), but I figured I’d have one up while I continue trying to figure this out.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/npc-drops-packing-unpacking-trying-all-day-p/447624/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/npc-drops-packing-unpacking-trying-all-day-p/447624/1</link>
+        <pubDate>Sun, 01 Jul 2012 01:39:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-447624-1</guid>
+        <source url="https://forum.moparisthebest.com/t/npc-drops-packing-unpacking-trying-all-day-p/447624.rss">NPC Drops (Packing/Unpacking) Trying ALL DAY :p</source>
+      </item>
+  </channel>
+</rss>

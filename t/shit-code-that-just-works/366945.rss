@@ -1,0 +1,538 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Shit code that just works</title>
+    <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945</link>
+    <description>Echos all the files that match the extension requirements from specified directory. Then logs if someone downloads the file with the directory and file name. I am thinking about making it into a download manager, but I know there are some things I need to work on 1st.
+
+[php]
+&lt;?php
+require_once (&quot;sqlinfo.php&quot;);
+$sql_connect = mysql_connect(&quot;localhost&quot;, $sqluser, $sqlpass);
+$sql_select = mysql_select_db(&quot;mysql_table&quot;);
+date_default_timezone_set(&quot;GMT&quot;);
+$type_array = array(
+			&quot;client&quot; =&gt; array(
+				&quot;type&quot; =&gt; &quot;client&quot;,
+				&quot;drive&quot; =&gt; &quot;files/-/full_client/&quot;,
+				&quot;title&quot; =&gt; &quot;Korean GunZ Client Download&quot;,
+				&quot;desc&quot; =&gt; &quot;Client Downloads&quot;
+			),
+			&quot;patch&quot; =&gt; array(
+				&quot;type&quot; =&gt; &quot;patch&quot;,
+				&quot;drive&quot; =&gt; &quot;files/-/&quot;,
+				&quot;title&quot; =&gt; &quot;Korean GunZ Patch Files&quot;,
+				&quot;desc&quot; =&gt; &quot;Patch Files&quot;
+			)/*,
+			&quot;test&quot; =&gt; array(
+				&quot;type&quot; =&gt; &quot;test&quot;,
+				&quot;drive&quot; =&gt; &quot;files/-/test/&quot;,
+				&quot;title&quot; =&gt; &quot;TESTING&quot;,
+				&quot;desc&quot; =&gt; &quot;Testing&quot;
+			)*/
+		);
+if(!empty($_GET[&#39;type&#39;])){
+	if(array_key_exists($_GET[&#39;type&#39;], $type_array)){
+		$type = $_GET[&#39;type&#39;];
+	}
+	else{
+		$type = &quot;patch&quot;; //default
+	}
+}
+else{
+	$type = &quot;patch&quot;; //default
+}
+function file_list($directory, $include = &quot;.zip|.rar|.exe|.png&quot; /*include only*/, $order = &quot;DESC&quot;){
+	$include_array = explode(&quot;|&quot;, $include);
+	$dir_handle = @opendir($directory) or die(&quot;Directory not found. &quot;.$directory);
+	$k = 0;
+	while(($entry = readdir($dir_handle)) !== FALSE){ 
+		if($entry == &quot;..&quot;){
+			$files[] = array(&quot;file_name&quot; =&gt; &quot;.NONE.&quot;, &quot;file_size&quot; =&gt; 0, &quot;file_added&quot; =&gt; 0, &quot;file_extention&quot; =&gt; 0, &quot;add_number&quot; =&gt; 0);
+		}
+		$find_ext = strrpos($entry, &quot;.&quot;);
+		$l = strlen($entry) - $find_ext;
+		$ext = substr($entry, $find_ext, $l);
+		if(in_array($ext, $include_array)){
+			if(is_readable($directory.$entry)){
+				$k++;
+				$files[] = array(
+					&quot;file_name&quot; =&gt; $entry,
+					&quot;file_size&quot; =&gt; filesize($directory.$entry),
+					&quot;file_added&quot; =&gt; filemtime($directory.$entry),
+					&quot;file_extention&quot; =&gt; $ext,
+					&quot;add_number&quot; =&gt; $k
+					);
+			}
+		}
+	}
+	closedir($dir_handle);
+	if($order == &quot;ASC&quot;){
+		@asort($files);
+	}
+	else if($order == &quot;DESC&quot;){
+		@arsort($files);
+	}
+	return $files;
+}
+function unique_ips($drive){
+	$query = mysql_fetch_array(mysql_query(&quot;SELECT COUNT(DISTINCT `ip`) as &#39;ips&#39; FROM file_download WHERE download_drive=&#39;&quot;.$drive.&quot;&#39;&quot;));
+	return $query[&#39;ips&#39;];
+}
+function most_downloaded($drive){
+	$fid = mysql_query(&quot;SELECT `download_file`, COUNT(*) FROM file_download WHERE download_drive=&#39;&quot;.$drive.&quot;&#39; GROUP BY `download_file` ORDER BY COUNT(*) DESC LIMIT 1&quot;) or die (mysql_error());
+	while($fip = mysql_fetch_array($fid)){
+			$dl_info = array(&quot;file&quot; =&gt; $fip[&#39;download_file&#39;], &quot;hits&quot; =&gt; $fip[&#39;COUNT(*)&#39;]);
+	}
+	return $dl_info;
+}
+function format_bytes($bytes){
+	if ($bytes &lt; 1024){ return $bytes; }
+	else if ($bytes &lt; 1048576){ return round($bytes / 1024, 2).&#39;K&#39;; }
+	else if ($bytes &lt; 1073741824){ return round($bytes / 1048576, 2).&#39;MB&#39;; }
+	else if ($bytes &lt; 1099511627776){ return round($bytes / 1073741824, 2).&#39;GB&#39;; }
+	else{ return round($bytes / 1099511627776, 2).&#39;TB&#39;; }
+}
+
+$file_array = file_list($type_array[$type][&#39;drive&#39;]);
+$file_downloads = most_downloaded($type_array[$type][&#39;drive&#39;]);
+/* Devide $file_array, I am sure there is a easire way */
+$file_names = array();
+foreach ($file_array as $value){ $file_names[] = $value[&#39;file_name&#39;]; }
+$file_sizes = array();
+foreach ($file_array as $value){ $file_sizes[] = $value[&#39;file_size&#39;]; }
+$numberofiles = array();
+foreach ($file_array as $value){ $numberofiles[] = $value[&#39;add_number&#39;]; }
+asort($numberofiles);
+/*   */
+if ($_SERVER[&#39;HTTP_X_FORWARD_FOR&#39;]){ $ip = $_SERVER[&#39;HTTP_X_FORWARD_FOR&#39;]; } else{ $ip = $_SERVER[&#39;REMOTE_ADDR&#39;]; }
+if($_GET){
+	if(!empty($_GET[&#39;file&#39;])){
+		if(in_array($_GET[&#39;file&#39;], $file_names)){
+			mysql_query(&quot;INSERT INTO file_download (download_drive, download_file, unix_time, ip, user_agent)
+			VALUES (
+				&#39;&quot;.$type_array[$type][&#39;drive&#39;].&quot;&#39;,
+				&#39;&quot;.$_GET[&#39;file&#39;].&quot;&#39;,
+				&#39;&quot;.time().&quot;&#39;,
+				&#39;&quot;.$ip.&quot;&#39;,
+				&#39;&quot;.$_SERVER[&#39;HTTP_USER_AGENT&#39;].&quot;&#39;
+			)&quot;) or die (mysql_error());
+			mysql_close();
+			header(&quot;Location: &quot;.$type_array[$type][&#39;drive&#39;].$_GET[&#39;file&#39;]);
+			exit();
+		}
+		else{
+			echo &#39;Requested file doesn\&#39;t exsist.&lt;br&gt;&lt;a href=&quot;&#39;.$_SERVER[&#39;PHP_SELF&#39;].&#39;&quot;&gt;PLEASE GO BACK&lt;/a&gt;&#39;;
+			exit();	
+		}
+	}
+	else if(isset($_GET[&#39;last&#39;])){
+		$q = mysql_query(&quot;SELECT * FROM file_download ORDER BY `unix_time` DESC LIMIT 0,1&quot;) or die (mysql_error());
+		echo &quot;&lt;h1&gt;Last Download&lt;/h1&gt;&quot;;
+		while($qp = mysql_fetch_array($q)){
+			echo &quot;ID: &quot;.$qp[&#39;download_id&#39;];
+			echo &quot;&lt;br&gt;File name: &quot;.$qp[&#39;download_file&#39;];
+			echo &quot;&lt;br&gt;Time: &quot;.date(&quot;d-M-Y H:i:s&quot;, $qp[&#39;unix_time&#39;]);
+			echo &quot;&lt;br&gt;IP: &quot;.$qp[&#39;ip&#39;];
+			echo &quot;&lt;br&gt;User Agent: &quot;.$qp[&#39;user_agent&#39;];
+		}
+		exit();
+	}
+}
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;head&gt;
+	&lt;title&gt;&lt;?=$type_array[$type][&#39;title&#39;];?&gt;&lt;/title&gt;
+	&lt;meta http-equiv=&quot;Content-Type&quot; content=&quot;text/html; charset=UTF-8&quot;&gt;
+	&lt;style type=&quot;text/css&quot;&gt;.top{ vertical-align:top } .left{ text-align:left; } .right{ text-align:right; }&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+	&lt;h1&gt;&lt;?=$type_array[$type][&#39;title&#39;];?&gt;&lt;/h1&gt;
+	&lt;h2&gt;Latest release first&lt;/h2&gt;
+	&lt;h5&gt;Most downloaded file: &lt;a href=&quot;&lt;?=$_SERVER[&#39;PHP_SELF&#39;];?&gt;?type=&lt;?=$type;?&gt;&amp;file=&lt;?=$file_downloads[&#39;file&#39;];?&gt;&quot;&gt;&lt;?=$file_downloads[&#39;file&#39;];?&gt;&lt;/a&gt; - Hits: &lt;?=$file_downloads[&#39;hits&#39;];?&gt;&lt;/h5&gt;
+	&lt;h6&gt;Goto: - &lt;?php
+foreach($type_array as $types){
+	if($type == $types[&#39;type&#39;]) continue;
+	echo &#39;&lt;a href=&quot;&#39;.$_SERVER[&#39;PHP_SELF&#39;].&#39;?type=&#39;.$types[&#39;type&#39;].&#39;&quot;&gt;&#39;.$types[&#39;desc&#39;].&#39;&lt;/a&gt; - &#39;;
+}
+?&gt;&lt;/h6&gt;
+	&lt;table&gt;
+		&lt;tr&gt;
+			&lt;th&gt;&lt;img src=&quot;files/images/dlicons/blank.gif&quot; alt=&quot;[ICO]&quot; width=&quot;20&quot; height=&quot;22&quot;&gt;&lt;/th&gt;
+			&lt;th&gt;&lt;a href=&quot;#&quot;&gt;Name&lt;/a&gt;&lt;/th&gt;&lt;th&gt;&lt;a href=&quot;#&quot;&gt;Size&lt;/a&gt;&lt;/th&gt;
+		&lt;/tr&gt;
+		&lt;tr&gt;
+			&lt;th colspan=&quot;3&quot;&gt;&lt;img src=&quot;files/images/dlicons/hr.png&quot; alt=&quot;_________________________________&quot;&gt;&lt;/th&gt;
+		&lt;/tr&gt;
+&lt;?php
+foreach ($file_array as $filename){
+	if($filename[&#39;file_name&#39;] == &quot;.NONE.&quot;) continue;
+echo &#39;		&lt;tr&gt;
+			&lt;td class=&quot;top&quot;&gt;&lt;img src=&quot;files/images/dlicons/patch.png&quot; alt=&quot;[&#39;.$filename[&#39;file_extention&#39;].&#39;]&quot; width=&quot;20&quot; height=&quot;22&quot;&gt;&lt;/td&gt;
+			&lt;td&gt;&lt;a href=&quot;&#39;.$_SERVER[&#39;PHP_SELF&#39;].&#39;?type=&#39;.$type.&#39;&amp;file=&#39;.$filename[&#39;file_name&#39;].&#39;&quot;&gt;&#39;.$filename[&#39;file_name&#39;].&#39;&lt;/a&gt;&lt;/td&gt;
+			&lt;td class=&quot;right&quot;&gt;&#39;.format_bytes($filename[&#39;file_size&#39;]).&#39;&lt;/td&gt;
+			&lt;!-- File added to my server on: &#39;.date(&quot;d-M-Y H:i:s&quot;, $filename[&#39;file_added&#39;]).&#39;. --&gt;
+		&lt;/tr&gt;
+&#39;;
+}
+echo &#39;	&lt;/table&gt;
+	&lt;h4&gt;Unique downloads: &#39;.unique_ips($type_array[$type][&#39;drive&#39;]).&#39;&lt;br&gt;There are &#39;.end($numberofiles).&#39; files for a total of &#39;.number_format(array_sum($file_sizes)).&#39; bytes (&#39;.format_bytes(array_sum($file_sizes)).&#39;).&lt;/h4&gt;&#39;;
+mysql_close();
+?&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+[/php]</description>
+    
+    <lastBuildDate>Fri, 05 Nov 2010 12:17:55 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@Uriko Uriko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uriko">@Uriko</a> wrote:</p>
+          <blockquote>
+              <p>you said so…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/11</link>
+        <pubDate>Fri, 05 Nov 2010 12:17:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-11</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@cumescape cumescape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cumescape">@cumescape</a> wrote:</p>
+          <blockquote>
+              <p>Kay. If you say so.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/10</link>
+        <pubDate>Fri, 05 Nov 2010 01:50:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-10</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“cumescape, post:8, topic:366945”]In general: there are many way of getting things done in all coding languages.</p>
+<p>Mind explaining to me where you think I went wrong.[/quote]<br>
+You said yourself that it’s shit…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/9</link>
+        <pubDate>Thu, 04 Nov 2010 08:43:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-9</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@cumescape cumescape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cumescape">@cumescape</a> wrote:</p>
+          <blockquote>
+              <p>In general: there are many way of getting things done in all coding languages.</p>
+<p>Mind explaining to me where you think I went wrong.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/8</link>
+        <pubDate>Thu, 04 Nov 2010 02:28:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-8</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@Liquid_Magic Liquid Magic]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/liquid_magic">@Liquid_Magic</a> wrote:</p>
+          <blockquote>
+              <p>In general: your layout is shit.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/7</link>
+        <pubDate>Wed, 03 Nov 2010 20:29:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-7</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@cumescape cumescape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cumescape">@cumescape</a> wrote:</p>
+          <blockquote>
+              <p>I am 17 years of age.</p>
+<p>I don’t really see why this would be bad, care to explain?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/6</link>
+        <pubDate>Tue, 02 Nov 2010 15:32:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-6</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@Pwnd Pwnd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pwnd">@Pwnd</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Unhandled, post:4, topic:366945”]I remember when I was 12 and wrote code like this.[/quote]cumescape probably is 12.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/5</link>
+        <pubDate>Mon, 01 Nov 2010 21:16:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-5</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@Unhandled Unhandled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unhandled">@Unhandled</a> wrote:</p>
+          <blockquote>
+              <p>I remember when I was 12 and wrote code like this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/4</link>
+        <pubDate>Mon, 01 Nov 2010 20:54:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-4</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@sppt sppt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sppt">@sppt</a> wrote:</p>
+          <blockquote>
+              <p>pssh, glob</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/3</link>
+        <pubDate>Mon, 01 Nov 2010 19:35:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-3</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@xx_matty_xx Justin Bieber]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_matty_xx">@xx_matty_xx</a> wrote:</p>
+          <blockquote>
+              <p>ty really needed this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/2</link>
+        <pubDate>Mon, 01 Nov 2010 15:21:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-2</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+      <item>
+        <title>Shit code that just works</title>
+        <dc:creator><![CDATA[@cumescape cumescape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cumescape">@cumescape</a> wrote:</p>
+          <blockquote>
+              <p>Echos all the files that match the extension requirements from specified directory. Then logs if someone downloads the file with the directory and file name. I am thinking about making it into a download manager, but I know there are some things I need to work on 1st.</p>
+<p>[php]</p>
+&lt;?php
+require_once ("sqlinfo.php");
+$sql_connect = mysql_connect("localhost", $sqluser, $sqlpass);
+$sql_select = mysql_select_db("mysql_table");
+date_default_timezone_set("GMT");
+$type_array = array(
+			"client" =&gt; array(
+				"type" =&gt; "client",
+				"drive" =&gt; "files/-/full_client/",
+				"title" =&gt; "Korean GunZ Client Download",
+				"desc" =&gt; "Client Downloads"
+			),
+			"patch" =&gt; array(
+				"type" =&gt; "patch",
+				"drive" =&gt; "files/-/",
+				"title" =&gt; "Korean GunZ Patch Files",
+				"desc" =&gt; "Patch Files"
+			)/*,
+			"test" =&gt; array(
+				"type" =&gt; "test",
+				"drive" =&gt; "files/-/test/",
+				"title" =&gt; "TESTING",
+				"desc" =&gt; "Testing"
+			)*/
+		);
+if(!empty($_GET['type'])){
+	if(array_key_exists($_GET['type'], $type_array)){
+		$type = $_GET['type'];
+	}
+	else{
+		$type = "patch"; //default
+	}
+}
+else{
+	$type = "patch"; //default
+}
+function file_list($directory, $include = ".zip|.rar|.exe|.png" /*include only*/, $order = "DESC"){
+	$include_array = explode("|", $include);
+	$dir_handle = @opendir($directory) or die("Directory not found. ".$directory);
+	$k = 0;
+	while(($entry = readdir($dir_handle)) !== FALSE){ 
+		if($entry == ".."){
+			$files[] = array("file_name" =&gt; ".NONE.", "file_size" =&gt; 0, "file_added" =&gt; 0, "file_extention" =&gt; 0, "add_number" =&gt; 0);
+		}
+		$find_ext = strrpos($entry, ".");
+		$l = strlen($entry) - $find_ext;
+		$ext = substr($entry, $find_ext, $l);
+		if(in_array($ext, $include_array)){
+			if(is_readable($directory.$entry)){
+				$k++;
+				$files[] = array(
+					"file_name" =&gt; $entry,
+					"file_size" =&gt; filesize($directory.$entry),
+					"file_added" =&gt; filemtime($directory.$entry),
+					"file_extention" =&gt; $ext,
+					"add_number" =&gt; $k
+					);
+			}
+		}
+	}
+	closedir($dir_handle);
+	if($order == "ASC"){
+		@asort($files);
+	}
+	else if($order == "DESC"){
+		@arsort($files);
+	}
+	return $files;
+}
+function unique_ips($drive){
+	$query = mysql_fetch_array(mysql_query("SELECT COUNT(DISTINCT `ip`) as 'ips' FROM file_download WHERE download_drive='".$drive."'"));
+	return $query['ips'];
+}
+function most_downloaded($drive){
+	$fid = mysql_query("SELECT `download_file`, COUNT(*) FROM file_download WHERE download_drive='".$drive."' GROUP BY `download_file` ORDER BY COUNT(*) DESC LIMIT 1") or die (mysql_error());
+	while($fip = mysql_fetch_array($fid)){
+			$dl_info = array("file" =&gt; $fip['download_file'], "hits" =&gt; $fip['COUNT(*)']);
+	}
+	return $dl_info;
+}
+function format_bytes($bytes){
+	if ($bytes &lt; 1024){ return $bytes; }
+	else if ($bytes &lt; 1048576){ return round($bytes / 1024, 2).'K'; }
+	else if ($bytes &lt; 1073741824){ return round($bytes / 1048576, 2).'MB'; }
+	else if ($bytes &lt; 1099511627776){ return round($bytes / 1073741824, 2).'GB'; }
+	else{ return round($bytes / 1099511627776, 2).'TB'; }
+}
+
+$file_array = file_list($type_array[$type]['drive']);
+$file_downloads = most_downloaded($type_array[$type]['drive']);
+/* Devide $file_array, I am sure there is a easire way */
+$file_names = array();
+foreach ($file_array as $value){ $file_names[] = $value['file_name']; }
+$file_sizes = array();
+foreach ($file_array as $value){ $file_sizes[] = $value['file_size']; }
+$numberofiles = array();
+foreach ($file_array as $value){ $numberofiles[] = $value['add_number']; }
+asort($numberofiles);
+/*   */
+if ($_SERVER['HTTP_X_FORWARD_FOR']){ $ip = $_SERVER['HTTP_X_FORWARD_FOR']; } else{ $ip = $_SERVER['REMOTE_ADDR']; }
+if($_GET){
+	if(!empty($_GET['file'])){
+		if(in_array($_GET['file'], $file_names)){
+			mysql_query("INSERT INTO file_download (download_drive, download_file, unix_time, ip, user_agent)
+			VALUES (
+				'".$type_array[$type]['drive']."',
+				'".$_GET['file']."',
+				'".time()."',
+				'".$ip."',
+				'".$_SERVER['HTTP_USER_AGENT']."'
+			)") or die (mysql_error());
+			mysql_close();
+			header("Location: ".$type_array[$type]['drive'].$_GET['file']);
+			exit();
+		}
+		else{
+			echo 'Requested file doesn\'t exsist.<br><a>PLEASE GO BACK</a>';
+			exit();	
+		}
+	}
+	else if(isset($_GET['last'])){
+		$q = mysql_query("SELECT * FROM file_download ORDER BY `unix_time` DESC LIMIT 0,1") or die (mysql_error());
+		echo "<h1>Last Download</h1>";
+		while($qp = mysql_fetch_array($q)){
+			echo "ID: ".$qp['download_id'];
+			echo "<br>File name: ".$qp['download_file'];
+			echo "<br>Time: ".date("d-M-Y H:i:s", $qp['unix_time']);
+			echo "<br>IP: ".$qp['ip'];
+			echo "<br>User Agent: ".$qp['user_agent'];
+		}
+		exit();
+	}
+}
+?&gt;
+
+
+	&lt;?=$type_array[$type]['title'];?&gt;
+	
+	.top{ vertical-align:top } .left{ text-align:left; } .right{ text-align:right; }
+
+
+	<h1>&lt;?=$type_array[$type]['title'];?&gt;</h1>
+	<h2>Latest release first</h2>
+	<h5>Most downloaded file: <a>&lt;?=$file_downloads['file'];?&gt;</a> - Hits: &lt;?=$file_downloads['hits'];?&gt;</h5>
+	<h6>Goto: - &lt;?php
+foreach($type_array as $types){
+	if($type == $types['type']) continue;
+	echo '<a>'.$types['desc'].'</a> - ';
+}
+?&gt;</h6>
+	<table>
+		<tr>
+			<th><img alt="[ICO]" width="20" height="22"></th>
+			<th><a>Name</a></th>
+<th><a>Size</a></th>
+		</tr>
+		<tr>
+			<th><img alt="_________________________________"></th>
+		</tr>
+&lt;?php
+foreach ($file_array as $filename){
+	if($filename['file_name'] == ".NONE.") continue;
+echo '		<tr>
+			<td><img alt="['.$filename['file_extention'].']" width="20" height="22"></td>
+			<td><a>'.$filename['file_name'].'</a></td>
+			<td>'.format_bytes($filename['file_size']).'</td>
+			
+		</tr>
+';
+}
+echo '	</table>
+	<h4>Unique downloads: '.unique_ips($type_array[$type]['drive']).'<br>There are '.end($numberofiles).' files for a total of '.number_format(array_sum($file_sizes)).' bytes ('.format_bytes(array_sum($file_sizes)).').</h4>';
+mysql_close();
+?&gt;
+
+
+[/php]
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/shit-code-that-just-works/366945/1</link>
+        <pubDate>Mon, 01 Nov 2010 14:53:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-366945-1</guid>
+        <source url="https://forum.moparisthebest.com/t/shit-code-that-just-works/366945.rss">Shit code that just works</source>
+      </item>
+  </channel>
+</rss>

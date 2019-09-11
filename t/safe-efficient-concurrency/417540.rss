@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Safe, efficient concurrency</title>
+    <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540</link>
+    <description>[i]why is concurrency hard?[/i]
+
+this is the usual question people ask. the answers are usually that threads are heavyweight, or that shared memory is a pain. threads are a relic of the past. being scheduled by the OS makes them heavy; their large, independent stacks make them heavy; their preemptive multitasking makes them heavy. this added weight is quite literal: threads just do [i]not[/i] scale.
+events were re-introduced as a way to avoid the downfalls of threads. unfortunately, events bring with them their own bag of problems. events make workflow confusing; events aren&#39;t easily concurrent; events are rarely intuitive.
+the age of a clear dichotomy are over, though. threads have become less expensive, and events have become more easily concurrent.
+the middle ground i came to discover was that of lightweight event-driven green-threads/protothreads/picothreads/fibers/tasks. code can become less complex again, yet remain much more scalable.
+
+there is always some sort of problem, however. conventionally, wherever there is concurrency, there is the underlying risk of inconsistency due to shared memory.
+for example, in a typical runescape server, there is little shared memory: events are all handled in a single thread in a serial fashion. this is wasteful, given that work can be distributed to multiple processors, and inefficient, in that throughput will be significantly decreased.
+serializing events has the added benefit of avoiding the problem of shared memory with game state. events have no need to worry about concurrent modification of values and inconsistency in data, because only one is being handled at a time. this is a pessimistic approach to achieve safety.
+
+in models i&#39;ve discussed on this site, i came to the point of advocating unifying the event and task system into one. events take advantage of parallelism as available and most certainly with concurrency. the issues that come with this of course is the problem of shared memory. to deal with this i brought to the attention of rune-server the idea of concurrency control.
+pessimistic control means avoiding concurrency completely in a bleak stance that if something can go wrong, it most certainly will. it often involves locking on any concurrent data to keep consistency. locking can either be coarse- or fine-grained, depending on the relative amount of data being locked on. coarse-grained locks would be like python&#39;s global interpreter lock,
+optimistic control, on the other hand, avoids locking completely. often times it is achieved through the use of transactions. the idea in version-based transactional concurrency control is that all changes to shared memory is encapsulated in ACID transactions, often times with the idea of two-phase commit. transactions are first verified to have not collided with another in that one refers to data that has now become invalidated by another. when this occurs, however, transactions need to be replayed. transactions are also often measured by granularity; transactions that rely on high volumes of data are logically more likely to fail and need to be replayed, while those that operate on as little volatile data as possible have a significantly smaller chance of this occurring.
+typically, optimistic control is good for systems with very little chance of collision, while a more pessimistic control works well for systems with an almost certain chance of collision. 
+with runescape servers, however, it&#39;s often the case that optimistic approaches are more expensive and less scalable, given that interactions may easily collide. i originally supported the optimistic approach, but in light of evidence from implementations (namely QuakeTM and AtomicQuake), i&#39;ve changed my mind. a completely pessimistic approach, however, usually is not much better; often times events can easily be handled concurrently without the chance of collision and therefore need of locking. the ideal is to maximize throughput.
+
+the idea of being optimistic in some cases and pessimistic in others is known as semi-optimistic concurrency control. one of the brief periods of research i had involved attempting to dynamically analyze tasks and transactions to see just exactly what state was modified in each task.
+this way, i reasoned, i could build a dependency graph of the work queue. if two tasks (corresponding to events), A and B, both relied on the same data, it was obvious there should be some sort of synchronization barrier to keep them from colliding in parallel but instead executed in a pessimistic serial manner. if two tasks didn&#39;t depend on the same data, they then could easily be executed in an optimistic manner.
+naturally, semi-optimistic control is hard to get right, and building such dependency graphs is not a trivial task. basically, i wasn&#39;t going to achieve what i wanted.
+
+if it isn&#39;t apparent by now, one of the main issues that we have with concurrency is just that: shared memory. how do we control how to deal with such state in a safe way without losing the benefits of available parallelism?
+
+the shared-nothing principle is an increasingly popular way of exploiting parallelism without messing with hard concurrency. to sum it up adequately, the principle dictates that concurrent processes share no memory or state that can be modified by both. instead, these processes keep data to themselves and avoid the whole issue of shared memory in general.
+these processes are by default visible in some of the most highly concurrent languages. erlang, for example, has processes built into the syntax, and scalable as well. erlang processes are actually implementations of the mathematical and CS concept of the actor model. like in scala, the actor model decouples logic into discrete concurrent processes known as actors, which interface only via a lightweight messaging scheme.
+the actor model extends object-oriented theory by stating that not only is everything an object, but everything is an actor, too.
+actors share nothing. all interactions are expressed through these messages, and, because of this, they&#39;re immune from the issues of shared memory concurrency. not only that, but actors are intuitive. actors are lightweight and event-driven, so it&#39;s inherent in their nature that they&#39;re scalable.
+
+it should come to no surprise then that actors provide the perfect solution to concurrency in runescape. events can be dispatched to actors in parallel, while avoiding state issues as actors demultiplex their messages into linear queues. actors are scheduled to run in thread pools, so they&#39;re not much different from the task conception, either.
+no complex data flow analysis and dependency graphs are needed; given that all state is protected behind an actor, parallelism can happen on a level not too coarse nor too fine. actors basically solve the issues i&#39;ve found. in essence, actors solve the issue of threads v. events as well as that of shared memory concurrency control.
+
+actors seem as the lasting solution to the problem of concurrency in runescape servers, yet i have yet to think out every possible issue. if you come up with any ideas, feel free to post them. 
+
+more on this:
+[url=http://research.microsoft.com/en-us/um/people/tharris/papers/2009-ppopp-quake.pdf]Atomic Quake: Using Transactional Memory in an Interactive Multiplayer Game Server[/url]
+[url=http://research.microsoft.com/en-us/um/people/tharris/papers/2009-ics.pdf]QuakeTM: Parallelizing a Complex Sequential Application Using Transactional Memory[/url]
+[url=http://www.devmaster.net/articles/mmo-scalable-server/]Writing Low-Pain Massively Scalable Multiplayer Servers[/url]
+[url=http://armstrongonsoftware.blogspot.com/2006/09/why-i-dont-like-shared-memory.html]Why I don&#39;t like Shared Memory[/url]
+[url=http://www.malhar.net/sriram/kilim/thread_of_ones_own.pdf]A Thread of One&#39;s Own[/url]
+and, of course, a video:
+[url=http://www.youtube.com/watch?v=37NaHRE0Sqw]Kilim: Fast, lightweight, cheap message passing in Java. - YouTube[/url]
+
+constructive criticism and related discourse are not only welcome but encouraged.</description>
+    
+    <lastBuildDate>Sun, 29 May 2016 02:25:13 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>lmfao i remember reading this on r-s years ago and not understanding a single thing</p>
+<p>idk why programmers like to make things seem so much more complicated than they actually are</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/18</link>
+        <pubDate>Sun, 29 May 2016 02:25:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-18</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@my-swagger my-swagger]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/my-swagger">@my-swagger</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="16" data-topic="417540">
+<div class="title">
+<div class="quote-controls"></div>
+ Snow_:</div>
+<blockquote>
+<p>Very nice and informative read! Bumping this so others who haven’t read this yet get the chance to do so.</p>
+</blockquote>
+</aside>
+<p>2016 mate</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/17</link>
+        <pubDate>Sat, 28 May 2016 22:29:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-17</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Kattoor Snow_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kattoor">@Kattoor</a> wrote:</p>
+          <blockquote>
+              <p>Very nice and informative read! Bumping this so others who haven’t read this yet get the chance to do so.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/16</link>
+        <pubDate>Sat, 28 May 2016 19:12:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-16</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@xxxtilllyxxx xxxtilllyxxx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xxxtilllyxxx">@xxxtilllyxxx</a> wrote:</p>
+          <blockquote>
+              <p>This is completely deserving of a bump…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/15</link>
+        <pubDate>Thu, 27 Jun 2013 22:04:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-15</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Because it doesn’t help the other 80% of this site that doesn’t understand it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/14</link>
+        <pubDate>Sat, 10 Dec 2011 20:20:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-14</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>oh well i guess but no idea why it died out so fast <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/13</link>
+        <pubDate>Sat, 10 Dec 2011 20:19:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-13</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>This is something bump worthy.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/12</link>
+        <pubDate>Sat, 10 Dec 2011 20:16:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-12</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="10" data-topic="417540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/imsuperman05/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> imsuperman05:</div>
+<blockquote>
+<p>Thank you very much sir.  Finally read this thoroughly.</p>
+</blockquote>
+</aside>
+<p>y u no check last post date <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/11</link>
+        <pubDate>Sat, 10 Dec 2011 20:12:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-11</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>Thank you very much sir.  Finally read this thoroughly.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/10</link>
+        <pubDate>Sat, 10 Dec 2011 16:58:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-10</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Your grammar makes me want to hit you on the head with a dictionary but never the less it was an interesting splurge of information.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/9</link>
+        <pubDate>Mon, 10 Oct 2011 05:00:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-9</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Burning_fangs Burning fangs]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/burning_fangs">@Burning_fangs</a> wrote:</p>
+          <blockquote>
+              <p>Mind if I draw this back to Java and private servers?</p>
+<p>How is it possible to make actions non-concurrent in java, I always thought that each process is finished 1 after the other?<br>
+and you would pretty much have to rewrite the entire server code to get any benifit out of that right?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/8</link>
+        <pubDate>Mon, 10 Oct 2011 03:40:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-8</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Kono-chan Kono-chan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kono-chan">@Kono-chan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“hybrent, post:6, topic:417540”][quote author=Kono-chan link=topic=520094.msg3776678#msg3776678 date=1318139941]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>I see the points here and all, but it is the wrong section…<br>
+[/quote]He’s talking about the most efficient and useful system for handling synchronous code in <span class="bbcode-b">private servers</span>. Obviously, you didn’t read it. You should; it’d make you less of a retard.</p>
+</blockquote>
+</aside>
+<p>And this specific section is for <span class="bbcode-b">server development</span>, not <span class="bbcode-b">general discussion</span>.</p>
+<p>Hey, I can use bold too!</p>
+</blockquote>
+</aside>
+<p>It is about server development though…[/quote]</p>
+<p>Hence I changed it to server development projects. xD</p>
+<p>EDIT:</p>
+<p>But fair enough. I always just thought of it as a project board, but you are right. ;o Though I do think it would be read more and fit more in general, due to that natural assumption that this is for projects.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/7</link>
+        <pubDate>Sun, 09 Oct 2011 06:00:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-7</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@hybrent hybrent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hybrent">@hybrent</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Kono-chan, post:5, topic:417540”][quote author=yo123 link=topic=520094.msg3776664#msg3776664 date=1318137757]</p>
+<aside class="quote">
+<blockquote>
+<p>I see the points here and all, but it is the wrong section…<br>
+[/quote]He’s talking about the most efficient and useful system for handling synchronous code in <span class="bbcode-b">private servers</span>. Obviously, you didn’t read it. You should; it’d make you less of a retard.</p>
+</blockquote>
+</aside>
+<p>And this specific section is for <span class="bbcode-b">server development</span>, not <span class="bbcode-b">general discussion</span>.</p>
+<p>Hey, I can use bold too![/quote]</p>
+<p>It is about server development though…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/6</link>
+        <pubDate>Sun, 09 Oct 2011 06:00:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-6</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Kono-chan Kono-chan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kono-chan">@Kono-chan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yo123, post:1, topic:417545”][quote author=Kono-chan link=topic=520094.msg3776578#msg3776578 date=1318133240]<br>
+I see the points here and all, but it is the wrong section…<br>
+[/quote]He’s talking about the most efficient and useful system for handling synchronous code in <span class="bbcode-b">private servers</span>. Obviously, you didn’t read it. You should; it’d make you less of a retard.[/quote]</p>
+<p>And this specific section is for <span class="bbcode-b">server development projects</span>, not <span class="bbcode-b">general discussion</span>.</p>
+<p>Hey, I can use bold too!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/5</link>
+        <pubDate>Sun, 09 Oct 2011 05:59:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-5</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yo123, post:1, topic:417545”][quote author=Kono-chan link=topic=520094.msg3776578#msg3776578 date=1318133240]<br>
+I see the points here and all, but it is the wrong section…<br>
+[/quote]He’s talking about the most efficient and useful system for handling synchronous code in <span class="bbcode-b">private servers</span>. Obviously, you didn’t read it. You should; it’d make you less of a retard.[/quote]<br>
+What section is this?  If you read it, you’d be less of a retard.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/4</link>
+        <pubDate>Sun, 09 Oct 2011 05:28:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-4</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>Fake and gay</p>
+<p>Very nice :o</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/3</link>
+        <pubDate>Sun, 09 Oct 2011 05:25:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-3</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Kono-chan Kono-chan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kono-chan">@Kono-chan</a> wrote:</p>
+          <blockquote>
+              <p>I see the points here and all, but it is the wrong section…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/2</link>
+        <pubDate>Sun, 09 Oct 2011 04:07:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-2</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+      <item>
+        <title>Safe, efficient concurrency</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-i">why is concurrency hard?</span></p>
+<p>this is the usual question people ask. the answers are usually that threads are heavyweight, or that shared memory is a pain. threads are a relic of the past. being scheduled by the OS makes them heavy; their large, independent stacks make them heavy; their preemptive multitasking makes them heavy. this added weight is quite literal: threads just do <span class="bbcode-i">not</span> scale.<br>
+events were re-introduced as a way to avoid the downfalls of threads. unfortunately, events bring with them their own bag of problems. events make workflow confusing; events aren’t easily concurrent; events are rarely intuitive.<br>
+the age of a clear dichotomy are over, though. threads have become less expensive, and events have become more easily concurrent.<br>
+the middle ground i came to discover was that of lightweight event-driven green-threads/protothreads/picothreads/fibers/tasks. code can become less complex again, yet remain much more scalable.</p>
+<p>there is always some sort of problem, however. conventionally, wherever there is concurrency, there is the underlying risk of inconsistency due to shared memory.<br>
+for example, in a typical runescape server, there is little shared memory: events are all handled in a single thread in a serial fashion. this is wasteful, given that work can be distributed to multiple processors, and inefficient, in that throughput will be significantly decreased.<br>
+serializing events has the added benefit of avoiding the problem of shared memory with game state. events have no need to worry about concurrent modification of values and inconsistency in data, because only one is being handled at a time. this is a pessimistic approach to achieve safety.</p>
+<p>in models i’ve discussed on this site, i came to the point of advocating unifying the event and task system into one. events take advantage of parallelism as available and most certainly with concurrency. the issues that come with this of course is the problem of shared memory. to deal with this i brought to the attention of rune-server the idea of concurrency control.<br>
+pessimistic control means avoiding concurrency completely in a bleak stance that if something can go wrong, it most certainly will. it often involves locking on any concurrent data to keep consistency. locking can either be coarse- or fine-grained, depending on the relative amount of data being locked on. coarse-grained locks would be like python’s global interpreter lock,<br>
+optimistic control, on the other hand, avoids locking completely. often times it is achieved through the use of transactions. the idea in version-based transactional concurrency control is that all changes to shared memory is encapsulated in ACID transactions, often times with the idea of two-phase commit. transactions are first verified to have not collided with another in that one refers to data that has now become invalidated by another. when this occurs, however, transactions need to be replayed. transactions are also often measured by granularity; transactions that rely on high volumes of data are logically more likely to fail and need to be replayed, while those that operate on as little volatile data as possible have a significantly smaller chance of this occurring.<br>
+typically, optimistic control is good for systems with very little chance of collision, while a more pessimistic control works well for systems with an almost certain chance of collision.<br>
+with runescape servers, however, it’s often the case that optimistic approaches are more expensive and less scalable, given that interactions may easily collide. i originally supported the optimistic approach, but in light of evidence from implementations (namely QuakeTM and AtomicQuake), i’ve changed my mind. a completely pessimistic approach, however, usually is not much better; often times events can easily be handled concurrently without the chance of collision and therefore need of locking. the ideal is to maximize throughput.</p>
+<p>the idea of being optimistic in some cases and pessimistic in others is known as semi-optimistic concurrency control. one of the brief periods of research i had involved attempting to dynamically analyze tasks and transactions to see just exactly what state was modified in each task.<br>
+this way, i reasoned, i could build a dependency graph of the work queue. if two tasks (corresponding to events), A and B, both relied on the same data, it was obvious there should be some sort of synchronization barrier to keep them from colliding in parallel but instead executed in a pessimistic serial manner. if two tasks didn’t depend on the same data, they then could easily be executed in an optimistic manner.<br>
+naturally, semi-optimistic control is hard to get right, and building such dependency graphs is not a trivial task. basically, i wasn’t going to achieve what i wanted.</p>
+<p>if it isn’t apparent by now, one of the main issues that we have with concurrency is just that: shared memory. how do we control how to deal with such state in a safe way without losing the benefits of available parallelism?</p>
+<p>the shared-nothing principle is an increasingly popular way of exploiting parallelism without messing with hard concurrency. to sum it up adequately, the principle dictates that concurrent processes share no memory or state that can be modified by both. instead, these processes keep data to themselves and avoid the whole issue of shared memory in general.<br>
+these processes are by default visible in some of the most highly concurrent languages. erlang, for example, has processes built into the syntax, and scalable as well. erlang processes are actually implementations of the mathematical and CS concept of the actor model. like in scala, the actor model decouples logic into discrete concurrent processes known as actors, which interface only via a lightweight messaging scheme.<br>
+the actor model extends object-oriented theory by stating that not only is everything an object, but everything is an actor, too.<br>
+actors share nothing. all interactions are expressed through these messages, and, because of this, they’re immune from the issues of shared memory concurrency. not only that, but actors are intuitive. actors are lightweight and event-driven, so it’s inherent in their nature that they’re scalable.</p>
+<p>it should come to no surprise then that actors provide the perfect solution to concurrency in runescape. events can be dispatched to actors in parallel, while avoiding state issues as actors demultiplex their messages into linear queues. actors are scheduled to run in thread pools, so they’re not much different from the task conception, either.<br>
+no complex data flow analysis and dependency graphs are needed; given that all state is protected behind an actor, parallelism can happen on a level not too coarse nor too fine. actors basically solve the issues i’ve found. in essence, actors solve the issue of threads v. events as well as that of shared memory concurrency control.</p>
+<p>actors seem as the lasting solution to the problem of concurrency in runescape servers, yet i have yet to think out every possible issue. if you come up with any ideas, feel free to post them.</p>
+<p>more on this:<br>
+<a href="http://research.microsoft.com/en-us/um/people/tharris/papers/2009-ppopp-quake.pdf" data-bbcode="true" rel="nofollow noopener">Atomic Quake: Using Transactional Memory in an Interactive Multiplayer Game Server</a><br>
+<a href="http://research.microsoft.com/en-us/um/people/tharris/papers/2009-ics.pdf" data-bbcode="true" rel="nofollow noopener">QuakeTM: Parallelizing a Complex Sequential Application Using Transactional Memory</a><br>
+<a href="http://www.devmaster.net/articles/mmo-scalable-server/" data-bbcode="true" rel="nofollow noopener">Writing Low-Pain Massively Scalable Multiplayer Servers</a><br>
+<a href="http://armstrongonsoftware.blogspot.com/2006/09/why-i-dont-like-shared-memory.html" data-bbcode="true" rel="nofollow noopener">Why I don’t like Shared Memory</a><br>
+<a href="http://www.malhar.net/sriram/kilim/thread_of_ones_own.pdf" data-bbcode="true" rel="nofollow noopener">A Thread of One’s Own</a><br>
+and, of course, a video:<br>
+<a href="http://www.youtube.com/watch?v=37NaHRE0Sqw" data-bbcode="true" rel="nofollow noopener">Kilim: Fast, lightweight, cheap message passing in Java. - YouTube</a></p>
+<p>constructive criticism and related discourse are not only welcome but encouraged.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540/1</link>
+        <pubDate>Sun, 09 Oct 2011 04:05:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-417540-1</guid>
+        <source url="https://forum.moparisthebest.com/t/safe-efficient-concurrency/417540.rss">Safe, efficient concurrency</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,877 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Updated grahams event manager</title>
+    <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540</link>
+    <description>After adding grahams new event manager for two people that needed help, I decided a few mins back to just quickly update his old one. (Now there is no reason for me to sit here and divide numbers by 600 in my head  :P).
+
+Anyway here you all go.
+
+
+Ready to be copied into PI / emulous.
+FIXED A SLIGHT ERROR. RE-ADD THIS IF YOU ADDED EARLIER.
+[code]
+package server.event;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Manages events which will be run in the future. Has its own thread since some
+ * events may need to be ran faster than the cycle time in the main thread.
+ * 
+ * @author Graham
+ */
+public class EventManager implements Runnable {
+
+    /**
+     * A reference to the singleton;
+     */
+    private static EventManager singleton = null;
+    
+    /**
+     * A list of events that are being executed.
+     */
+    private List&lt;EventContainer&gt; events;
+    
+    /**
+     * A queue of events that still need to be added.
+     */
+    private Queue&lt;EventContainer&gt; newEvents;
+    
+    /**
+     * The {@link ScheduledExecutorService} which schedules calls to the
+     * {@link #run()} method.
+     */
+    private final ScheduledExecutorService logicService;
+
+    /**
+     * Initialize the event manager.
+     */
+    private EventManager() {
+	logicService = Executors.newSingleThreadScheduledExecutor();
+	events = new ArrayList&lt;EventContainer&gt;();
+	newEvents = new ArrayDeque&lt;EventContainer&gt;();
+	logicService.scheduleAtFixedRate(this, 0, 600, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Gets the event manager singleton. If there is no singleton, the singleton
+     * is created.
+     * @return The event manager singleton.
+     */
+    public static EventManager getSingleton() {
+	if (singleton == null) {
+	    singleton = new EventManager();
+	}
+	return singleton;
+    }
+
+    /**
+     * Initializes the event manager (if it needs to be).
+     */
+    public static void initialise() {
+	getSingleton();
+    }
+
+    @Override
+    /**
+     * Processes events. Works kinda like newer versions of cron.
+     */
+    public void run() {
+	synchronized (newEvents) {
+	    EventContainer event;
+	    while ((event = newEvents.poll()) != null)
+		events.add(event);
+	}
+	// process all events
+	for (Iterator&lt;EventContainer&gt; it = events.iterator(); it.hasNext();) {
+	    EventContainer container = it.next();
+	    if (container.isRunning()) {
+		if ((System.currentTimeMillis() - container.getLastRun()) &gt;= container.getTick()) {
+		    container.execute();
+		}
+	    } else {
+		// remove events that have completed
+		it.remove();
+	    }
+	}
+    }
+
+    /**
+     * Adds an event.
+     * @param event The event to add.
+     * @param tick The tick time.
+     */
+    public void addEvent(Event event, int tick) {
+	synchronized (newEvents) {
+	    newEvents.add(new EventContainer(event, tick));
+	}
+    }
+
+    /**
+     * Shuts the event manager down.
+     */
+    public void shutdown() {
+	logicService.shutdown();
+    }
+}
+[/code]
+
+Ready to be copied into shards. Slightly older, was the first one I did, was for a friends project on shards.
+
+[code]
+package com.rs.worldserver.events;
+
+//Shard Revolutions Generic MMORPG Server
+//Copyright (C) 2008  Graham Edgecombe
+//This program is free software: you can redistribute it and/or modify
+//it under the terms of the GNU General Public License as published by
+//the Free Software Foundation, either version 3 of the License, or
+//(at your option) any later version.
+//This program is distributed in the hope that it will be useful,
+//but WITHOUT ANY WARRANTY; without even the implied warranty of
+//MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//GNU General Public License for more details.
+//You should have received a copy of the GNU General Public License
+//along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import com.rs.worldserver.Server;
+
+/**
+ * Manages events which will be run in the future. Has its own thread since some
+ * events may need to be ran faster than the cycle time in the main thread.
+ * @author Graham
+ */
+public class EventManager implements Runnable {
+
+    /**
+     * A reference to the singleton;
+     */
+    private static EventManager singleton = null;
+    
+    /**
+     * The {@link ScheduledExecutorService} which schedules calls to the
+     * {@link #run()} method.
+     */
+    private final ScheduledExecutorService logicService = Executors.newSingleThreadScheduledExecutor();
+
+    /**
+     * A list of events that are being executed.
+     */
+    private List&lt;EventContainer&gt; events;
+
+    /**
+     * A list of events to add.
+     */
+    private List&lt;EventContainer&gt; eventsToAdd;
+
+    /**
+     * A list of events to remove.
+     */
+    private List&lt;EventContainer&gt; remove;
+
+    /**
+     * Initialise the event manager.
+     */
+    private EventManager() {
+	events = new ArrayList&lt;EventContainer&gt;();
+	eventsToAdd = new ArrayList&lt;EventContainer&gt;();
+	remove = new ArrayList&lt;EventContainer&gt;();
+	logicService.scheduleAtFixedRate(this, 0, 600, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Gets the event manager singleton. If there is no singleton, the singleton
+     * is created.
+     * @return The event manager singleton.
+     */
+    public static EventManager getSingleton() {
+	if (singleton == null) {
+	    singleton = new EventManager();
+	}
+	return singleton;
+    }
+
+    /**
+     * Initialises the event manager (if it needs to be).
+     */
+    public static void initialise() {
+	getSingleton();
+    }
+
+    /**
+     * Have we shutdown?
+     */
+    private boolean isShutdown = false;
+    
+    /**
+     * Toggle shutdown.
+     */
+    private boolean toggleShutdown = false;
+
+    /**
+     * Processes events. Works kinda like newer versions of cron.
+     */
+    @Override
+    public void run() {
+	if (toggleShutdown) {
+	    isShutdown = true;
+	    return;
+	}
+	if (!isShutdown) {
+	    synchronized (eventsToAdd) {
+		for (EventContainer c : eventsToAdd) {
+		    events.add(c);
+		}
+		eventsToAdd.clear();
+	    }
+	    // Log.debug(Log.MAIN, &quot;Executing events&quot;);
+	    // process all events
+	    for (EventContainer container : events) {
+		if (container.isRunning()) {
+		    if ((System.nanoTime() / 1000000L - container.getLastRun()) &gt;= container.getTick()) {
+			try {
+			    synchronized (Server.gameLogicLock) {
+				container.execute();
+			    }
+			} catch (Exception e) {
+			    e.printStackTrace();
+			}
+		    }
+		} else {
+		    // add to remove list
+		    remove.add(container);
+		}
+	    }
+	    // remove events that have completed
+	    for (EventContainer container : remove) {
+		events.remove(container);
+	    }
+	    remove.clear();
+	} else {
+	    System.out.println(&quot;Event manager shut down.&quot;);
+	    if (Server.getIoThread().isShutdown()) {
+		System.exit(0);
+	    }
+	}
+    }
+
+    /**
+     * Adds an event.
+     * @param object The owner.
+     * @param event The event to add.
+     * @param tick The tick time.
+     */
+    public void addEvent(Object owner, Event event, int tick) {
+	synchronized (eventsToAdd) {
+	    eventsToAdd.add(new EventContainer(owner, event, tick));
+	}
+    }
+
+    /**
+     * Stops events
+     * @param object The owner.
+     */
+    public void stopEvents(Object owner) {
+	synchronized (events) {
+	    for (EventContainer container : events) {
+		if (container.getOwner() == owner) {
+		    container.stop();
+		}
+	    }
+	}
+    }
+
+    /**
+     * Shuts the event manager down.
+     */
+    public void shutdown() {
+	logicService.shutdown();
+	toggleShutdown = true;
+    }
+
+    /**
+     * Have we shutdown?
+     * @return
+     */
+    public boolean isShutdown() {
+	return isShutdown;
+    }
+
+    public int getEventCount() {
+	synchronized (events) {
+	    return events.size();
+	}
+    }
+}
+
+[/code]
+
+[size=14pt]I ask no rep for this. I also take no credit for this.[/size]
+
+* If you wish to avoid synchronization problems, you can run your main server tick with an event.</description>
+    
+    <lastBuildDate>Mon, 05 Nov 2012 04:49:47 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>Any idea on why you didn’t just make a server help thread instead of gravedigging?</p>
+<p>But anyways it can’t find your method initialize()</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/30</link>
+        <pubDate>Mon, 05 Nov 2012 04:49:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-30</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@WHATBLOOD WHATBLOOD]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whatblood">@WHATBLOOD</a> wrote:</p>
+          <blockquote>
+              <p><code>src\server\Server.java:167: cannot find symbol
+symbol  : method initialize()
+location: class server.event.EventManager
+                EventManager.initialize();
+                            ^
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+1 error
+Press any key to continue . . .</code></p>
+<p>Any ideas</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/29</link>
+        <pubDate>Mon, 05 Nov 2012 04:33:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-29</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Advocatus, post:27, topic:389540”][quote author=s1gma link=topic=485453.msg4025175#msg4025175 date=1340290168]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Just use ticks as hyperion has.</p>
+</blockquote>
+</aside>
+<p>You are obviously retarded.</p>
+<ol>
+<li>Hyperion doesnt come with a tick system.</li>
+<li>The purpose of this was to be a useful update for the traditionally used event manager (which graham had originally released years ago). This event manager is quite horrid for obvious reasons.<br>
+[/quote]‘obviously retarded’ for suggesting a better system (citing the wrong source?), wow you should shut the fuck up</li>
+</ol>
+</blockquote>
+</aside>
+<p>No, he is obviously retarded for not bothering to think before typing. You also made that same mistake, so honestly you should just shut the fuck up.<br>
+Graham’s latested released tick system (which is also present in Apollo) is significantly different from his initial event manager in a few key places.</p>
+<ol>
+<li>His initial event manager ran on a seperate thread. His later “TaskManager” ran on the same thread as the game logic processing.</li>
+<li>His initial event manager used one collection for all “Events”, this had to be synched with for adding/ removing events because the event manager utilized multiple threads.</li>
+</ol>
+<p>Just to make some final clarifications:<br>
+By saying “initial evet manager” I do not refer to the one released in rs2hd or final devolution 2.7. I refer to the one used in nearly every single winterlove source.<br>
+I am not trying to say that “Tick” systems are worthless, because I believe otherwise.<br>
+However, the point of this appears to be a quick and easy to implement (literally just replace the file) system that corrected some of the problems that graham had fixed with his later releases.[/quote]since you’re using the term retarded in such a loose, ironically ‘retarded’, way to refer to your distaste of someone’s unwillingness to check facts and/or just your general distaste through ignorant egotism. better still, you’ve actually clarified a bit more now though, now we actually understand that you’ve gutted the better system (which wasn’t particularly obvious). although why not just spend time on a system that replaces this crap with something that solves the various problems with this ‘event manager’ and then insist that it’s better.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/28</link>
+        <pubDate>Fri, 22 Jun 2012 03:05:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-28</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Advocatus Advocatus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/advocatus">@Advocatus</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“s1gma, post:15, topic:389540”][quote author=Advocatus link=topic=485453.msg4024666#msg4024666 date=1340245148]</p>
+<aside class="quote">
+<blockquote>
+<p>Just use ticks as hyperion has.</p>
+</blockquote>
+</aside>
+<p>You are obviously retarded.</p>
+<ol>
+<li>
+<p>Hyperion doesnt come with a tick system.</p>
+</li>
+<li>
+<p>The purpose of this was to be a useful update for the traditionally used event manager (which graham had originally released years ago). This event manager is quite horrid for obvious reasons.<br>
+[/quote]‘obviously retarded’ for suggesting a better system (citing the wrong source?), wow you should shut the fuck up[/quote]<br>
+No, he is obviously retarded for not bothering to think before typing. You also made that same mistake, so honestly you should just shut the fuck up.<br>
+Graham’s latested released tick system (which is also present in Apollo) is significantly different from his initial event manager in a few key places.</p>
+</li>
+<li>
+<p>His initial event manager ran on a seperate thread. His later “TaskManager” ran on the same thread as the game logic processing.</p>
+</li>
+<li>
+<p>His initial event manager used one collection for all “Events”, this had to be synched with for adding/ removing events because the event manager utilized multiple threads.</p>
+</li>
+</ol>
+<p>Just to make some final clarifications:<br>
+By saying “initial evet manager” I do not refer to the one released in rs2hd or final devolution 2.7. I refer to the one used in nearly every single winterlove source.<br>
+I am not trying to say that “Tick” systems are worthless, because I believe otherwise.<br>
+However, the point of this appears to be a quick and easy to implement (literally just replace the file) system that corrected some of the problems that graham had fixed with his later releases.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/27</link>
+        <pubDate>Fri, 22 Jun 2012 02:07:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-27</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“asshole_rule, post:25, topic:389540”][quote author=Uncalled link=topic=485453.msg4025312#msg4025312 date=1340298570]<br>
+i swear… i know i saw someone say it was outdated…<br>
+[/quote]</p>
+<p>I don’t believe this is the first time this has been posted in the tut section.[/quote]ah, may have been there. at least i’m not a total derp lmfao</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/26</link>
+        <pubDate>Thu, 21 Jun 2012 17:32:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-26</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="24" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/uncalled/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Uncalled:</div>
+<blockquote>
+<p>i swear… i know i saw someone say it was outdated…</p>
+</blockquote>
+</aside>
+<p>I don’t believe this is the first time this has been posted in the tut section.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/25</link>
+        <pubDate>Thu, 21 Jun 2012 17:28:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-25</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>i swear… i know i saw someone say it was outdated…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/24</link>
+        <pubDate>Thu, 21 Jun 2012 17:09:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-24</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Uncalled, post:22, topic:389540”][quote author=asshole_rule link=topic=485453.msg4025304#msg4025304 date=1340298330]</p>
+<p>[quote author=Uncalled link=topic=485453.msg4025303#msg4025303 date=1340298243]</p>
+<aside class="quote">
+<blockquote>
+<p>I was just pointing out the fact that you think your cool by backing s1gma when you couldn’t point out 1 thing wrong with this. It’s outdated and old code is old.<br>
+[/quote]as that’s been stated already… <span class="bbcode-b">hurr durr durr</span></p>
+</blockquote>
+</aside>
+<p>Where?<br>
+[/quote]ofak lmao. i’m half awake right now. my apologies[/quote]</p>
+<p>lol <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue_winking_eye.png?v=5" title=":stuck_out_tongue_winking_eye:" class="emoji" alt=":stuck_out_tongue_winking_eye:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/23</link>
+        <pubDate>Thu, 21 Jun 2012 17:08:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-23</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“asshole_rule, post:21, topic:389540”][quote author=Uncalled link=topic=485453.msg4025303#msg4025303 date=1340298243]</p>
+<aside class="quote">
+<blockquote>
+<p>I was just pointing out the fact that you think your cool by backing s1gma when you couldn’t point out 1 thing wrong with this. It’s outdated and old code is old.<br>
+[/quote]as that’s been stated already… <span class="bbcode-b">hurr durr durr</span></p>
+</blockquote>
+</aside>
+<p>Where?[/quote]ofak lmao. i’m half awake right now. my apologies</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/22</link>
+        <pubDate>Thu, 21 Jun 2012 17:07:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-22</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Uncalled, post:20, topic:389540”][quote author=asshole_rule link=topic=485453.msg4025298#msg4025298 date=1340297869]<br>
+I was just pointing out the fact that you think your cool by backing s1gma when you couldn’t point out 1 thing wrong with this. It’s outdated and old code is old.<br>
+[/quote]as that’s been stated already… <span class="bbcode-b">hurr durr durr</span>[/quote]</p>
+<p>Where?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/21</link>
+        <pubDate>Thu, 21 Jun 2012 17:05:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-21</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="19" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/asshole_rule/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> asshole_rule:</div>
+<blockquote>
+<p>I was just pointing out the fact that you think your cool by backing s1gma when you couldn’t point out 1 thing wrong with this. It’s outdated and old code is old.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/20</link>
+        <pubDate>Thu, 21 Jun 2012 17:04:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-20</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Uncalled, post:18, topic:389540”][quote author=asshole_rule link=topic=485453.msg4025287#msg4025287 date=1340297163]</p>
+<aside class="quote">
+<blockquote>
+<p>this.</p>
+</blockquote>
+</aside>
+<p>hm you’re cool.<br>
+[/quote]hm, you don’t know how to use efficient techniques.[/quote]</p>
+<p>You’re being ignorant right now and you’re talking out your ass.</p>
+<p>1st. I never even said anything about how 'efficient" this was and what “efficient techniques”(rofl) I use.</p>
+<p>2nd. dafuq?</p>
+<p>I was just pointing out the fact that you think your cool by backing s1gma when you couldn’t point out 1 thing wrong with this. It’s outdated and old code is old.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/19</link>
+        <pubDate>Thu, 21 Jun 2012 16:57:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-19</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“asshole_rule, post:17, topic:389540”][quote author=Uncalled link=topic=485453.msg4025276#msg4025276 date=1340296391]<br>
+this.<br>
+[/quote]</p>
+<p>hm you’re cool.[/quote]hm, you don’t know how to use efficient techniques.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/18</link>
+        <pubDate>Thu, 21 Jun 2012 16:47:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-18</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@asshole_rule asshole_rule]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/asshole_rule">@asshole_rule</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="16" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/uncalled/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Uncalled:</div>
+<blockquote>
+<p>this.</p>
+</blockquote>
+</aside>
+<p>hm you’re cool.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/17</link>
+        <pubDate>Thu, 21 Jun 2012 16:46:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-17</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“s1gma, post:15, topic:389540”][quote author=Advocatus link=topic=485453.msg4024666#msg4024666 date=1340245148]</p>
+<aside class="quote">
+<blockquote>
+<p>Just use ticks as hyperion has.</p>
+</blockquote>
+</aside>
+<p>You are obviously retarded.</p>
+<ol>
+<li>Hyperion doesnt come with a tick system.</li>
+<li>The purpose of this was to be a useful update for the traditionally used event manager (which graham had originally released years ago). This event manager is quite horrid for obvious reasons.<br>
+[/quote]‘obviously retarded’ for suggesting a better system (citing the wrong source?), wow you should shut the fuck up[/quote]this.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/16</link>
+        <pubDate>Thu, 21 Jun 2012 16:33:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-16</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Advocatus, post:14, topic:389540”][quote author=relexlawl link=topic=485453.msg4022124#msg4022124 date=1340080471]<br>
+Just use ticks as hyperion has.<br>
+[/quote]</p>
+<p>You are obviously retarded.</p>
+<ol>
+<li>Hyperion doesnt come with a tick system.</li>
+<li>The purpose of this was to be a useful update for the traditionally used event manager (which graham had originally released years ago). This event manager is quite horrid for obvious reasons.[/quote]‘obviously retarded’ for suggesting a better system (citing the wrong source?), wow you should shut the fuck up</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/15</link>
+        <pubDate>Thu, 21 Jun 2012 14:49:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-15</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Advocatus Advocatus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/advocatus">@Advocatus</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="13" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/relexlawl/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> relexlawl:</div>
+<blockquote>
+<p>Just use ticks as hyperion has.</p>
+</blockquote>
+</aside>
+<p>You are obviously retarded.</p>
+<ol>
+<li>Hyperion doesnt come with a tick system.</li>
+<li>The purpose of this was to be a useful update for the traditionally used event manager (which graham had originally released years ago). This event manager is quite horrid for obvious reasons.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/14</link>
+        <pubDate>Thu, 21 Jun 2012 02:19:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-14</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@relexlawl relexlawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/relexlawl">@relexlawl</a> wrote:</p>
+          <blockquote>
+              <p>Just use ticks as hyperion has.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/13</link>
+        <pubDate>Tue, 19 Jun 2012 04:34:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-13</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>skyro, i can give you a link i found a few hours ago, <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"><br>
+i gravedigged alot just to find it haha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/12</link>
+        <pubDate>Tue, 19 Jun 2012 03:13:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-12</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@doom_j doom_j]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/doom_j">@doom_j</a> wrote:</p>
+          <blockquote>
+              <p>You should have no reason to convert this to delta, none of the code posted is base dependent.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/11</link>
+        <pubDate>Tue, 19 Jun 2012 00:38:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-11</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Skyro Arbe]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/skyro">@Skyro</a> wrote:</p>
+          <blockquote>
+              <p>Can you please tell me how to use it, like so I can go and change all methods from process to this so the server runs faster.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/10</link>
+        <pubDate>Tue, 19 Jun 2012 00:31:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-10</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@relexlawl relexlawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/relexlawl">@relexlawl</a> wrote:</p>
+          <blockquote>
+              <p>Updated grahams event manager<br>
+« on: April 04, 2011, 07:33:17 PM »</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/9</link>
+        <pubDate>Tue, 19 Jun 2012 00:20:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-9</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@Squirt_Ltd Squirt Ltd]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/squirt_ltd">@Squirt_Ltd</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="7" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/strucker/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> strucker:</div>
+<blockquote>
+<p>erghh, is there one for delta?</p>
+</blockquote>
+</aside>
+<p>i don’t think anyone bothered to convert it to delta, but feel free to do it yourself if you want<br>
+btw gravedig  <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/8</link>
+        <pubDate>Mon, 18 Jun 2012 22:49:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-8</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>erghh, is there one for delta?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/7</link>
+        <pubDate>Mon, 18 Jun 2012 22:09:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-7</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+      <item>
+        <title>Updated grahams event manager</title>
+        <dc:creator><![CDATA[@glestrts glestrts]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/glestrts">@glestrts</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="389540">
+<div class="title">
+<div class="quote-controls"></div>
+ faded vision:</div>
+<blockquote>
+<p>This was posted elsewhere, by you I presume?</p>
+</blockquote>
+</aside>
+<p>Yes. on R-S and R-L</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540/6</link>
+        <pubDate>Wed, 06 Apr 2011 23:39:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-389540-6</guid>
+        <source url="https://forum.moparisthebest.com/t/updated-grahams-event-manager/389540.rss">Updated grahams event manager</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,363 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Huffman Codec implementation [Java]</title>
+    <link>https://forum.moparisthebest.com/t/huffman-codec-implementation-java/554905</link>
+    <description>Eventual plans:
+
+- Support for codes between 2-32 bits.
+- Better tests (they are bad).
+- Function to create code tree.
+
+Huffman is a entropy based lossless compression algorithm. 
+
+[code=java]
+package net.github.hadyn;
+
+import com.google.common.base.Preconditions;
+
+import java.io.EOFException;
+import java.io.IOException;
+
+/**
+ * This implementation is limited to 8 bit codewords. Code literal 255 is reserved for a null code
+ * which is used for control flow. This codec encodes and decodes values that use MSB 0 numbering
+ * meaning the MSB is bit 0.
+ *
+ * @author Hadyn Fitzgerald
+ */
+public class HuffmanCodec {
+
+  public static final int MAXIMUM_SYMBOLS = 255;
+
+  /**
+   * Used to denote a node in the code tree that doesn&#39;t have a code value.
+   */
+  private static final byte NULL_CODE = -1;
+
+  /**
+   * The binary code tree used to encode and decode values.
+   */
+  private byte[] codes;
+
+  /**
+   * The indexes for all of the symbols in the code tree.
+   */
+  private byte[] indexes;
+
+  public HuffmanCodec(byte[] codes, int length) {
+    Preconditions.checkArgument(length &lt; MAXIMUM_SYMBOLS);
+    this.codes = codes;
+    indexes = new byte[length];
+    for (int i = 0; i &lt; codes.length; i++) {
+      if (codes[i] == NULL_CODE) {
+        continue;
+      }
+      indexes[codes[i] &amp; 0xff] = (byte) i;
+    }
+  }
+
+  public int encode(byte[] src, int srcOff, int srcLen, byte[] dest, int destOff) {
+    int bitOffset = destOff &lt;&lt; 3;
+
+    for (int i = 0; i &lt; srcLen; i++) {
+      int value = src[srcOff + i] &amp; 0xff;
+
+      int index = indexes[value] &amp; 0xff;
+      if (index == 0) {
+        throw new IllegalArgumentException(&quot;Symbol &#39;&quot; + value + &quot;&#39; is not supported by the codec.&quot;);
+      }
+
+      // floor(log2(index + 1))
+      int length = 31 - Integer.numberOfLeadingZeros(index + 1);
+
+      // Write out the next symbol, we must write the codes in reverse order.
+      for (int j = 0; j &lt; length; j++) {
+        int codeBitOffset = bitOffset + (length - j - 1);
+        int byteOffset = codeBitOffset &gt;&gt; 3;
+        int k = 7 - (codeBitOffset &amp; 7);
+
+        // Odd indexes are left, even indexes are right. Normalizes this to the bit we
+        // need to write to the destination buffer, 0 for left and 1 for right.
+        int bit = (~(index &amp; 1) &amp; 1);
+
+        // Mask the bit that we are writing to the destination buffer so that
+        // just in case the buffer needs to be overwritten.
+        dest[byteOffset] = (byte) ((dest[byteOffset] &amp; ~(1 &lt;&lt; k)) | (bit &lt;&lt; k));
+        index = (index - bit - 1) &gt;&gt; 1;
+      }
+
+      if (index != 0) {
+        throw new IllegalStateException(&quot;Invalid code tree.&quot;);
+      }
+
+      bitOffset += length;
+    }
+
+    return bitOffset - (destOff &lt;&lt; 3);
+  }
+
+  public void decode(byte[] src, int srcOff, int srcLen,
+                     byte[] dest, int destOff, int destLength) throws IOException {
+    int bitOffset = srcOff &lt;&lt; 3;
+    int bitLength = srcLen &lt;&lt; 3;
+
+    for (int i = 0; i &lt; destLength; i++) {
+      // Read in the next symbol from the source buffer. A symbol is completed if the current
+      // node being traversed in the binary tree is non-null. Null symbols are defined as literal
+      // value 255.
+      int n = 0;
+      int length = 0;
+      while (length &lt; bitLength) {
+        int bitPos = bitOffset + length;
+        if (codes[n] != NULL_CODE) {
+          break;
+        }
+        n = (n &lt;&lt; 1) + (src[bitPos &gt;&gt;&gt; 3] &gt;&gt;&gt; (7 - (bitPos &amp; 7)) &amp; 1) + 1;
+        length++;
+      }
+
+      byte code = codes[n];
+      if (code == NULL_CODE) {
+        throw new EOFException();
+      }
+      dest[destOff + i] = code;
+      bitOffset += length;
+      bitLength -= length;
+    }
+  }
+}
+
+[/code]
+
+[code=java]
+package net.github.hadyn;
+
+import org.junit.Test;
+
+import java.io.IOException;
+
+import static com.google.common.truth.Truth.assertThat;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class HuffmanCodecTest {
+
+  @Test
+  public void testHuffmanCodec() throws IOException {
+    String symbols = &quot;abc&quot;;
+    byte[] codes = new byte[] {
+            -1,                     //      |
+            -1, 0,                  //    |   a
+             1, 2                   //  b   c
+    };
+
+    HuffmanCodec codec = new HuffmanCodec(codes, symbols.length());
+
+    String value = &quot;abcabcbcabca&quot;;
+    byte[] srcBuffer = new byte[value.length()];
+    byte[] destBuffer = new byte[100];
+
+    for(int i = 0; i &lt; value.length(); i++) {
+      srcBuffer[i] = (byte) symbols.indexOf(value.charAt(i));
+    }
+
+    int bitLength = codec.encode(srcBuffer, 0, srcBuffer.length, destBuffer, 0);
+    codec.decode(destBuffer, 0, (bitLength &gt;&gt; 3) + 1, srcBuffer, 0, srcBuffer.length);
+
+    String result = &quot;&quot;;
+    for(int i = 0; i &lt; srcBuffer.length; i++) {
+      result += symbols.charAt(srcBuffer[i] &amp; 0xff);
+    }
+
+    assertThat(result).isEqualTo(value);
+  }
+}
+[/code]</description>
+    
+    <lastBuildDate>Wed, 02 Mar 2016 23:46:39 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/huffman-codec-implementation-java/554905.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Huffman Codec implementation [Java]</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Eventual plans:</p>
+<ul>
+<li>Support for codes between 2-32 bits.</li>
+<li>Better tests (they are bad).</li>
+<li>Function to create code tree.</li>
+</ul>
+<p>Huffman is a entropy based lossless compression algorithm.</p>
+<pre><code class="lang-auto">package net.github.hadyn;
+
+import com.google.common.base.Preconditions;
+
+import java.io.EOFException;
+import java.io.IOException;
+
+/**
+ * This implementation is limited to 8 bit codewords. Code literal 255 is reserved for a null code
+ * which is used for control flow. This codec encodes and decodes values that use MSB 0 numbering
+ * meaning the MSB is bit 0.
+ *
+ * @author Hadyn Fitzgerald
+ */
+public class HuffmanCodec {
+
+  public static final int MAXIMUM_SYMBOLS = 255;
+
+  /**
+   * Used to denote a node in the code tree that doesn't have a code value.
+   */
+  private static final byte NULL_CODE = -1;
+
+  /**
+   * The binary code tree used to encode and decode values.
+   */
+  private byte[] codes;
+
+  /**
+   * The indexes for all of the symbols in the code tree.
+   */
+  private byte[] indexes;
+
+  public HuffmanCodec(byte[] codes, int length) {
+    Preconditions.checkArgument(length &lt; MAXIMUM_SYMBOLS);
+    this.codes = codes;
+    indexes = new byte[length];
+    for (int i = 0; i &lt; codes.length; i++) {
+      if (codes[i] == NULL_CODE) {
+        continue;
+      }
+      indexes[codes[i] &amp; 0xff] = (byte) i;
+    }
+  }
+
+  public int encode(byte[] src, int srcOff, int srcLen, byte[] dest, int destOff) {
+    int bitOffset = destOff &lt;&lt; 3;
+
+    for (int i = 0; i &lt; srcLen; i++) {
+      int value = src[srcOff + i] &amp; 0xff;
+
+      int index = indexes[value] &amp; 0xff;
+      if (index == 0) {
+        throw new IllegalArgumentException("Symbol '" + value + "' is not supported by the codec.");
+      }
+
+      // floor(log2(index + 1))
+      int length = 31 - Integer.numberOfLeadingZeros(index + 1);
+
+      // Write out the next symbol, we must write the codes in reverse order.
+      for (int j = 0; j &lt; length; j++) {
+        int codeBitOffset = bitOffset + (length - j - 1);
+        int byteOffset = codeBitOffset &gt;&gt; 3;
+        int k = 7 - (codeBitOffset &amp; 7);
+
+        // Odd indexes are left, even indexes are right. Normalizes this to the bit we
+        // need to write to the destination buffer, 0 for left and 1 for right.
+        int bit = (~(index &amp; 1) &amp; 1);
+
+        // Mask the bit that we are writing to the destination buffer so that
+        // just in case the buffer needs to be overwritten.
+        dest[byteOffset] = (byte) ((dest[byteOffset] &amp; ~(1 &lt;&lt; k)) | (bit &lt;&lt; k));
+        index = (index - bit - 1) &gt;&gt; 1;
+      }
+
+      if (index != 0) {
+        throw new IllegalStateException("Invalid code tree.");
+      }
+
+      bitOffset += length;
+    }
+
+    return bitOffset - (destOff &lt;&lt; 3);
+  }
+
+  public void decode(byte[] src, int srcOff, int srcLen,
+                     byte[] dest, int destOff, int destLength) throws IOException {
+    int bitOffset = srcOff &lt;&lt; 3;
+    int bitLength = srcLen &lt;&lt; 3;
+
+    for (int i = 0; i &lt; destLength; i++) {
+      // Read in the next symbol from the source buffer. A symbol is completed if the current
+      // node being traversed in the binary tree is non-null. Null symbols are defined as literal
+      // value 255.
+      int n = 0;
+      int length = 0;
+      while (length &lt; bitLength) {
+        int bitPos = bitOffset + length;
+        if (codes[n] != NULL_CODE) {
+          break;
+        }
+        n = (n &lt;&lt; 1) + (src[bitPos &gt;&gt;&gt; 3] &gt;&gt;&gt; (7 - (bitPos &amp; 7)) &amp; 1) + 1;
+        length++;
+      }
+
+      byte code = codes[n];
+      if (code == NULL_CODE) {
+        throw new EOFException();
+      }
+      dest[destOff + i] = code;
+      bitOffset += length;
+      bitLength -= length;
+    }
+  }
+}
+</code></pre>
+<pre><code class="lang-auto">package net.github.hadyn;
+
+import org.junit.Test;
+
+import java.io.IOException;
+
+import static com.google.common.truth.Truth.assertThat;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class HuffmanCodecTest {
+
+  @Test
+  public void testHuffmanCodec() throws IOException {
+    String symbols = "abc";
+    byte[] codes = new byte[] {
+            -1,                     //      |
+            -1, 0,                  //    |   a
+             1, 2                   //  b   c
+    };
+
+    HuffmanCodec codec = new HuffmanCodec(codes, symbols.length());
+
+    String value = "abcabcbcabca";
+    byte[] srcBuffer = new byte[value.length()];
+    byte[] destBuffer = new byte[100];
+
+    for(int i = 0; i &lt; value.length(); i++) {
+      srcBuffer[i] = (byte) symbols.indexOf(value.charAt(i));
+    }
+
+    int bitLength = codec.encode(srcBuffer, 0, srcBuffer.length, destBuffer, 0);
+    codec.decode(destBuffer, 0, (bitLength &gt;&gt; 3) + 1, srcBuffer, 0, srcBuffer.length);
+
+    String result = "";
+    for(int i = 0; i &lt; srcBuffer.length; i++) {
+      result += symbols.charAt(srcBuffer[i] &amp; 0xff);
+    }
+
+    assertThat(result).isEqualTo(value);
+  }
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/huffman-codec-implementation-java/554905/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/huffman-codec-implementation-java/554905/1</link>
+        <pubDate>Wed, 02 Mar 2016 23:46:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554905-1</guid>
+        <source url="https://forum.moparisthebest.com/t/huffman-codec-implementation-java/554905.rss">Huffman Codec implementation [Java]</source>
+      </item>
+  </channel>
+</rss>

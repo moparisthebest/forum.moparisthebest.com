@@ -1,0 +1,724 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Anti-floodscript 562 RS2HD</title>
+    <link>https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406</link>
+    <description>Heres a VERY quick workaround (Another way of me saying i think it sucks) of laz&#39;s flooder. Note i discourage you from using super_&#39;s method simply because its stupid. All anyone needs to do is to create a fake cache id, to get around super_&#39;s protection.
+
+I was going to explain this step by step, but your all going to copy/paste anyhow so i fail to see the point.
+
+Replace your ConnectionThrottleFilter with this one:
+
+[code]Code:
+package com.rs2hd.net;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import org.apache.mina.common.IoFilterAdapter;
+import org.apache.mina.common.IoSession;
+
+import com.rs2hd.util.log.Logger;
+
+/**
+* A {@link IoFilter} which blocks connections from connecting
+* at a rate faster than the specified interval.
+*
+* @author The Apache MINA Project (dev@mina.apache.org)
+* @version $Rev$, $Date$
+*/
+public class ConnectionThrottleFilter extends IoFilterAdapter {
+	private long allowedInterval;
+	private Map&lt;InetAddress, Long&gt; clients;
+	private Map&lt;InetAddress, Integer&gt; counts;
+	private Set&lt;InetAddress&gt; connectedAddresses;
+	/**
+	 * Connection holder
+	 */
+	public static ArrayList&lt;InetAddress&gt; connected = new ArrayList&lt;InetAddress&gt;();
+	
+	/**
+	* Constructor that takes in a specified wait time.
+	*
+	* @param allowedInterval
+	* 	The number of milliseconds a client is allowed to wait
+	* 	before making another successful connection
+	*
+	*/
+	public ConnectionThrottleFilter(long allowedInterval) {
+		this.allowedInterval = allowedInterval;
+		clients = Collections.synchronizedMap(new HashMap&lt;InetAddress, Long&gt;());
+		counts = Collections.synchronizedMap(new HashMap&lt;InetAddress, Integer&gt;());
+		connectedAddresses = new HashSet&lt;InetAddress&gt;();
+	}
+	
+	/**
+	* Sets the interval between connections from a client.
+	* This value is measured in milliseconds.
+	*
+	* @param allowedInterval
+	* 	The number of milliseconds a client is allowed to wait
+	* 	before making another successful connection
+	*/
+	public void setAllowedInterval(long allowedInterval) {
+		this.allowedInterval = allowedInterval;
+	}
+	
+	public void delayClient(IoSession session, int delay) {
+		long d = System.currentTimeMillis() - delay;
+		clients.put(getAddress(session), d);
+	}
+	
+	private InetAddress getAddress(IoSession io) {
+		return ((InetSocketAddress)io.getRemoteAddress()).getAddress();
+	}
+	
+	/**
+	* Method responsible for deciding if a connection is OK
+	* to continue
+	*
+	* @param session
+	* 	The new session that will be verified
+	* @return
+	* 	True if the session meets the criteria, otherwise false
+	*/
+	public boolean isConnectionOk(IoSession session) {
+		InetAddress addr = getAddress(session);
+		if(!connected.contains(((InetSocketAddress)session.getRemoteAddress()).getAddress()))
+		{
+			//System.out.println(session.getRemoteAddress().)
+			connected.add(((InetSocketAddress)session.getRemoteAddress()).getAddress());
+			long now = System.currentTimeMillis();
+			if (clients.containsKey(addr)) {
+				long lastConnTime = clients.get(addr);
+				
+				if (now - lastConnTime &lt; allowedInterval) {
+					int c = 0;
+					if(!counts.containsKey(addr))
+						counts.put(addr, 0);
+					else c = counts.get(addr) + 1;
+					if(c &gt;= 350) {
+						
+						c = 0;
+					}
+					counts.put(addr, c);
+					Logger.getInstance().error(&quot;[&quot;+addr+&quot;] Session dropped (delay=&quot;+(now-lastConnTime)+&quot;ms)&quot;);
+					return false;
+				} else {
+					clients.put(addr, now);
+					return true;
+				}
+			} else {
+				clients.put(addr, now);
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public void closedSession(IoSession io) {
+		connectedAddresses.remove(getAddress(io));
+		connected.remove(getAddress(io));
+	}
+	
+	public void acceptedLogin(IoSession io) {
+		connectedAddresses.add(getAddress(io));
+		connected.remove(getAddress(io));
+	}
+	
+	public boolean isConnected(IoSession io) {
+		return connectedAddresses.contains(getAddress(io));
+	}
+	
+	public int[] getSizes() { 
+		return new int[] { clients.size(), counts.size(), connectedAddresses.size() }; 
+	}
+	
+	public void connectionOk(IoSession io) {
+		counts.remove(getAddress(io));
+		connected.remove(getAddress(io));
+	}
+	
+	@Override
+	public void sessionCreated(NextFilter nextFilter, IoSession session) throws Exception {
+		if (!isConnectionOk(session)) {
+			session.close();
+			return;
+		}
+		nextFilter.sessionCreated(session);
+	}
+	
+	public static void fluships()
+	{
+		connected.clear();
+	}
+}[/code]
+and replace your ConnectionHandler.java with this one
+
+Code:
+[code]package com.rs2hd.net;
+
+import java.net.InetSocketAddress;
+
+import org.apache.mina.common.IdleStatus;
+import org.apache.mina.common.IoHandler;
+import org.apache.mina.common.IoSession;
+import org.apache.mina.filter.codec.ProtocolCodecFilter;
+
+import com.rs2hd.Constants;
+import com.rs2hd.GameEngine;
+import com.rs2hd.model.Player;
+import com.rs2hd.model.World;
+import com.rs2hd.net.codec.CodecFactory;
+import com.rs2hd.util.log.Logger;
+
+/**
+ * Handles incoming events from MINA.
+ * @author phaze
+ *
+ */
+public class ConnectionHandler implements IoHandler {
+	/**
+	 * Logger instance.
+	 */
+	private Logger logger = Logger.getInstance();
+	
+	/**
+	 * The game engine.
+	 */
+	private GameEngine engine;
+	
+	/**
+	 * Creates the connection handler.
+	 * @param engine
+	 */
+	public ConnectionHandler(GameEngine engine) {
+		this.engine = engine;
+	}
+
+	@Override
+	public void exceptionCaught(IoSession session, Throwable throwable) throws Exception {
+		//logger.error(&quot;Exception caught: &quot; + session + &quot;: &quot; + throwable.getMessage() + &quot;.&quot;);
+		//logger.stackTrace(throwable);
+	}
+
+	@Override
+	public void messageReceived(IoSession session, Object data) throws Exception {
+		Packet packet = (Packet) data;
+		Player player = (Player) session.getAttachment();
+		player.addPacketToQueue(packet);
+	}
+
+	@Override
+	public void messageSent(IoSession session, Object data) throws Exception {
+	}
+
+	@Override
+	public void sessionClosed(IoSession session) throws Exception {
+		if(session.getAttachment() != null) {
+			World.getInstance().unregister((Player) session.getAttachment());
+		}
+		logger.debug(&quot;Session has been closed: &quot; + session.getRemoteAddress().toString());
+		// TODO remove player from lists here
+	}
+
+	@Override
+	public void sessionCreated(IoSession session) throws Exception {
+	}
+
+	@Override
+	public void sessionIdle(IoSession session, IdleStatus status) throws Exception {
+		logger.debug(&quot;Session is now idle: &quot; + session.getRemoteAddress().toString());
+		ConnectionThrottleFilter.connected.remove(((InetSocketAddress)session.getRemoteAddress()).getAddress());
+		session.close();
+	}
+	
+	@Override
+	public void sessionOpened(IoSession session) throws Exception {
+			logger.debug(&quot;New session from: &quot; + session.getRemoteAddress().toString());
+			session.setIdleTime(IdleStatus.BOTH_IDLE, Constants.SESSION_INITIAL_IDLE_TIME);
+			session.getFilterChain().addLast(&quot;protocolFilter&quot;, new ProtocolCodecFilter(new CodecFactory(engine.getWorkerThread())));
+	}
+
+}[/code]
+
+
+MOD PLEASE MOVE TO TUTORIAL !</description>
+    
+    <lastBuildDate>Sat, 28 Aug 2010 10:03:30 +0000</lastBuildDate>
+    <category>General Discussion</category>
+    <atom:link href="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Anti-floodscript 562 RS2HD</title>
+        <dc:creator><![CDATA[@Maniek15012 Maniek15012]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/maniek15012">@Maniek15012</a> wrote:</p>
+          <blockquote>
+              <p><code>src\com\rs2hd\net\ConnectionHandler.java:74: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                ConnectionThrottleFilter.connected.remove(((InetSocketAddress)se
+ssion.getRemoteAddress()).getAddress());
+                                        ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:47: incompatible types
+found   : java.util.Map&lt;java.net.InetAddress,java.lang.Long&gt;
+required: java.util.Map&lt;java.net.InetAddress,com.rs2hd.net.ConnectionThrottleFil
+ter.ConnectionInfo&gt;
+                clients = Collections.synchronizedMap(new HashMap&lt;InetAddress, L
+ong&gt;());
+                                                     ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:48: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                counts = Collections.synchronizedMap(new HashMap&lt;InetAddress, In
+teger&gt;());
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:49: cannot find symbol
+symbol  : variable connectedAddresses
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connectedAddresses = new HashSet&lt;InetAddress&gt;();
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:66: put(java.net.InetAddress,com
+.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo) in java.util.Map&lt;java.net.In
+etAddress,com.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo&gt; cannot be appli
+ed to (java.net.InetAddress,long)
+                clients.put(getAddress(session), d);
+                       ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:84: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                if(!connected.contains(((InetSocketAddress)session.getRemoteAddr
+ess()).getAddress()))
+                    ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:87: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                        connected.add(((InetSocketAddress)session.getRemoteAddre
+ss()).getAddress());
+                        ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:90: incompatible types
+found   : com.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo
+required: long
+                                long lastConnTime = clients.get(addr);
+                                                               ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:94: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                                        if(!counts.containsKey(addr))
+                                            ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:95: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                                                counts.put(addr, 0);
+                                                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:96: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                                        else c = counts.get(addr) + 1;
+                                                 ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:96: operator + cannot be applied
+ to counts.get,int
+                                        else c = counts.get(addr) + 1;
+                                                           ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:96: incompatible types
+found   : &lt;nulltype&gt;
+required: int
+                                        else c = counts.get(addr) + 1;
+                                                                  ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:101: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                                        counts.put(addr, c);
+                                        ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:105: put(java.net.InetAddress,co
+m.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo) in java.util.Map&lt;java.net.I
+netAddress,com.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo&gt; cannot be appl
+ied to (java.net.InetAddress,long)
+                                        clients.put(addr, now);
+                                               ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:109: put(java.net.InetAddress,co
+m.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo) in java.util.Map&lt;java.net.I
+netAddress,com.rs2hd.net.ConnectionThrottleFilter.ConnectionInfo&gt; cannot be appl
+ied to (java.net.InetAddress,long)
+                                clients.put(addr, now);
+                                       ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:117: cannot find symbol
+symbol  : variable connectedAddresses
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connectedAddresses.remove(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:118: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connected.remove(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:122: cannot find symbol
+symbol  : variable connectedAddresses
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connectedAddresses.add(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:123: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connected.remove(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:127: cannot find symbol
+symbol  : variable connectedAddresses
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                return connectedAddresses.contains(getAddress(io));
+                       ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:131: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                return new int[] { clients.size(), counts.size(), connectedAddre
+sses.size() };
+                                                   ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:131: cannot find symbol
+symbol  : variable connectedAddresses
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                return new int[] { clients.size(), counts.size(), connectedAddre
+sses.size() };
+                                                                  ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:135: cannot find symbol
+symbol  : variable counts
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                counts.remove(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:136: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connected.remove(getAddress(io));
+                ^
+src\com\rs2hd\net\ConnectionThrottleFilter.java:150: cannot find symbol
+symbol  : variable connected
+location: class com.rs2hd.net.ConnectionThrottleFilter
+                connected.clear();
+                ^
+26 errors</code></p>
+<p>LoL</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/3</link>
+        <pubDate>Sat, 28 Aug 2010 10:03:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-349406-3</guid>
+        <source url="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406.rss">Anti-floodscript 562 RS2HD</source>
+      </item>
+      <item>
+        <title>Anti-floodscript 562 RS2HD</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>No.  I don’t even need to read all the code to tell you that this is poorly written code, I just need to read this:</p>
+<pre><code class="lang-auto">        private Map&lt;InetAddress, Long&gt; clients;
+        private Map&lt;InetAddress, Integer&gt; counts;
+        private Set&lt;InetAddress&gt; connectedAddresses;
+        /**
+         * Connection holder
+         */
+        public static ArrayList&lt;InetAddress&gt; connected = new ArrayList&lt;InetAddress&gt;();</code></pre>
+<p>Why do you need that many different data structures to store the same information?  Not only does it EAT memory, and is inefficient, you have to remember to remove the addresses from all of those structures when the clients aren’t connected anymore, which it looks like you don’t, and it opens up memory leaks and errors.</p>
+<p>All of that could be replaced by the following code:</p>
+<pre><code class="lang-auto">        private Map&lt;InetAddress, ConnectionInfo&gt; clients;
+
+        class ConnectionInfo {
+              long lastConnected;
+              int count;
+
+              public ConnectionInfo(long lastConnected, int count){
+                   this.lastConnected = lastConnected;
+                   this.count = count;
+              }
+         }</code></pre>
+<p>Then you have ALL the info you need in one data structure, it uses less memory, and is less prone to errors.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/2</link>
+        <pubDate>Fri, 16 Jul 2010 15:56:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-349406-2</guid>
+        <source url="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406.rss">Anti-floodscript 562 RS2HD</source>
+      </item>
+      <item>
+        <title>Anti-floodscript 562 RS2HD</title>
+        <dc:creator><![CDATA[@memersey memersey]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/memersey">@memersey</a> wrote:</p>
+          <blockquote>
+              <p>Heres a VERY quick workaround (Another way of me saying i think it sucks) of laz’s flooder. Note i discourage you from using super_'s method simply because its stupid. All anyone needs to do is to create a fake cache id, to get around super_'s protection.</p>
+<p>I was going to explain this step by step, but your all going to copy/paste anyhow so i fail to see the point.</p>
+<p>Replace your ConnectionThrottleFilter with this one:</p>
+<p>[code]Code:<br>
+package <a href="http://com.rs2hd.net" rel="nofollow noopener">com.rs2hd.net</a>;</p>
+<p>import java.net.InetAddress;<br>
+import java.net.InetSocketAddress;<br>
+import java.util.ArrayList;<br>
+import java.util.Collections;<br>
+import java.util.HashMap;<br>
+import java.util.HashSet;<br>
+import java.util.Map;<br>
+import java.util.Set;<br>
+import org.apache.mina.common.IoFilterAdapter;<br>
+import org.apache.mina.common.IoSession;</p>
+<p>import com.rs2hd.util.log.Logger;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>A {<a class="mention" href="/u/link">@link</a> IoFilter} which blocks connections from connecting</p>
+</li>
+<li>
+<p>at a rate faster than the specified interval.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> The Apache MINA Project (<a href="mailto:dev@mina.apache.org">dev@mina.apache.org</a>)</p>
+</li>
+<li>
+<p><a class="mention" href="/u/version">@version</a> $Rev$, $Date$<br>
+<em>/<br>
+public class ConnectionThrottleFilter extends IoFilterAdapter {<br>
+private long allowedInterval;<br>
+private Map&lt;InetAddress, Long&gt; clients;<br>
+private Map&lt;InetAddress, Integer&gt; counts;<br>
+private Set connectedAddresses;<br>
+/</em>*</p>
+<ul>
+<li>Connection holder<br>
+*/<br>
+public static ArrayList connected = new ArrayList();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Constructor that takes in a specified wait time.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> allowedInterval</li>
+<li>The number of milliseconds a client is allowed to wait</li>
+<li>before making another successful connection</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public ConnectionThrottleFilter(long allowedInterval) {<br>
+this.allowedInterval = allowedInterval;<br>
+clients = Collections.synchronizedMap(new HashMap&lt;InetAddress, Long&gt;());<br>
+counts = Collections.synchronizedMap(new HashMap&lt;InetAddress, Integer&gt;());<br>
+connectedAddresses = new HashSet();<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Sets the interval between connections from a client.</li>
+<li>This value is measured in milliseconds.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> allowedInterval</li>
+<li>The number of milliseconds a client is allowed to wait</li>
+<li>before making another successful connection<br>
+*/<br>
+public void setAllowedInterval(long allowedInterval) {<br>
+this.allowedInterval = allowedInterval;<br>
+}</li>
+</ul>
+<p>public void delayClient(IoSession session, int delay) {<br>
+long d = System.currentTimeMillis() - delay;<br>
+clients.put(getAddress(session), d);<br>
+}</p>
+<p>private InetAddress getAddress(IoSession io) {<br>
+return ((InetSocketAddress)io.getRemoteAddress()).getAddress();<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Method responsible for deciding if a connection is OK</p>
+</li>
+<li>
+<p>to continue</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> session</p>
+</li>
+<li>
+<p>The new session that will be verified</p>
+</li>
+<li>
+<p><a class="mention" href="/u/return">@return</a></p>
+</li>
+<li>
+<p>True if the session meets the criteria, otherwise false<br>
+*/<br>
+public boolean isConnectionOk(IoSession session) {<br>
+InetAddress addr = getAddress(session);<br>
+if(!connected.contains(((InetSocketAddress)session.getRemoteAddress()).getAddress()))<br>
+{<br>
+<a href="//System.out.println" rel="nofollow noopener">//System.out.println</a>(session.getRemoteAddress().)<br>
+connected.add(((InetSocketAddress)session.getRemoteAddress()).getAddress());<br>
+long now = System.currentTimeMillis();<br>
+if (clients.containsKey(addr)) {<br>
+long lastConnTime = clients.get(addr);</p>
+<pre><code>	if (now - lastConnTime &lt; allowedInterval) {
+		int c = 0;
+		if(!counts.containsKey(addr))
+			counts.put(addr, 0);
+		else c = counts.get(addr) + 1;
+		if(c &gt;= 350) {
+			
+			c = 0;
+		}
+		counts.put(addr, c);
+		Logger.getInstance().error("["+addr+"] Session dropped (delay="+(now-lastConnTime)+"ms)");
+		return false;
+	} else {
+		clients.put(addr, now);
+		return true;
+	}
+} else {
+	clients.put(addr, now);
+	return true;
+}
+</code></pre>
+<p>}<br>
+return false;<br>
+}</p>
+</li>
+</ul>
+<p>public void closedSession(IoSession io) {<br>
+connectedAddresses.remove(getAddress(io));<br>
+connected.remove(getAddress(io));<br>
+}</p>
+<p>public void acceptedLogin(IoSession io) {<br>
+connectedAddresses.add(getAddress(io));<br>
+connected.remove(getAddress(io));<br>
+}</p>
+<p>public boolean isConnected(IoSession io) {<br>
+return connectedAddresses.contains(getAddress(io));<br>
+}</p>
+<p>public int[] getSizes() {<br>
+return new int[] { clients.size(), counts.size(), connectedAddresses.size() };<br>
+}</p>
+<p>public void connectionOk(IoSession io) {<br>
+counts.remove(getAddress(io));<br>
+connected.remove(getAddress(io));<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+public void sessionCreated(NextFilter nextFilter, IoSession session) throws Exception {<br>
+if (!isConnectionOk(session)) {<br>
+session.close();<br>
+return;<br>
+}<br>
+nextFilter.sessionCreated(session);<br>
+}</p>
+<p>public static void fluships()<br>
+{<br>
+connected.clear();<br>
+}<br>
+}[/code]<br>
+and replace your ConnectionHandler.java with this one</p>
+</li>
+</ul>
+<p>Code:</p>
+<p>[code]package <a href="http://com.rs2hd.net" rel="nofollow noopener">com.rs2hd.net</a>;</p>
+<p>import java.net.InetSocketAddress;</p>
+<p>import org.apache.mina.common.IdleStatus;<br>
+import org.apache.mina.common.IoHandler;<br>
+import org.apache.mina.common.IoSession;<br>
+import org.apache.mina.filter.codec.ProtocolCodecFilter;</p>
+<p>import com.rs2hd.Constants;<br>
+import com.rs2hd.GameEngine;<br>
+import com.rs2hd.model.Player;<br>
+import com.rs2hd.model.World;<br>
+import com.rs2hd.net.codec.CodecFactory;<br>
+import com.rs2hd.util.log.Logger;</p>
+<p>/**</p>
+<ul>
+<li>Handles incoming events from MINA.</li>
+<li>
+<span class="mention">@author</span> phaze</li>
+<li>
+</li>
+</ul>
+<p><em>/<br>
+public class ConnectionHandler implements IoHandler {<br>
+/</em>*<br>
+* Logger instance.<br>
+*/<br>
+private Logger logger = Logger.getInstance();</p>
+<pre><code>/**
+ * The game engine.
+ */
+private GameEngine engine;
+
+/**
+ * Creates the connection handler.
+ * @param engine
+ */
+public ConnectionHandler(GameEngine engine) {
+	this.engine = engine;
+}
+
+@Override
+public void exceptionCaught(IoSession session, Throwable throwable) throws Exception {
+	//logger.error("Exception caught: " + session + ": " + throwable.getMessage() + ".");
+	//logger.stackTrace(throwable);
+}
+
+@Override
+public void messageReceived(IoSession session, Object data) throws Exception {
+	Packet packet = (Packet) data;
+	Player player = (Player) session.getAttachment();
+	player.addPacketToQueue(packet);
+}
+
+@Override
+public void messageSent(IoSession session, Object data) throws Exception {
+}
+
+@Override
+public void sessionClosed(IoSession session) throws Exception {
+	if(session.getAttachment() != null) {
+		World.getInstance().unregister((Player) session.getAttachment());
+	}
+	logger.debug("Session has been closed: " + session.getRemoteAddress().toString());
+	// TODO remove player from lists here
+}
+
+@Override
+public void sessionCreated(IoSession session) throws Exception {
+}
+
+@Override
+public void sessionIdle(IoSession session, IdleStatus status) throws Exception {
+	logger.debug("Session is now idle: " + session.getRemoteAddress().toString());
+	ConnectionThrottleFilter.connected.remove(((InetSocketAddress)session.getRemoteAddress()).getAddress());
+	session.close();
+}
+
+@Override
+public void sessionOpened(IoSession session) throws Exception {
+		logger.debug("New session from: " + session.getRemoteAddress().toString());
+		session.setIdleTime(IdleStatus.BOTH_IDLE, Constants.SESSION_INITIAL_IDLE_TIME);
+		session.getFilterChain().addLast("protocolFilter", new ProtocolCodecFilter(new CodecFactory(engine.getWorkerThread())));
+}
+</code></pre>
+<p>}[/code]</p>
+<p>MOD PLEASE MOVE TO TUTORIAL !</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406/1</link>
+        <pubDate>Fri, 16 Jul 2010 14:30:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-349406-1</guid>
+        <source url="https://forum.moparisthebest.com/t/anti-floodscript-562-rs2hd/349406.rss">Anti-floodscript 562 RS2HD</source>
+      </item>
+  </channel>
+</rss>

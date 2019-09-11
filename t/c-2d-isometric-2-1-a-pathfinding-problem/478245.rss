@@ -1,0 +1,600 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[C#] 2D Isometric (2:1) A* pathfinding problem</title>
+    <link>https://forum.moparisthebest.com/t/c-2d-isometric-2-1-a-pathfinding-problem/478245</link>
+    <description>Hello everyone
+
+I&#39;m currently working on a 2D Isometric game in C# and I&#39;m trying to implement A* pathfinding to make the character move to his destination point without hitting any obstacle, this is working except for the part where he just goes in an infinit loop when there is obstacle between him like this:
+[img]http://i.imgur.com/xpr2N.png[/img]
+
+Here is a basic example how the world gets rendered
+[code=csharp]
+for (int y = 0; y &lt; worldHeight; y++)
+{
+    for (int x = 0; x &lt; worldWidth; x++)
+    {
+        world[x, y].Render(g);
+    }
+}
+[/code]
+
+The Render(g); Method
+[code=csharp]
+public void Render(Graphics g)
+{
+    Int32 yOffset = 0;
+    Int32 xOffset = 0;
+    Int32 tileX = 0;
+    Int32 tileY = 0;
+
+    if (Image.Height &gt; 32)
+        yOffset = Image.Height - 32;
+
+    if ((Y % 2) != 0)
+        xOffset = 32;
+
+    tileX = (X + (64 * X) + xOffset);
+    tileY = (Y + (15 * Y) - yOffset);
+
+    g.DrawImageUnscaled(Image, tileX, tileY);
+}
+[/code]
+
+Now the pathfinding
+[code=csharp]
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Drawing;
+
+namespace IsoTest
+{
+    public class PathFinding
+    {
+        private bool _calculated = false;
+        private TileInfo[,] world;
+
+        private Node startNode;
+        private Node lastNode;
+
+        Int32 width;
+        Int32 height;
+
+        public PathFinding(TileInfo[,] worldInstance)
+        {
+            world = worldInstance;
+            width = world.GetLength(0);
+            height = world.Length / width;
+        }
+
+        public void Reset(TileInfo[,] worldInstance)
+        {
+            _calculated = false;
+            OpenList = new List&lt;Node&gt;();
+            ClosedList = new List&lt;Node&gt;();
+            world = worldInstance;
+            width = world.GetLength(0);
+            height = world.Length / width;
+        }
+
+        public Node[] GetSurroundingNodes(Node parent)
+        {
+            Int32 xx = parent.Location.X; // unchangable
+            Int32 yy = parent.Location.Y; // unchangable
+            List&lt;Node&gt; surroundedNodes = new List&lt;Node&gt;();
+            Boolean allow = false;
+			
+            if ((yy % 2) != 0)
+                allow = true;
+
+            for (Int32 x = xx - 1; x &lt; xx + 2; x++)
+            {
+                Int32 y = 0;
+
+                if (x == (xx - 1))
+                {
+                    for (y = yy - 1; y &lt; yy + 2; y++)
+                    {
+                        Add(x, y, allow, surroundedNodes, xx, yy);
+                    }
+                }
+                else if (x == (xx))
+                {
+                    for (y = yy - 2; y &lt; yy + 3; y++)
+                    {
+                        Add(x, y, allow, surroundedNodes, xx, yy);
+                    }
+                }
+                else if (x == (xx + 1))
+                {
+                    y = yy;
+                    Add(x, y, allow, surroundedNodes, xx, yy);
+                }
+            }
+
+            return surroundedNodes.ToArray();
+        }
+
+        private void Add(Int32 x, Int32 y, bool allow, List&lt;Node&gt; lst, Int32 xx, Int32 yy)
+        {
+            if (allow)
+                if ((y % 2) == 0)
+                    x +=1;
+
+            if (x &gt; -1 &amp;&amp; x &lt; width &amp;&amp; y &gt; -1 &amp;&amp; y &lt; height)
+            {
+                Node n = world[x, y].ToNode();
+                if (n.Walkable)
+                {
+                    world[x, y].Image = new Bitmap(64, 32);
+                    lst.Add(n);
+                }
+            }
+        }
+
+        public void Calculate(Point startingPt, Point endPt)
+        {
+            Node currentNode = world[startingPt.X, startingPt.Y].ToNode();
+            Node endNode = world[endPt.X, endPt.Y].ToNode();
+            Node[] surroundedNodes;
+
+            startNode = currentNode;
+
+            Node parentBackup = currentNode;
+
+            while (!_calculated)
+            {
+                surroundedNodes = GetSurroundingNodes(currentNode);
+                parentBackup = currentNode;
+
+                foreach (Node n in surroundedNodes)
+                {
+                    Point distanceDifference = new Point(
+                        Math.Abs((n.Location.X - endNode.Location.X)), Math.Abs((n.Location.Y - endNode.Location.Y)));
+
+                    if ((distanceDifference.X != 0) &amp;&amp; (distanceDifference.Y != 0))
+                        n.MovingCost = 14;
+                    else
+                        n.MovingCost = 10;
+
+                    n.HeuristicDistance = (distanceDifference.Y + distanceDifference.X) * 10;
+
+                    n.Used = true;
+                }
+
+                Node lowestCostNode = null;
+                Int32 lowestCost = Int32.MaxValue;
+                foreach (Node n in surroundedNodes)
+                {
+                    Int32 currentCost = (n.MovingCost + n.HeuristicDistance);
+                    if (currentCost &lt; lowestCost)
+                    {
+                        lowestCost = currentCost;
+                        lowestCostNode = n;
+                    }
+                }
+
+                currentNode = lowestCostNode;
+                lastNode = currentNode;
+
+                currentNode.Parent = parentBackup;
+
+                if (Node.Equals(currentNode, endNode))
+                    _calculated = true;
+
+
+            }
+        }
+
+        public Point[] ToWayPoint()
+        {
+            List&lt;Point&gt; waypoints = new List&lt;Point&gt;();
+
+            if (_calculated)
+            {
+                Node ln = lastNode;
+                while (!Node.Equals(ln,startNode))
+                {
+                    waypoints.Add(ln.Location);
+                    ln = ln.Parent;
+                    
+                }
+
+                List&lt;Point&gt; orderedWayPoints = new List&lt;Point&gt;();
+                for (Int32 i = waypoints.Count - 1; i &gt; -1; i--)
+                {
+                    orderedWayPoints.Add(waypoints[i]);
+                }
+
+                waypoints = orderedWayPoints;
+            }
+
+            return waypoints.ToArray();
+        }
+    }
+}
+[/code]
+
+The player class:
+[code=csharp]
+public class Player
+{
+	public PathFinding path = null;
+	public float x = 1;
+	public float y = 1;
+	private Int32 pathIndex = 0;
+	private Point[] pathArray = new Point[] { new Point(0, 0) };
+	Bitmap image = null;
+
+	private Point PrevDestination = new Point(6, 5);
+	public Point Destination = new Point(6, 5);
+
+	public Player(float xx, float yy, Bitmap bmp, PathFinding pathInstance)
+	{
+		x = xx;
+		y = yy;
+		image = bmp;
+		path = pathInstance;
+	}
+	
+	public void Tick()
+	{
+		if (Destination != PrevDestination)
+		{
+			path.Calculate(new Point((Int32)this.x, (Int32)this.y), Destination);
+
+			pathIndex = 0;
+			pathArray = path.ToWayPoint();
+
+			PrevDestination = Destination;
+		}
+
+		Point loc = pathArray[pathIndex];
+		float moveX = 0;
+		float moveY = 0;
+
+		if (Destination.X &gt; x)
+			moveX = 0.125f;
+		else if (Destination.X &lt; x)
+			moveX = -0.125f;
+
+		if (Destination.Y &gt; y)
+			moveY = 0.125f;
+		else if (Destination.Y &lt; y)
+			moveY = -0.125f;
+
+		if (moveX == 0 &amp;&amp; moveY == 0 &amp;&amp; pathIndex &lt; pathArray.Length - 1)
+			pathIndex++;
+
+		x += moveX;
+		y += moveY;
+	}
+
+	public void Render(Graphics g)
+	{
+		Int32 yOffset = 0;
+		Int32 xOffset = 0;
+		float tileX = 0;
+		float tileY = 0;
+
+		if (image.Height &gt; 32)
+			yOffset = image.Height - 32;
+
+		if ((y % 2) != 0)
+			xOffset = 32;
+
+		tileX = (x + (64 * x) + xOffset);
+		tileY = (y + (15 * y) - yOffset);
+
+		g.DrawImage(image, tileX, tileY, image.Width, image.Height);
+	}
+}
+
+[/code]
+
+[i]btw: If you have any remarks on my code, things that I could improve or should change don&#39;t wait to tell them.[/i]
+
+Thanks alot!</description>
+    
+    <lastBuildDate>Sat, 12 Jan 2013 13:01:58 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/c-2d-isometric-2-1-a-pathfinding-problem/478245.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[C#] 2D Isometric (2:1) A* pathfinding problem</title>
+        <dc:creator><![CDATA[@DefLegende DefLegende]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/deflegende">@DefLegende</a> wrote:</p>
+          <blockquote>
+              <p>Hello everyone</p>
+<p>I’m currently working on a 2D Isometric game in C# and I’m trying to implement A* pathfinding to make the character move to his destination point without hitting any obstacle, this is working except for the part where he just goes in an infinit loop when there is obstacle between him like this:<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/xpr2N.png" title="xpr2N.png" rel="nofollow noopener"><img src="http://i.imgur.com/xpr2N.png" alt width="690" height="430"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">xpr2N.png</span><span class="informations">993×619</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>Here is a basic example how the world gets rendered</p>
+<pre><code class="lang-auto">for (int y = 0; y &lt; worldHeight; y++)
+{
+    for (int x = 0; x &lt; worldWidth; x++)
+    {
+        world[x, y].Render(g);
+    }
+}</code></pre>
+<p>The Render(g); Method</p>
+<pre><code class="lang-auto">public void Render(Graphics g)
+{
+    Int32 yOffset = 0;
+    Int32 xOffset = 0;
+    Int32 tileX = 0;
+    Int32 tileY = 0;
+
+    if (Image.Height &gt; 32)
+        yOffset = Image.Height - 32;
+
+    if ((Y % 2) != 0)
+        xOffset = 32;
+
+    tileX = (X + (64 * X) + xOffset);
+    tileY = (Y + (15 * Y) - yOffset);
+
+    g.DrawImageUnscaled(Image, tileX, tileY);
+}</code></pre>
+<p>Now the pathfinding</p>
+<pre><code class="lang-auto">using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Drawing;
+
+namespace IsoTest
+{
+    public class PathFinding
+    {
+        private bool _calculated = false;
+        private TileInfo[,] world;
+
+        private Node startNode;
+        private Node lastNode;
+
+        Int32 width;
+        Int32 height;
+
+        public PathFinding(TileInfo[,] worldInstance)
+        {
+            world = worldInstance;
+            width = world.GetLength(0);
+            height = world.Length / width;
+        }
+
+        public void Reset(TileInfo[,] worldInstance)
+        {
+            _calculated = false;
+            OpenList = new List&lt;Node&gt;();
+            ClosedList = new List&lt;Node&gt;();
+            world = worldInstance;
+            width = world.GetLength(0);
+            height = world.Length / width;
+        }
+
+        public Node[] GetSurroundingNodes(Node parent)
+        {
+            Int32 xx = parent.Location.X; // unchangable
+            Int32 yy = parent.Location.Y; // unchangable
+            List&lt;Node&gt; surroundedNodes = new List&lt;Node&gt;();
+            Boolean allow = false;
+			
+            if ((yy % 2) != 0)
+                allow = true;
+
+            for (Int32 x = xx - 1; x &lt; xx + 2; x++)
+            {
+                Int32 y = 0;
+
+                if (x == (xx - 1))
+                {
+                    for (y = yy - 1; y &lt; yy + 2; y++)
+                    {
+                        Add(x, y, allow, surroundedNodes, xx, yy);
+                    }
+                }
+                else if (x == (xx))
+                {
+                    for (y = yy - 2; y &lt; yy + 3; y++)
+                    {
+                        Add(x, y, allow, surroundedNodes, xx, yy);
+                    }
+                }
+                else if (x == (xx + 1))
+                {
+                    y = yy;
+                    Add(x, y, allow, surroundedNodes, xx, yy);
+                }
+            }
+
+            return surroundedNodes.ToArray();
+        }
+
+        private void Add(Int32 x, Int32 y, bool allow, List&lt;Node&gt; lst, Int32 xx, Int32 yy)
+        {
+            if (allow)
+                if ((y % 2) == 0)
+                    x +=1;
+
+            if (x &gt; -1 &amp;&amp; x &lt; width &amp;&amp; y &gt; -1 &amp;&amp; y &lt; height)
+            {
+                Node n = world[x, y].ToNode();
+                if (n.Walkable)
+                {
+                    world[x, y].Image = new Bitmap(64, 32);
+                    lst.Add(n);
+                }
+            }
+        }
+
+        public void Calculate(Point startingPt, Point endPt)
+        {
+            Node currentNode = world[startingPt.X, startingPt.Y].ToNode();
+            Node endNode = world[endPt.X, endPt.Y].ToNode();
+            Node[] surroundedNodes;
+
+            startNode = currentNode;
+
+            Node parentBackup = currentNode;
+
+            while (!_calculated)
+            {
+                surroundedNodes = GetSurroundingNodes(currentNode);
+                parentBackup = currentNode;
+
+                foreach (Node n in surroundedNodes)
+                {
+                    Point distanceDifference = new Point(
+                        Math.Abs((n.Location.X - endNode.Location.X)), Math.Abs((n.Location.Y - endNode.Location.Y)));
+
+                    if ((distanceDifference.X != 0) &amp;&amp; (distanceDifference.Y != 0))
+                        n.MovingCost = 14;
+                    else
+                        n.MovingCost = 10;
+
+                    n.HeuristicDistance = (distanceDifference.Y + distanceDifference.X) * 10;
+
+                    n.Used = true;
+                }
+
+                Node lowestCostNode = null;
+                Int32 lowestCost = Int32.MaxValue;
+                foreach (Node n in surroundedNodes)
+                {
+                    Int32 currentCost = (n.MovingCost + n.HeuristicDistance);
+                    if (currentCost &lt; lowestCost)
+                    {
+                        lowestCost = currentCost;
+                        lowestCostNode = n;
+                    }
+                }
+
+                currentNode = lowestCostNode;
+                lastNode = currentNode;
+
+                currentNode.Parent = parentBackup;
+
+                if (Node.Equals(currentNode, endNode))
+                    _calculated = true;
+
+
+            }
+        }
+
+        public Point[] ToWayPoint()
+        {
+            List&lt;Point&gt; waypoints = new List&lt;Point&gt;();
+
+            if (_calculated)
+            {
+                Node ln = lastNode;
+                while (!Node.Equals(ln,startNode))
+                {
+                    waypoints.Add(ln.Location);
+                    ln = ln.Parent;
+                    
+                }
+
+                List&lt;Point&gt; orderedWayPoints = new List&lt;Point&gt;();
+                for (Int32 i = waypoints.Count - 1; i &gt; -1; i--)
+                {
+                    orderedWayPoints.Add(waypoints[i]);
+                }
+
+                waypoints = orderedWayPoints;
+            }
+
+            return waypoints.ToArray();
+        }
+    }
+}</code></pre>
+<p>The player class:</p>
+<pre><code class="lang-auto">public class Player
+{
+	public PathFinding path = null;
+	public float x = 1;
+	public float y = 1;
+	private Int32 pathIndex = 0;
+	private Point[] pathArray = new Point[] { new Point(0, 0) };
+	Bitmap image = null;
+
+	private Point PrevDestination = new Point(6, 5);
+	public Point Destination = new Point(6, 5);
+
+	public Player(float xx, float yy, Bitmap bmp, PathFinding pathInstance)
+	{
+		x = xx;
+		y = yy;
+		image = bmp;
+		path = pathInstance;
+	}
+	
+	public void Tick()
+	{
+		if (Destination != PrevDestination)
+		{
+			path.Calculate(new Point((Int32)this.x, (Int32)this.y), Destination);
+
+			pathIndex = 0;
+			pathArray = path.ToWayPoint();
+
+			PrevDestination = Destination;
+		}
+
+		Point loc = pathArray[pathIndex];
+		float moveX = 0;
+		float moveY = 0;
+
+		if (Destination.X &gt; x)
+			moveX = 0.125f;
+		else if (Destination.X &lt; x)
+			moveX = -0.125f;
+
+		if (Destination.Y &gt; y)
+			moveY = 0.125f;
+		else if (Destination.Y &lt; y)
+			moveY = -0.125f;
+
+		if (moveX == 0 &amp;&amp; moveY == 0 &amp;&amp; pathIndex &lt; pathArray.Length - 1)
+			pathIndex++;
+
+		x += moveX;
+		y += moveY;
+	}
+
+	public void Render(Graphics g)
+	{
+		Int32 yOffset = 0;
+		Int32 xOffset = 0;
+		float tileX = 0;
+		float tileY = 0;
+
+		if (image.Height &gt; 32)
+			yOffset = image.Height - 32;
+
+		if ((y % 2) != 0)
+			xOffset = 32;
+
+		tileX = (x + (64 * x) + xOffset);
+		tileY = (y + (15 * y) - yOffset);
+
+		g.DrawImage(image, tileX, tileY, image.Width, image.Height);
+	}
+}
+</code></pre>
+<p><span class="bbcode-i">btw: If you have any remarks on my code, things that I could improve or should change don’t wait to tell them.</span></p>
+<p>Thanks alot!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-2d-isometric-2-1-a-pathfinding-problem/478245/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-2d-isometric-2-1-a-pathfinding-problem/478245/1</link>
+        <pubDate>Sat, 12 Jan 2013 13:01:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-478245-1</guid>
+        <source url="https://forum.moparisthebest.com/t/c-2d-isometric-2-1-a-pathfinding-problem/478245.rss">[C#] 2D Isometric (2:1) A* pathfinding problem</source>
+      </item>
+  </channel>
+</rss>

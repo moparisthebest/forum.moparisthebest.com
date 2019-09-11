@@ -1,0 +1,911 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Smtp implementation cause im bored</title>
+    <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675</link>
+    <description>
+thought this might be useful for a java runescape bot, like make it email you every hour with progress reports.
+
+pop and smtp are really shitty un-elegant protocols, they are unintuitive, hackish, ugly ways of doing things.
+
+its clearly the work of a natural-selection-type process, it started out small then got more widely used and extended in weird little ways. Its evolved like a meme.
+now its the smothering wreck you see before you. And almost everyone still uses it.
+
+clearly if a five-year-old were to make another email protocol and make it widely adopted, it would be better then this,
+but that just goes to show, in terms of good solutions, design &gt; evolution.
+
+i haven&#39;t looked at that IMAP protocol, its probably better.
+i think a solution involving xml would be good here.
+
+but people have a its-not-broken-dont-fix-it attitude, so i dont think that will happen in the near future
+
+[code]
+/*
+    this was written by yakman
+    forgive the lack of elegance
+    tested on gmail servers, they seem to be the only free email that
+    allows you to use pop3/smtp
+*/
+
+/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+import java.io.*;
+import java.net.*;
+import javax.net.ssl.*;
+
+public class SMTP {
+
+	private static String smtpHost = &quot;smtp.googlemail.com&quot;;
+	private static int smtpPort = 587;
+	private static String username = &quot;username-goes-here@googlemail.com&quot;;
+	private static String password = &quot;password-goes-here&quot;;
+
+	private static String from = username;
+	private static String to = &quot;email-address@gmail.com&quot;;
+	private static String subject = &quot;subject-goes-here&quot;;
+
+	//EMAIL MESSAGE GOES HERE
+	//all line breaks MUST be \r\n
+	//MUST NOT have line break followed by dot
+	// to do that, put two dots
+	private static String message =
+		&quot;hello there\r\n&quot; +
+		&quot;..\r\n&quot; +
+		&quot;two dots on the above line, is parsed so its only one dot\r\n&quot; +
+		&quot;...\r\n&quot; +
+		&quot;three dots here, become two&quot;;
+	//TODO method for parsing a message with this dot stuff, so you&#39;re not
+	//forced to follow these shitty rules above
+
+	private static BufferedReader in;
+	private static PrintWriter out;
+
+	public static void main(String[] args) throws Exception {
+
+		InetAddress addr = InetAddress.getByName(smtpHost);
+		System.out.println(&quot;resolved host: &quot; + addr);
+
+		Socket normSock = new Socket();
+		System.out.println(&quot;connecting to port &quot; + smtpPort);
+		normSock.connect(new InetSocketAddress(addr, smtpPort), 30000);
+		System.out.println(&quot;connected&quot;);
+
+		//check for good
+		PrintWriter unsout = new PrintWriter(normSock.getOutputStream());
+		BufferedReader unsin = new BufferedReader(new InputStreamReader(normSock.getInputStream()));
+		checkOK(unsin);
+		unsout.write(&quot;EHLO localhost\r\n&quot;);
+		unsout.flush();
+		checkOK(unsin);
+
+		//start ssl
+		System.out.println(&quot;starting ssl&quot;);
+		unsout.write(&quot;STARTTLS\r\n&quot;);
+		unsout.flush();
+		checkOK(unsin);
+
+		//start ssl
+		SSLSocketFactory sslSockFact = (SSLSocketFactory)SSLSocketFactory.getDefault();
+		SSLSocket sock = (SSLSocket)sslSockFact.createSocket(normSock, smtpHost, smtpPort, false);
+		System.out.println(&quot;Started secure socket layer&quot;);
+
+		out = new PrintWriter(sock.getOutputStream());
+		in = new BufferedReader(new InputStreamReader(sock.getInputStream()));
+		System.out.println(&quot;Opened streams, starting&quot;);
+
+		//connection is opened above
+
+		//send the EHLO (again)
+		send(&quot;EHLO localhost&quot;);
+		checkOK();
+
+		//login
+		send(&quot;AUTH LOGIN&quot;);
+		checkOK();
+
+		send(base64EncodeNoCRLF(username));
+		checkOK();
+		send(base64EncodeNoCRLF(password));
+		checkOK();
+
+		//send email
+		send(&quot;MAIL FROM:&lt;&quot; + from + &quot;&gt;&quot;);
+		checkOK();
+
+		send(&quot;RCPT TO:&lt;&quot; + to + &quot;&gt;&quot;);
+		checkOK();
+
+		send(&quot;DATA&quot;);
+		checkOK();
+
+		String data =
+			&quot;From: &lt;&quot; + from + &quot;&gt;\r\n&quot; +
+			&quot;To: &lt;&quot; + to + &quot;&gt;\r\n&quot; + 
+			&quot;Subject: &quot; + subject + &quot;\r\n&quot; +
+			//&quot;Date: Fri, 21 Nov 1997 09:55:06 -0600\r\n&quot; + //TODO date properly
+			&quot;Message-ID: &quot; + getMessageID() + &quot;\r\n&quot; +
+			&quot;\r\n&quot; + 
+			message;
+
+
+		send(data);
+		send(&quot;.&quot;);
+		checkOK();
+
+		//disconnect
+		send(&quot;QUIT&quot;);
+		checkOK();
+	}
+
+	private static String getMessageID() {
+		try {
+			return (int)(Math.random() * 0x7fffffff) + &#39;.&#39; + (int)(Math.random() * 0x7fffffff) +
+				&#39;@&#39; + InetAddress.getLocalHost().getHostName();
+		}
+		catch(UnknownHostException ex) {
+			throw new Error();
+		}
+	}
+
+	private static void send(String line) {
+		System.out.println(&quot;=&gt; \&quot;&quot; + line + &quot;\&quot;&quot;);
+		out.write(line + &quot;\r\n&quot;);
+		out.flush();
+	}
+
+	private static String recv() throws IOException {
+		return recv(in);
+	}
+
+	private static String recv(BufferedReader in) throws IOException {
+		String line = in.readLine();
+		if(line == null)
+			throw new EOFException();
+		System.out.println(&quot;&lt;= \&quot;&quot; + line + &quot;\&quot;&quot;);
+		return line;
+	}
+
+	private static void checkOK() throws IOException {
+		checkOK(in);
+	}
+
+	private static void checkOK(BufferedReader in) throws IOException {
+		String line;
+		do {
+			line = recv(in);
+			if(line.charAt(0) != &#39;2&#39; &amp;&amp; line.charAt(0) != &#39;3&#39;)
+				throw new IOException(line);
+		} while(line.charAt(3) == &#39;-&#39;);
+	}
+
+	private static String base64EncodeNoCRLF(String string) {
+		String encoded = base64Encode(string);
+		encoded = encoded.substring(0, encoded.length() - 1);
+		return encoded;
+	}
+
+	//code below ripped from http://www.wikihow.com/Encode-a-String-to-Base64-With-Java
+
+	public static String base64code =
+		&quot;ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot; +
+		&quot;abcdefghijklmnopqrstuvwxyz&quot; + &quot;0123456789&quot; + &quot;+/&quot;;
+
+	public static int splitLinesAt = 76;
+	
+	public static String base64Encode(String string) {
+		String encoded = &quot;&quot;;
+	
+		// determine how many padding bytes to add to the output
+		int paddingCount = (3 - (string.length() % 3)) % 3;
+	
+		// add any necessary padding to the input
+		string += &quot;\0\0&quot;.substring(0, paddingCount);
+
+		// process 3 bytes at a time, churning out 4 output bytes
+		// worry about CRLF insertions later
+		for (int i = 0; i &lt; string.length(); i += 3) {
+			int j = (string.charAt(i) &lt;&lt; 16) + (string.charAt(i + 1) &lt;&lt; 8) +
+			string.charAt(i + 2);
+			encoded = encoded + base64code.charAt((j &gt;&gt; 18) &amp; 0x3f) +
+			base64code.charAt((j &gt;&gt; 12) &amp; 0x3f) +
+			base64code.charAt((j &gt;&gt; 6) &amp; 0x3f) +
+			base64code.charAt(j &amp; 0x3f);
+		}
+
+		// replace encoded padding nulls with &quot;=&quot;
+		return splitLines(encoded.substring(0, encoded.length() - paddingCount) + &quot;==&quot;.substring(0, paddingCount));
+	}
+
+	public static String splitLines(String string) {
+		String lines = &quot;&quot;;
+		for (int i = 0; i &lt; string.length(); i += splitLinesAt) {
+			lines += string.substring(i, Math.min(string.length(), i + splitLinesAt));
+			lines += &quot;\r\n&quot;;
+		}
+		return lines;
+	}
+
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Thu, 25 Sep 2008 13:18:28 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>Okay you have a point with stringbuilder. Does javac use builder or buffer?</p>
+<p>As for the code not being yours I would still remove such an inefficient monstrosity. While synchronizations every time would be costly having to copy the entire thing how ever many lines it is * 2.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/21</link>
+        <pubDate>Thu, 25 Sep 2008 13:18:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-21</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@k00dr k00dr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k00dr">@k00dr</a> wrote:</p>
+          <blockquote>
+              <p>…is fucking awesome and would fit the code much better.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/20</link>
+        <pubDate>Wed, 24 Sep 2008 20:34:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-20</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:18, topic:232675”]<em>never</em> use stringbuffer<br>
+stringbuffer synchronizes on every method, why would i want that when im only using one thread?<br>
+l2stringbuilder[/quote]stringbuilder…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/19</link>
+        <pubDate>Wed, 24 Sep 2008 18:57:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-19</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p><em>never</em> use stringbuffer<br>
+stringbuffer synchronizes on every method, why would i want that when im only using one thread?<br>
+l2stringbuilder</p>
+<p>also,<br>
+l2read BAsh, i didnt even write that part</p>
+<p>[quote=“yakman, post:1, topic:232675”]<code>
+	//code below ripped from http://www.wikihow.com/Encode-a-String-to-Base64-With-Java
+</code>[/quote]</p>
+<p>as for you k00dr, you’re completely correct. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+i only glanced over the message ID of the email i got, since it contained my hostname, i never noticed it didnt have a ‘.’ or ‘@’</p>
+<p>normally on smtp, they use the current pid as part of the message ID, and lawl can back me up here, i was asking around if anyone knew a way to get that on java.<br>
+couldnt find a good way to do it, random numbers seemed an alright solution for the time being.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/18</link>
+        <pubDate>Wed, 24 Sep 2008 15:56:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-18</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>dont hate it. &lt;3 the fail</p>
+<p><code>
+	public static String splitLines(String string) {
+		String lines = "";
+		for (int i = 0; i &lt; string.length(); i += splitLinesAt) {
+			lines += string.substring(i, Math.min(string.length(), i + splitLinesAt));
+			lines += "\r\n";
+		}
+		return lines;
+	}</code><br>
+l2stringbuffer</p>
+<pre><code class="lang-auto">	public static int splitLinesAt = 76;</code></pre>
+<p>l2constant</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/17</link>
+        <pubDate>Wed, 24 Sep 2008 09:53:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-17</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@k00dr k00dr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/k00dr">@k00dr</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:1, topic:232675”]<code>
+	private static String getMessageID() {
+		try {
+			return (int)(Math.random() * 0x7fffffff) + '.' + (int)(Math.random() * 0x7fffffff) +
+				'@' + InetAddress.getLocalHost().getHostName();
+		}
+		catch(UnknownHostException ex) {
+			throw new Error();
+		}
+	}
+</code>[/quote]</p>
+<p>A little bit of fail right there <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/16</link>
+        <pubDate>Wed, 24 Sep 2008 09:06:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-16</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“meiscooldude, post:14, topic:232675”]About a week ago i was looking for a way to Send Emails without using an SMTP Server (in C# though). Something similar to the mail method in php. I was able to find <a href="http://www.emailarchitect.net/WebApp/SMTPCOM/developers/dnslookup.asp" data-bbcode="true" rel="nofollow noopener">this</a>, which does what I want, but it puts a ‘Signature’ on the email, which I don’t necessarily want.</p>
+<p>My thought was possibly implement an SMTP Server, but I don’t know enough about email protocol to go about doing that.</p>
+<p>Any ideas? (or if you find a similar library)[/quote]use a language that doesnt suck</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/15</link>
+        <pubDate>Wed, 24 Sep 2008 07:02:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-15</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@meiscooldude meiscooldude]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/meiscooldude">@meiscooldude</a> wrote:</p>
+          <blockquote>
+              <p>About a week ago i was looking for a way to Send Emails without using an SMTP Server (in C# though). Something similar to the mail method in php. I was able to find <a href="http://www.emailarchitect.net/WebApp/SMTPCOM/developers/dnslookup.asp" data-bbcode="true" rel="nofollow noopener">this</a>, which does what I want, but it puts a ‘Signature’ on the email, which I don’t necessarily want.</p>
+<p>My thought was possibly implement an SMTP Server, but I don’t know enough about email protocol to go about doing that.</p>
+<p>Any ideas? (or if you find a similar library)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/14</link>
+        <pubDate>Wed, 24 Sep 2008 03:24:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-14</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@Speljohan Speljohan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speljohan">@Speljohan</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“io9, post:11, topic:232675”][quote author=chrisn2323 link=topic=306852.msg2455554#msg2455554 date=1222208811]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>javax.mail?<br>
+[/quote]Yea but what’s the fun in that…</p>
+</blockquote>
+</aside>
+<p>Why recreate the wheel?</p>
+</blockquote>
+</aside>
+<p>to learn how it works/get better at building them.</p>
+</blockquote>
+</aside>
+<p>That’s only for faggots.[/quote]I think that you will find YOURSELF the fag in this thread :&gt;</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/13</link>
+        <pubDate>Wed, 24 Sep 2008 02:13:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-13</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“io9, post:11, topic:232675”][quote author=chrisn2323 link=topic=306852.msg2455554#msg2455554 date=1222208811]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>javax.mail?<br>
+[/quote]Yea but what’s the fun in that…</p>
+</blockquote>
+</aside>
+<p>Why recreate the wheel?</p>
+</blockquote>
+</aside>
+<p>to learn how it works/get better at building them.</p>
+</blockquote>
+</aside>
+<p>That’s only for faggots.[/quote]No.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/12</link>
+        <pubDate>Wed, 24 Sep 2008 02:00:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-12</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@ilyaostr9 io9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ilyaostr9">@ilyaostr9</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“chrisn2323, post:10, topic:232675”][quote author=Yz85Racer link=topic=306852.msg2455522#msg2455522 date=1222207749]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>javax.mail?<br>
+[/quote]Yea but what’s the fun in that…</p>
+</blockquote>
+</aside>
+<p>Why recreate the wheel?</p>
+</blockquote>
+</aside>
+<p>to learn how it works/get better at building them.[/quote]<br>
+That’s only for faggots.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/11</link>
+        <pubDate>Tue, 23 Sep 2008 23:41:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-11</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@chrisn2323 chrisn2323]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chrisn2323">@chrisn2323</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Yz85Racer, post:9, topic:232675”][quote author=TeleNubby link=topic=306852.msg2455519#msg2455519 date=1222207668]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>javax.mail?<br>
+[/quote]Yea but what’s the fun in that…</p>
+</blockquote>
+</aside>
+<p>Why recreate the wheel?[/quote]<br>
+to learn how it works/get better at building them.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/10</link>
+        <pubDate>Tue, 23 Sep 2008 22:26:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-10</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@Yz85Racer Yz85Racer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yz85racer">@Yz85Racer</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“TeleNubby, post:8, topic:232675”][quote author=la­wl link=topic=306852.msg2455184#msg2455184 date=1222196975]<br>
+javax.mail?<br>
+[/quote]Yea but what’s the fun in that…[/quote]<br>
+Why recreate the wheel?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/9</link>
+        <pubDate>Tue, 23 Sep 2008 22:09:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-9</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“la­wl, post:7, topic:232675”]javax.mail?[/quote]Yea but what’s the fun in that…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/8</link>
+        <pubDate>Tue, 23 Sep 2008 22:07:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-8</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>javax.mail?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/7</link>
+        <pubDate>Tue, 23 Sep 2008 19:09:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-7</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>null termination would probably create problems for c strings, i definatly remember a passage in the rfc of irc how you can have any chars except null</p>
+<p>good idea though, i think the main problem with the dot is that people might use it for sending emails, and null is not printable, so they cant.<br>
+irc uses 0x07 for some stuff, it might make a good alternative.</p>
+<aside class="quote no-group" data-post="5" data-topic="232675">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/telenubby/40/5_6bca9977b612b7aeef77ba1ec1cd67b3.png" class="avatar"> TeleNubby:</div>
+<blockquote>
+<p>skiddie hakers</p>
+</blockquote>
+</aside>
+<p>surely thats an oxymoron? a hacker whos also an skiddie.</p>
+<p>and anyway, people could just google for an smtp program</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/6</link>
+        <pubDate>Tue, 23 Sep 2008 18:45:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-6</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>Actually, I remember considering making an impl. for the most common e-mail protocols (SMTP, IMAP, POP, and MIME (?)). Decided not to as soon after it looked like a boring project so I just moved on.</p>
+<p>Useful for those skiddie hakers, though.</p>
+<p>Nevertheless, good job.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/5</link>
+        <pubDate>Tue, 23 Sep 2008 00:42:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-5</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@Cheese_Police c|p]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheese_police">@Cheese_Police</a> wrote:</p>
+          <blockquote>
+              <p>null termination would be perfect…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/4</link>
+        <pubDate>Tue, 23 Sep 2008 00:03:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-4</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>irc protocol doesnt end its messages with a dot, so you’re not allowed to have dots in the middle and have to put two dots to mean one dot.<br>
+the newline seperated stuff works for irc cause the stuff is newline seperated,</p>
+<p>emails are not newline seperated</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/3</link>
+        <pubDate>Mon, 22 Sep 2008 22:42:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-3</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“yakman, post:1, topic:232675”]pop and smtp are really shitty un-elegant protocols, they are unintuitive, hackish, ugly ways of doing things.</p>
+<p>its clearly the work of a natural-selection-type process, it started out small then got more widely used and extended in weird little ways. Its evolved like a meme.<br>
+now its the smothering wreck you see before you. And almost everyone still uses it.</p>
+<p>clearly if a five-year-old were to make another email protocol and make it widely adopted, it would be better then this,<br>
+but that just goes to show, in terms of good solutions, design &gt; evolution.[/quote]thats like saying the irc protocol is bad, please talk out of your arse some more</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/2</link>
+        <pubDate>Mon, 22 Sep 2008 22:38:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-2</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+      <item>
+        <title>Smtp implementation cause im bored</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>thought this might be useful for a java runescape bot, like make it email you every hour with progress reports.</p>
+<p>pop and smtp are really shitty un-elegant protocols, they are unintuitive, hackish, ugly ways of doing things.</p>
+<p>its clearly the work of a natural-selection-type process, it started out small then got more widely used and extended in weird little ways. Its evolved like a meme.<br>
+now its the smothering wreck you see before you. And almost everyone still uses it.</p>
+<p>clearly if a five-year-old were to make another email protocol and make it widely adopted, it would be better then this,<br>
+but that just goes to show, in terms of good solutions, design &gt; evolution.</p>
+<p>i haven’t looked at that IMAP protocol, its probably better.<br>
+i think a solution involving xml would be good here.</p>
+<p>but people have a its-not-broken-dont-fix-it attitude, so i dont think that will happen in the near future</p>
+<pre><code class="lang-auto">/*
+    this was written by yakman
+    forgive the lack of elegance
+    tested on gmail servers, they seem to be the only free email that
+    allows you to use pop3/smtp
+*/
+
+/*
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+*/
+
+import java.io.*;
+import java.net.*;
+import javax.net.ssl.*;
+
+public class SMTP {
+
+	private static String smtpHost = "smtp.googlemail.com";
+	private static int smtpPort = 587;
+	private static String username = "username-goes-here@googlemail.com";
+	private static String password = "password-goes-here";
+
+	private static String from = username;
+	private static String to = "email-address@gmail.com";
+	private static String subject = "subject-goes-here";
+
+	//EMAIL MESSAGE GOES HERE
+	//all line breaks MUST be \r\n
+	//MUST NOT have line break followed by dot
+	// to do that, put two dots
+	private static String message =
+		"hello there\r\n" +
+		"..\r\n" +
+		"two dots on the above line, is parsed so its only one dot\r\n" +
+		"...\r\n" +
+		"three dots here, become two";
+	//TODO method for parsing a message with this dot stuff, so you're not
+	//forced to follow these shitty rules above
+
+	private static BufferedReader in;
+	private static PrintWriter out;
+
+	public static void main(String[] args) throws Exception {
+
+		InetAddress addr = InetAddress.getByName(smtpHost);
+		System.out.println("resolved host: " + addr);
+
+		Socket normSock = new Socket();
+		System.out.println("connecting to port " + smtpPort);
+		normSock.connect(new InetSocketAddress(addr, smtpPort), 30000);
+		System.out.println("connected");
+
+		//check for good
+		PrintWriter unsout = new PrintWriter(normSock.getOutputStream());
+		BufferedReader unsin = new BufferedReader(new InputStreamReader(normSock.getInputStream()));
+		checkOK(unsin);
+		unsout.write("EHLO localhost\r\n");
+		unsout.flush();
+		checkOK(unsin);
+
+		//start ssl
+		System.out.println("starting ssl");
+		unsout.write("STARTTLS\r\n");
+		unsout.flush();
+		checkOK(unsin);
+
+		//start ssl
+		SSLSocketFactory sslSockFact = (SSLSocketFactory)SSLSocketFactory.getDefault();
+		SSLSocket sock = (SSLSocket)sslSockFact.createSocket(normSock, smtpHost, smtpPort, false);
+		System.out.println("Started secure socket layer");
+
+		out = new PrintWriter(sock.getOutputStream());
+		in = new BufferedReader(new InputStreamReader(sock.getInputStream()));
+		System.out.println("Opened streams, starting");
+
+		//connection is opened above
+
+		//send the EHLO (again)
+		send("EHLO localhost");
+		checkOK();
+
+		//login
+		send("AUTH LOGIN");
+		checkOK();
+
+		send(base64EncodeNoCRLF(username));
+		checkOK();
+		send(base64EncodeNoCRLF(password));
+		checkOK();
+
+		//send email
+		send("MAIL FROM:&lt;" + from + "&gt;");
+		checkOK();
+
+		send("RCPT TO:&lt;" + to + "&gt;");
+		checkOK();
+
+		send("DATA");
+		checkOK();
+
+		String data =
+			"From: &lt;" + from + "&gt;\r\n" +
+			"To: &lt;" + to + "&gt;\r\n" + 
+			"Subject: " + subject + "\r\n" +
+			//"Date: Fri, 21 Nov 1997 09:55:06 -0600\r\n" + //TODO date properly
+			"Message-ID: " + getMessageID() + "\r\n" +
+			"\r\n" + 
+			message;
+
+
+		send(data);
+		send(".");
+		checkOK();
+
+		//disconnect
+		send("QUIT");
+		checkOK();
+	}
+
+	private static String getMessageID() {
+		try {
+			return (int)(Math.random() * 0x7fffffff) + '.' + (int)(Math.random() * 0x7fffffff) +
+				'@' + InetAddress.getLocalHost().getHostName();
+		}
+		catch(UnknownHostException ex) {
+			throw new Error();
+		}
+	}
+
+	private static void send(String line) {
+		System.out.println("=&gt; \"" + line + "\"");
+		out.write(line + "\r\n");
+		out.flush();
+	}
+
+	private static String recv() throws IOException {
+		return recv(in);
+	}
+
+	private static String recv(BufferedReader in) throws IOException {
+		String line = in.readLine();
+		if(line == null)
+			throw new EOFException();
+		System.out.println("&lt;= \"" + line + "\"");
+		return line;
+	}
+
+	private static void checkOK() throws IOException {
+		checkOK(in);
+	}
+
+	private static void checkOK(BufferedReader in) throws IOException {
+		String line;
+		do {
+			line = recv(in);
+			if(line.charAt(0) != '2' &amp;&amp; line.charAt(0) != '3')
+				throw new IOException(line);
+		} while(line.charAt(3) == '-');
+	}
+
+	private static String base64EncodeNoCRLF(String string) {
+		String encoded = base64Encode(string);
+		encoded = encoded.substring(0, encoded.length() - 1);
+		return encoded;
+	}
+
+	//code below ripped from http://www.wikihow.com/Encode-a-String-to-Base64-With-Java
+
+	public static String base64code =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+		"abcdefghijklmnopqrstuvwxyz" + "0123456789" + "+/";
+
+	public static int splitLinesAt = 76;
+	
+	public static String base64Encode(String string) {
+		String encoded = "";
+	
+		// determine how many padding bytes to add to the output
+		int paddingCount = (3 - (string.length() % 3)) % 3;
+	
+		// add any necessary padding to the input
+		string += "\0\0".substring(0, paddingCount);
+
+		// process 3 bytes at a time, churning out 4 output bytes
+		// worry about CRLF insertions later
+		for (int i = 0; i &lt; string.length(); i += 3) {
+			int j = (string.charAt(i) &lt;&lt; 16) + (string.charAt(i + 1) &lt;&lt; 8) +
+			string.charAt(i + 2);
+			encoded = encoded + base64code.charAt((j &gt;&gt; 18) &amp; 0x3f) +
+			base64code.charAt((j &gt;&gt; 12) &amp; 0x3f) +
+			base64code.charAt((j &gt;&gt; 6) &amp; 0x3f) +
+			base64code.charAt(j &amp; 0x3f);
+		}
+
+		// replace encoded padding nulls with "="
+		return splitLines(encoded.substring(0, encoded.length() - paddingCount) + "==".substring(0, paddingCount));
+	}
+
+	public static String splitLines(String string) {
+		String lines = "";
+		for (int i = 0; i &lt; string.length(); i += splitLinesAt) {
+			lines += string.substring(i, Math.min(string.length(), i + splitLinesAt));
+			lines += "\r\n";
+		}
+		return lines;
+	}
+
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675/1</link>
+        <pubDate>Mon, 22 Sep 2008 22:35:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-232675-1</guid>
+        <source url="https://forum.moparisthebest.com/t/smtp-implementation-cause-im-bored/232675.rss">Smtp implementation cause im bored</source>
+      </item>
+  </channel>
+</rss>

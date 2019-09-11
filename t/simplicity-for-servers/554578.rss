@@ -1,0 +1,562 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Simplicity for servers</title>
+    <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578</link>
+    <description>So, I haven&#39;t seen any servers around that makes things easy on the programmer for most content development. I&#39;ve been working with a guy named Dirk Jamieson that I&#39;ve been watching for a while to learn more about programming design. I have been trying to isolate the API in our project and would like to show you exactly what is possible with it and how simple and short every bit of your code can be. Keep in mind this project to isolate things has only been in development for a couple days and I have only gotten a couple of hours in total towards development in all. So, certain parts of code I will be showing you are just for example and probably haven&#39;t been designed for simplicity yet.
+
+There are modules that allow for development away from the core project so we can isolate the core from content. These modules are loaded from jarred files, which use a module.yml file to retrieve small details of the module such as the name and class of the java module file. A Module can hold an entire server/game, just in case you were wondering ;). I have written a small example to show the simplicity and shortness of code needed to write a server using a Module, EventListener, and MessageHandler implementations from the Core project.
+
+[size=14pt][b]Here is an example of a module:[/b][/size]
+[img]http://grabilla.com/0611e-0fd883d1-fd98-4d0d-a6c6-ae9c9c018815.png[/img]
+
+The module YML file below gives the name of the module (which can be anything) and the path of the Module class that is going to be loaded (or unloaded) by the core
+[code=yml]class: runescape.RuneScapeModule
+name: RuneScapeModule[/code]
+
+The RuneScapeModule.java file below is an example of the Module class, which also implements EventListener so I can listen for events
+[code=java]package runescape;
+
+import runescape.rawhandlers.ConnectionRequestHandler;
+
+import com.game.event.EventHandler;
+import com.game.event.EventListener;
+import com.game.event.EventPriority;
+import com.game.event.events.SessionConnectEvent;
+import com.module.Module;
+
+/**
+ * @author Albert Beaupre
+ */
+public class RuneScapeModule extends Module implements EventListener {
+
+	@EventHandler(priority = EventPriority.MAXIMUM)
+	public void onSessionConnect(SessionConnectEvent event) {
+		/**
+		 * Listens for any session connections
+		 */
+
+		/**
+		 * Checks if the session of the event is being established (connecting)
+		 */
+		if (event.isEstablishing())
+			event.getSession().setHandler(new ConnectionRequestHandler()); //sets the message handler of the session to the ConnectionRequestHandler class
+	}
+
+	@Override
+	protected void load() throws Exception {
+		/**
+		 * This method is automatically called when this module is loaded by the core
+		 */
+
+		this.register(); //registers this event listener for the core to have this class listen for events
+	}
+
+	@Override
+	protected void unload() throws Exception {
+		/**
+		 * This method is automatically called when this module is unloaded by the core
+		 */
+		this.unregister(); //unregisters this event listener from the core so it does not listen for events anymore
+	}
+
+}[/code]
+
+The ConnectionRequestHandler.java class below implements the MessageHandler class, which is a class Session from the Core project uses to decode messages received from the client and can be set to different types of MessageHandler classes if need-be and shows a small example of how easy it is to decode messages from a RuneScape client (although a message encoding/decoding design still needs to be implemented).
+[code=java]package runescape.rawhandlers;
+
+import java.nio.ByteBuffer;
+
+import com.network.Session;
+import com.network.message.MessageHandler;
+
+public class ConnectionRequestHandler implements MessageHandler {
+
+	static final int REVISION = 637;
+	static final int JS5_REQUEST_ID = 15;
+	static final int LOGIN_REQUEST_ID = 14;
+
+	@Override
+	public void decode(Session session, ByteBuffer buffer) throws Exception {
+		int requestId = buffer.get();
+		switch (requestId) {
+		case JS5_REQUEST_ID:
+			int revision = buffer.getInt();
+			ByteBuffer response = ByteBuffer.allocate(1);
+
+			if (revision != REVISION) {
+				response.put((byte) 6);
+			} else {
+				int[] responseData = { 56, 79325, 55568, 46770, 24563, 299978, 44375, 0, 4176, 3589, 109125, 604031, 176138, 292288, 350498, 686783, 18008, 20836, 16339, 1244, 8142, 743, 119, 699632, 932831, 3931, 2974 };
+
+				response = ByteBuffer.allocate(1 + (4 * responseData.length));
+				response.put((byte) 0);
+				for (int data : responseData)
+					response.putInt(data);
+			}
+			session.encode(response);
+			break;
+		}
+		switch (requestId) {
+		case LOGIN_REQUEST_ID:
+			session.encode(ByteBuffer.wrap(new byte[] { 0 })).setHandler(new LoginRequestHandler());
+			break;
+		}
+	}
+}[/code]
+
+The LoginRequestHandler.java class is a MessageHandler implementation that a Session changes to when the ConnectionRequestHandler recieves a request ID of 14
+[code=java]package runescape.rawhandlers;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+import com.network.Session;
+import com.network.message.MessageHandler;
+
+public class LoginRequestHandler implements MessageHandler {
+
+	@Override
+	public void decode(Session session, ByteBuffer buffer) throws Exception {
+		if (buffer.remaining() &gt;= 3) {
+			int state = buffer.get() &amp; 0xFF;
+			int packetSize = buffer.getShort() &amp; 0xFFFF;
+			if (packetSize != buffer.remaining())
+				throw new IOException(&quot;Mismatched login packet size.&quot;);
+
+			int revision = buffer.getInt();
+			System.out.printf(&quot;state=%s, revision=%s&quot;, state, revision);
+		}
+	}
+
+}[/code]
+
+I would like for content creation to be as simple as this in the future, which should be EXTREMELY easy to be honest.
+[code=java]
+	void runScript() {
+		teleport(3222, 3222, 0); //teleports the script owner to 3222, 3222, 0
+		wait(2); //waits 1 tick before the script continues
+		animate(2222); // the script owner animates a thinking animation, but I don&#39;t think 2222 is the right one :/
+		forceTalk(&quot;Huh...Where am I?&quot;); //forces the script owner to force chat the specified string
+		wait(3);
+		walk(3200, 3200); //walks the script owner to 3200, 3200 and pauses the script until the script owner reaches the end of the path
+		//And so on...
+		NPC nearby = getNearby(NPC.class, 10).get(0); //retrieves a list of nearby entities within a radius of 10 instancing NPC and gets the first element in the list
+		boolean lookingForEnemies = nearby != null;
+		while (!(lookingForEnemies = (nearby = (getNearby(NPC.class, 10).get(0) != null))))
+			walk(3222 + random(100), 3222 + random(100)); //walks the script owner to a random location if there are no nearby enemies
+	}[/code]
+
+[hr]
+[b]I would like some thoughts and suggestions on all of this from you guys :D[/b]
+[hr]</description>
+    
+    <lastBuildDate>Sun, 31 Jan 2016 04:15:15 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:7, topic:554578”][quote author=wildskiller link=topic=673499.msg4503472#msg4503472 date=1454175749]<br>
+Well, I will agree it is pretty confusing. I was up until 3AM working on this and I probably wasn’t entirely focused on what I was talking about.</p>
+<p>Now, with the wait method, which has already been implemented to the Action class from our 637 from scratch thanks to a separate API</p>
+<p>[code=java]	public static void wait(int ticks) throws SuspendExecution {<br>
+Core.getServer().getThread().assertThread();</p>
+<pre><code>	if (!Fiber.isCurrentFiber())
+		throw new RuntimeException("wait() may only be invoked by a Fiber.");
+	
+	while (ticks-- &gt; 0)
+		Fiber.park();
+}[/code]
+</code></pre>
+<p>Since I don’t have much of anything relating to content development, I couldn’t show a good example of what I was talking about. It will take a while until I get to content development because I will need to do quite a bit to the core to support most of it. So, I decided to show the simplicity of a module instead. I understand why I made it so confusing, and should probably revise the thread.<br>
+[/quote]<br>
+super lightweight threads, okay that makes sense. i just think that a plugin systems are better off when using a publish-subscribe style design. it’s the perfect balance between being easy to write and easy to understand</p>
+<p>[code=scala]object SomeSkill {</p>
+<p>val data = List(<br>
+(1, 2, 3, 4),<br>
+(4, 3, 2, 1),<br>
+(2, 4, 2, 4)<br>
+)</p>
+<p>lazy val moreData = data.flatMap(it =&gt; List(it._1, it._2, it._3, it._4))</p>
+<p>on[FirstItemClick] { (msg, plr) =&gt;<br>
+if (msg.id == 4151) {<br>
+plr.sendMessage(“Okay, we can continue with the item click…”)<br>
+msg.terminate<br>
+}<br>
+}</p>
+<p>on[FirstObjectClick] { (msg, plr) =&gt;<br>
+if (msg.id == 2572) {<br>
+println(s"First index of our data: ${data(0)}")<br>
+msg.terminate<br>
+}<br>
+}</p>
+<p>on[PickupGroundItem] { (msg, plr) =&gt;<br>
+if (msg.id == 592) {<br>
+moreData.foreach(doSomething)<br>
+msg.terminate<br>
+}<br>
+}<br>
+}[/code]</p>
+<p>it’s just so easy to work with and understand. you can do something similar with plain Java but it’d be much uglier[/quote]<br>
+Well, I would like to keep everything in java currently. If you could give me any suggestions for plugin system designs, I would be plenty grateful <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/8</link>
+        <pubDate>Sun, 31 Jan 2016 04:15:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-8</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wildskiller, post:6, topic:554578”]Well, I will agree it is pretty confusing. I was up until 3AM working on this and I probably wasn’t entirely focused on what I was talking about.</p>
+<p>Now, with the wait method, which has already been implemented to the Action class from our 637 from scratch thanks to a separate API</p>
+<p>[code=java]	public static void wait(int ticks) throws SuspendExecution {<br>
+Core.getServer().getThread().assertThread();</p>
+<pre><code>	if (!Fiber.isCurrentFiber())
+		throw new RuntimeException("wait() may only be invoked by a Fiber.");
+	
+	while (ticks-- &gt; 0)
+		Fiber.park();
+}[/code]
+</code></pre>
+<p>Since I don’t have much of anything relating to content development, I couldn’t show a good example of what I was talking about. It will take a while until I get to content development because I will need to do quite a bit to the core to support most of it. So, I decided to show the simplicity of a module instead. I understand why I made it so confusing, and should probably revise the thread.[/quote]<br>
+super lightweight threads, okay that makes sense. i just think that a plugin systems are better off when using a publish-subscribe style design. it’s the perfect balance between being easy to write and easy to understand</p>
+<p>[code=scala]object SomeSkill {</p>
+<p>val data = List(<br>
+(1, 2, 3, 4),<br>
+(4, 3, 2, 1),<br>
+(2, 4, 2, 4)<br>
+)</p>
+<p>lazy val moreData = data.flatMap(it =&gt; List(it._1, it._2, it._3, it._4))</p>
+<p>on[FirstItemClick] { (msg, plr) =&gt;<br>
+if (msg.id == 4151) {<br>
+plr.sendMessage(“Okay, we can continue with the item click…”)<br>
+msg.terminate<br>
+}<br>
+}</p>
+<p>on[FirstObjectClick] { (msg, plr) =&gt;<br>
+if (msg.id == 2572) {<br>
+println(s"First index of our data: ${data(0)}")<br>
+msg.terminate<br>
+}<br>
+}</p>
+<p>on[PickupGroundItem] { (msg, plr) =&gt;<br>
+if (msg.id == 592) {<br>
+moreData.foreach(doSomething)<br>
+msg.terminate<br>
+}<br>
+}<br>
+}[/code]</p>
+<p>it’s just so easy to work with and understand. you can do something similar with plain Java but it’d be much uglier</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/7</link>
+        <pubDate>Sat, 30 Jan 2016 19:43:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-7</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“lare69, post:4, topic:554578”]doesn’t really make sense to me</p>
+<p>your original point was that servers currently out there are not easy to write content for. i disagree, but okay.</p>
+<p>then you talk about using modules to isolate content from the core and then handle login requests, a core feature, via a module??</p>
+<p>and then finally you address your original point and it still doesn’t make sense</p>
+<aside class="quote">
+<blockquote>
+<p>I would like for content creation to be as simple as this in the future, which should be EXTREMELY easy to be honest.</p>
+<p><code>
+	void runScript() {
+		teleport(3222, 3222, 0); //teleports the script owner to 3222, 3222, 0
+		wait(2); //waits 1 tick before the script continues
+		animate(2222); // the script owner animates a thinking animation, but I don't think 2222 is the right one :/
+		forceTalk("Huh...Where am I?"); //forces the script owner to force chat the specified string
+		wait(3);
+		walk(3200, 3200); //walks the script owner to 3200, 3200 and pauses the script until the script owner reaches the end of the path
+		//And so on...
+		NPC nearby = getNearby(NPC.class, 10).get(0); //retrieves a list of nearby entities within a radius of 10 instancing NPC and gets the first element in the list
+		boolean lookingForEnemies = nearby != null;
+		while (!(lookingForEnemies = (nearby = (getNearby(NPC.class, 10).get(0) != null))))
+			walk(3222 + random(100), 3222 + random(100)); //walks the script owner to a random location if there are no nearby enemies
+	}</code></p>
+<p>[hr]<br>
+<span class="bbcode-b">I would like some thoughts on all of this from you guys <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></span><br>
+[hr]</p>
+</blockquote>
+</aside>
+<p>I’m not sure how you intend to implement that nicely in Java when it lacks the metaprogramming capabilities of other languages like Ruby’s open classes and Scala’s implicit classes… also your wait(int) method is going to be near impossible to implement how you intend (without multiple threads and complicated synchronization locks at least)[/quote]<br>
+Well, I will agree it is pretty confusing. I was up until 3AM working on this and I probably wasn’t entirely focused on what I was talking about.</p>
+<p>Now, with the wait method, which has already been implemented to the Action class from our 637 from scratch thanks to a separate API</p>
+<p>[code=java]	public static void wait(int ticks) throws SuspendExecution {<br>
+Core.getServer().getThread().assertThread();</p>
+<pre><code>	if (!Fiber.isCurrentFiber())
+		throw new RuntimeException("wait() may only be invoked by a Fiber.");
+	
+	while (ticks-- &gt; 0)
+		Fiber.park();
+}[/code]
+</code></pre>
+<p>Since I don’t have much of anything relating to content development, I couldn’t show a good example of what I was talking about. It will take a while until I get to content development because I will need to do quite a bit to the core to support most of it. So, I decided to show the simplicity of a module instead. I understand why I made it so confusing, and should probably revise the thread.</p>
+<aside class="quote" data-post="5" data-topic="554578">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sini/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sini:</div>
+<blockquote>
+<p>Blocking within scripts is good for timing but it removes a lot of clarity.</p>
+</blockquote>
+</aside>
+<p>What do you mean “it removes a lot of clarity”? I feel like without all of the class calls and insane amount of lines, it makes everything clearer. If you’re talking about pairing, then that can be easily implemented as so:</p>
+<p><span class="bbcode-i">wait(1000, teleport())</span><br>
+Since each command would inherit some sort of script command parent and the wait method could take a pairing parameter which pairs the delay with the command</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/6</link>
+        <pubDate>Sat, 30 Jan 2016 17:42:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-6</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>blah blah blah</p>
+<p>Blocking within scripts is good for timing but it removes a lot of clarity.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/5</link>
+        <pubDate>Sat, 30 Jan 2016 10:27:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-5</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>doesn’t really make sense to me</p>
+<p>your original point was that servers currently out there are not easy to write content for. i disagree, but okay.</p>
+<p>then you talk about using modules to isolate content from the core and then handle login requests, a core feature, via a module??</p>
+<p>and then finally you address your original point and it still doesn’t make sense</p>
+<p>[quote=“wildskiller, post:1, topic:554578”]I would like for content creation to be as simple as this in the future, which should be EXTREMELY easy to be honest.</p>
+<p><code>
+	void runScript() {
+		teleport(3222, 3222, 0); //teleports the script owner to 3222, 3222, 0
+		wait(2); //waits 1 tick before the script continues
+		animate(2222); // the script owner animates a thinking animation, but I don't think 2222 is the right one :/
+		forceTalk("Huh...Where am I?"); //forces the script owner to force chat the specified string
+		wait(3);
+		walk(3200, 3200); //walks the script owner to 3200, 3200 and pauses the script until the script owner reaches the end of the path
+		//And so on...
+		NPC nearby = getNearby(NPC.class, 10).get(0); //retrieves a list of nearby entities within a radius of 10 instancing NPC and gets the first element in the list
+		boolean lookingForEnemies = nearby != null;
+		while (!(lookingForEnemies = (nearby = (getNearby(NPC.class, 10).get(0) != null))))
+			walk(3222 + random(100), 3222 + random(100)); //walks the script owner to a random location if there are no nearby enemies
+	}</code></p>
+<p>[hr]<br>
+<span class="bbcode-b">I would like some thoughts on all of this from you guys <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></span><br>
+[hr][/quote]<br>
+I’m not sure how you intend to implement that nicely in Java when it lacks the metaprogramming capabilities of other languages like Ruby’s open classes and Scala’s implicit classes… also your wait(int) method is going to be near impossible to implement how you intend (without multiple threads and complicated synchronization locks at least)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/4</link>
+        <pubDate>Sat, 30 Jan 2016 09:45:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-4</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“my-swagger, post:2, topic:554578”]I don’t think you know what a good design is.<br>
+I’ve been using Scapeemulator recently, it has made things very easy for me. Look into it’s design or Apollo’s. I love it and it has really helped me stay consistent with my content.[/quote]<br>
+I would really like you to reevaluate this thread. I don’t believe you took the time to read the examples and form a good idea of the matter so I’ve decided to re-write the thread for more users to understand what I am trying to do.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/3</link>
+        <pubDate>Sat, 30 Jan 2016 06:04:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-3</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@my-swagger my-swagger]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/my-swagger">@my-swagger</a> wrote:</p>
+          <blockquote>
+              <p>I don’t think you know what a good design is.<br>
+I’ve been using Scapeemulator recently, it has made things very easy for me. Look into it’s design or Apollo’s. I love it and it has really helped me stay consistent with my content.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/2</link>
+        <pubDate>Fri, 29 Jan 2016 01:24:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-2</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+      <item>
+        <title>Simplicity for servers</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>So, I haven’t seen any servers around that makes things easy on the programmer for most content development. I’ve been working with a guy named Dirk Jamieson that I’ve been watching for a while to learn more about programming design. I have been trying to isolate the API in our project and would like to show you exactly what is possible with it and how simple and short every bit of your code can be. Keep in mind this project to isolate things has only been in development for a couple days and I have only gotten a couple of hours in total towards development in all. So, certain parts of code I will be showing you are just for example and probably haven’t been designed for simplicity yet.</p>
+<p>There are modules that allow for development away from the core project so we can isolate the core from content. These modules are loaded from jarred files, which use a module.yml file to retrieve small details of the module such as the name and class of the java module file. A Module can hold an entire server/game, just in case you were wondering ;). I have written a small example to show the simplicity and shortness of code needed to write a server using a Module, EventListener, and MessageHandler implementations from the Core project.</p>
+<p>[size=14pt]<span class="bbcode-b">Here is an example of a module:</span>[/size]<br>
+<img src="http://grabilla.com/0611e-0fd883d1-fd98-4d0d-a6c6-ae9c9c018815.png" alt width="" height=""></p>
+<p>The module YML file below gives the name of the module (which can be anything) and the path of the Module class that is going to be loaded (or unloaded) by the core</p>
+<p><code>class: runescape.RuneScapeModule
+name: RuneScapeModule</code></p>
+<p>The RuneScapeModule.java file below is an example of the Module class, which also implements EventListener so I can listen for events</p>
+<p>[code=java]package runescape;</p>
+<p>import runescape.rawhandlers.ConnectionRequestHandler;</p>
+<p>import com.game.event.EventHandler;<br>
+import com.game.event.EventListener;<br>
+import com.game.event.EventPriority;<br>
+import com.game.event.events.SessionConnectEvent;<br>
+import com.module.Module;</p>
+<p>/**</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Albert Beaupre<br>
+*/<br>
+public class RuneScapeModule extends Module implements EventListener {</p>
+<p><span class="mention">@EventHandler</span>(priority = EventPriority.MAXIMUM)<br>
+public void onSessionConnect(SessionConnectEvent event) {<br>
+/**<br>
+* Listens for any session connections<br>
+*/</p>
+<pre><code> /**
+  * Checks if the session of the event is being established (connecting)
+  */
+ if (event.isEstablishing())
+ 	event.getSession().setHandler(new ConnectionRequestHandler()); //sets the message handler of the session to the ConnectionRequestHandler class
+</code></pre>
+<p>}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+protected void load() throws Exception {<br>
+/**<br>
+* This method is automatically called when this module is loaded by the core<br>
+*/</p>
+<pre><code> this.register(); //registers this event listener for the core to have this class listen for events
+</code></pre>
+<p>}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+protected void unload() throws Exception {<br>
+/**<br>
+* This method is automatically called when this module is unloaded by the core<br>
+*/<br>
+this.unregister(); //unregisters this event listener from the core so it does not listen for events anymore<br>
+}</p>
+</li>
+</ul>
+<p>}[/code]</p>
+<p>The ConnectionRequestHandler.java class below implements the MessageHandler class, which is a class Session from the Core project uses to decode messages received from the client and can be set to different types of MessageHandler classes if need-be and shows a small example of how easy it is to decode messages from a RuneScape client (although a message encoding/decoding design still needs to be implemented).</p>
+<p>[code=java]package runescape.rawhandlers;</p>
+<p>import java.nio.ByteBuffer;</p>
+<p>import com.network.Session;<br>
+import com.network.message.MessageHandler;</p>
+<p>public class ConnectionRequestHandler implements MessageHandler {</p>
+<pre><code>static final int REVISION = 637;
+static final int JS5_REQUEST_ID = 15;
+static final int LOGIN_REQUEST_ID = 14;
+
+@Override
+public void decode(Session session, ByteBuffer buffer) throws Exception {
+	int requestId = buffer.get();
+	switch (requestId) {
+	case JS5_REQUEST_ID:
+		int revision = buffer.getInt();
+		ByteBuffer response = ByteBuffer.allocate(1);
+
+		if (revision != REVISION) {
+			response.put((byte) 6);
+		} else {
+			int[] responseData = { 56, 79325, 55568, 46770, 24563, 299978, 44375, 0, 4176, 3589, 109125, 604031, 176138, 292288, 350498, 686783, 18008, 20836, 16339, 1244, 8142, 743, 119, 699632, 932831, 3931, 2974 };
+
+			response = ByteBuffer.allocate(1 + (4 * responseData.length));
+			response.put((byte) 0);
+			for (int data : responseData)
+				response.putInt(data);
+		}
+		session.encode(response);
+		break;
+	}
+	switch (requestId) {
+	case LOGIN_REQUEST_ID:
+		session.encode(ByteBuffer.wrap(new byte[] { 0 })).setHandler(new LoginRequestHandler());
+		break;
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>The LoginRequestHandler.java class is a MessageHandler implementation that a Session changes to when the ConnectionRequestHandler recieves a request ID of 14</p>
+<p>[code=java]package runescape.rawhandlers;</p>
+<p>import java.io.IOException;<br>
+import java.nio.ByteBuffer;</p>
+<p>import com.network.Session;<br>
+import com.network.message.MessageHandler;</p>
+<p>public class LoginRequestHandler implements MessageHandler {</p>
+<pre><code>@Override
+public void decode(Session session, ByteBuffer buffer) throws Exception {
+	if (buffer.remaining() &gt;= 3) {
+		int state = buffer.get() &amp; 0xFF;
+		int packetSize = buffer.getShort() &amp; 0xFFFF;
+		if (packetSize != buffer.remaining())
+			throw new IOException("Mismatched login packet size.");
+
+		int revision = buffer.getInt();
+		System.out.printf("state=%s, revision=%s", state, revision);
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>I would like for content creation to be as simple as this in the future, which should be EXTREMELY easy to be honest.</p>
+<p><code>
+	void runScript() {
+		teleport(3222, 3222, 0); //teleports the script owner to 3222, 3222, 0
+		wait(2); //waits 1 tick before the script continues
+		animate(2222); // the script owner animates a thinking animation, but I don't think 2222 is the right one :/
+		forceTalk("Huh...Where am I?"); //forces the script owner to force chat the specified string
+		wait(3);
+		walk(3200, 3200); //walks the script owner to 3200, 3200 and pauses the script until the script owner reaches the end of the path
+		//And so on...
+		NPC nearby = getNearby(NPC.class, 10).get(0); //retrieves a list of nearby entities within a radius of 10 instancing NPC and gets the first element in the list
+		boolean lookingForEnemies = nearby != null;
+		while (!(lookingForEnemies = (nearby = (getNearby(NPC.class, 10).get(0) != null))))
+			walk(3222 + random(100), 3222 + random(100)); //walks the script owner to a random location if there are no nearby enemies
+	}</code></p>
+<p>[hr]<br>
+<span class="bbcode-b">I would like some thoughts and suggestions on all of this from you guys <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></span><br>
+[hr]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/simplicity-for-servers/554578/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/simplicity-for-servers/554578/1</link>
+        <pubDate>Fri, 29 Jan 2016 00:42:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554578-1</guid>
+        <source url="https://forum.moparisthebest.com/t/simplicity-for-servers/554578.rss">Simplicity for servers</source>
+      </item>
+  </channel>
+</rss>

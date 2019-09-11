@@ -1,0 +1,1283 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[SOLVED] Problem with dynamic loading</title>
+    <link>https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878</link>
+    <description>EDIT: Problem solved.
+As I suspected, I wasn&#39;t building the main executable right. Nothing wrong with my code at all.
+I built the shared object code as position independent, but didn&#39;t build the main executable with the --export-dynamic flag. Doing so solved the problem.
+
+For anyone else who has the problem, build your main executable with -Wl,--export-dynamic and be sure to build modules as position independent code with -fPIC.
+
+The original question is below.
+
+[hr]
+
+I&#39;ve been working on an application in C. It utilises dynamic loading of shared objects as plugins.
+
+Anyway, at runtime it is producing this error:
+&lt;blockquote&gt;src/protocols/508.so: undefined symbol: discard_handler&lt;/blockquote&gt;
+
+The discard_handler function can be found in the packet_decoder files. Basically I need to know why my dynamically loaded code can&#39;t access functions that are part of the main application at runtime.
+
+Thanks for the help, all of the code is below.
+
+module_loader.h
+[code=c]
+#ifndef INCLUDED_MODULE_LOADER_H
+#define INCLUDED_MODULE_LOADER_H
+
+#include &lt;dirent.h&gt;
+#include &lt;dlfcn.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int load_modules(char *module_dir);
+int unload_modules();
+int load_module(char *module_dir, char *module_name);
+int unload_module(char *module_name);
+
+#endif /* INCLUDED_MODULE_LOADER_H */
+[/code]
+
+module_loader.c
+[code=c]
+#include &quot;module_loader.h&quot;
+
+/*
+ * Loads all of the modules in the provided directory.
+ * Returns 1 on success or zero on failure.
+ */
+int
+load_modules(char *module_dir)
+{
+  DIR *dir;
+  struct dirent *ent;
+  void *handle;
+  int (*fn)();
+  char *error;
+  int len;
+  int load_result;
+  char *mod_loc;
+
+  dir = opendir(module_dir);
+  if (dir == NULL) {
+    printf(&quot;load_modules() failed to open directory\n&quot;);
+    exit(EXIT_FAILURE);
+  }
+
+  /*
+   * If the filename contains .so then we attempt
+   * to load it as a plugin.
+   */
+  while ((ent = readdir(dir)) != NULL) {
+    char *c = strstr(ent-&gt;d_name, &quot;.so&quot;);
+    if (c != NULL) {
+      len = strlen(module_dir) + strlen(ent-&gt;d_name) + 1;
+      mod_loc = (char *) malloc(len);
+      strcat(mod_loc, module_dir);
+      strcat(mod_loc, ent-&gt;d_name);
+
+      handle = dlopen(mod_loc, RTLD_NOW);
+      free(mod_loc);
+      if (!handle) {
+        printf(&quot;Failed open: %s. Could not load module %s\n&quot;, 
+                dlerror(), ent-&gt;d_name);
+        return 0;
+      }
+
+      fn = dlsym(handle, &quot;module_init&quot;);
+      if ((error = dlerror()) != NULL) {
+        printf(&quot;Failed symbol search: %s. Could not load module %s\n&quot;, 
+                error, ent-&gt;d_name);
+        return 0;
+      }
+
+      load_result = (*fn)();
+      if (!load_result) {
+        printf(&quot;Failed to load module %s\n&quot;, ent-&gt;d_name);
+        return 0;
+      }
+
+      printf(&quot;Loaded module: %s\n&quot;, ent-&gt;d_name);
+      dlclose(handle); /* Cleanup, temporary only */
+    }
+  }
+  closedir(dir);
+  return 1;
+}
+
+int 
+unload_modules()
+{
+  return 1;
+}
+
+int 
+load_module(char *module_dir, char *module_name)
+{
+  void *handle;
+  int (*fn)();
+  int load_result;
+  char *error;
+  char full_module_name[100];
+
+  memset(full_module_name, &#39;\0&#39;, 100);
+  strcat(full_module_name, module_dir);
+  strcat(full_module_name, module_name);
+  strcat(full_module_name, &quot;.so&quot;);
+
+  handle = dlopen(full_module_name, RTLD_NOW);
+  if (!handle) {
+    printf(&quot;1. %s\n&quot;, dlerror());
+    return 0;
+  }
+
+  fn = dlsym(handle, &quot;module_init&quot;);
+  if ((error = dlerror()) != NULL) {
+    printf(&quot;2. %s\n&quot;, error);
+    return 0;
+  }
+
+  load_result = (*fn)();
+  if (!load_result) {
+    printf(&quot;Failed to load module %s\n&quot;, module_name);
+    return 0;
+  }
+
+  dlclose(handle); /* Cleanup, temporary only */
+  return 1;
+}
+
+int 
+unload_module(char *module_name)
+{
+  return 1;
+}
+[/code]
+
+packet_decoder.h
+[code=c]
+#ifndef INCLUDED_PACKETDECODER_H
+#define INCLUDED_PACKETDECODER_H
+
+#include &lt;event2/bufferevent.h&gt;
+#include &lt;event2/buffer.h&gt;
+
+#define PACKET_DECODER_TAB_SIZE 256
+
+struct packet_decoder {
+  char *name;
+  int (*handler_func)(struct bufferevent *bev, int opcode, int packet_size, void *arg);
+};
+
+struct packet_decoder *packet_decoder_table;
+int *packet_sizes;
+
+extern char read_byte(struct bufferevent *bev);
+extern short read_short(struct bufferevent *bev);
+extern int read_int(struct bufferevent *bev);
+extern long long read_long(struct bufferevent *bev);
+
+extern void set_packet_decoder_table(struct packet_decoder *table);
+extern void set_packet_sizes_table(int *packet_sizes);
+
+extern int discard_handler(struct bufferevent *bev, int opcode, int packet_size, void *arg);
+
+
+#endif /* INCLUDED_PACKETDECODER_H */
+[/code]
+
+packet_decoder.c
+[code=c]
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+#include &quot;packet_decoder.h&quot;
+
+char
+read_byte(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  char value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 1);
+  value = *mem;
+  evbuffer_drain(input, 1);
+  return value;
+}
+
+short
+read_short(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  int value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 2);
+  value = mem[0] &lt;&lt; 8;
+  value |= mem[1];
+  evbuffer_drain(input, 2);
+  return value;
+}
+
+int
+read_int(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  int value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 4);
+  value = mem[0] &lt;&lt; 24;
+  value |= mem[1] &lt;&lt; 16;
+  value |= mem[2] &lt;&lt; 8;
+  value |= mem[3];
+  evbuffer_drain(input, 4);
+  return value;
+}
+
+long long
+read_long(struct bufferevent *bev)
+{
+  long long value;
+
+  value = read_int(bev);
+  value &lt;&lt;= 32;
+  value |= read_int(bev);
+  return value;
+}
+
+void
+set_packet_decoder_table(struct packet_decoder *table)
+{
+  if (table == NULL) {
+    fprintf(stderr, &quot;NULL packet decoder table specified\n&quot;);
+    exit(EXIT_FAILURE);
+  }
+
+  packet_decoder_table = table;
+}
+
+int
+discard_handler(struct bufferevent *bev, int opcode, int packet_size, void *arg)
+{
+  return 1;
+}
+[/code]
+
+And finally, a shared object:
+[code=c]
+#include &lt;stdio.h&gt;
+
+#include &quot;packet_decoder.h&quot;
+
+int packet_sizes_508[] = {
+  -3, -3, 8, 8, -3, -3, -3, 2, -3, -3,       /* 0 - 9 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, -3,    /* 10 - 19 */
+  -3, 6, 4, -3, 8, -3, -3, -3, -3, -3,       /* 20 - 29 */
+  8, -3, -3, -3, -3, -3, -3, 2, 2, -3,       /* 30 - 39 */
+  16, -3, -3, 4, -3, -3, -3, 0, -3, -1,      /* 40 - 49 */
+  -3, -3, 2, -3, -3, -3, -3, -3, -3, 6,      /* 50 - 59 */
+  0, 8, -3, 6, -3, -3, -3, -3, -3, -3,       /* 60 - 69 */
+  8, -3, -3, -3, -3, -3, -3, -3, -3, -3,     /* 70 - 79 */
+  -3, -3, -3, -3, 2, -3, -3, -3, 2, -3,      /* 80 - 89 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, 4,     /* 90 - 99 */
+  -3, -3, -3, -3, -3, -3, -3, -1, 0, -3,     /* 100 - 109 */
+  -3, -3, -3, 4, -3, 0, -3, -1, -3, -1,      /* 110 - 119 */
+  -3, -3, -3, 2, -3, -3, -3, -3, -3, -3,     /* 120 - 129 */
+  -3, -3, 8, -3, -3, -3, -3, -3, -1, -3,     /* 130 - 139 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, -3,    /* 140 - 149 */
+  -3, -3, -3, -3, -3, -3, -3, -3, 6, -3,     /* 150 - 159 */
+  2, -3, -3, -3, -3, 4, -3, 9, -3, 6,        /* 160 - 169 */
+  -3, -3, -3, 6, -3, -3, -3, -3, -1, 12,     /* 170 - 179 */
+  -3, -3, -3, -3, -3, -3, 8, -3, -3, -3,     /* 180 - 189 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, 2,     /* 190 - 199 */
+  -3, 6, -3, 8, -3, -3, -3, -3, -3, -3,      /* 200 - 209 */
+  -3, 8, 6, -3, 6, -3, -3, -3, -3, -3,       /* 210 - 219 */
+  8, -3, -1, -3, 14, -3, -3, 2, 6, -3,       /* 220 - 229 */
+  -3, -3, 6, 6, -3, -3, -3, -3, -3, -3,      /* 230 - 239 */
+  -3, -3, -3, -3, -3, -3, -3, 4, 1, -3,      /* 240 - 249 */
+  4, -3, -3, 2, -3, -3                       /* 250 - 255 */
+};
+
+struct packet_decoder packet_decoder_508[] = {
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+  {&quot;0&quot;, discard_handler},
+};
+
+int
+module_init()
+{
+  set_packet_sizes_table(packet_sizes_508);
+  printf(&quot;508 module has been initialised!\n&quot;);
+  return 1;
+}
+[/code]</description>
+    
+    <lastBuildDate>Sat, 19 Feb 2011 08:57:35 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[SOLVED] Problem with dynamic loading</title>
+        <dc:creator><![CDATA[@Evil1 Evil_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evil1">@Evil1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“abraham2119, post:2, topic:382878”]rofl it doesn’t work that way mate, you have to dynamically get the address of the function you want to invoke[/quote]I’m pretty sure that’s what dlsym is for.</p>
+<p>[quote=“man-pages”]   dlsym()<br>
+The  function  dlsym()  takes  a  “handle”  of a dynamic library returned by dlopen() and the null-terminated symbol name, returning the address where that symbol is<br>
+loaded into memory.  If the symbol is not found, in the specified library or any of the libraries that were automatically loaded by dlopen() when  that  library  was<br>
+loaded,  dlsym()  returns  NULL.   (The  search performed by dlsym() is breadth first through the dependency tree of these libraries.)  Since the value of the symbol<br>
+could actually be NULL (so that a NULL return from dlsym() need not indicate an error), the correct way to test for an error is to call dlerror() to  clear  any  old<br>
+error conditions, then call dlsym(), and then call dlerror() again, saving its return value into a variable, and check whether this saved value is not NULL.</p>
+<pre><code>   There  are  two special pseudo-handles, RTLD_DEFAULT and RTLD_NEXT.  The former will find the first occurrence of the desired symbol using the default library search
+   order.  The latter will find the next occurrence of a function in the search order after the current library.  This allows one to provide a wrapper around a function
+   in another shared library.[/quote]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/4</link>
+        <pubDate>Sat, 19 Feb 2011 08:57:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-382878-4</guid>
+        <source url="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878.rss">[SOLVED] Problem with dynamic loading</source>
+      </item>
+      <item>
+        <title>[SOLVED] Problem with dynamic loading</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>How come Anope modules, as just one of many examples, work though?<br>
+I load my modules in precisely the same fashion that they do (however their code supports cross-platform dynamic loading whereas mine does not).</p>
+<p>Here’s one of the shorter anope modules, which clearly shows calls to functions declared in the modules.h header file:</p>
+<pre><code class="lang-auto">/* BotServ core fantasy functions
+ *
+ * (C) 2003-2010 Anope Team
+ * Contact us at team@anope.org
+ *
+ * Please read COPYING and README for further details.
+ *
+ * Based on the original code of Epona by Lara.
+ * Based on the original code of Services by Andy Church. 
+ * 
+ *
+ */
+/*************************************************************************/
+
+#include "module.h"
+
+int do_fantasy(int argc, char **argv);
+
+/**
+ * Create the hook, and tell anope about it.
+ * @param argc Argument count
+ * @param argv Argument list
+ * @return MOD_CONT to allow the module, MOD_STOP to stop it
+ **/
+int AnopeInit(int argc, char **argv)
+{
+    EvtHook *hook;
+
+    moduleAddAuthor("Anope");
+    moduleAddVersion
+        (VERSION_STRING);
+    moduleSetType(CORE);
+
+    hook = createEventHook(EVENT_BOT_FANTASY, do_fantasy);
+    moduleAddEventHook(hook);
+
+    return MOD_CONT;
+}
+
+/**
+ * Unload the module
+ **/
+void AnopeFini(void)
+{
+
+}
+
+/**
+ * Handle unban fantasy command.
+ * @param argc Argument count
+ * @param argv Argument list
+ * @return MOD_CONT or MOD_STOP
+ **/
+int do_fantasy(int argc, char **argv)
+{
+    User *u;
+    ChannelInfo *ci;
+    char *target = NULL;
+
+    if (argc &lt; 3)
+        return MOD_CONT;
+
+    if (stricmp(argv[0], "unban") == 0) {
+        u = finduser(argv[1]);
+        ci = cs_findchan(argv[2]);
+        if (!u || !ci || !check_access(u, ci, CA_UNBAN))
+            return MOD_CONT;
+
+        if (argc &gt;= 4)
+            target = myStrGetToken(argv[3], ' ', 0);
+        if (!target)
+            common_unban(ci, u-&gt;nick);
+        else
+            common_unban(ci, target);
+
+        /* free target if needed (#852) */
+        Anope_Free(target);
+    }
+
+    return MOD_CONT;
+}</code></pre>
+<p>EDIT: Okay, I’ve solved the problem now. As I suspected, I wasn’t building the main executable right.<br>
+So yeah, I built the shared object code as position independent, but didn’t build the main executable with the --export-dynamic flag – doing so solved the problem.</p>
+<p>For anyone else who has the problem, build your main executable with -Wl,–export-dynamic and be sure to build modules with -fPIC.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/3</link>
+        <pubDate>Fri, 18 Feb 2011 07:16:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-382878-3</guid>
+        <source url="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878.rss">[SOLVED] Problem with dynamic loading</source>
+      </item>
+      <item>
+        <title>[SOLVED] Problem with dynamic loading</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>rofl it doesn’t work that way mate, you have to dynamically get the address of the function you want to invoke</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/2</link>
+        <pubDate>Fri, 18 Feb 2011 04:05:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-382878-2</guid>
+        <source url="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878.rss">[SOLVED] Problem with dynamic loading</source>
+      </item>
+      <item>
+        <title>[SOLVED] Problem with dynamic loading</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>EDIT: Problem solved.<br>
+As I suspected, I wasn’t building the main executable right. Nothing wrong with my code at all.<br>
+I built the shared object code as position independent, but didn’t build the main executable with the --export-dynamic flag. Doing so solved the problem.</p>
+<p>For anyone else who has the problem, build your main executable with -Wl,–export-dynamic and be sure to build modules as position independent code with -fPIC.</p>
+<p>The original question is below.</p>
+<p>[hr]</p>
+<p>I’ve been working on an application in C. It utilises dynamic loading of shared objects as plugins.</p>
+<p>Anyway, at runtime it is producing this error:</p>
+<blockquote>src/protocols/508.so: undefined symbol: discard_handler</blockquote>
+<p>The discard_handler function can be found in the packet_decoder files. Basically I need to know why my dynamically loaded code can’t access functions that are part of the main application at runtime.</p>
+<p>Thanks for the help, all of the code is below.</p>
+<p>module_loader.h</p>
+<pre><code class="lang-auto">#ifndef INCLUDED_MODULE_LOADER_H
+#define INCLUDED_MODULE_LOADER_H
+
+#include &lt;dirent.h&gt;
+#include &lt;dlfcn.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int load_modules(char *module_dir);
+int unload_modules();
+int load_module(char *module_dir, char *module_name);
+int unload_module(char *module_name);
+
+#endif /* INCLUDED_MODULE_LOADER_H */</code></pre>
+<p>module_loader.c</p>
+<pre><code class="lang-auto">#include "module_loader.h"
+
+/*
+ * Loads all of the modules in the provided directory.
+ * Returns 1 on success or zero on failure.
+ */
+int
+load_modules(char *module_dir)
+{
+  DIR *dir;
+  struct dirent *ent;
+  void *handle;
+  int (*fn)();
+  char *error;
+  int len;
+  int load_result;
+  char *mod_loc;
+
+  dir = opendir(module_dir);
+  if (dir == NULL) {
+    printf("load_modules() failed to open directory\n");
+    exit(EXIT_FAILURE);
+  }
+
+  /*
+   * If the filename contains .so then we attempt
+   * to load it as a plugin.
+   */
+  while ((ent = readdir(dir)) != NULL) {
+    char *c = strstr(ent-&gt;d_name, ".so");
+    if (c != NULL) {
+      len = strlen(module_dir) + strlen(ent-&gt;d_name) + 1;
+      mod_loc = (char *) malloc(len);
+      strcat(mod_loc, module_dir);
+      strcat(mod_loc, ent-&gt;d_name);
+
+      handle = dlopen(mod_loc, RTLD_NOW);
+      free(mod_loc);
+      if (!handle) {
+        printf("Failed open: %s. Could not load module %s\n", 
+                dlerror(), ent-&gt;d_name);
+        return 0;
+      }
+
+      fn = dlsym(handle, "module_init");
+      if ((error = dlerror()) != NULL) {
+        printf("Failed symbol search: %s. Could not load module %s\n", 
+                error, ent-&gt;d_name);
+        return 0;
+      }
+
+      load_result = (*fn)();
+      if (!load_result) {
+        printf("Failed to load module %s\n", ent-&gt;d_name);
+        return 0;
+      }
+
+      printf("Loaded module: %s\n", ent-&gt;d_name);
+      dlclose(handle); /* Cleanup, temporary only */
+    }
+  }
+  closedir(dir);
+  return 1;
+}
+
+int 
+unload_modules()
+{
+  return 1;
+}
+
+int 
+load_module(char *module_dir, char *module_name)
+{
+  void *handle;
+  int (*fn)();
+  int load_result;
+  char *error;
+  char full_module_name[100];
+
+  memset(full_module_name, '\0', 100);
+  strcat(full_module_name, module_dir);
+  strcat(full_module_name, module_name);
+  strcat(full_module_name, ".so");
+
+  handle = dlopen(full_module_name, RTLD_NOW);
+  if (!handle) {
+    printf("1. %s\n", dlerror());
+    return 0;
+  }
+
+  fn = dlsym(handle, "module_init");
+  if ((error = dlerror()) != NULL) {
+    printf("2. %s\n", error);
+    return 0;
+  }
+
+  load_result = (*fn)();
+  if (!load_result) {
+    printf("Failed to load module %s\n", module_name);
+    return 0;
+  }
+
+  dlclose(handle); /* Cleanup, temporary only */
+  return 1;
+}
+
+int 
+unload_module(char *module_name)
+{
+  return 1;
+}</code></pre>
+<p>packet_decoder.h</p>
+<pre><code class="lang-auto">#ifndef INCLUDED_PACKETDECODER_H
+#define INCLUDED_PACKETDECODER_H
+
+#include &lt;event2/bufferevent.h&gt;
+#include &lt;event2/buffer.h&gt;
+
+#define PACKET_DECODER_TAB_SIZE 256
+
+struct packet_decoder {
+  char *name;
+  int (*handler_func)(struct bufferevent *bev, int opcode, int packet_size, void *arg);
+};
+
+struct packet_decoder *packet_decoder_table;
+int *packet_sizes;
+
+extern char read_byte(struct bufferevent *bev);
+extern short read_short(struct bufferevent *bev);
+extern int read_int(struct bufferevent *bev);
+extern long long read_long(struct bufferevent *bev);
+
+extern void set_packet_decoder_table(struct packet_decoder *table);
+extern void set_packet_sizes_table(int *packet_sizes);
+
+extern int discard_handler(struct bufferevent *bev, int opcode, int packet_size, void *arg);
+
+
+#endif /* INCLUDED_PACKETDECODER_H */</code></pre>
+<p>packet_decoder.c</p>
+<pre><code class="lang-auto">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+#include "packet_decoder.h"
+
+char
+read_byte(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  char value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 1);
+  value = *mem;
+  evbuffer_drain(input, 1);
+  return value;
+}
+
+short
+read_short(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  int value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 2);
+  value = mem[0] &lt;&lt; 8;
+  value |= mem[1];
+  evbuffer_drain(input, 2);
+  return value;
+}
+
+int
+read_int(struct bufferevent *bev)
+{
+  struct evbuffer *input;
+  unsigned char *mem;
+  int value;
+
+  input = bufferevent_get_input(bev);
+  mem = evbuffer_pullup(input, 4);
+  value = mem[0] &lt;&lt; 24;
+  value |= mem[1] &lt;&lt; 16;
+  value |= mem[2] &lt;&lt; 8;
+  value |= mem[3];
+  evbuffer_drain(input, 4);
+  return value;
+}
+
+long long
+read_long(struct bufferevent *bev)
+{
+  long long value;
+
+  value = read_int(bev);
+  value &lt;&lt;= 32;
+  value |= read_int(bev);
+  return value;
+}
+
+void
+set_packet_decoder_table(struct packet_decoder *table)
+{
+  if (table == NULL) {
+    fprintf(stderr, "NULL packet decoder table specified\n");
+    exit(EXIT_FAILURE);
+  }
+
+  packet_decoder_table = table;
+}
+
+int
+discard_handler(struct bufferevent *bev, int opcode, int packet_size, void *arg)
+{
+  return 1;
+}</code></pre>
+<p>And finally, a shared object:</p>
+<pre><code class="lang-auto">#include &lt;stdio.h&gt;
+
+#include "packet_decoder.h"
+
+int packet_sizes_508[] = {
+  -3, -3, 8, 8, -3, -3, -3, 2, -3, -3,       /* 0 - 9 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, -3,    /* 10 - 19 */
+  -3, 6, 4, -3, 8, -3, -3, -3, -3, -3,       /* 20 - 29 */
+  8, -3, -3, -3, -3, -3, -3, 2, 2, -3,       /* 30 - 39 */
+  16, -3, -3, 4, -3, -3, -3, 0, -3, -1,      /* 40 - 49 */
+  -3, -3, 2, -3, -3, -3, -3, -3, -3, 6,      /* 50 - 59 */
+  0, 8, -3, 6, -3, -3, -3, -3, -3, -3,       /* 60 - 69 */
+  8, -3, -3, -3, -3, -3, -3, -3, -3, -3,     /* 70 - 79 */
+  -3, -3, -3, -3, 2, -3, -3, -3, 2, -3,      /* 80 - 89 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, 4,     /* 90 - 99 */
+  -3, -3, -3, -3, -3, -3, -3, -1, 0, -3,     /* 100 - 109 */
+  -3, -3, -3, 4, -3, 0, -3, -1, -3, -1,      /* 110 - 119 */
+  -3, -3, -3, 2, -3, -3, -3, -3, -3, -3,     /* 120 - 129 */
+  -3, -3, 8, -3, -3, -3, -3, -3, -1, -3,     /* 130 - 139 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, -3,    /* 140 - 149 */
+  -3, -3, -3, -3, -3, -3, -3, -3, 6, -3,     /* 150 - 159 */
+  2, -3, -3, -3, -3, 4, -3, 9, -3, 6,        /* 160 - 169 */
+  -3, -3, -3, 6, -3, -3, -3, -3, -1, 12,     /* 170 - 179 */
+  -3, -3, -3, -3, -3, -3, 8, -3, -3, -3,     /* 180 - 189 */
+  -3, -3, -3, -3, -3, -3, -3, -3, -3, 2,     /* 190 - 199 */
+  -3, 6, -3, 8, -3, -3, -3, -3, -3, -3,      /* 200 - 209 */
+  -3, 8, 6, -3, 6, -3, -3, -3, -3, -3,       /* 210 - 219 */
+  8, -3, -1, -3, 14, -3, -3, 2, 6, -3,       /* 220 - 229 */
+  -3, -3, 6, 6, -3, -3, -3, -3, -3, -3,      /* 230 - 239 */
+  -3, -3, -3, -3, -3, -3, -3, 4, 1, -3,      /* 240 - 249 */
+  4, -3, -3, 2, -3, -3                       /* 250 - 255 */
+};
+
+struct packet_decoder packet_decoder_508[] = {
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+  {"0", discard_handler},
+};
+
+int
+module_init()
+{
+  set_packet_sizes_table(packet_sizes_508);
+  printf("508 module has been initialised!\n");
+  return 1;
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878/1</link>
+        <pubDate>Fri, 18 Feb 2011 01:13:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-382878-1</guid>
+        <source url="https://forum.moparisthebest.com/t/solved-problem-with-dynamic-loading/382878.rss">[SOLVED] Problem with dynamic loading</source>
+      </item>
+  </channel>
+</rss>

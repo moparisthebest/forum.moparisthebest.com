@@ -1,0 +1,725 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>LinkageError: attempted duplicate class definition</title>
+    <link>https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181</link>
+    <description>I am getting the following error:
+&lt;blockquote&gt;Exception in thread &quot;main&quot; java.lang.LinkageError: loader (instance of  net/telenubby/cmd/RegisteredCommands$1): attempted  duplicate class definition for name: &quot;module/telenubby/cmd/IRCBridge&quot;
+	at java.lang.ClassLoader.defineClass1(Native Method)
+	at java.lang.ClassLoader.defineClass(Unknown Source)
+	at java.lang.ClassLoader.defineClass(Unknown Source)
+	at net.telenubby.cmd.RegisteredCommands$1.loadClass(RegisteredCommands.java:34)
+	at net.telenubby.cmd.RegisteredCommands.load(RegisteredCommands.java:86)&lt;/blockquote&gt;
+
+I&#39;m pretty sure I have the basic idea on what the error message indicates; however, it also seems to me that there are no duplicates at all. I&#39;m a little dumb-struck at the moment, anybody mind helping out?
+
+Basically, what I have is a system which loads &#39;plugins&#39;/&#39;modules&#39; that perform certain actions when needed (such as scripts would, etc.). How these are loaded:
+[code]
+package net.telenubby.cmd;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.ArrayList;
+
+import net.telenubby.crypt.Hexadecimal;
+
+/**
+ * @author TeleNubby
+ */
+@SuppressWarnings(&quot;unchecked&quot;)
+public class RegisteredCommands 
+{
+	
+	private static ArrayList&lt;Command&gt; loaded;
+	
+	public static void loadDatabase()
+	{
+		File plugDir = new File(&quot;bin/module/telenubby/cmd/&quot;);
+		File[] plugIns = plugDir.listFiles();
+		ClassLoader myLoader = new ClassLoader()
+		{
+			public Class&lt;?&gt; loadClass(String name) throws ClassNotFoundException
+			{
+				try 
+				{
+					return findSystemClass(name);
+				} 
+				catch(ClassNotFoundException cnfe2) 
+				{
+					byte[] b = getBytes(new File(name));
+					if(b != null) 
+						return defineClass(replace5C(name.substring(4, name.length()-6)), b, 0, b.length);
+					return super.loadClass(name);
+				}
+			}
+		};
+		for(File f : plugIns)
+		{
+			System.out.println(f.toString());
+			if(!f.toString().endsWith(&quot;.class&quot;) || f.toString().contains(&quot;$&quot;))
+				continue;
+			load(f, myLoader);
+		}
+	}
+	
+	
+	public static ArrayList&lt;Command&gt; getLoaded()
+	{
+		return loaded;
+	}
+	
+	public static Command get(String command)
+	{
+		try
+		{
+			for(Command c : loaded)
+			{
+				if(c.getTrigger().equalsIgnoreCase(command))
+				{
+					return c;
+				}
+			}
+		}
+		catch(Exception e) { e.printStackTrace(); }
+		return null;
+	}
+	
+	public static boolean isRegistered(String command)
+	{
+		for(Command c : loaded)
+		{
+			if(c.getTrigger().equalsIgnoreCase(command))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	private static void load(File file, ClassLoader myLoader)
+	{
+		try
+		{
+			Command standBy = (Command)myLoader.loadClass(file.toString()).newInstance();
+			loaded.add(standBy);
+			System.out.println(&quot;Registered command: trigger=&#39;&quot;+standBy.getTrigger()+&quot;&#39;; flags=&#39;&quot;+standBy.getFlags()+&quot;&#39;; author=&#39;&quot;+standBy.getAuthor()+&quot;&#39;&quot;);
+		}
+		catch(Exception e)
+		{
+			System.out.println(&quot;Exception! Could not load Command &quot;+
+					&quot;(&quot;+file.getName()+&quot;)!&quot;); 
+		}
+	}
+	
+	private static String replace5C(String theName)
+	{
+		String hexName = Hexadecimal.stringToHex(theName);
+		StringBuilder newHexString = new StringBuilder();
+		for(int i = 0; i &lt; hexName.length(); i += 2)
+		{
+			String hexSub = hexName.substring(i, i+2);
+			if(hexSub.equals(&quot;5C&quot;))
+				hexSub = &quot;2E&quot;;
+			newHexString.append(hexSub);
+		}
+		String newString = Hexadecimal.hexToString(newHexString.toString());
+		return newString;
+	}
+
+	private static byte[] getBytes(File theFile)
+	{
+		byte[] fileBuffer = null;
+		try 
+		{
+			FileInputStream inStream = new FileInputStream(theFile);
+			fileBuffer = new byte[inStream.available()];
+			inStream.read(fileBuffer, 0, fileBuffer.length);
+			inStream.close();
+		} 
+		catch (Exception e) { e.printStackTrace(); }
+		return fileBuffer;
+	}
+	
+	static
+	{
+		loaded = new ArrayList&lt;Command&gt;();
+	}
+	
+}
+[/code]
+
+
+The problem lies within the following class (one of these &#39;plugins&#39; loaded on startup), because it only started occuring when I created an inner class within it:
+[code]
+package module.telenubby.cmd;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import net.telenubby.aim.user.Account;
+import net.telenubby.cmd.Command;
+import net.telenubby.irc.IRCConnection;
+import net.telenubby.irc.IRCException;
+import net.telenubby.irc.IRCListener;
+
+/**
+ * @author TeleNubby
+ */
+public class IRCBridge extends Command
+{
+
+	private HashMap&lt;String, IRCConnection&gt; ircDb;
+	
+	public IRCBridge()
+	{
+		ircDb = new HashMap&lt;String, IRCConnection&gt;();
+	}
+
+	public String getTrigger()
+	{
+		return &quot;irc&quot;;
+	}
+	
+	public String getDescription()
+	{
+		return &quot;Uses the running bot as a &#39;bridge&#39; relaying server-&gt;client and client-&gt;server information, successfully allowing users to chat on IRC servers.&quot;;
+	}
+
+	public String getAuthor()
+	{
+		return &quot;TeleNubby&quot;;
+	}
+	
+	public String getVersion()
+	{
+		return &quot;1.0&quot;;
+	}
+
+	public String getFlags()
+	{
+		return &quot;dsupc&quot;;
+	}
+	
+	public void onFlag(Account acc, char flag, String value)
+	{
+		if(!ircDb.containsKey(acc.getName()))
+			ircDb.put(acc.getName(), new IRCConnection());
+		IRCConnection irc = ircDb.get(acc.getName());
+		try
+		{
+			switch(flag)
+			{
+				case &#39;d&#39;:
+					if(irc.isConnected())
+					{
+						irc.close();
+						irc = null;
+						sendIM(acc.getName(), &quot;You have been disconnected from the IRC service.&quot;);
+					}
+					break;
+				case &#39;s&#39;:
+					irc.setPort(Integer.parseInt(value.substring(value.indexOf(&#39;:&#39;)+1)));
+					irc.setServer(value.substring(0, value.indexOf(&#39;:&#39;)));
+					break;
+				case &#39;u&#39;:	
+					irc.setUsername(value);
+					break;
+				case &#39;p&#39;:
+					irc.setPassword(value);
+					break;
+				case &#39;c&#39;:
+					irc.setChannel(value);
+					break;
+				default:
+					break;
+			}
+		}
+		catch(NumberFormatException nfe) { sendIM(acc.getName(), &quot;You must specify a port! (i.e. irc.server.com:6667)&quot;); }
+		catch(IOException ioe) { sendIM(acc.getName(), &quot;There was a problem closing the connection. Never opened? Accidental termination?&quot;); }
+	}
+	
+	public void init(Account acc)
+	{
+		try
+		{
+			IRCConnection irc = ircDb.get(acc.getName());
+			if(irc != null)
+			{
+				System.out.println(&quot;[&quot;+acc.getName()+&quot;] Connecting to &quot;+irc.getServer()+&quot;:&quot;+irc.getPort()+&quot; as part of the IRC service&quot;);
+				irc.setListener(new Listener(acc, irc));
+				irc.setVerbose(false);
+				irc.establish();
+			}
+		}
+		catch(IOException ioe) { sendIM(acc.getName(), &quot;There was a problem connecting to the IRC server.&quot;); }
+		catch(IRCException irce) 
+		{ 
+			if(irce.getMessage().contains(&quot;No listener&quot;))
+				sendIM(acc.getName(), &quot;An internal error had occurred; connection failed.&quot;); 
+			if(irce.getMessage().contains(&quot;Username not&quot;))
+				sendIM(acc.getName(), &quot;You must specify a username/nickname!&quot;);
+		}
+	}
+	
+	public class Listener implements IRCListener
+	{
+		
+		Account acc;
+		IRCConnection irc;
+		
+		public Listener(Account acc, IRCConnection irc)
+		{
+			this.acc = acc;
+			this.irc = irc;
+		}
+		
+		public void parseMessage(String message)
+		{
+			try
+			{
+				if(message.startsWith(&quot;PING&quot;))
+				{
+					irc.sendMessage(&quot;PONG &quot;+message.substring(6));
+				}
+				else if(message.startsWith(&quot;:&quot;))
+				{
+					Pattern thePttrn = Pattern.compile(&quot;:(.+?)!(.+?)@(.+?) (.+?) (#*.+?) :(.+)&quot;);
+					Matcher theMtchr = thePttrn.matcher(message);
+					if(theMtchr.find())
+					{
+						String nick = theMtchr.group(1);
+						String user = theMtchr.group(2);
+						String host = theMtchr.group(3);
+						String cmd = theMtchr.group(4);
+						String chan = theMtchr.group(5);
+						String msg = theMtchr.group(6);
+						if(cmd.equals(&quot;KICK&quot;) &amp;&amp; chan.endsWith(irc.getUsername()))
+						{
+							String kickedFrom = chan.substring(0, chan.indexOf(&quot; &quot;));
+							sendIM(acc.getName(), &quot;You have been kicked from &quot;+kickedFrom+&quot; and have been disconnected.&quot;);
+							irc.close();
+							irc = null;
+						}
+						else if(cmd.equals(&quot;PRIVMSG&quot;))
+						{
+							System.out.println(&quot;IRC -&gt; &quot;+nick+&quot;: &quot;+msg);
+							sendIM(acc.getName(), &quot;IRC -&gt; &quot;+nick+&quot;: &quot;+msg);
+						}
+					}
+					else
+					{
+						if(irc.getChannel() != null)
+						{
+							message = message.substring(1);
+							if(message.startsWith(irc.getUsername()))
+							{
+								String cmd = message.substring(irc.getUsername().length()+1);
+								if(cmd.startsWith(&quot;MODE&quot;))
+									irc.joinChannel(irc.getChannel());
+							}
+						}
+					}
+				}
+			}
+			catch(Exception e) { e.printStackTrace(); }
+		}
+		
+	}
+	
+}
+[/code]</description>
+    
+    <lastBuildDate>Sat, 10 Oct 2009 03:56:05 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>LinkageError: attempted duplicate class definition</title>
+        <dc:creator><![CDATA[@lesterknome lesterknome]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lesterknome">@lesterknome</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="2" data-topic="307181">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>chances are the classpath is bin</p>
+</blockquote>
+</aside>
+<p>What? i understood the rest of what you said but what do you mean by this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/4</link>
+        <pubDate>Sat, 10 Oct 2009 03:56:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307181-4</guid>
+        <source url="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181.rss">LinkageError: attempted duplicate class definition</source>
+      </item>
+      <item>
+        <title>LinkageError: attempted duplicate class definition</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>Got help over MSN. &lt;3 super.</p>
+<p>omg super ur da gr8st thx for da help rep++ m8</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/3</link>
+        <pubDate>Fri, 09 Oct 2009 00:47:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307181-3</guid>
+        <source url="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181.rss">LinkageError: attempted duplicate class definition</source>
+      </item>
+      <item>
+        <title>LinkageError: attempted duplicate class definition</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>chances are the classpath is bin and you are trying to redefine a class under module/telenubby/cmd which was already defined by the system classloader; instead of your classloader, you could just do Class.forName() seeing as they are in the classpath</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/2</link>
+        <pubDate>Fri, 09 Oct 2009 00:21:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307181-2</guid>
+        <source url="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181.rss">LinkageError: attempted duplicate class definition</source>
+      </item>
+      <item>
+        <title>LinkageError: attempted duplicate class definition</title>
+        <dc:creator><![CDATA[@TeleNubby TeleNubby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/telenubby">@TeleNubby</a> wrote:</p>
+          <blockquote>
+              <p>I am getting the following error:</p>
+<blockquote>Exception in thread "main" java.lang.LinkageError: loader (instance of  net/telenubby/cmd/RegisteredCommands$1): attempted  duplicate class definition for name: "module/telenubby/cmd/IRCBridge"
+	at java.lang.ClassLoader.defineClass1(Native Method)
+	at java.lang.ClassLoader.defineClass(Unknown Source)
+	at java.lang.ClassLoader.defineClass(Unknown Source)
+	at net.telenubby.cmd.RegisteredCommands$1.loadClass(RegisteredCommands.java:34)
+	at net.telenubby.cmd.RegisteredCommands.load(RegisteredCommands.java:86)</blockquote>
+<p>I’m pretty sure I have the basic idea on what the error message indicates; however, it also seems to me that there are no duplicates at all. I’m a little dumb-struck at the moment, anybody mind helping out?</p>
+<p>Basically, what I have is a system which loads ‘plugins’/‘modules’ that perform certain actions when needed (such as scripts would, etc.). How these are loaded:</p>
+<pre><code class="lang-auto">package net.telenubby.cmd;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.ArrayList;
+
+import net.telenubby.crypt.Hexadecimal;
+
+/**
+ * @author TeleNubby
+ */
+@SuppressWarnings("unchecked")
+public class RegisteredCommands 
+{
+	
+	private static ArrayList&lt;Command&gt; loaded;
+	
+	public static void loadDatabase()
+	{
+		File plugDir = new File("bin/module/telenubby/cmd/");
+		File[] plugIns = plugDir.listFiles();
+		ClassLoader myLoader = new ClassLoader()
+		{
+			public Class&lt;?&gt; loadClass(String name) throws ClassNotFoundException
+			{
+				try 
+				{
+					return findSystemClass(name);
+				} 
+				catch(ClassNotFoundException cnfe2) 
+				{
+					byte[] b = getBytes(new File(name));
+					if(b != null) 
+						return defineClass(replace5C(name.substring(4, name.length()-6)), b, 0, b.length);
+					return super.loadClass(name);
+				}
+			}
+		};
+		for(File f : plugIns)
+		{
+			System.out.println(f.toString());
+			if(!f.toString().endsWith(".class") || f.toString().contains("$"))
+				continue;
+			load(f, myLoader);
+		}
+	}
+	
+	
+	public static ArrayList&lt;Command&gt; getLoaded()
+	{
+		return loaded;
+	}
+	
+	public static Command get(String command)
+	{
+		try
+		{
+			for(Command c : loaded)
+			{
+				if(c.getTrigger().equalsIgnoreCase(command))
+				{
+					return c;
+				}
+			}
+		}
+		catch(Exception e) { e.printStackTrace(); }
+		return null;
+	}
+	
+	public static boolean isRegistered(String command)
+	{
+		for(Command c : loaded)
+		{
+			if(c.getTrigger().equalsIgnoreCase(command))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	private static void load(File file, ClassLoader myLoader)
+	{
+		try
+		{
+			Command standBy = (Command)myLoader.loadClass(file.toString()).newInstance();
+			loaded.add(standBy);
+			System.out.println("Registered command: trigger='"+standBy.getTrigger()+"'; flags='"+standBy.getFlags()+"'; author='"+standBy.getAuthor()+"'");
+		}
+		catch(Exception e)
+		{
+			System.out.println("Exception! Could not load Command "+
+					"("+file.getName()+")!"); 
+		}
+	}
+	
+	private static String replace5C(String theName)
+	{
+		String hexName = Hexadecimal.stringToHex(theName);
+		StringBuilder newHexString = new StringBuilder();
+		for(int i = 0; i &lt; hexName.length(); i += 2)
+		{
+			String hexSub = hexName.substring(i, i+2);
+			if(hexSub.equals("5C"))
+				hexSub = "2E";
+			newHexString.append(hexSub);
+		}
+		String newString = Hexadecimal.hexToString(newHexString.toString());
+		return newString;
+	}
+
+	private static byte[] getBytes(File theFile)
+	{
+		byte[] fileBuffer = null;
+		try 
+		{
+			FileInputStream inStream = new FileInputStream(theFile);
+			fileBuffer = new byte[inStream.available()];
+			inStream.read(fileBuffer, 0, fileBuffer.length);
+			inStream.close();
+		} 
+		catch (Exception e) { e.printStackTrace(); }
+		return fileBuffer;
+	}
+	
+	static
+	{
+		loaded = new ArrayList&lt;Command&gt;();
+	}
+	
+}</code></pre>
+<p>The problem lies within the following class (one of these ‘plugins’ loaded on startup), because it only started occuring when I created an inner class within it:</p>
+<pre><code class="lang-auto">package module.telenubby.cmd;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import net.telenubby.aim.user.Account;
+import net.telenubby.cmd.Command;
+import net.telenubby.irc.IRCConnection;
+import net.telenubby.irc.IRCException;
+import net.telenubby.irc.IRCListener;
+
+/**
+ * @author TeleNubby
+ */
+public class IRCBridge extends Command
+{
+
+	private HashMap&lt;String, IRCConnection&gt; ircDb;
+	
+	public IRCBridge()
+	{
+		ircDb = new HashMap&lt;String, IRCConnection&gt;();
+	}
+
+	public String getTrigger()
+	{
+		return "irc";
+	}
+	
+	public String getDescription()
+	{
+		return "Uses the running bot as a 'bridge' relaying server-&gt;client and client-&gt;server information, successfully allowing users to chat on IRC servers.";
+	}
+
+	public String getAuthor()
+	{
+		return "TeleNubby";
+	}
+	
+	public String getVersion()
+	{
+		return "1.0";
+	}
+
+	public String getFlags()
+	{
+		return "dsupc";
+	}
+	
+	public void onFlag(Account acc, char flag, String value)
+	{
+		if(!ircDb.containsKey(acc.getName()))
+			ircDb.put(acc.getName(), new IRCConnection());
+		IRCConnection irc = ircDb.get(acc.getName());
+		try
+		{
+			switch(flag)
+			{
+				case 'd':
+					if(irc.isConnected())
+					{
+						irc.close();
+						irc = null;
+						sendIM(acc.getName(), "You have been disconnected from the IRC service.");
+					}
+					break;
+				case 's':
+					irc.setPort(Integer.parseInt(value.substring(value.indexOf(':')+1)));
+					irc.setServer(value.substring(0, value.indexOf(':')));
+					break;
+				case 'u':	
+					irc.setUsername(value);
+					break;
+				case 'p':
+					irc.setPassword(value);
+					break;
+				case 'c':
+					irc.setChannel(value);
+					break;
+				default:
+					break;
+			}
+		}
+		catch(NumberFormatException nfe) { sendIM(acc.getName(), "You must specify a port! (i.e. irc.server.com:6667)"); }
+		catch(IOException ioe) { sendIM(acc.getName(), "There was a problem closing the connection. Never opened? Accidental termination?"); }
+	}
+	
+	public void init(Account acc)
+	{
+		try
+		{
+			IRCConnection irc = ircDb.get(acc.getName());
+			if(irc != null)
+			{
+				System.out.println("["+acc.getName()+"] Connecting to "+irc.getServer()+":"+irc.getPort()+" as part of the IRC service");
+				irc.setListener(new Listener(acc, irc));
+				irc.setVerbose(false);
+				irc.establish();
+			}
+		}
+		catch(IOException ioe) { sendIM(acc.getName(), "There was a problem connecting to the IRC server."); }
+		catch(IRCException irce) 
+		{ 
+			if(irce.getMessage().contains("No listener"))
+				sendIM(acc.getName(), "An internal error had occurred; connection failed."); 
+			if(irce.getMessage().contains("Username not"))
+				sendIM(acc.getName(), "You must specify a username/nickname!");
+		}
+	}
+	
+	public class Listener implements IRCListener
+	{
+		
+		Account acc;
+		IRCConnection irc;
+		
+		public Listener(Account acc, IRCConnection irc)
+		{
+			this.acc = acc;
+			this.irc = irc;
+		}
+		
+		public void parseMessage(String message)
+		{
+			try
+			{
+				if(message.startsWith("PING"))
+				{
+					irc.sendMessage("PONG "+message.substring(6));
+				}
+				else if(message.startsWith(":"))
+				{
+					Pattern thePttrn = Pattern.compile(":(.+?)!(.+?)@(.+?) (.+?) (#*.+?) :(.+)");
+					Matcher theMtchr = thePttrn.matcher(message);
+					if(theMtchr.find())
+					{
+						String nick = theMtchr.group(1);
+						String user = theMtchr.group(2);
+						String host = theMtchr.group(3);
+						String cmd = theMtchr.group(4);
+						String chan = theMtchr.group(5);
+						String msg = theMtchr.group(6);
+						if(cmd.equals("KICK") &amp;&amp; chan.endsWith(irc.getUsername()))
+						{
+							String kickedFrom = chan.substring(0, chan.indexOf(" "));
+							sendIM(acc.getName(), "You have been kicked from "+kickedFrom+" and have been disconnected.");
+							irc.close();
+							irc = null;
+						}
+						else if(cmd.equals("PRIVMSG"))
+						{
+							System.out.println("IRC -&gt; "+nick+": "+msg);
+							sendIM(acc.getName(), "IRC -&gt; "+nick+": "+msg);
+						}
+					}
+					else
+					{
+						if(irc.getChannel() != null)
+						{
+							message = message.substring(1);
+							if(message.startsWith(irc.getUsername()))
+							{
+								String cmd = message.substring(irc.getUsername().length()+1);
+								if(cmd.startsWith("MODE"))
+									irc.joinChannel(irc.getChannel());
+							}
+						}
+					}
+				}
+			}
+			catch(Exception e) { e.printStackTrace(); }
+		}
+		
+	}
+	
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181/1</link>
+        <pubDate>Thu, 08 Oct 2009 23:45:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-307181-1</guid>
+        <source url="https://forum.moparisthebest.com/t/linkageerror-attempted-duplicate-class-definition/307181.rss">LinkageError: attempted duplicate class definition</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,851 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Odd Auto cache downloader error</title>
+    <link>https://forum.moparisthebest.com/t/odd-auto-cache-downloader-error/555203</link>
+    <description>Hey Mopar,
+
+My auto cache downloader, downloads the cache to the user folder, but when trying to load up fully, rejects the background image.
+
+See Error
+[img]https://i.gyazo.com/9ae724bd0f8a866e59a907d2c7377828.png[/img]
+
+My cache downloader:
+[code]package org.ruse.client;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+/**
+ * Handles cache downloading
+ */
+public class CacheDownloader {
+	//Note for madara, convert www.dropbox.com to dl.dropboxusercontent.com and remove ?dl= off the end
+	private static final String CACHE_FILE_NAME = &quot;RuseCache.zip&quot;; //The name of the actual .zip file,
+	private static final String CACHE_URL = &quot;https://dl.dropboxusercontent.com/s/uetvcfyg0jm9c65/RuseCache.zip&quot;; //The url to the .zip file
+	private static final String NEWEST_VERSION_FILE_URL = &quot;https://dl.dropboxusercontent.com/s/elt3xlai6pwcejc/cacheVersion.txt&quot;; //The url to the current cache_versiont txt file
+	private static final String CURRENT_VERSION_FILE = &quot;cacheVersion.txt&quot;; //The location of the local cache_version txt file
+	//Below links are just the directory the images are in, not the images.zip 
+	public static final String URL_TO_LOADING_IMAGES = &quot;http://postmortem.comxa.com/&quot;; // make sure you log into 000webhost often or itll deactivate
+	public static final String MIRROR_URL_TO_LOADING_IMAGES = &quot;http://postmortem.comxa.com/&quot;; //If first link is broken, it will attempt to download from here
+	
+	public static boolean UPDATING = true;
+	
+	public static boolean updatedCache() {
+		try {
+			
+			double newest = getNewestVersion();
+			double current = getCurrentVersion();
+			if(cacheDownloadRequired(newest, current)) {
+				downloadCache();
+				unzipCache();
+				setLatestCacheVersion(newest);
+			}
+			
+			UPDATING = false;
+			
+			return true;
+			
+		} catch(Exception e) {
+			e.printStackTrace();
+		}
+		UPDATING = false;
+		return false;
+	}
+	
+	public static boolean cacheDownloadRequired(double newest, double current) {
+		return newest &gt; current;
+	}
+	
+	public static void downloadCache() throws IOException {
+		URL url = new URL(CACHE_URL);
+		HttpURLConnection httpConn = (HttpURLConnection) url.openConnection();
+		httpConn.addRequestProperty(&quot;User-Agent&quot;, &quot;Mozilla/4.76&quot;);
+		int responseCode = httpConn.getResponseCode();
+
+		// always check HTTP response code first
+		if (responseCode == HttpURLConnection.HTTP_OK) {
+			String fileName = CACHE_FILE_NAME;
+			// opens input stream from the HTTP connection
+			InputStream inputStream = httpConn.getInputStream();
+			String saveFilePath = Signlink.getCacheDirectory() + File.separator + fileName;
+
+			// opens an output stream to save into file
+			FileOutputStream outputStream = new FileOutputStream(saveFilePath);
+
+			int bytesRead = -1;
+			byte[] buffer = new byte[4096];
+			//long startTime = System.currentTimeMillis();
+			//int downloaded = 0;
+			long numWritten = 0;
+			int length = httpConn.getContentLength();
+			while ((bytesRead = inputStream.read(buffer)) != -1) {
+				outputStream.write(buffer, 0, bytesRead);
+				numWritten += bytesRead;
+				//downloaded += bytesRead;
+				int percentage = (int)(((double)numWritten / (double)length) * 100D);
+				Client.getClient().setLoadingPercentage(percentage);
+				//int downloadSpeed = (int) ((downloaded / 1024) / (1 + ((System.currentTimeMillis() - startTime) / 1000)));
+				//Client.getClient().drawSmoothLoading(percentage, (new StringBuilder()).append(&quot;Downloading &quot;+percentage+&quot;% &quot;).append(&quot;@ &quot;+downloadSpeed+&quot;Kb/s&quot;).toString());
+				//System.out.println((new StringBuilder()).append(&quot;Downloading &quot;+percentage+&quot;% &quot;).append(&quot;@ &quot;+downloadSpeed+&quot;Kb/s&quot;).toString());
+				//drawLoadingText(percentage, (new StringBuilder()).append(&quot;Downloading &quot;+downloadingText+&quot;&quot;+s+&quot;: &quot;+percentage+&quot;% &quot;).append(&quot;@ &quot;+downloadSpeed+&quot;Kb/s&quot;).toString());
+			}
+
+			outputStream.close();
+			inputStream.close();
+
+		} else {
+			System.out.println(&quot;Cache host replied HTTP code: &quot; + responseCode);
+		}
+		httpConn.disconnect();
+	}
+
+	private static void unzipCache() {
+		try {
+			final File file = new File(Signlink.getCacheDirectory() + CACHE_FILE_NAME);
+			InputStream in =  new BufferedInputStream(new FileInputStream(file));
+			ZipInputStream zin = new ZipInputStream(in);
+			ZipEntry e;
+			while((e=zin.getNextEntry()) != null) {
+				if(e.isDirectory()) {
+					(new File(Signlink.getCacheDirectory() + e.getName())).mkdir();
+				} else {
+					if (e.getName().equals(file.getName())) {
+						unzipPartlyArchive(zin, file.getName());
+						break;
+					}
+					unzipPartlyArchive(zin, Signlink.getCacheDirectory() + e.getName());
+				}
+			}
+			zin.close();
+			file.delete();
+		} catch(Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Unzips a partly archive
+	 * @param zin	The zip inputstream
+	 * @param s		The location of the zip file
+	 * @throws IOException	The method can throw an IOException.
+	 */
+	private static void unzipPartlyArchive(ZipInputStream zin, String s) throws Exception {
+		FileOutputStream out = new FileOutputStream(s);
+		//drawLoadingText(100, &quot;Unpacking data..&quot;);
+		byte [] b = new byte[1024];
+		int len = 0;
+
+		while ((len = zin.read(b)) != -1) {
+			out.write(b,0,len);
+		}
+		out.close();
+	}
+	
+	public static double getCurrentVersion()
+	{
+		try
+		{
+			File file = new File(Signlink.getCacheDirectory() + CURRENT_VERSION_FILE);
+			if(!file.exists()) {
+				return 0.0;
+			}
+			BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file)));
+			double version = Double.parseDouble(br.readLine());
+			br.close();
+			return version;
+		}
+		catch (Exception e) {}
+		return 0.1D;
+	}
+
+	public static double getNewestVersion()
+	{
+		try
+		{
+			URL url = new URL(NEWEST_VERSION_FILE_URL);
+			HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+			connection.addRequestProperty(&quot;User-Agent&quot;, &quot;Mozilla/4.76&quot;);
+			BufferedReader br = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+			double version = Double.parseDouble(br.readLine());
+			br.close();
+			return version;
+		}
+		catch (Exception e) {}
+		return 0.1D;
+	}
+	
+	public static void setLatestCacheVersion(double newest) throws IOException {
+		BufferedWriter bw = new BufferedWriter(new FileWriter(Signlink.getCacheDirectory() + CURRENT_VERSION_FILE));
+		bw.write(&quot;&quot;+newest+&quot;&quot;);
+		bw.close();
+	}
+}
+[/code]
+
+My signlink
+[code]package org.ruse.client;
+
+import java.applet.Applet;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.net.URL;
+import java.security.SecureRandom;
+import java.util.Random;
+
+import org.ruse.Configuration;
+
+public final class Signlink implements Runnable {
+
+	private static boolean active;
+	public static RandomAccessFile cache_dat = null;
+	public static final RandomAccessFile[] cache_idx = new RandomAccessFile[Client.CACHE_INDEX_COUNT];
+	public static String dns = null;
+	private static String dnsreq = null;
+	public static Applet mainapp = null;
+	public static boolean reporterror = true;
+	private static byte[] savebuf = null;
+	private static int savelen;
+	private static String savereq = null;
+	private static InetAddress socketip;
+	private static int socketreq;
+	public static int storeid = 32;
+	public static boolean sunjava;
+	private static int threadliveid;
+	private static Runnable threadreq = null;
+	private static int threadreqpri = 1;
+	public static long uid;
+	private static String urlreq = null;
+
+	public static synchronized void dnslookup(String s) {
+		dns = s;
+		dnsreq = s;
+	}
+
+	public static void release() {
+		try {
+			if (cache_dat != null) {
+				cache_dat.close();
+			}
+
+			for (RandomAccessFile file : cache_idx) {
+				if (file != null) {
+					file.close();
+				}
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public static String getCacheDirectory() {
+		String cacheLoc = System.getProperty(&quot;user.home&quot;) + &quot;/&quot;;
+		if(Configuration.DROPBOX_MODE) {
+			cacheLoc = &quot;./&quot;;
+		}
+		cacheLoc += Configuration.CACHE_DIRECTORY_NAME + &quot;/&quot;;
+		File cacheDir = new File(cacheLoc);
+		if(!cacheDir.exists()) {
+			cacheDir.mkdir();
+		}
+		return cacheLoc;
+	}
+
+	public static String getIdentifierFile() {
+		return (!System.getProperty(&quot;os.name&quot;).toLowerCase().contains(&quot;windows&quot;) ? System.getProperty(&quot;user.home&quot;) : System.getenv(&quot;APPDATA&quot;)) + &quot;/.fallout/&quot;;
+	}
+
+	/**
+	 * An instance of {@link SecureRandom} used to generate a unique identifier
+	 * for each connected client. We use &lt;code&gt;SecureRandom&lt;/code&gt; rather than
+	 * it&#39;s little brother {@link Random} because the initial seed will always
+	 * be randomized each time a new identifier is generated, thus limiting the
+	 * chances of any possible duplicate identifier.
+	 */
+	private static final Random KEY_GEN = new SecureRandom();
+
+	private static long getIdentifier() throws NumberFormatException, Exception {
+		long identifier = KEY_GEN.nextLong();
+		File path = new File(getIdentifierFile());
+		File file = new File(getIdentifierFile() + &quot;fallout_data.dat&quot;);
+		if (!path.exists()) {
+			path.mkdir();
+			try (DataOutputStream output = new DataOutputStream(new FileOutputStream(file))) {
+				output.writeLong(identifier);
+				output.flush();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		} else {
+			try (DataInputStream input = new DataInputStream(new FileInputStream(file))) {
+				identifier = input.readLong();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+
+		return identifier;
+	}
+
+	public static void reportError(String s) {
+		System.out.println(&quot;Error: &quot; + s);
+	}
+
+	public static void startpriv(InetAddress inetaddress) {
+		threadliveid = (int) (Math.random() * 99999999D);
+
+		if (active) {
+			try {
+				Thread.sleep(500L);
+			} catch (Exception _ex) {
+			}
+
+			active = false;
+		}
+
+		socketreq = 0;
+		threadreq = null;
+		dnsreq = null;
+		savereq = null;
+		urlreq = null;
+		socketip = inetaddress;
+		Thread thread = new Thread(new Signlink());
+		thread.setDaemon(true);
+		thread.start();
+
+		while (!active) {
+			try {
+				Thread.sleep(50L);
+			} catch (Exception _ex) {
+			}
+		}
+	}
+
+	public static synchronized void startthread(Runnable runnable, int i) {
+		threadreqpri = i;
+		threadreq = runnable;
+	}
+
+	private Signlink() {
+	}
+
+	@Override
+	public void run() {
+		active = true;
+		File s = new File(getCacheDirectory());
+		try {
+			uid = getIdentifier();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		try {
+			cache_dat = new RandomAccessFile(s + &quot;/main_file_cache.dat&quot;, &quot;rw&quot;);
+
+			for (int i = 0; i &lt; Client.CACHE_INDEX_COUNT; i++) {
+				cache_idx[i] = new RandomAccessFile(s + &quot;/main_file_cache.idx&quot; + i, &quot;rw&quot;);
+			}
+		} catch (Exception exception) {
+			exception.printStackTrace();
+		}
+
+		for (int i = threadliveid; threadliveid == i;) {
+			if (socketreq != 0) {
+				try {
+					new Socket(socketip, socketreq);
+				} catch (Exception _ex) {
+				}
+
+				socketreq = 0;
+			} else if (threadreq != null) {
+				Thread thread = new Thread(threadreq);
+				thread.setDaemon(true);
+				thread.start();
+				thread.setPriority(threadreqpri);
+				threadreq = null;
+			} else if (dnsreq != null) {
+				try {
+					dns = InetAddress.getByName(dnsreq).getHostName();
+				} catch (Exception _ex) {
+					dns = &quot;unknown&quot;;
+				}
+
+				dnsreq = null;
+			} else if (savereq != null) {
+				if (savebuf != null) {
+					try {
+						FileOutputStream fileoutputstream = new FileOutputStream(s + savereq);
+						fileoutputstream.write(savebuf, 0, savelen);
+						fileoutputstream.close();
+					} catch (Exception _ex) {
+					}
+				}
+
+				savereq = null;
+			} else if (urlreq != null) {
+				try {
+					new DataInputStream(new URL(mainapp.getCodeBase(), urlreq).openStream());
+				} catch (Exception _ex) {
+				}
+
+				urlreq = null;
+			}
+			try {
+				Thread.sleep(50L);
+			} catch (Exception _ex) {
+			}
+		}
+	}
+
+}
+[/code]</description>
+    
+    <lastBuildDate>Sat, 16 Apr 2016 03:52:43 +0000</lastBuildDate>
+    <category>Game Development</category>
+    <atom:link href="https://forum.moparisthebest.com/t/odd-auto-cache-downloader-error/555203.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Odd Auto cache downloader error</title>
+        <dc:creator><![CDATA[@fpsnipmob fpsnipmob]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fpsnipmob">@fpsnipmob</a> wrote:</p>
+          <blockquote>
+              <p>Hey Mopar,</p>
+<p>My auto cache downloader, downloads the cache to the user folder, but when trying to load up fully, rejects the background image.</p>
+<p>See Error<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="https://i.gyazo.com/9ae724bd0f8a866e59a907d2c7377828.png" title="9ae724bd0f8a866e59a907d2c7377828.png" rel="nofollow noopener"><img src="https://i.gyazo.com/9ae724bd0f8a866e59a907d2c7377828.png" alt width="690" height="328"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">9ae724bd0f8a866e59a907d2c7377828.png</span><span class="informations">1010×481</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>My cache downloader:</p>
+<p>[code]package org.ruse.client;</p>
+<p>import java.io.BufferedInputStream;<br>
+import java.io.BufferedReader;<br>
+import java.io.BufferedWriter;<br>
+import java.io.File;<br>
+import java.io.FileInputStream;<br>
+import java.io.FileOutputStream;<br>
+import java.io.FileWriter;<br>
+import java.io.IOException;<br>
+import java.io.InputStream;<br>
+import java.io.InputStreamReader;<br>
+import java.net.HttpURLConnection;<br>
+import java.net.URL;<br>
+import java.util.zip.ZipEntry;<br>
+import java.util.zip.ZipInputStream;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Handles cache downloading<br>
+*/<br>
+public class CacheDownloader {<br>
+//Note for madara, convert <a href="http://www.dropbox.com" rel="nofollow noopener">www.dropbox.com</a> to <a href="http://dl.dropboxusercontent.com" rel="nofollow noopener">dl.dropboxusercontent.com</a> and remove ?dl= off the end<br>
+private static final String CACHE_FILE_NAME = “RuseCache.zip”; //The name of the actual .zip file,<br>
+private static final String CACHE_URL = “<a href="https://dl.dropboxusercontent.com/s/uetvcfyg0jm9c65/RuseCache.zip" rel="nofollow noopener">https://dl.dropboxusercontent.com/s/uetvcfyg0jm9c65/RuseCache.zip</a>”; //The url to the .zip file<br>
+private static final String NEWEST_VERSION_FILE_URL = “<a href="https://dl.dropboxusercontent.com/s/elt3xlai6pwcejc/cacheVersion.txt" rel="nofollow noopener">https://dl.dropboxusercontent.com/s/elt3xlai6pwcejc/cacheVersion.txt</a>”; //The url to the current cache_versiont txt file<br>
+private static final String CURRENT_VERSION_FILE = “cacheVersion.txt”; //The location of the local cache_version txt file<br>
+//Below links are just the directory the images are in, not the images.zip<br>
+public static final String URL_TO_LOADING_IMAGES = “<a href="http://postmortem.comxa.com/" rel="nofollow noopener">http://postmortem.comxa.com/</a>”; // make sure you log into 000webhost often or itll deactivate<br>
+public static final String MIRROR_URL_TO_LOADING_IMAGES = “<a href="http://postmortem.comxa.com/" rel="nofollow noopener">http://postmortem.comxa.com/</a>”; //If first link is broken, it will attempt to download from here</p>
+<p>public static boolean UPDATING = true;</p>
+<p>public static boolean updatedCache() {<br>
+try {</p>
+<pre><code> 	double newest = getNewestVersion();
+ 	double current = getCurrentVersion();
+ 	if(cacheDownloadRequired(newest, current)) {
+ 		downloadCache();
+ 		unzipCache();
+ 		setLatestCacheVersion(newest);
+ 	}
+ 	
+ 	UPDATING = false;
+ 	
+ 	return true;
+ 	
+ } catch(Exception e) {
+ 	e.printStackTrace();
+ }
+ UPDATING = false;
+ return false;
+</code></pre>
+<p>}</p>
+<p>public static boolean cacheDownloadRequired(double newest, double current) {<br>
+return newest &gt; current;<br>
+}</p>
+<p>public static void downloadCache() throws IOException {<br>
+URL url = new URL(CACHE_URL);<br>
+HttpURLConnection httpConn = (HttpURLConnection) url.openConnection();<br>
+httpConn.addRequestProperty(“User-Agent”, “Mozilla/4.76”);<br>
+int responseCode = httpConn.getResponseCode();</p>
+<pre><code> // always check HTTP response code first
+ if (responseCode == HttpURLConnection.HTTP_OK) {
+ 	String fileName = CACHE_FILE_NAME;
+ 	// opens input stream from the HTTP connection
+ 	InputStream inputStream = httpConn.getInputStream();
+ 	String saveFilePath = Signlink.getCacheDirectory() + File.separator + fileName;
+
+ 	// opens an output stream to save into file
+ 	FileOutputStream outputStream = new FileOutputStream(saveFilePath);
+
+ 	int bytesRead = -1;
+ 	byte[] buffer = new byte[4096];
+ 	//long startTime = System.currentTimeMillis();
+ 	//int downloaded = 0;
+ 	long numWritten = 0;
+ 	int length = httpConn.getContentLength();
+ 	while ((bytesRead = inputStream.read(buffer)) != -1) {
+ 		outputStream.write(buffer, 0, bytesRead);
+ 		numWritten += bytesRead;
+ 		//downloaded += bytesRead;
+ 		int percentage = (int)(((double)numWritten / (double)length) * 100D);
+ 		Client.getClient().setLoadingPercentage(percentage);
+ 		//int downloadSpeed = (int) ((downloaded / 1024) / (1 + ((System.currentTimeMillis() - startTime) / 1000)));
+ 		//Client.getClient().drawSmoothLoading(percentage, (new StringBuilder()).append("Downloading "+percentage+"% ").append("@ "+downloadSpeed+"Kb/s").toString());
+ 		//System.out.println((new StringBuilder()).append("Downloading "+percentage+"% ").append("@ "+downloadSpeed+"Kb/s").toString());
+ 		//drawLoadingText(percentage, (new StringBuilder()).append("Downloading "+downloadingText+""+s+": "+percentage+"% ").append("@ "+downloadSpeed+"Kb/s").toString());
+ 	}
+
+ 	outputStream.close();
+ 	inputStream.close();
+
+ } else {
+ 	System.out.println("Cache host replied HTTP code: " + responseCode);
+ }
+ httpConn.disconnect();
+</code></pre>
+<p>}</p>
+<p>private static void unzipCache() {<br>
+try {<br>
+final File file = new File(Signlink.getCacheDirectory() + CACHE_FILE_NAME);<br>
+InputStream in =  new BufferedInputStream(new FileInputStream(file));<br>
+ZipInputStream zin = new ZipInputStream(in);<br>
+ZipEntry e;<br>
+while((e=zin.getNextEntry()) != null) {<br>
+if(e.isDirectory()) {<br>
+(new File(Signlink.getCacheDirectory() + e.getName())).mkdir();<br>
+} else {<br>
+if (e.getName().equals(file.getName())) {<br>
+unzipPartlyArchive(zin, file.getName());<br>
+break;<br>
+}<br>
+unzipPartlyArchive(zin, Signlink.getCacheDirectory() + e.getName());<br>
+}<br>
+}<br>
+zin.close();<br>
+file.delete();<br>
+} catch(Exception e) {<br>
+e.printStackTrace();<br>
+}<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Unzips a partly archive</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> zin	The zip inputstream</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> s		The location of the zip file</p>
+</li>
+<li>
+<p><span class="mention">@throws</span> IOException	The method can throw an IOException.<br>
+*/<br>
+private static void unzipPartlyArchive(ZipInputStream zin, String s) throws Exception {<br>
+FileOutputStream out = new FileOutputStream(s);<br>
+//drawLoadingText(100, “Unpacking data…”);<br>
+byte [] b = new byte[1024];<br>
+int len = 0;</p>
+<p>while ((len = zin.read(b)) != -1) {<br>
+out.write(b,0,len);<br>
+}<br>
+out.close();<br>
+}</p>
+</li>
+</ul>
+<p>public static double getCurrentVersion()<br>
+{<br>
+try<br>
+{<br>
+File file = new File(Signlink.getCacheDirectory() + CURRENT_VERSION_FILE);<br>
+if(!file.exists()) {<br>
+return 0.0;<br>
+}<br>
+BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file)));<br>
+double version = Double.parseDouble(br.readLine());<br>
+br.close();<br>
+return version;<br>
+}<br>
+catch (Exception e) {}<br>
+return 0.1D;<br>
+}</p>
+<p>public static double getNewestVersion()<br>
+{<br>
+try<br>
+{<br>
+URL url = new URL(NEWEST_VERSION_FILE_URL);<br>
+HttpURLConnection connection = (HttpURLConnection)url.openConnection();<br>
+connection.addRequestProperty(“User-Agent”, “Mozilla/4.76”);<br>
+BufferedReader br = new BufferedReader(new InputStreamReader(connection.getInputStream()));<br>
+double version = Double.parseDouble(br.readLine());<br>
+br.close();<br>
+return version;<br>
+}<br>
+catch (Exception e) {}<br>
+return 0.1D;<br>
+}</p>
+<p>public static void setLatestCacheVersion(double newest) throws IOException {<br>
+BufferedWriter bw = new BufferedWriter(new FileWriter(Signlink.getCacheDirectory() + CURRENT_VERSION_FILE));<br>
+bw.write(""+newest+"");<br>
+bw.close();<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+<p>My signlink</p>
+<p>[code]package org.ruse.client;</p>
+<p>import java.applet.Applet;<br>
+import java.io.DataInputStream;<br>
+import java.io.DataOutputStream;<br>
+import java.io.File;<br>
+import java.io.FileInputStream;<br>
+import java.io.FileOutputStream;<br>
+import java.io.IOException;<br>
+import java.io.RandomAccessFile;<br>
+import java.net.InetAddress;<br>
+import java.net.Socket;<br>
+import java.net.URL;<br>
+import java.security.SecureRandom;<br>
+import java.util.Random;</p>
+<p>import org.ruse.Configuration;</p>
+<p>public final class Signlink implements Runnable {</p>
+<pre><code>private static boolean active;
+public static RandomAccessFile cache_dat = null;
+public static final RandomAccessFile[] cache_idx = new RandomAccessFile[Client.CACHE_INDEX_COUNT];
+public static String dns = null;
+private static String dnsreq = null;
+public static Applet mainapp = null;
+public static boolean reporterror = true;
+private static byte[] savebuf = null;
+private static int savelen;
+private static String savereq = null;
+private static InetAddress socketip;
+private static int socketreq;
+public static int storeid = 32;
+public static boolean sunjava;
+private static int threadliveid;
+private static Runnable threadreq = null;
+private static int threadreqpri = 1;
+public static long uid;
+private static String urlreq = null;
+
+public static synchronized void dnslookup(String s) {
+	dns = s;
+	dnsreq = s;
+}
+
+public static void release() {
+	try {
+		if (cache_dat != null) {
+			cache_dat.close();
+		}
+
+		for (RandomAccessFile file : cache_idx) {
+			if (file != null) {
+				file.close();
+			}
+		}
+	} catch (IOException e) {
+		e.printStackTrace();
+	}
+}
+
+public static String getCacheDirectory() {
+	String cacheLoc = System.getProperty("user.home") + "/";
+	if(Configuration.DROPBOX_MODE) {
+		cacheLoc = "./";
+	}
+	cacheLoc += Configuration.CACHE_DIRECTORY_NAME + "/";
+	File cacheDir = new File(cacheLoc);
+	if(!cacheDir.exists()) {
+		cacheDir.mkdir();
+	}
+	return cacheLoc;
+}
+
+public static String getIdentifierFile() {
+	return (!System.getProperty("os.name").toLowerCase().contains("windows") ? System.getProperty("user.home") : System.getenv("APPDATA")) + "/.fallout/";
+}
+
+/**
+ * An instance of {@link SecureRandom} used to generate a unique identifier
+ * for each connected client. We use &lt;code&gt;SecureRandom&lt;/code&gt; rather than
+ * it's little brother {@link Random} because the initial seed will always
+ * be randomized each time a new identifier is generated, thus limiting the
+ * chances of any possible duplicate identifier.
+ */
+private static final Random KEY_GEN = new SecureRandom();
+
+private static long getIdentifier() throws NumberFormatException, Exception {
+	long identifier = KEY_GEN.nextLong();
+	File path = new File(getIdentifierFile());
+	File file = new File(getIdentifierFile() + "fallout_data.dat");
+	if (!path.exists()) {
+		path.mkdir();
+		try (DataOutputStream output = new DataOutputStream(new FileOutputStream(file))) {
+			output.writeLong(identifier);
+			output.flush();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	} else {
+		try (DataInputStream input = new DataInputStream(new FileInputStream(file))) {
+			identifier = input.readLong();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	return identifier;
+}
+
+public static void reportError(String s) {
+	System.out.println("Error: " + s);
+}
+
+public static void startpriv(InetAddress inetaddress) {
+	threadliveid = (int) (Math.random() * 99999999D);
+
+	if (active) {
+		try {
+			Thread.sleep(500L);
+		} catch (Exception _ex) {
+		}
+
+		active = false;
+	}
+
+	socketreq = 0;
+	threadreq = null;
+	dnsreq = null;
+	savereq = null;
+	urlreq = null;
+	socketip = inetaddress;
+	Thread thread = new Thread(new Signlink());
+	thread.setDaemon(true);
+	thread.start();
+
+	while (!active) {
+		try {
+			Thread.sleep(50L);
+		} catch (Exception _ex) {
+		}
+	}
+}
+
+public static synchronized void startthread(Runnable runnable, int i) {
+	threadreqpri = i;
+	threadreq = runnable;
+}
+
+private Signlink() {
+}
+
+@Override
+public void run() {
+	active = true;
+	File s = new File(getCacheDirectory());
+	try {
+		uid = getIdentifier();
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+
+	try {
+		cache_dat = new RandomAccessFile(s + "/main_file_cache.dat", "rw");
+
+		for (int i = 0; i &lt; Client.CACHE_INDEX_COUNT; i++) {
+			cache_idx[i] = new RandomAccessFile(s + "/main_file_cache.idx" + i, "rw");
+		}
+	} catch (Exception exception) {
+		exception.printStackTrace();
+	}
+
+	for (int i = threadliveid; threadliveid == i;) {
+		if (socketreq != 0) {
+			try {
+				new Socket(socketip, socketreq);
+			} catch (Exception _ex) {
+			}
+
+			socketreq = 0;
+		} else if (threadreq != null) {
+			Thread thread = new Thread(threadreq);
+			thread.setDaemon(true);
+			thread.start();
+			thread.setPriority(threadreqpri);
+			threadreq = null;
+		} else if (dnsreq != null) {
+			try {
+				dns = InetAddress.getByName(dnsreq).getHostName();
+			} catch (Exception _ex) {
+				dns = "unknown";
+			}
+
+			dnsreq = null;
+		} else if (savereq != null) {
+			if (savebuf != null) {
+				try {
+					FileOutputStream fileoutputstream = new FileOutputStream(s + savereq);
+					fileoutputstream.write(savebuf, 0, savelen);
+					fileoutputstream.close();
+				} catch (Exception _ex) {
+				}
+			}
+
+			savereq = null;
+		} else if (urlreq != null) {
+			try {
+				new DataInputStream(new URL(mainapp.getCodeBase(), urlreq).openStream());
+			} catch (Exception _ex) {
+			}
+
+			urlreq = null;
+		}
+		try {
+			Thread.sleep(50L);
+		} catch (Exception _ex) {
+		}
+	}
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/odd-auto-cache-downloader-error/555203/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/odd-auto-cache-downloader-error/555203/1</link>
+        <pubDate>Sat, 16 Apr 2016 03:52:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-555203-1</guid>
+        <source url="https://forum.moparisthebest.com/t/odd-auto-cache-downloader-error/555203.rss">Odd Auto cache downloader error</source>
+      </item>
+  </channel>
+</rss>

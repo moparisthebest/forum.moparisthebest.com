@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PHP Email Verification ~ Help Please</title>
+    <link>https://forum.moparisthebest.com/t/php-email-verification-help-please/215314</link>
+    <description>I need a PHP script to verify email addresses. I have working code which checks the syntax, and is able to check DNS records. However, the code I&#39;m using should also be able to verify email addresses using an SMTP probe. The problem I am having is with the step of verification involving the SMTP probe. 
+
+Here&#39;s the code I&#39;m using:
+[code]&lt;?php
+if(array_key_exists(&#39;send&#39;, $_POST)){
+
+  $contact = $_POST[&#39;email&#39;];
+  $probe = &quot;admin@sourcertools.com&quot;;
+  $helo = &quot;www.sourcertools.com&quot;;
+
+function validateEmail($email, $domainCheck = false, $verify = false, $probe_address=&#39;&#39;, $helo_address=&#39;&#39;, $return_errors=false) {
+    global $debug;
+    $server_timeout = 180; # timeout in seconds. Some servers deliberately wait a while (tarpitting)
+    if($debug) {echo &quot;&lt;pre&gt;&quot;;}
+    # Check email syntax with regex
+    if (preg_match(&#39;/^([a-zA-Z0-9\._\+-]+)\@((\[?)[a-zA-Z0-9\-\.]+\.([a-zA-Z]{2,7}|[0-9]{1,3})(\]?))$/&#39;, $email, $matches)) {
+        $user = $matches[1];
+        $domain = $matches[2];
+        # Check availability of DNS MX records
+        if ($domainCheck &amp;&amp; function_exists(&#39;checkdnsrr&#39;)) {
+            # Construct array of available mailservers
+            if(getmxrr($domain, $mxhosts, $mxweight)) {
+                for($i=0;$i&lt;count($mxhosts);$i++){
+                    $mxs[$mxhosts[$i]] = $mxweight[$i];
+                }
+                asort($mxs);
+                $mailers = array_keys($mxs);
+            } elseif(checkdnsrr($domain, &#39;A&#39;)) {
+                $mailers[0] = gethostbyname($domain);
+            } else {
+                $mailers=array();
+            }
+            $total = count($mailers);
+            # Query each mailserver
+            if($total &gt; 0 &amp;&amp; $verify) {
+                # Check if mailers accept mail
+                for($n=0; $n &lt; $total; $n++) {
+                    # Check if socket can be opened
+                    if($debug) { echo &quot;Checking server $mailers[$n]...\n&quot;;}
+                    $connect_timeout = $server_timeout;
+                    $errno = 0;
+                    $errstr = 0;
+                    # Try to open up socket
+                    if($sock = @fsockopen($mailers[$n], 25, $errno , $errstr, $connect_timeout)) {
+                        $response = fgets($sock);
+                        if($debug) {echo &quot;Opening up socket to $mailers[$n]... Succes!\n&quot;;}
+                        stream_set_timeout($sock, 30);
+                        $meta = stream_get_meta_data($sock);
+                        if($debug) { echo &quot;$mailers[$n] replied: $response\n&quot;;}
+                        $cmds = array(
+                            &quot;HELO $helo_address&quot;,
+                            &quot;MAIL FROM: &lt;$probe_address&gt;&quot;,
+                            &quot;RCPT TO: &lt;$email&gt;&quot;,
+                            &quot;QUIT&quot;,
+                        );
+                        # Hard error on connect -&gt; break out
+                        # Error means &#39;any reply that does not start with 2xx &#39;
+                        if(!$meta[&#39;timed_out&#39;] &amp;&amp; !preg_match(&#39;/^2\d\d[ -]/&#39;, $response)) {
+                            $error = &quot;Error: $mailers[$n] said: $response\n&quot;;
+                            break;
+                        }
+                        foreach($cmds as $cmd) {
+                            $before = microtime(true);
+                            fputs($sock, &quot;$cmd\r\n&quot;);
+                            $response = fgets($sock, 4096);
+                            $t = 1000*(microtime(true)-$before);
+                            if($debug) {echo htmlentities(&quot;$cmd\n$response&quot;) . &quot;(&quot; . sprintf(&#39;%.2f&#39;, $t) . &quot; ms)\n&quot;;}
+                            if(!$meta[&#39;timed_out&#39;] &amp;&amp; preg_match(&#39;/^5\d\d[ -]/&#39;, $response)) {
+                                $error = &quot;Unverified address: $mailers[$n] said: $response&quot;;
+                                break 2;
+                            }
+                        }
+                        fclose($sock);
+                        if($debug) { echo &quot;Succesful communication with $mailers[$n], no hard errors, assuming OK&quot;;}
+                        break;
+                    } elseif($n == $total-1) {
+                        $error = &quot;None of the mailservers listed for $domain could be contacted&quot;;
+                    }
+                }
+            } elseif($total &lt;= 0) {
+                $error = &quot;No usable DNS records found for domain &#39;$domain&#39;&quot;;
+            }
+        }
+    } else {
+        $error = &#39;Address syntax not correct&#39;;
+    }
+    if($debug) { echo &quot;&lt;/pre&gt;&quot;;}
+    
+    if($return_errors) {
+        # Give back details about the error(s).
+        # Return FALSE if there are no errors.
+        if(isset($error)) return htmlentities($error); else return false;
+    } else {
+        # &#39;Old&#39; behaviour, simple to understand
+        if(isset($error)) return false; else return true;
+    }
+} 
+
+  $valid = validateEmail($contact, true, true, $probe, $helo);
+
+  if($valid){
+    echo(&quot;Email address is valid&quot;);
+  }else{
+    echo(&quot;Email address is invalid&quot;);
+  }
+}else{
+?&gt;
+  &lt;form id=&quot;contact&quot; method=&quot;post&quot; action=&quot;&quot;&gt;
+  &lt;p&gt;
+    &lt;label for=&quot;email&quot;&gt;Email:&lt;/label&gt;&lt;br&gt;
+	&lt;input name=&quot;email&quot; type=&quot;text&quot; class=&quot;text&quot; /&gt;
+  &lt;/p&gt;
+  &lt;p&gt;
+	&lt;input name=&quot;send&quot; type=&quot;submit&quot; value=&quot;Send message&quot; class=&quot;button&quot; /&gt;
+  &lt;/p&gt;
+  &lt;/form&gt;
+&lt;?php } ?&gt;[/code]
+
+And here&#39;s the description of the parameters for the function I&#39;m using to verify the email addresses:
+[code]/* 
+   $Id: VerifyEmailAddress.php 8 2008-01-13 22:51:10Z visser $
+   
+   Email address verification with SMTP probes
+   Dick Visser &lt;dick@tienhuis.nl&gt;
+
+   INTRODUCTION
+
+   This function tries to verify an email address using several tehniques,
+   depending on the configuration. 
+
+   Arguments that are needed:
+
+   $email (string)
+   The address you are trying to verify
+
+   $domainCheck (boolean)
+   Check if any DNS MX records exist for domain part
+
+   $verify (boolean)
+   Use SMTP verify probes to see if the address is deliverable.
+
+   $probe_address (string)
+   This is the email address that is used as FROM address in outgoing
+   probes. Make sure this address exists so that in the event that the
+   other side does probing too this will work.
+   
+   $helo_address (string)
+   This should be the hostname of the machine that runs this site.
+
+   $return_errors (boolean)
+   By default, no errors are returned. This means that the function will evaluate
+   to TRUE if no errors are found, and false in case of errors. It is not possible
+   to return those errors, because returning something would be a TRUE.
+   When $return_errors is set, the function will return FALSE if the address
+   passes the tests. If it does not validate, an array with errors is returned.
+
+
+   A global variable $debug can be set to display all the steps.
+
+
+   EXAMPLES
+
+   Use more options to get better checking.
+   Check only by syntax:  validateEmail(&#39;dick@tienhuis.nl&#39;)
+   Check syntax + DNS MX records: validateEmail(&#39;dick@tienhuis.nl&#39;, true);   
+   Check syntax + DNS records + SMTP probe:
+   validateEmail(&#39;dick@tienhuis.nl&#39;, true, true, &#39;postmaster@tienhuis.nl&#39;, &#39;outkast.tienhuis.nl&#39;);
+
+
+   WARNING
+ 
+   This function works for now, but it may well break in the future.
+
+*/[/code]
+
+All help is appreciated, and Much thanks in advance,
+Ligor
+
+EDIT: I have determined that my current problem is due to the fsockopen function timing out. Anyone have any suggestions to fix this problem?
+
+EDIT 2: The person I&#39;m working for uses Godaddy, and I did a Google search and found out that Godaddy disables the fsockopen function. Gay. 
+
+Consider this solved.</description>
+    
+    <lastBuildDate>Tue, 01 Jul 2008 06:43:12 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PHP Email Verification ~ Help Please</title>
+        <dc:creator><![CDATA[@Red_Phat Red Phat]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/red_phat">@Red_Phat</a> wrote:</p>
+          <blockquote>
+              <p>Useful if 10gbfreehost would enable the functions -.-</p>
+<p>P.S. It does allow PHP</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/3</link>
+        <pubDate>Tue, 01 Jul 2008 06:43:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-215314-3</guid>
+        <source url="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314.rss">PHP Email Verification ~ Help Please</source>
+      </item>
+      <item>
+        <title>PHP Email Verification ~ Help Please</title>
+        <dc:creator><![CDATA[@VB7_Rocks VB7 Rocks]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vb7_rocks">@VB7_Rocks</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“driger1592, post:1, topic:215314”]and I did a Google search and found out that Godaddy disables the fsockopen function. Gay.</p>
+<p>Consider this solved.[/quote]</p>
+<p>Lulz.</p>
+<p>This thread is now about warning potential godaddy customers to find a different host. <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=6" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/2</link>
+        <pubDate>Fri, 27 Jun 2008 08:33:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-215314-2</guid>
+        <source url="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314.rss">PHP Email Verification ~ Help Please</source>
+      </item>
+      <item>
+        <title>PHP Email Verification ~ Help Please</title>
+        <dc:creator><![CDATA[@driger1592 driger1592]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/driger1592">@driger1592</a> wrote:</p>
+          <blockquote>
+              <p>I need a PHP script to verify email addresses. I have working code which checks the syntax, and is able to check DNS records. However, the code I’m using should also be able to verify email addresses using an SMTP probe. The problem I am having is with the step of verification involving the SMTP probe.</p>
+<p>Here’s the code I’m using:</p>
+<p>[code]&lt;?php<br>
+if(array_key_exists(‘send’, $_POST)){</p>
+<p>$contact = $_POST[‘email’];<br>
+$probe = <a>"admin@sourcertools.com</a>";<br>
+$helo = “<a href="http://www.sourcertools.com" rel="nofollow noopener">www.sourcertools.com</a>”;</p>
+<p>function validateEmail($email, $domainCheck = false, $verify = false, $probe_address=’’, $helo_address=’’, $return_errors=false) {<br>
+global $debug;<br>
+$server_timeout = 180; # timeout in seconds. Some servers deliberately wait a while (tarpitting)<br>
+if($debug) {echo “</p><pre>”;}<br>
+# Check email syntax with regex<br>
+if (preg_match(’/^([a-zA-Z0-9._±]+)@(([?)[a-zA-Z0-9-.]+.([a-zA-Z]{2,7}|[0-9]{1,3})(]?))$/’, $email, $matches)) {<br>
+$user = $matches[1];<br>
+$domain = $matches[2];<br>
+# Check availability of DNS MX records<br>
+if ($domainCheck &amp;&amp; function_exists(‘checkdnsrr’)) {<br>
+# Construct array of available mailservers<br>
+if(getmxrr($domain, $mxhosts, $mxweight)) {<br>
+for($i=0;$i&lt;count($mxhosts);$i++){<br>
+$mxs[$mxhosts[$i]] = $mxweight[$i];<br>
+}<br>
+asort($mxs);<br>
+$mailers = array_keys($mxs);<br>
+} elseif(checkdnsrr($domain, ‘A’)) {<br>
+$mailers[0] = gethostbyname($domain);<br>
+} else {<br>
+$mailers=array();<br>
+}<br>
+$total = count($mailers);<br>
+# Query each mailserver<br>
+if($total &gt; 0 &amp;&amp; $verify) {<br>
+# Check if mailers accept mail<br>
+for($n=0; $n &lt; $total; $n++) {<br>
+# Check if socket can be opened<br>
+if($debug) { echo “Checking server $mailers[$n]…\n”;}<br>
+$connect_timeout = $server_timeout;<br>
+$errno = 0;<br>
+$errstr = 0;<br>
+# Try to open up socket<br>
+if($sock = <span class="mention">@fsockopen</span>($mailers[$n], 25, $errno , $errstr, $connect_timeout)) {<br>
+$response = fgets($sock);<br>
+if($debug) {echo “Opening up socket to $mailers[$n]… Succes!\n”;}<br>
+stream_set_timeout($sock, 30);<br>
+$meta = stream_get_meta_data($sock);<br>
+if($debug) { echo “$mailers[$n] replied: $response\n”;}<br>
+$cmds = array(<br>
+“HELO $helo_address”,<br>
+“MAIL FROM: &lt;$probe_address&gt;”,<br>
+“RCPT TO: &lt;$email&gt;”,<br>
+“QUIT”,<br>
+);<br>
+# Hard error on connect -&gt; break out<br>
+# Error means ‘any reply that does not start with 2xx ’<br>
+if(!$meta[‘timed_out’] &amp;&amp; !preg_match(’/^2\d\d[ -]/’, $response)) {<br>
+$error = “Error: $mailers[$n] said: $response\n”;<br>
+break;<br>
+}<br>
+foreach($cmds as $cmd) {<br>
+$before = microtime(true);<br>
+fputs($sock, “$cmd\r\n”);<br>
+$response = fgets($sock, 4096);<br>
+$t = 1000*(microtime(true)-$before);<br>
+if($debug) {echo htmlentities("$cmd\n$response") . “(” . sprintf(’%.2f’, $t) . " ms)\n";}<br>
+if(!$meta[‘timed_out’] &amp;&amp; preg_match(’/^5\d\d[ -]/’, $response)) {<br>
+$error = “Unverified address: $mailers[$n] said: $response”;<br>
+break 2;<br>
+}<br>
+}<br>
+fclose($sock);<br>
+if($debug) { echo “Succesful communication with $mailers[$n], no hard errors, assuming OK”;}<br>
+break;<br>
+} elseif($n == $total-1) {<br>
+$error = “None of the mailservers listed for $domain could be contacted”;<br>
+}<br>
+}<br>
+} elseif($total &lt;= 0) {<br>
+$error = “No usable DNS records found for domain ‘$domain’”;<br>
+}<br>
+}<br>
+} else {<br>
+$error = ‘Address syntax not correct’;<br>
+}<br>
+if($debug) { echo “</pre>”;}
+<pre><code>if($return_errors) {
+    # Give back details about the error(s).
+    # Return FALSE if there are no errors.
+    if(isset($error)) return htmlentities($error); else return false;
+} else {
+    # 'Old' behaviour, simple to understand
+    if(isset($error)) return false; else return true;
+}
+</code></pre>
+<p>}</p>
+<p>$valid = validateEmail($contact, true, true, $probe, $helo);</p>
+<p>if($valid){<br>
+echo(“Email address is valid”);<br>
+}else{<br>
+echo(“Email address is invalid”);<br>
+}<br>
+}else{<br>
+?&gt;</p>
+  
+  <p>
+    Email:<br>
+	
+  </p>
+  <p>
+	
+  </p>
+  
+&lt;?php } ?&gt;[/code]
+<p>And here’s the description of the parameters for the function I’m using to verify the email addresses:</p>
+<p>[code]/*<br>
+$Id: VerifyEmailAddress.php 8 2008-01-13 22:51:10Z visser $</p>
+<p>Email address verification with SMTP probes<br>
+Dick Visser <a href="mailto:dick@tienhuis.nl">dick@tienhuis.nl</a></p>
+<p>INTRODUCTION</p>
+<p>This function tries to verify an email address using several tehniques,<br>
+depending on the configuration.</p>
+<p>Arguments that are needed:</p>
+<p>$email (string)<br>
+The address you are trying to verify</p>
+<p>$domainCheck (boolean)<br>
+Check if any DNS MX records exist for domain part</p>
+<p>$verify (boolean)<br>
+Use SMTP verify probes to see if the address is deliverable.</p>
+<p>$probe_address (string)<br>
+This is the email address that is used as FROM address in outgoing<br>
+probes. Make sure this address exists so that in the event that the<br>
+other side does probing too this will work.</p>
+<p>$helo_address (string)<br>
+This should be the hostname of the machine that runs this site.</p>
+<p>$return_errors (boolean)<br>
+By default, no errors are returned. This means that the function will evaluate<br>
+to TRUE if no errors are found, and false in case of errors. It is not possible<br>
+to return those errors, because returning something would be a TRUE.<br>
+When $return_errors is set, the function will return FALSE if the address<br>
+passes the tests. If it does not validate, an array with errors is returned.</p>
+<p>A global variable $debug can be set to display all the steps.</p>
+<p>EXAMPLES</p>
+<p>Use more options to get better checking.<br>
+Check only by syntax:  validateEmail(‘dick@tienhuis.nl’)<br>
+Check syntax + DNS MX records: validateEmail(‘dick@tienhuis.nl’, true);<br>
+Check syntax + DNS records + SMTP probe:<br>
+validateEmail(‘dick@tienhuis.nl’, true, true, ‘postmaster@tienhuis.nl’, ‘outkast.tienhuis.nl’);</p>
+<p>WARNING</p>
+<p>This function works for now, but it may well break in the future.</p>
+<p>*/[/code]</p>
+<p>All help is appreciated, and Much thanks in advance,<br>
+Ligor</p>
+<p>EDIT: I have determined that my current problem is due to the fsockopen function timing out. Anyone have any suggestions to fix this problem?</p>
+<p>EDIT 2: The person I’m working for uses Godaddy, and I did a Google search and found out that Godaddy disables the fsockopen function. Gay.</p>
+<p>Consider this solved.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/php-email-verification-help-please/215314/1</link>
+        <pubDate>Thu, 26 Jun 2008 02:00:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-215314-1</guid>
+        <source url="https://forum.moparisthebest.com/t/php-email-verification-help-please/215314.rss">PHP Email Verification ~ Help Please</source>
+      </item>
+  </channel>
+</rss>

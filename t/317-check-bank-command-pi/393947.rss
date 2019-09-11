@@ -1,0 +1,926 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[317] Check Bank Command [PI]</title>
+    <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947</link>
+    <description>This command is set up to check banks of any existing player, regardless of whether or not they are online. It does so by checking players added to the PlayerHandler&#39;s players array. (online players) If the player is online, it will simply grab their bank and toss it at you, and if they are offline, then it will load their bank from their character file.
+
+First up open Player.java and search for this:
+
+[code]	public int bankItems[] = new int[Config.BANK_SIZE];
+	public int bankItemsN[] = new int[Config.BANK_SIZE];[/code]
+
+Below it add this:
+
+[code]	public int oBankItems[] = new int[Config.BANK_SIZE];
+	public int oBankItemsN[] = new int[Config.BANK_SIZE];[/code]
+
+This will allow you to temporarily store someone&#39;s bank so that you can view it later.
+
+You can close that up, we won&#39;t be needing it any further. Now open Client.java and make sure you have java&#39;s File and Scanner classes imported. They look like this:
+
+[code]import java.io.File;
+import java.util.Scanner;[/code]
+
+If you don&#39;t have it, just toss it in with the rest of you imports. Then add the following method:
+
+[code]	public boolean loadCharBank(String name){
+		Scanner in = null;
+		try{
+			File acc = new File(&quot;Data/characters/&quot; + name + &quot;.txt&quot;);
+			in = new Scanner(acc);
+			while(in.hasNextLine()){
+				String nextLine = in.nextLine();
+				if(nextLine.contains(&quot;character-bank&quot;)){
+					String line = nextLine.split(&quot;=&quot;)[1];
+					line = line.trim();
+					String stuff[] = line.split(&quot;	&quot;);
+					int key = Integer.parseInt(stuff[0].trim());
+					int id = Integer.parseInt(stuff[1].trim());
+					int amount = Integer.parseInt(stuff[2].trim());
+					this.oBankItems[key] = id;
+					this.oBankItemsN[key] = amount;
+				}else if(nextLine.equalsIgnoreCase(&quot;[friends]&quot;))
+					break;
+			}
+		}catch(Exception e){
+			return false;
+		}
+		return true;
+	}[/code]
+
+What this does is use Java&#39;s File class to load up your character&#39;s file. Of course if you&#39;ve changed the path to the character files, you should reflect that change in the path above. If the character file does not exist, Java will throw an exception, which will be caught by the catch method, obviously, which will return false. The boolean returns will be explained later. If the file exists, then we&#39;ll use the Scanner class to read the file.
+
+Now that we&#39;re reading the file, we&#39;re going to use what we know to read the relevant data we want. if we&#39;re looking at a line with &quot;character-bank&quot; we must be looking at their bank, so we&#39;ll get that data in. The code is pretty self explanatory at this point. We split the line by the = sign. What this does is return an array of strings where each index in the array is a part of the string that was split. For example, if we have
+I went = to the = mall.
+then split that by &quot;=&quot; we would get an array as such:
+{&quot;I went &quot;, &quot; to the &quot;, &quot; mall.&quot;}
+
+In our case, there&#39;s only one equal sign, so there&#39;s only two array indexes. We only need the second, as that&#39;s the data we want, so we only store the second. Now as we also know, data in our char files are separated by the &quot;space&quot; you get by pressing tab, which is also /t in most operating systems. I used the space itself to avoid any problems. Once you split by that space, you get an array containing the key, or slot in the bank, the item id and the item amount. we&#39;ll parse those to integers, and store them in our temporary bank. Once all that is finish, we return true.
+
+Ok, now go to Commands.java and add this command (I&#39;m fairly certain you know how to add commands if you&#39;re looking at this tut)
+
+[code]			if (playerCommand.startsWith(&quot;checkbank&quot;)){
+				boolean isOnline = false;
+				String name = &quot;&quot;;
+				try{
+					name = playerCommand.substring(10);
+				}catch(Exception e){
+					c.sendMessage(&quot;You didn&#39;t enter a name.&quot;);
+					return;
+				}
+				if(name.isEmpty()){
+					c.sendMessage(&quot;You didn&#39;t enter a name.&quot;);
+					return;
+				}
+				Client c2 = null;
+				for(Player a : PlayerHandler.players){
+					if(a != null){
+						c2 = (Client)a;
+						if(c2.playerName.equalsIgnoreCase(name)){
+							isOnline = true;
+							break;
+						}
+					}
+				}
+				if(isOnline){
+					c.oBankItems = c2.bankItems.clone();
+					c.oBankItemsN = c2.bankItemsN.clone();
+					c2 = null;
+				}else{
+					if(!c.loadCharBank(name)){
+						c.sendMessage(&quot;Character not found.&quot;);
+						return;
+					}
+				}
+				int tempItems[] = c.bankItems;
+				int tempItemsN[] = c.bankItemsN;
+				c.bankItems = c.oBankItems;
+				c.bankItemsN = c.oBankItemsN;
+				c.getPA().openUpBank();
+				c.bankItems = tempItems;
+				c.bankItemsN = tempItemsN;
+				c.oBankItems = new int[Config.BANK_SIZE];
+				c.oBankItemsN = new int[Config.BANK_SIZE];
+			}[/code]
+
+Ok so here we start off checking to make sure the inputted name is not blank. If it is, we&#39;re pretty much done. Next thing to do is declare a new client, we&#39;ll probably need it later. Now we start looping through each player. If that player is not null, then we cast it to our c2 client. Now we check that player&#39;s name, versus the name given to us from the command. If they match, our player is online, so we can break out of the loop, and best of all, we won&#39;t have to load it from the file later on. It&#39;s also a good idea to have a boolean to know if we found him online or not for later =P
+
+Ok, so now we check if the player is online, based on our boolean variable that we set earlier. If it&#39;s true, it&#39;s because we found him online, so we take our c2 Client (this is why we needed to declare the client outside of the loop, so that it could stay within scope for this moment) and we copy the bank array to our temporary copy bank arrays. Be careful when doing this, because simply using the assignment variable to do this is not enough. You MUST invoke the clone() method on any object that you want to copy in this manner (in this case, our array) because otherwise, all you end up copying is the reference to memory, meaning instead of editing temporary values, you&#39;ll be editing the REAL thing. I&#39;m sure you can see how that would be a problem in our specific example ;)
+
+Assuming our player was not online, we&#39;re going to load the bank up using our method from before. If it returns false, it means the character wasn&#39;t found most likely, so we let the user know. Perhaps he typed the name in wrong =P
+
+Now that we have our temporary bank array loaded up, we make another temporary array, and assign our own real bank to it. In this case, we don&#39;t need to clone() because we actually do want to pass the memory reference instead of a copy of the object itself. Doing this allows us to give our own real bank array its reference back later on. Now we give our real bank array the reference to the memory of the other player&#39;s fake bank. Now that that is done, we open up the bank the way we would normally, and the server handles it as it normally would, except this time it&#39;s loading the other person&#39;s items, instead of your own ;)
+
+As soon as the open bank method is done, we&#39;ll give our own real bank its original memory reference back, using our temp arrays from earlier, and we&#39;ll completely destroy the fake bank by assigning it new memory. Fear not, Java&#39;s garbage collection will take care of the crap we tossed out by doing this ;)
+
+That&#39;s basically it. The only thing you might be wondering is, what if I try to withdraw something? Nothing happens, unless you have the same item as that person in your own bank, in which case, it will just withdraw it from your bank. Depositing will also deposit to your own bank.
+
+I hope this will help out with any mischievous players on your server *cough* dupers *cough*
+
+Post up any problems or errors.</description>
+    
+    <lastBuildDate>Wed, 18 Apr 2012 20:08:50 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>keep in mind im using an abstract source, so this code might not look like yours but.</p>
+<p>note these lines:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>[code]public int checkBankID=playerID;//default: playerID, can be set to any ID though, based on whose bank you would like to access. This code is NOT tested, though this is what i meant.</p>
+<pre><code>public void fromBank(int itemID, int fromSlot, int amount) {
+	if (!IsBanking) {
+		closeInterface();
+		return;
+	}
+	if (amount &gt; 0) {
+		if (ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] &gt; 0) {
+			if (!takeAsNote) {
+				if (Item.itemStackable[ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1]) {
+					if (ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] &gt; amount) {
+						if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1), amount)) {
+							ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] -= amount;
+							resetBank();
+							resetItems(5064);
+						}
+					} else {
+						if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1),
+								ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot])) {
+							ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] = 0;
+							ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] = 0;
+							resetBank();
+							resetItems(5064);
+						}
+					}
+				} else {
+					while (amount &gt; 0) {
+						if (ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] &gt; 0) {
+							if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1), 1)) {
+								ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] += -1;
+								amount--;
+							} else {
+								amount = 0;
+							}
+						} else {
+							amount = 0;
+						}
+					}
+					resetBank();
+					resetItems(5064);
+				}
+			} else if (takeAsNote &amp;&amp; Item.itemIsNote[ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot]]) {
+				if (ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] &gt; amount) {
+					if (addItem(ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot], amount)) {
+						ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] -= amount;
+						resetBank();
+						resetItems(5064);
+					}
+				} else {
+					if (addItem(ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot], ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot])) {
+						ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] = 0;
+						ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] = 0;
+						resetBank();
+						resetItems(5064);
+					}
+				}
+			} else {
+				sM("Item can't be drawn as note.");
+				if (Item.itemStackable[ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1]) {
+					if (ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] &gt; amount) {
+						if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1), amount)) {
+							ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] -= amount;
+							resetBank();
+							resetItems(5064);
+						}
+					} else {
+						if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1),
+								ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot])) {
+							ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] = 0;
+							ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] = 0;
+							resetBank();
+							resetItems(5064);
+						}
+					}
+				} else {
+					while (amount &gt; 0) {
+						if (ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] &gt; 0) {
+							if (addItem((ServerConstants.playerHandler.players[checkBankID].bankItems[fromSlot] - 1), 1)) {
+								ServerConstants.playerHandler.players[checkBankID].bankItemsN[fromSlot] += -1;
+								amount--;
+							} else {
+								amount = 0;
+							}
+						} else {
+							amount = 0;
+						}
+					}
+					resetBank();
+					resetItems(5064);
+				}
+			}
+		}
+	}
+}[/code]
+</code></pre>
+<p>since my method is in my client, i can just let it add the items with addItem     (no c. required)</p>
+<p>This code gets the item from which ever bank is selected (via checkBankID) and removes that item from that bank.</p>
+<p>is that better? :o</p>
+<p>EDIT: i got it working <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+the Bank All was a little screwie due to the way it is set up but i got it working ^^’ can only withdrawl, not bank (to avoid accidental confusion), you right click them to check bank. once you open your bank via any method (other than ::bank) it will revert back to your bank. and while you are withdrawing from theirs, you can store it in yours. To make it work i didn’t have to add much other than what is above. Something in my packets class and i can remove the part from my commands(i had a command to revert it back to my bank, for my original design)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/45</link>
+        <pubDate>Wed, 18 Apr 2012 20:08:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-45</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>what???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/44</link>
+        <pubDate>Wed, 18 Apr 2012 19:58:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-44</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:40, topic:393947”][code=java]if(playerCommand.startsWith(“checkbank”)) {<br>
+String name = playerCommand.substring(9);<br>
+Client player = null;<br>
+for(Player p : PlayerHandler.players) {<br>
+if(p != null) {<br>
+if(p.playerName.equalsIgnoreCase(name)) {<br>
+player = p;<br>
+break;<br>
+}<br>
+}<br>
+}<br>
+if(player != null) {<br>
+//now set a variable in the client class: bankCheckingID</p>
+<p>c.bankCheckingID = player.playerId;<br>
+c.inBank = true;<br>
+//then show their items<br>
+}<br>
+}<br>
+[/code]</p>
+<p>then in the bankX packet handlers you can just add</p>
+<p><code>
+Client player = PlayerHandler.players[c.bankCheckID];
+if(player != null) {
+player.removeFromBank(item, amount, slot);
+//but you would still have to mess with that method to make it give the item to this player.
+}</code></p>
+<p>So you’d have to make a new method</p>
+<p><code>
+public void removeFromOtherBank(Client player, Client other, int item, int amount, int slot) {
+//remove from other's bank and add item to player.
+}</code>[/quote]</p>
+<p>that is what i said &gt;.&gt;’ (having to add another method) or…</p>
+<p>player.removeFromBank(int item, amnt, slot)<br>
+//for remove it from player. but add item to Server.playerHandler.players[playerID])&lt;-- instead of making the checkBank “null” when it is nobody else, make it your ID! and you can withdraw from your bank with the same method? :o just would take some reworking ^^’ I’ll work on the method to show what i mean if you need it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/43</link>
+        <pubDate>Wed, 18 Apr 2012 19:51:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-43</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“eyeownyew, post:41, topic:393947”][quote author=imsuperman05 link=topic=491131.msg3976587#msg3976587 date=1334714121]</p>
+<p>[code=java]if(playerCommand.startsWith(“checkbank”)) {<br>
+String name = playerCommand.substring(9);<br>
+Client player = null;<br>
+for(Player p : PlayerHandler.players) {<br>
+if(p != null) {<br>
+if(p.playerName.equalsIgnoreCase(name)) {<br>
+player = p;<br>
+break;<br>
+}<br>
+}<br>
+}<br>
+if(player != null) {<br>
+//now set a variable in the client class: bankCheckingID</p>
+<p>c.bankCheckingID = player.playerId;<br>
+c.inBank = true;<br>
+//then show their items<br>
+}<br>
+}<br>
+[/code]</p>
+<p>then in the bankX packet handlers you can just add</p>
+<p><code>
+Client player = PlayerHandler.players[c.bankCheckID];
+if(player != null) {
+player.removeFromBank(item, amount, slot);
+//but you would still have to mess with that method to make it give the item to this player.
+}</code></p>
+<p>So you’d have to make a new method</p>
+<p><code>
+public void removeFromOtherBank(Client player, Client other, int item, int amount, int slot) {
+//remove from other's bank and add item to player.
+}</code><br>
+[/quote]<br>
+Conventions n_n[/quote]<br>
+wrote it in the reply box soo…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/42</link>
+        <pubDate>Wed, 18 Apr 2012 19:09:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-42</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:40, topic:393947”][code=java]if(playerCommand.startsWith(“checkbank”)) {<br>
+String name = playerCommand.substring(9);<br>
+Client player = null;<br>
+for(Player p : PlayerHandler.players) {<br>
+if(p != null) {<br>
+if(p.playerName.equalsIgnoreCase(name)) {<br>
+player = p;<br>
+break;<br>
+}<br>
+}<br>
+}<br>
+if(player != null) {<br>
+//now set a variable in the client class: bankCheckingID</p>
+<p>c.bankCheckingID = player.playerId;<br>
+c.inBank = true;<br>
+//then show their items<br>
+}<br>
+}<br>
+[/code]</p>
+<p>then in the bankX packet handlers you can just add</p>
+<p><code>
+Client player = PlayerHandler.players[c.bankCheckID];
+if(player != null) {
+player.removeFromBank(item, amount, slot);
+//but you would still have to mess with that method to make it give the item to this player.
+}</code></p>
+<p>So you’d have to make a new method</p>
+<p><code>
+public void removeFromOtherBank(Client player, Client other, int item, int amount, int slot) {
+//remove from other's bank and add item to player.
+}</code>[/quote]<br>
+Conventions n_n</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/41</link>
+        <pubDate>Wed, 18 Apr 2012 15:54:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-41</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[code=java]if(playerCommand.startsWith(“checkbank”)) {<br>
+String name = playerCommand.substring(9);<br>
+Client player = null;<br>
+for(Player p : PlayerHandler.players) {<br>
+if(p != null) {<br>
+if(p.playerName.equalsIgnoreCase(name)) {<br>
+player = p;<br>
+break;<br>
+}<br>
+}<br>
+}<br>
+if(player != null) {<br>
+//now set a variable in the client class: bankCheckingID</p>
+<p>c.bankCheckingID = player.playerId;<br>
+c.inBank = true;<br>
+//then show their items<br>
+}<br>
+}<br>
+[/code]</p>
+<p>then in the bankX packet handlers you can just add</p>
+<p><code>
+Client player = PlayerHandler.players[c.bankCheckID];
+if(player != null) {
+player.removeFromBank(item, amount, slot);
+//but you would still have to mess with that method to make it give the item to this player.
+}</code></p>
+<p>So you’d have to make a new method</p>
+<p><code>
+public void removeFromOtherBank(Client player, Client other, int item, int amount, int slot) {
+//remove from other's bank and add item to player.
+}</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/40</link>
+        <pubDate>Wed, 18 Apr 2012 01:55:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-40</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>You would have to explain that more, but i am curious how it knows who gets the item(s)… I know you would have a variable to tell you what their(or your) client id is(i think that is what you are getting at) and instead of it being null, should it just be your clientID#? (so you could just use Server.playerHandler.players[ID].(toBank/fromBank) and then you would have to send those items to the local user(you, the person taking the item) If i were to sit down and work it out that is probably how i would go about it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/39</link>
+        <pubDate>Wed, 18 Apr 2012 01:39:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-39</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>You’re over thinking it.  You could just set a variable as the other player local then check if it’s null or not when you deposit and if it’s not null, then you remove that item from their bank.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/38</link>
+        <pubDate>Tue, 17 Apr 2012 19:09:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-38</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:36, topic:393947”][quote author=matzie link=topic=491131.msg3975976#msg3975976 date=1334662654]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Online only, and I made it to work with right click (Admin’s can rightclick out of wildy to view banks, instead of “attack” option) This is being “accessed” from the client whose being checked, (the Client received is the one of who is checking) I just duped the resetBank() method and added the argument and the c.'s <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>	public void showYourBank(Client c) {
+		c.outStream.createFrameVarSizeWord(53);
+		c.outStream.writeWord(5382); // bank
+		c.outStream.writeWord(playerBankSize); // number of items
+		for (int i = 0; i &lt; playerBankSize; i++) {
+			if (bankItemsN[i] &gt; 254) {
+				c.outStream.writeByte(255);
+				c.outStream.writeDWord_v2(bankItemsN[i]);
+			} else {
+				c.outStream.writeByte(bankItemsN[i]); // amount
+			}
+			if (bankItemsN[i] &lt; 1) {
+				bankItems[i] = 0;
+			}
+			if ((bankItems[i] &gt; 20000) || (bankItems[i] &lt; 0)) {
+				bankItems[i] = 20000;
+			}
+			c.outStream.writeWordBigEndianA(bankItems[i]); // itemID
+		}
+		c.outStream.endFrameVarSizeWord();
+                c.showInterface(5292);
+	}</code></p>
+<p>EDIT: to edit other peoples banks, i would add a “link bank” method in order to allow your commands to be sent to their bank. or you could “hijack” their client, though im not sure it would work lol.</p>
+</blockquote>
+</aside>
+<p>Could just use the method that is given: takeFromBank(int item, int amount, int slot) and mess with some of the bankx packet handlers.</p>
+</blockquote>
+</aside>
+<p>but the client would have to know its messing with oneone elses bank :3 so when interacting with the bank it does not try to remove it from yours with the usual (toBank fromBank) methods. it needs to know that it is in someone elses, explains my “link bank” <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>If the banking method is not in “client” it would have to receive two clients as arguments to be able to know both sides (checker,and being checked) Aside from that, it also would have to be split upon the button interface screen, (when you click an object, it sends the interface ID along with the button id) So you would have to tell it, if in person B’s bank(use this method)(rather than the original)<br>
+[/quote]<br>
+The client doesn’t need to know shit.  The client only needs to know when to remove and add items to the bank or from the bank.  We simply do that with the server-sided methods that have been poorly written.  c2.bankItem(int item, int amount, int slot)[/quote]</p>
+<p>client as in the class file, not as in the client it self…(it learns that stuff though resetBank() mostly–it resync’s all of the items) I figured you would know what i was talking about, considering were in the <span class="bbcode-b">server</span> help thread :o</p>
+<p>EDIT: server tutorial thread, my bad. turns out this was posted in the wrong section… <em>golf clap</em></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/37</link>
+        <pubDate>Tue, 17 Apr 2012 16:27:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-37</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:35, topic:393947”][quote author=imsuperman05 link=topic=491131.msg3975468#msg3975468 date=1334612137]</p>
+<aside class="quote">
+<blockquote>
+<p>Online only, and I made it to work with right click (Admin’s can rightclick out of wildy to view banks, instead of “attack” option) This is being “accessed” from the client whose being checked, (the Client received is the one of who is checking) I just duped the resetBank() method and added the argument and the c.'s <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>	public void showYourBank(Client c) {
+		c.outStream.createFrameVarSizeWord(53);
+		c.outStream.writeWord(5382); // bank
+		c.outStream.writeWord(playerBankSize); // number of items
+		for (int i = 0; i &lt; playerBankSize; i++) {
+			if (bankItemsN[i] &gt; 254) {
+				c.outStream.writeByte(255);
+				c.outStream.writeDWord_v2(bankItemsN[i]);
+			} else {
+				c.outStream.writeByte(bankItemsN[i]); // amount
+			}
+			if (bankItemsN[i] &lt; 1) {
+				bankItems[i] = 0;
+			}
+			if ((bankItems[i] &gt; 20000) || (bankItems[i] &lt; 0)) {
+				bankItems[i] = 20000;
+			}
+			c.outStream.writeWordBigEndianA(bankItems[i]); // itemID
+		}
+		c.outStream.endFrameVarSizeWord();
+                c.showInterface(5292);
+	}</code></p>
+<p>EDIT: to edit other peoples banks, i would add a “link bank” method in order to allow your commands to be sent to their bank. or you could “hijack” their client, though im not sure it would work lol.</p>
+</blockquote>
+</aside>
+<p>Could just use the method that is given: takeFromBank(int item, int amount, int slot) and mess with some of the bankx packet handlers.<br>
+[/quote]<br>
+but the client would have to know its messing with oneone elses bank :3 so when interacting with the bank it does not try to remove it from yours with the usual (toBank fromBank) methods. it needs to know that it is in someone elses, explains my “link bank” <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>If the banking method is not in “client” it would have to receive two clients as arguments to be able to know both sides (checker,and being checked) Aside from that, it also would have to be split upon the button interface screen, (when you click an object, it sends the interface ID along with the button id) So you would have to tell it, if in person B’s bank(use this method)(rather than the original)[/quote]<br>
+The client doesn’t need to know shit.  The client only needs to know when to remove and add items to the bank or from the bank.  We simply do that with the server-sided methods that have been poorly written.  c2.bankItem(int item, int amount, int slot)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/36</link>
+        <pubDate>Tue, 17 Apr 2012 13:21:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-36</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:34, topic:393947”][quote author=matzie link=topic=491131.msg3975449#msg3975449 date=1334610949]<br>
+Online only, and I made it to work with right click (Admin’s can rightclick out of wildy to view banks, instead of “attack” option) This is being “accessed” from the client whose being checked, (the Client received is the one of who is checking) I just duped the resetBank() method and added the argument and the c.'s <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>	public void showYourBank(Client c) {
+		c.outStream.createFrameVarSizeWord(53);
+		c.outStream.writeWord(5382); // bank
+		c.outStream.writeWord(playerBankSize); // number of items
+		for (int i = 0; i &lt; playerBankSize; i++) {
+			if (bankItemsN[i] &gt; 254) {
+				c.outStream.writeByte(255);
+				c.outStream.writeDWord_v2(bankItemsN[i]);
+			} else {
+				c.outStream.writeByte(bankItemsN[i]); // amount
+			}
+			if (bankItemsN[i] &lt; 1) {
+				bankItems[i] = 0;
+			}
+			if ((bankItems[i] &gt; 20000) || (bankItems[i] &lt; 0)) {
+				bankItems[i] = 20000;
+			}
+			c.outStream.writeWordBigEndianA(bankItems[i]); // itemID
+		}
+		c.outStream.endFrameVarSizeWord();
+                c.showInterface(5292);
+	}</code></p>
+<p>EDIT: to edit other peoples banks, i would add a “link bank” method in order to allow your commands to be sent to their bank. or you could “hijack” their client, though im not sure it would work lol.<br>
+[/quote]<br>
+Could just use the method that is given: takeFromBank(int item, int amount, int slot) and mess with some of the bankx packet handlers.[/quote]<br>
+but the client would have to know its messing with oneone elses bank :3 so when interacting with the bank it does not try to remove it from yours with the usual (toBank fromBank) methods. it needs to know that it is in someone elses, explains my “link bank” <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>If the banking method is not in “client” it would have to receive two clients as arguments to be able to know both sides (checker,and being checked) Aside from that, it also would have to be split upon the button interface screen, (when you click an object, it sends the interface ID along with the button id) So you would have to tell it, if in person B’s bank(use this method)(rather than the original)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/35</link>
+        <pubDate>Tue, 17 Apr 2012 11:37:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-35</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:32, topic:393947”]Online only, and I made it to work with right click (Admin’s can rightclick out of wildy to view banks, instead of “attack” option) This is being “accessed” from the client whose being checked, (the Client received is the one of who is checking) I just duped the resetBank() method and added the argument and the c.'s <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>	public void showYourBank(Client c) {
+		c.outStream.createFrameVarSizeWord(53);
+		c.outStream.writeWord(5382); // bank
+		c.outStream.writeWord(playerBankSize); // number of items
+		for (int i = 0; i &lt; playerBankSize; i++) {
+			if (bankItemsN[i] &gt; 254) {
+				c.outStream.writeByte(255);
+				c.outStream.writeDWord_v2(bankItemsN[i]);
+			} else {
+				c.outStream.writeByte(bankItemsN[i]); // amount
+			}
+			if (bankItemsN[i] &lt; 1) {
+				bankItems[i] = 0;
+			}
+			if ((bankItems[i] &gt; 20000) || (bankItems[i] &lt; 0)) {
+				bankItems[i] = 20000;
+			}
+			c.outStream.writeWordBigEndianA(bankItems[i]); // itemID
+		}
+		c.outStream.endFrameVarSizeWord();
+                c.showInterface(5292);
+	}</code></p>
+<p>EDIT: to edit other peoples banks, i would add a “link bank” method in order to allow your commands to be sent to their bank. or you could “hijack” their client, though im not sure it would work lol.[/quote]<br>
+Could just use the method that is given: takeFromBank(int item, int amount, int slot) and mess with some of the bankx packet handlers.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/34</link>
+        <pubDate>Mon, 16 Apr 2012 21:35:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-34</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">Bad.
+
+Regexes were made for a reason.</code></pre>
+<p>Bad.</p>
+<p>Regexes were made for a reason.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/33</link>
+        <pubDate>Mon, 16 Apr 2012 21:25:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-33</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>Online only, and I made it to work with right click (Admin’s can rightclick out of wildy to view banks, instead of “attack” option) This is being “accessed” from the client whose being checked, (the Client received is the one of who is checking) I just duped the resetBank() method and added the argument and the c.'s <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>	public void showYourBank(Client c) {
+		c.outStream.createFrameVarSizeWord(53);
+		c.outStream.writeWord(5382); // bank
+		c.outStream.writeWord(playerBankSize); // number of items
+		for (int i = 0; i &lt; playerBankSize; i++) {
+			if (bankItemsN[i] &gt; 254) {
+				c.outStream.writeByte(255);
+				c.outStream.writeDWord_v2(bankItemsN[i]);
+			} else {
+				c.outStream.writeByte(bankItemsN[i]); // amount
+			}
+			if (bankItemsN[i] &lt; 1) {
+				bankItems[i] = 0;
+			}
+			if ((bankItems[i] &gt; 20000) || (bankItems[i] &lt; 0)) {
+				bankItems[i] = 20000;
+			}
+			c.outStream.writeWordBigEndianA(bankItems[i]); // itemID
+		}
+		c.outStream.endFrameVarSizeWord();
+                c.showInterface(5292);
+	}</code></p>
+<p>EDIT: to edit other peoples banks, i would add a “link bank” method in order to allow your commands to be sent to their bank. or you could “hijack” their client, though im not sure it would work lol.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/32</link>
+        <pubDate>Mon, 16 Apr 2012 21:15:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-32</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@ladaswa ladaswa]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ladaswa">@ladaswa</a> wrote:</p>
+          <blockquote>
+              <p><img src="http://i44.tinypic.com/18k9bm.png" alt width="680" height="345"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/31</link>
+        <pubDate>Thu, 12 Apr 2012 00:12:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-31</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@RuneScape070 RuneScape070]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/runescape070">@RuneScape070</a> wrote:</p>
+          <blockquote>
+              <p>please help me to fix this error<br>
+[sup]src\server\model\players\packets\Commands.java:792: cannot find symbol<br>
+symbol  : class Player<br>
+location: class server.model.players.packets.Commands<br>
+for(Player a : PlayerHandler.players){<br>
+^<br>
+Note: Some input files use unchecked or unsafe operations.<br>
+Note: Recompile with -Xlint:unchecked for details.<br>
+1 error<br>
+Press any key to continue . . .[/sup]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/30</link>
+        <pubDate>Sat, 07 Apr 2012 18:58:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-30</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@Brid_Mayhem_1 Brid Mayhem #1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/brid_mayhem_1">@Brid_Mayhem_1</a> wrote:</p>
+          <blockquote>
+              <p><code>src\server\model\players\packets\Commands.java:1038: cannot find symbol
+symbol  : class player
+location: class server.model.players.packets.Commands
+                                for(player a : PlayerHandler.players){
+                                    ^
+src\server\model\players\packets\Commands.java:1052: cannot find symbol
+symbol  : method loadCharBank(java.lang.String)
+location: class server.model.players.Client
+                                        if(!c.loadCharBank(name)){
+                                             ^
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+2 errors
+Press any key to continue . . .</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/29</link>
+        <pubDate>Mon, 06 Feb 2012 00:53:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-29</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:27, topic:393947”][quote author=Loveandpower link=topic=491131.msg3876268#msg3876268 date=1325702549]</p>
+<aside class="quote">
+<blockquote>
+<p>How can i make it so that i can take out items when i check the bank? so i dont have to ban players but just take out their stuff<br>
+[/quote]I’m interested in knowing this as well. ( i guess we could just use ::takeitem command but still be easier )</p>
+</blockquote>
+</aside>
+<p>stfu look at the date -.-[/quote]if the tutorial is a good contribution date means nothing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/28</link>
+        <pubDate>Wed, 04 Jan 2012 18:52:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-28</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@imsuperman05 imsuperman05]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/imsuperman05">@imsuperman05</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Loveandpower, post:26, topic:393947”][quote author=imsuperman05 link=topic=491131.msg3612861#msg3612861 date=1306728390]<br>
+How can i make it so that i can take out items when i check the bank? so i dont have to ban players but just take out their stuff<br>
+[/quote]I’m interested in knowing this as well. ( i guess we could just use ::takeitem command but still be easier )[/quote]<br>
+stfu look at the date -.-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/27</link>
+        <pubDate>Wed, 04 Jan 2012 18:50:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-27</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“imsuperman05, post:17, topic:393947”]How can i make it so that i can take out items when i check the bank? so i dont have to ban players but just take out their stuff[/quote]I’m interested in knowing this as well. ( i guess we could just use ::takeitem command but still be easier )</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/26</link>
+        <pubDate>Wed, 04 Jan 2012 18:42:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-26</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@noty noty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/noty">@noty</a> wrote:</p>
+          <blockquote>
+              <p>works great <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/25</link>
+        <pubDate>Wed, 04 Jan 2012 15:24:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-25</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@A_G_S_P_U_R_E A G S P U R E]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/a_g_s_p_u_r_e">@A_G_S_P_U_R_E</a> wrote:</p>
+          <blockquote>
+              <p>^^ Have that same problem.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/24</link>
+        <pubDate>Mon, 02 Jan 2012 20:48:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-24</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@mr_extremez mr extremez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mr_extremez">@mr_extremez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“iownedyouhard, post:22, topic:393947”][hr] [quote]src\server\model\players\packets\Commands.java:742: error: cannot find symbol<br>
+for(Player a : PlayerHandler.players){<br>
+^<br>
+symbol:   class Player<br>
+location: class Commands[/quote]</p>
+<p>wtf is this?[/quote]<br>
+6 month bump?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/23</link>
+        <pubDate>Fri, 23 Dec 2011 19:37:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-23</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@iownedyouhard iownedyouhard]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/iownedyouhard">@iownedyouhard</a> wrote:</p>
+          <blockquote>
+              <p>[hr] </p><blockquote>src\server\model\players\packets\Commands.java:742: error: cannot find symbol<br>
+for(Player a : PlayerHandler.players){<br>
+^<br>
+symbol:   class Player<br>
+location: class Commands</blockquote>
+<p>wtf is this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/22</link>
+        <pubDate>Fri, 23 Dec 2011 16:55:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-22</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+      <item>
+        <title>[317] Check Bank Command [PI]</title>
+        <dc:creator><![CDATA[@valcombird valcombird]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/valcombird">@valcombird</a> wrote:</p>
+          <blockquote>
+              <p>I kept adding them and deleting some still didn’t work…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947/21</link>
+        <pubDate>Fri, 01 Jul 2011 21:30:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-393947-21</guid>
+        <source url="https://forum.moparisthebest.com/t/317-check-bank-command-pi/393947.rss">[317] Check Bank Command [PI]</source>
+      </item>
+  </channel>
+</rss>

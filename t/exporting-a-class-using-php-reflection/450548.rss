@@ -1,0 +1,454 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Exporting a class using PHP Reflection</title>
+    <link>https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548</link>
+    <description>Just thought I would share some utility methods with getting information on specified classes. The main point of this is my emulation of PHP’s export() function (mine is the exportClass() function).
+
+Use as,
+[code]
+&lt;?php
+
+abstract class TestClass {
+    
+    private $dummy;
+    public $dummy2;
+    protected $dummy3;
+    static $staticDummy;
+    
+    public abstract function abstractMethod();
+    public function publicMethodWithArgs($arg, $arg2) {}
+    public function publicMethod() {}
+    public static function staticMethod($arg) {}
+    protected function protectedMethod() {}
+    private function privateMethod() {}
+}
+
+$class = ScanClass::loadClass(&#39;TestClass&#39;);
+if (!$class) {
+    die(&#39;Something broke.&#39;);
+} else {
+    echo &#39;&lt;pre&gt;&#39;;
+    echo $class-&gt;exportClass();
+    echo &#39;&lt;/pre&gt;&#39;;
+}
+
+?&gt;
+[/code]
+
+[code]
+&lt;?php
+
+class ScanClass {
+    
+    private static $clazz = null;
+    
+    public static function loadClass($className) {
+        try {
+            self::$clazz = new ReflectionClass($className);
+        } catch (ReflectionException $ex) {
+            return false;
+        }
+        
+        return new ScanClass();
+    }
+    
+    // Testing purposes - PHP&#39;s export()
+    public static function ex() {
+        return ReflectionClass::export(self::$clazz);
+    }
+    
+    public function exportClass() {
+        // So I have OCD..?
+        define(&#39;PHP_TAB&#39;, &quot;\t&quot;);
+
+        $export = &#39;Class [ &#39; . (self::$clazz-&gt;isInterface() ? &#39;interface&#39; : (self::$clazz-&gt;isAbstract() ? &#39;abstract &#39; : &#39;&#39;) . &#39;class&#39;) . &#39; &#39; . self::$clazz-&gt;getName() . &#39; &#39;;
+        $parent = self::$clazz-&gt;getParentClass();
+        if ($parent != null)
+            $export .= &#39;extends &#39; . $parent-&gt;getName() . &#39; &#39;;
+        
+        $interfaces = self::$clazz-&gt;getInterfaceNames();
+        $interfaceCount = count($interfaces);
+        if ($interfaceCount &gt; 0) {
+            $export .= &#39;implements &#39;;
+            for ($i = 0; $i &lt; $interface_count; $i++)
+                $export .= $interfaces[$i] . ($i &lt;= count($interfaceCount) ? &#39;&#39; : &#39;, &#39;);
+        }
+        
+        $export .= &#39;] {&#39; . PHP_EOL;
+        
+        $staticFields = self::$clazz-&gt;getProperties(ReflectionMethod::IS_STATIC);
+        $staticFieldCount = count($staticFields);
+        $export .= PHP_TAB . &#39;- Static properties [&#39; . $staticFieldCount . &#39;] {&#39;;
+        if ($staticFieldCount &gt; 0) {
+            for ($i = 0; $i &lt; $staticFieldCount; $i++) {
+                $fieldProperty = $staticFields[$i];
+                $export .= PHP_EOL . PHP_TAB . PHP_TAB . &#39;Static property [ &#39; . self::modifierIntToString($fieldProperty-&gt;getModifiers()) . &#39; $&#39; . $fieldProperty-&gt;getName() . &#39; ]&#39;;
+            }
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . &#39;}&#39; . PHP_EOL;
+        
+        $staticMethods = self::$clazz-&gt;getMethods(ReflectionMethod::IS_STATIC);
+        $staticMethodCount = count($staticMethods);
+        $export .= PHP_TAB . &#39;- Static methods [&#39; . $staticMethodCount . &#39;] {&#39;;
+        if ($staticMethodCount &gt; 0) {
+            for ($i = 0; $i &lt; $staticMethodCount; $i++) {
+                $methodProperty = $staticMethods[$i];
+                $export .= PHP_EOL . PHP_TAB . PHP_TAB . &#39;Static method [ &#39; . self::modifierIntToString($methodProperty-&gt;getModifiers()) . &#39; &#39; . $methodProperty-&gt;getName() . &#39; ]&#39;;
+            }
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . &#39;}&#39; . PHP_EOL;
+        
+        $fields = self::$clazz-&gt;getProperties(ReflectionMethod::IS_ABSTRACT | ReflectionMethod::IS_FINAL | ReflectionMethod::IS_PROTECTED | ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PRIVATE);
+        $fieldCount = count($fields);
+        if ($fieldCount &gt; 0) {
+            $validFields = 0;
+            $exportTemp  = &#39;&#39;;
+            for ($i = 0; $i &lt; $fieldCount; $i++) {
+                $fieldProperty = $fields[$i];
+                if ($fieldProperty-&gt;isStatic())
+                    continue;
+                
+                $exportTemp .= PHP_EOL . PHP_TAB . PHP_TAB . &#39;Property [ &#39; . self::modifierIntToString($fieldProperty-&gt;getModifiers()) . &#39; $&#39; . $fieldProperty-&gt;getName() . &#39; ]&#39;;
+                $validFields++;
+            }
+            
+            $export .= PHP_TAB . &#39;- Properties [&#39; . $validFields . &#39;] {&#39; . $exportTemp;
+        } else {
+            $export .= PHP_TAB . &#39;- Properties [0] {&#39;;
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . &#39;}&#39; . PHP_EOL;
+        
+        $methods = self::$clazz-&gt;getMethods(ReflectionMethod::IS_ABSTRACT | ReflectionMethod::IS_FINAL | ReflectionMethod::IS_PROTECTED | ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PRIVATE);
+        $methodCount = count($methods);
+        if ($methodCount &gt; 0) {
+            $exportTemp = &#39;&#39;;
+            $validMethods = 0;
+            for ($i = 0; $i &lt; $methodCount; $i++) {
+                $methodProperty = $methods[$i];
+                if ($methodProperty-&gt;isStatic())
+                    continue;
+                
+                $exportTemp .= PHP_EOL . PHP_TAB . PHP_TAB . &#39;Method [ &#39; . self::modifierIntToString($methodProperty-&gt;getModifiers()) . &#39; &#39; . $methodProperty-&gt;getName() . &#39; ]&#39;;
+                $validMethods++;
+            }
+            
+            $export .= PHP_TAB . &#39;- Methods [&#39; . $validMethods . &#39;] {&#39; . $exportTemp;
+        } else {
+            $export .= PHP_TAB . &#39;- Methods [0] {&#39;;
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . &#39;}&#39; . PHP_EOL;
+        return $export . &#39;}&#39;;
+    }
+    
+    private function modifierIntToString($modifier) {
+        $str = &#39;&#39;;
+        switch ($modifier) {
+            case 256:
+            case 257:
+            case 65792:
+                $str = &#39;public&#39;;
+                break;
+            case 512:
+            case 513:
+            case 66048:
+                $str = &#39;protected&#39;;
+                break;
+            case 1024:
+            case 1025:
+            case 66560:
+                $str = &#39;private&#39;;
+                break;
+            case 8448:
+                $str = &#39;constructor&#39;;
+                break;
+            case 65794:
+                $str = &#39;abstract&#39;;
+                break;
+        }
+        
+        return $str;
+    }
+}
+
+?&gt;
+[/code]
+
+An example run (doesn&#39;t seem to format properly here),
+&lt;blockquote&gt;Class [ abstract class Test implements Test2 ] { 
+   – Static properties [0] { 
+   } 
+   – Static methods [1] { 
+      Static method [ private lol ] 
+   } 
+   – Properties [1] { 
+      Property [ protected $static ] 
+   } 
+   – Methods [4] { 
+      Method [ constructor __construct ] 
+      Method [ protected lol2 ] 
+      Method [ abstract lol3 ] 
+      Method [ public lol4 ] 
+   }
+}&lt;/blockquote&gt;</description>
+    
+    <lastBuildDate>Sat, 21 Jul 2012 18:51:13 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Exporting a class using PHP Reflection</title>
+        <dc:creator><![CDATA[@Protosstribe object]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/protosstribe">@Protosstribe</a> wrote:</p>
+          <blockquote>
+              <p>I used reflection in a PHP-project at work, where we needed a modular object oriented system. The core I built used IoC (Inversion of Control) using DI (Dependency Injection), and it was here reflection came into the picture. This approach made it really easy to extend or modify. So it was a success at work.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/4</link>
+        <pubDate>Sat, 21 Jul 2012 18:51:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450548-4</guid>
+        <source url="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548.rss">Exporting a class using PHP Reflection</source>
+      </item>
+      <item>
+        <title>Exporting a class using PHP Reflection</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sppt, post:2, topic:450548”]What exactly is the use of this?<br>
+I have never come across a situation where I would need reflection in PHP.</p>
+<p>Also, perhaps it’s better to name getSingleton to something like loadClasses, the standard library is confusing enough as it is :)[/quote]</p>
+<p>Sorry sppt, removed it for a couple minutes while I re-evaluate my code. It’s an older piece of code so it needs to be updated. Basically all I’m doing is emulating PHP’s export() function with the help of PHP Reflection.</p>
+<p>I can’t think of a use for it, but I got bored one day so I made this!</p>
+<p>Updated the code. I think it makes more sense now. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/3</link>
+        <pubDate>Sat, 21 Jul 2012 01:39:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450548-3</guid>
+        <source url="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548.rss">Exporting a class using PHP Reflection</source>
+      </item>
+      <item>
+        <title>Exporting a class using PHP Reflection</title>
+        <dc:creator><![CDATA[@sppt sppt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sppt">@sppt</a> wrote:</p>
+          <blockquote>
+              <p>What exactly is the use of this?<br>
+I have never come across a situation where I would need reflection in PHP.</p>
+<p>Also, perhaps it’s better to name getSingleton to something like loadClasses, the standard library is confusing enough as it is <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/2</link>
+        <pubDate>Sat, 21 Jul 2012 01:23:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450548-2</guid>
+        <source url="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548.rss">Exporting a class using PHP Reflection</source>
+      </item>
+      <item>
+        <title>Exporting a class using PHP Reflection</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>Just thought I would share some utility methods with getting information on specified classes. The main point of this is my emulation of PHP’s export() function (mine is the exportClass() function).</p>
+<p>Use as,</p>
+<pre><code class="lang-auto">&lt;?php
+
+abstract class TestClass {
+    
+    private $dummy;
+    public $dummy2;
+    protected $dummy3;
+    static $staticDummy;
+    
+    public abstract function abstractMethod();
+    public function publicMethodWithArgs($arg, $arg2) {}
+    public function publicMethod() {}
+    public static function staticMethod($arg) {}
+    protected function protectedMethod() {}
+    private function privateMethod() {}
+}
+
+$class = ScanClass::loadClass('TestClass');
+if (!$class) {
+    die('Something broke.');
+} else {
+    echo '&lt;pre&gt;';
+    echo $class-&gt;exportClass();
+    echo '&lt;/pre&gt;';
+}
+
+?&gt;</code></pre>
+<pre><code class="lang-auto">&lt;?php
+
+class ScanClass {
+    
+    private static $clazz = null;
+    
+    public static function loadClass($className) {
+        try {
+            self::$clazz = new ReflectionClass($className);
+        } catch (ReflectionException $ex) {
+            return false;
+        }
+        
+        return new ScanClass();
+    }
+    
+    // Testing purposes - PHP's export()
+    public static function ex() {
+        return ReflectionClass::export(self::$clazz);
+    }
+    
+    public function exportClass() {
+        // So I have OCD..?
+        define('PHP_TAB', "\t");
+
+        $export = 'Class [ ' . (self::$clazz-&gt;isInterface() ? 'interface' : (self::$clazz-&gt;isAbstract() ? 'abstract ' : '') . 'class') . ' ' . self::$clazz-&gt;getName() . ' ';
+        $parent = self::$clazz-&gt;getParentClass();
+        if ($parent != null)
+            $export .= 'extends ' . $parent-&gt;getName() . ' ';
+        
+        $interfaces = self::$clazz-&gt;getInterfaceNames();
+        $interfaceCount = count($interfaces);
+        if ($interfaceCount &gt; 0) {
+            $export .= 'implements ';
+            for ($i = 0; $i &lt; $interface_count; $i++)
+                $export .= $interfaces[$i] . ($i &lt;= count($interfaceCount) ? '' : ', ');
+        }
+        
+        $export .= '] {' . PHP_EOL;
+        
+        $staticFields = self::$clazz-&gt;getProperties(ReflectionMethod::IS_STATIC);
+        $staticFieldCount = count($staticFields);
+        $export .= PHP_TAB . '- Static properties [' . $staticFieldCount . '] {';
+        if ($staticFieldCount &gt; 0) {
+            for ($i = 0; $i &lt; $staticFieldCount; $i++) {
+                $fieldProperty = $staticFields[$i];
+                $export .= PHP_EOL . PHP_TAB . PHP_TAB . 'Static property [ ' . self::modifierIntToString($fieldProperty-&gt;getModifiers()) . ' $' . $fieldProperty-&gt;getName() . ' ]';
+            }
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . '}' . PHP_EOL;
+        
+        $staticMethods = self::$clazz-&gt;getMethods(ReflectionMethod::IS_STATIC);
+        $staticMethodCount = count($staticMethods);
+        $export .= PHP_TAB . '- Static methods [' . $staticMethodCount . '] {';
+        if ($staticMethodCount &gt; 0) {
+            for ($i = 0; $i &lt; $staticMethodCount; $i++) {
+                $methodProperty = $staticMethods[$i];
+                $export .= PHP_EOL . PHP_TAB . PHP_TAB . 'Static method [ ' . self::modifierIntToString($methodProperty-&gt;getModifiers()) . ' ' . $methodProperty-&gt;getName() . ' ]';
+            }
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . '}' . PHP_EOL;
+        
+        $fields = self::$clazz-&gt;getProperties(ReflectionMethod::IS_ABSTRACT | ReflectionMethod::IS_FINAL | ReflectionMethod::IS_PROTECTED | ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PRIVATE);
+        $fieldCount = count($fields);
+        if ($fieldCount &gt; 0) {
+            $validFields = 0;
+            $exportTemp  = '';
+            for ($i = 0; $i &lt; $fieldCount; $i++) {
+                $fieldProperty = $fields[$i];
+                if ($fieldProperty-&gt;isStatic())
+                    continue;
+                
+                $exportTemp .= PHP_EOL . PHP_TAB . PHP_TAB . 'Property [ ' . self::modifierIntToString($fieldProperty-&gt;getModifiers()) . ' $' . $fieldProperty-&gt;getName() . ' ]';
+                $validFields++;
+            }
+            
+            $export .= PHP_TAB . '- Properties [' . $validFields . '] {' . $exportTemp;
+        } else {
+            $export .= PHP_TAB . '- Properties [0] {';
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . '}' . PHP_EOL;
+        
+        $methods = self::$clazz-&gt;getMethods(ReflectionMethod::IS_ABSTRACT | ReflectionMethod::IS_FINAL | ReflectionMethod::IS_PROTECTED | ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PRIVATE);
+        $methodCount = count($methods);
+        if ($methodCount &gt; 0) {
+            $exportTemp = '';
+            $validMethods = 0;
+            for ($i = 0; $i &lt; $methodCount; $i++) {
+                $methodProperty = $methods[$i];
+                if ($methodProperty-&gt;isStatic())
+                    continue;
+                
+                $exportTemp .= PHP_EOL . PHP_TAB . PHP_TAB . 'Method [ ' . self::modifierIntToString($methodProperty-&gt;getModifiers()) . ' ' . $methodProperty-&gt;getName() . ' ]';
+                $validMethods++;
+            }
+            
+            $export .= PHP_TAB . '- Methods [' . $validMethods . '] {' . $exportTemp;
+        } else {
+            $export .= PHP_TAB . '- Methods [0] {';
+        }
+        
+        $export .= PHP_EOL . PHP_TAB . '}' . PHP_EOL;
+        return $export . '}';
+    }
+    
+    private function modifierIntToString($modifier) {
+        $str = '';
+        switch ($modifier) {
+            case 256:
+            case 257:
+            case 65792:
+                $str = 'public';
+                break;
+            case 512:
+            case 513:
+            case 66048:
+                $str = 'protected';
+                break;
+            case 1024:
+            case 1025:
+            case 66560:
+                $str = 'private';
+                break;
+            case 8448:
+                $str = 'constructor';
+                break;
+            case 65794:
+                $str = 'abstract';
+                break;
+        }
+        
+        return $str;
+    }
+}
+
+?&gt;</code></pre>
+<p>An example run (doesn’t seem to format properly here),</p>
+<blockquote>Class [ abstract class Test implements Test2 ] { 
+   – Static properties [0] { 
+   } 
+   – Static methods [1] { 
+      Static method [ private lol ] 
+   } 
+   – Properties [1] { 
+      Property [ protected $static ] 
+   } 
+   – Methods [4] { 
+      Method [ constructor __construct ] 
+      Method [ protected lol2 ] 
+      Method [ abstract lol3 ] 
+      Method [ public lol4 ] 
+   }
+}</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548/1</link>
+        <pubDate>Sat, 21 Jul 2012 00:46:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-450548-1</guid>
+        <source url="https://forum.moparisthebest.com/t/exporting-a-class-using-php-reflection/450548.rss">Exporting a class using PHP Reflection</source>
+      </item>
+  </channel>
+</rss>

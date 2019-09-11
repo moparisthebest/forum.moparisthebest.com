@@ -1,0 +1,846 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>SocketException - Update Keys</title>
+    <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637</link>
+    <description>This is the error that is being printed out to the console:
+[CODE]
+java.net.SocketException: Software caused connection abort: socket write error
+	at java.net.SocketOutputStream.socketWrite0(Native Method)
+	at java.net.SocketOutputStream.socketWrite(Unknown Source)
+	at java.net.SocketOutputStream.write(Unknown Source)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:70)
+	at com.runescape.revised.net.io.Login.run(Login.java:86)
+	at java.lang.Thread.run(Unknown Source)
+[/CODE]
+
+Line 70 is this:
+[CODE]
+this.getOutputStream().write(Constants.UPDATE_KEYS[i]);
+[/CODE]
+
+I&#39;m completely lost as to how it&#39;s not able to write out the update keys to the client. Am I missing something here? Thanks in advance.</description>
+    
+    <lastBuildDate>Fri, 06 Jun 2014 17:16:31 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <p>Here’s a partial bit of my server - Login only:</p>
+<p>[size=10pt]<span class="bbcode-b">IO Class (I decided to go from IO to NIO 2.0):</span>[/size]</p>
+<pre><code class="lang-auto">package com.runescape.revised.net.io;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketException;
+import java.net.StandardSocketOptions;
+import java.nio.channels.AsynchronousChannelGroup;
+import java.nio.channels.AsynchronousServerSocketChannel;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+import com.runescape.Constants;
+import com.runescape.revised.util.Timer;
+
+/**
+ *
+ * 
+ * @author Josh
+ *
+ */
+public class IO {
+
+	/**
+	 * Class constructor.
+	 */
+	public IO() {
+		final Timer timer = new Timer();
+		try {
+			final AsynchronousChannelGroup serverGroup = AsynchronousChannelGroup.withThreadPool(Executors.newSingleThreadExecutor());
+			this.setAsynchronousServerSocket(AsynchronousServerSocketChannel.open(serverGroup).bind(new InetSocketAddress(Constants.PORT)));
+			System.out.println("IO started in " + timer.toString());
+			while (this.isRunning()) {
+				final Future&lt;AsynchronousSocketChannel&gt; serverFuture = this.getAsynchronousServerSocket().accept();
+				try {
+					this.setAsynchronousClientSocket(serverFuture.get());
+					this.getAsynchronousClientSocket().setOption(StandardSocketOptions.SO_KEEPALIVE, Boolean.TRUE);
+					this.getAsynchronousClientSocket().setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
+				} catch (InterruptedException | ExecutionException ee) {
+					ee.printStackTrace();
+				}
+				this.setClientThread(new Login(this.getAsynchronousClientSocket()));
+			}
+			this.setRunning(false);
+			this.getAsynchronousServerSocket().close();
+			this.getAsynchronousClientSocket().close();
+		} catch (final SocketException se) {
+			se.printStackTrace();
+			this.setRunning(false);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+			this.setRunning(false);
+		}
+	}
+}</code></pre>
+<p>[size=10pt]<span class="bbcode-b">Login Class:</span>[/size]</p>
+<pre><code class="lang-auto">package com.runescape.revised.net.io;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.Channels;
+
+import com.runescape.Constants;
+import com.runescape.Main;
+import com.runescape.revised.logic.encryption.Cryption;
+import com.runescape.revised.net.login.Login317;
+import com.runescape.revised.net.login.Login474;
+import com.runescape.revised.net.login.Login508;
+import com.runescape.revised.net.login.Login562;
+
+/**
+ * Represents the Login class so that
+ * players may login to the server.
+ * 
+ * @author Josh
+ *
+ */
+public class Login implements Runnable {
+
+	/**
+	 * Class constructor.
+	 * 
+	 * @param asynchronousSocketChannel
+	 * 			The socket.
+	 */
+	public Login(final AsynchronousSocketChannel clientSocket) {
+		this.setClientSocket(clientSocket);
+		this.setInputStream(Channels.newInputStream(clientSocket));
+		this.setClientThread(new Thread(this));
+		this.getClientThread().start();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Runnable#run()
+	 */
+	@Override
+	public void run() {
+		this.setOutStream(new IOPacketBuffer(new byte[Constants.BUFFER_SIZE]));
+		this.getOutStream().setCurrentOffset(0);
+		this.setInStream(new IOPacketBuffer(new byte[Constants.BUFFER_SIZE]));
+		this.getInStream().setCurrentOffset(0);
+		this.fillInStream(2);
+
+		/**
+		 * Switch between each revision.
+		 */
+		switch (Main.getMain().getRevisionType()) {
+		case THREE_ONE_SEVEN:
+			new Login317(this.getOutStream(), this.getInStream(), this.getClientSocket());
+			break;
+		case FOUR_SEVEN_FOUR:
+			new Login474();
+			break;
+		case FIVE_OH_EIGHT:
+			new Login508();
+			break;
+		case FIVE_SIXTY_TWO:
+			new Login562(this.getOutStream(), this.getInStream(), this.getClientSocket());
+			break;
+		default:
+			System.out.println("Revision not supported!");
+		}
+	}
+}</code></pre>
+<p>[size=10pt]<span class="bbcode-b">Login562 Class:</span>[/size]</p>
+<pre><code class="lang-auto">package com.runescape.revised.net.login;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.Channels;
+
+import com.runescape.Constants;
+import com.runescape.Main;
+import com.runescape.revised.actor.entity.AbstractEntity;
+import com.runescape.revised.actor.entity.player.GamePlayer;
+import com.runescape.revised.engine.impl.GameEngine;
+import com.runescape.revised.logic.encryption.Cryption;
+import com.runescape.revised.net.io.IOPacketBuffer;
+import com.runescape.revised.net.packets.codec.login.LoginStage;
+import com.runescape.revised.net.packets.codec.login.RevisionType;
+import com.runescape.revised.util.Text;
+
+public class Login562 {
+
+	public Login562(final IOPacketBuffer outStream, final IOPacketBuffer inStream, final AsynchronousSocketChannel clientSocket) {
+		this.setOutStream(outStream);
+		this.setInStream(inStream);
+		this.setInputStream(Channels.newInputStream(clientSocket));
+		this.setOutputStream(Channels.newOutputStream(clientSocket));
+		final long clientSessionKey = 0, serverSessionKey = ((long) (Math.random() * 99999999D) &lt;&lt; 32) + (long) (Math.random() * 99999999D);
+		if (this.getLoginStage() == LoginStage.FIRST) {
+			System.out.println("First Call: " + Main.getMain().getRevisionType().getRevisionID());
+			this.setLoginStage(LoginStage.FOURTH);
+			final byte opcodeUpdate = (byte) this.getInStream().readUnsignedByte();
+			if (opcodeUpdate == 15) {
+				System.out.println("Opcode is 15!");
+				this.setLoginStage(LoginStage.SECOND);
+			}
+			this.getOutStream().writeByte((byte) 0);
+			this.getOutStream().writeQWord(0);
+			this.flushOutStream();
+			this.getInStream().setCurrentOffset(0);
+		}
+		if (this.getLoginStage() == LoginStage.SECOND) {
+			System.out.println("Second stage.");
+			@SuppressWarnings("unused")
+			final short clientRevision = (short) this.getInStream().readUnsignedWord();
+			try {
+				this.getOutputStream().write(0);
+				this.setLoginStage(LoginStage.THIRD);
+			} catch (final IOException ioe) {
+				ioe.printStackTrace();
+			}
+		}
+		if (this.getLoginStage() == LoginStage.THIRD) {
+			System.out.println("Third stage.");
+			Main.getMain().setRevisionType(RevisionType.FIVE_SIXTY_TWO);
+			System.out.println("Second Call: " + Main.getMain().getRevisionType().getRevisionID());
+			for (int i = 0; i &lt; Constants.UPDATE_KEYS.length; i++) {
+				try {
+					this.getOutputStream().write(Constants.UPDATE_KEYS[i]);
+				} catch (final IOException ioe) {
+					ioe.printStackTrace();
+				}
+			}
+			// this.flushOutStream();
+		}
+		if (this.getLoginStage() == LoginStage.FOURTH) {
+			System.out.println("Fourth stage.");
+			this.flushOutStream();
+			this.fillInStream(2);
+			System.out.println("Sending login type.");
+			final int loginType = this.getInStream().readUnsignedByte();
+			if ((loginType != 16) &amp;&amp; (loginType != 18)) {
+				System.out.println("Login type is not 16 and 18 - " + loginType);
+				return;
+			}
+			this.getInStream().readSkip(2);
+			System.out.println("Sending revision.");
+			@SuppressWarnings("unused")
+			final
+			short revision = (short) this.getInStream().readDWord();
+			this.getInStream().readSkip(30);
+			this.getInStream().readString();
+			this.getInStream().readSkip(143);
+			final long username = this.getInStream().readQWord();
+			final String name = Text.fixName(Text.longToString(username)).trim();
+			System.out.println("Name: " + name);
+			final String password = this.getInStream().readString();
+			System.out.println("Password: " + password);
+			System.out.println("Printed out username, user id, and password.");
+			final int[] sessionKey = new int[4];
+			sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+			sessionKey[1] = (int) clientSessionKey;
+			sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+			sessionKey[3] = (int) serverSessionKey;
+			for (int i = 0; i &lt; 4; i++) {
+				Integer.toHexString(sessionKey[i]);
+			}
+			this.setInStreamDecryption(new Cryption(sessionKey));
+			for (byte i = 0; i &lt; 4; i++) {
+				sessionKey[i] += 50;
+			}
+			for (byte i = 0; i &lt; 4; i++) {
+				Integer.toHexString(sessionKey[i]);
+			}
+			this.setOutStreamDecryption(new Cryption(sessionKey));
+			this.getOutStream().setPacketEncryption(this.getOutStreamDecryption());
+			AbstractEntity player = null;
+			try {
+				player = new GamePlayer(name, null);
+			} catch (final Exception e) {
+				e.printStackTrace();
+			}
+			try {
+				System.out.println("Sending return code of 2.");
+				this.getOutputStream().write(2); // return code
+				if (player.getName().equals("Josh") || player.getName().equals("Rodriges")) {
+					System.out.println("Sending player rights of 2 for " + player.getName());
+					this.getOutputStream().write(2); // rights
+				} else {
+					this.getOutputStream().write(0); // rights
+				}
+				this.getOutStream().writeByte((byte) 0);
+				System.out.println("Sending login bytes.");
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutStream().writeWord(1); // slot (playerID - same thing?)
+				this.getOutputStream().write((byte) 1);
+				this.getOutputStream().write((byte) 1); // members
+				this.flushOutStream();
+			} catch (final IOException ioe) {
+				ioe.printStackTrace();
+			}
+			System.out.println("Sending map region packet.");
+			this.getOutStream().createFrameVarSizeWord(76);
+			this.getOutStream().writeWordBigEndianA(player.getLocation().getRegionX());
+			this.getOutStream().writeWord(player.getLocation().getY());
+			this.getOutStream().writeByte((byte) 0);
+			this.getOutStream().writeByteA(0);
+			boolean forceRegion = (((player.getLocation().getRegionX() / 8) == 48) || ((player.getLocation().getRegionX() / 8) == 49)) &amp;&amp; ((player.getLocation().getRegionY() / 8) == 48);
+			if (((player.getLocation().getRegionX() / 8) == 48) &amp;&amp; ((player.getLocation().getRegionY() / 8) == 148)) {
+				forceRegion = true;
+			}
+			for (int xCalc = (player.getLocation().getRegionX() - 6) / 8; xCalc &lt;= ((player.getLocation().getRegionX() + 6) / 8); xCalc++) {
+				for (int yCalc = (player.getLocation().getRegionY() - 6) / 8; yCalc &lt;= ((player.getLocation().getRegionY() + 6) / 8); yCalc++) {
+					final int region = yCalc + (xCalc &lt;&lt; 8);
+					final int[] mapData = Main.getMain().getMapData().getRegionData(region);
+					if (forceRegion &amp;&amp; ((yCalc == 49) || (yCalc == 149) || (yCalc == 147) || (xCalc == 50) || ((xCalc == 49) &amp;&amp; (yCalc == 47)))) {
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+					} else {
+						this.getOutStream().writeDWord(mapData[0]);
+						this.getOutStream().writeDWord(mapData[1]);
+						this.getOutStream().writeDWord(mapData[2]);
+						this.getOutStream().writeDWord(mapData[3]);
+					}
+				}
+			}
+			this.getOutStream().writeByteA(player.getLocation().getZ());
+			this.getOutStream().writeWord(player.getLocation().getX());
+			this.getOutStream().writeWord(player.getLocation().getRegionY());
+			this.getOutStream().endFrameVarSizeWord();
+
+			this.getOutStream().createFrame(50);
+			this.getOutStream().writeWordA(548);
+			this.getOutStream().writeWord(0);
+			this.getOutStream().writeByteS(0);
+
+			this.getOutStream().createFrame(50);
+			this.getOutStream().writeWordA(549);
+			this.getOutStream().writeWord(0);
+			this.getOutStream().writeByteS(0);
+			this.flushOutStream();
+			new GameEngine((GamePlayer) player);
+		}
+	}
+}</code></pre>
+<p>I switched from Windows 7 to Ubuntu 12.04. With Windows 7, I get the following:</p>
+<pre><code class="lang-auto">java.io.IOException: java.io.IOException: An established connection was aborted by the software in your host machine
+	at java.nio.channels.Channels$3.write(Unknown Source)
+	at java.io.OutputStream.write(Unknown Source)
+	at java.nio.channels.Channels$3.write(Unknown Source)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:71)
+	at com.runescape.revised.net.io.Login.run(Login.java:85)
+	at java.lang.Thread.run(Unknown Source)</code></pre>
+<p>With Ubuntu 12.04, I get the following:</p>
+<pre><code class="lang-auto">java.io.IOException: java.io.IOException: Connection reset by peer
+	at java.nio.channels.Channels$3.write(Channels.java:313)
+	at java.io.OutputStream.write(OutputStream.java:75)
+	at java.nio.channels.Channels$3.write(Channels.java:286)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:64)
+	at com.runescape.revised.net.io.Login.run(Login.java:73)
+	at java.lang.Thread.run(Thread.java:744)
+Caused by: java.io.IOException: Connection reset by peer
+	at sun.nio.ch.FileDispatcherImpl.write0(Native Method)
+	at sun.nio.ch.SocketDispatcher.write(SocketDispatcher.java:47)
+	at sun.nio.ch.IOUtil.writeFromNativeBuffer(IOUtil.java:93)
+	at sun.nio.ch.IOUtil.write(IOUtil.java:65)
+	at sun.nio.ch.UnixAsynchronousSocketChannelImpl.implWrite(UnixAsynchronousSocketChannelImpl.java:691)
+	at sun.nio.ch.AsynchronousSocketChannelImpl.write(AsynchronousSocketChannelImpl.java:381)
+	at sun.nio.ch.AsynchronousSocketChannelImpl.write(AsynchronousSocketChannelImpl.java:386)
+	at java.nio.channels.Channels$3.write(Channels.java:311)
+	... 5 more
+java.io.IOException: java.io.IOException: Broken pipe
+	at java.nio.channels.Channels$3.write(Channels.java:313)
+	at java.io.OutputStream.write(OutputStream.java:75)
+	at java.nio.channels.Channels$3.write(Channels.java:286)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:64)
+	at com.runescape.revised.net.io.Login.run(Login.java:73)
+	at java.lang.Thread.run(Thread.java:744)</code></pre>
+<p>If you can find anything wrong with the above code that would give me a Broken Pipe or a Connection Reset by Peer, I would gladly appreciate it!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/8</link>
+        <pubDate>Fri, 06 Jun 2014 17:16:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-8</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Rodrigues, post:6, topic:543637”][quote author=zyle1992 link=topic=662519.msg4428443#msg4428443 date=1401992702]<br>
+It means the server disconnected the client.<br>
+[/quote]<br>
+Mind going a bit in-depth on this because I’m unsure as to how the server disconnected the client?[/quote]</p>
+<p>There’s probably something in the server protocol handling than in the client. Something like</p>
+<pre><code class="lang-auto">// Start reading UKeys
+int value = getValue();
+if (value != expectedValue) {
+    disconnectClient();
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/7</link>
+        <pubDate>Thu, 05 Jun 2014 22:01:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-7</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="543637">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/zyle1992/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> zyle1992:</div>
+<blockquote>
+<p>It means the server disconnected the client.</p>
+</blockquote>
+</aside>
+<p>Mind going a bit in-depth on this because I’m unsure as to how the server disconnected the client?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/6</link>
+        <pubDate>Thu, 05 Jun 2014 19:05:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-6</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>It means the server disconnected the client.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/5</link>
+        <pubDate>Thu, 05 Jun 2014 18:25:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-5</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">package com.runescape.revised.net.login;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.nio.channels.AsynchronousSocketChannel;
+
+import com.runescape.Constants;
+import com.runescape.Main;
+import com.runescape.revised.actor.entity.AbstractEntity;
+import com.runescape.revised.actor.entity.player.GamePlayer;
+import com.runescape.revised.engine.impl.GameEngine;
+import com.runescape.revised.logic.encryption.Cryption;
+import com.runescape.revised.net.io.IOPacketBuffer;
+import com.runescape.revised.net.packets.codec.login.LoginStage;
+import com.runescape.revised.net.packets.codec.login.RevisionType;
+import com.runescape.revised.util.Text;
+
+public class Login562 {
+
+	private IOPacketBuffer outStream, inStream;
+	private InputStream inputStream;
+	private OutputStream outputStream;
+	private Cryption inStreamDecryption, outStreamDecryption;
+	private LoginStage loginStage = LoginStage.FIRST;
+
+	public Login562(final IOPacketBuffer outStream, final IOPacketBuffer inStream, final Socket socket, final AsynchronousSocketChannel clientSocket) {
+		this.setOutStream(outStream);
+		this.setInStream(inStream);
+		// this.setInputStream(Channels.newInputStream(clientSocket));
+		// this.setOutputStream(Channels.newOutputStream(clientSocket));
+		try {
+			this.setInputStream(socket.getInputStream());
+			this.setOutputStream(socket.getOutputStream());
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		final long clientSessionKey = 0, serverSessionKey = ((long) (Math.random() * 99999999D) &lt;&lt; 32) + (long) (Math.random() * 99999999D);
+		if (this.getLoginStage() == LoginStage.FIRST) {
+			System.out.println("First Call: " + Main.getMain().getRevisionType().getRevisionID());
+			this.setLoginStage(LoginStage.FOURTH);
+			final byte opcodeUpdate = (byte) this.getInStream().readUnsignedByte();
+			if (opcodeUpdate == 15) {
+				System.out.println("Opcode is 15!");
+				this.setLoginStage(LoginStage.SECOND);
+			}
+			this.getOutStream().writeByte((byte) 0);
+			this.getOutStream().writeQWord(0);
+			this.flushOutStream();
+			this.getInStream().setCurrentOffset(0);
+		}
+		if (this.getLoginStage() == LoginStage.SECOND) {
+			System.out.println("Second stage.");
+			@SuppressWarnings("unused")
+			final short clientRevision = (short) this.getInStream().readUnsignedWord();
+			try {
+				this.getOutputStream().write(0);
+				this.setLoginStage(LoginStage.THIRD);
+			} catch (final IOException ioe) {
+				ioe.printStackTrace();
+			}
+		}
+		if (this.getLoginStage() == LoginStage.THIRD) {
+			System.out.println("Third stage.");
+			Main.getMain().setRevisionType(RevisionType.FIVE_SIXTY_TWO);
+			System.out.println("Second Call: " + Main.getMain().getRevisionType().getRevisionID());
+			for (int i = 0; i &lt; Constants.UPDATE_KEYS.length; i++) {
+				try {
+					this.getOutputStream().write(Constants.UPDATE_KEYS[i]);
+				} catch (final IOException ioe) {
+					ioe.printStackTrace();
+				}
+			}
+			// this.flushOutStream();
+		}
+		if (this.getLoginStage() == LoginStage.FOURTH) {
+			System.out.println("Fourth stage.");
+			this.flushOutStream();
+			this.fillInStream(2);
+			System.out.println("Sending login type.");
+			final int loginType = this.getInStream().readUnsignedByte();
+			if ((loginType != 16) &amp;&amp; (loginType != 18)) {
+				System.out.println("Login type is not 16 and 18 - " + loginType);
+				return;
+			}
+			this.getInStream().readSkip(2);
+			System.out.println("Sending revision.");
+			@SuppressWarnings("unused")
+			final
+			short revision = (short) this.getInStream().readDWord();
+			this.getInStream().readSkip(30);
+			this.getInStream().readString();
+			this.getInStream().readSkip(143);
+			final long username = this.getInStream().readQWord();
+			final String name = Text.fixName(Text.longToString(username)).trim();
+			System.out.println("Name: " + name);
+			final String password = this.getInStream().readString();
+			System.out.println("Password: " + password);
+			System.out.println("Printed out username, user id, and password.");
+			final int[] sessionKey = new int[4];
+			sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+			sessionKey[1] = (int) clientSessionKey;
+			sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+			sessionKey[3] = (int) serverSessionKey;
+			for (int i = 0; i &lt; 4; i++) {
+				Integer.toHexString(sessionKey[i]);
+			}
+			this.setInStreamDecryption(new Cryption(sessionKey));
+			for (byte i = 0; i &lt; 4; i++) {
+				sessionKey[i] += 50;
+			}
+			for (byte i = 0; i &lt; 4; i++) {
+				Integer.toHexString(sessionKey[i]);
+			}
+			this.setOutStreamDecryption(new Cryption(sessionKey));
+			this.getOutStream().setPacketEncryption(this.getOutStreamDecryption());
+			AbstractEntity player = null;
+			try {
+				player = new GamePlayer(name, null);
+			} catch (final Exception e) {
+				e.printStackTrace();
+			}
+			try {
+				System.out.println("Sending return code of 2.");
+				this.getOutputStream().write(2); // return code
+				if (player.getName().equals("Josh") || player.getName().equals("Rodriges")) {
+					System.out.println("Sending player rights of 2 for " + player.getName());
+					this.getOutputStream().write(2); // rights
+				} else {
+					this.getOutputStream().write(0); // rights
+				}
+				this.getOutStream().writeByte((byte) 0);
+				System.out.println("Sending login bytes.");
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutputStream().write((byte) 0);
+				this.getOutStream().writeWord(1); // slot (playerID - same thing?)
+				this.getOutputStream().write((byte) 1);
+				this.getOutputStream().write((byte) 1); // members
+				this.flushOutStream();
+			} catch (final IOException ioe) {
+				ioe.printStackTrace();
+			}
+			System.out.println("Sending map region packet.");
+			this.getOutStream().createFrameVarSizeWord(76);
+			this.getOutStream().writeWordBigEndianA(player.getLocation().getRegionX());
+			this.getOutStream().writeWord(player.getLocation().getY());
+			this.getOutStream().writeByte((byte) 0);
+			this.getOutStream().writeByteA(0);
+			boolean forceRegion = (((player.getLocation().getRegionX() / 8) == 48) || ((player.getLocation().getRegionX() / 8) == 49)) &amp;&amp; ((player.getLocation().getRegionY() / 8) == 48);
+			if (((player.getLocation().getRegionX() / 8) == 48) &amp;&amp; ((player.getLocation().getRegionY() / 8) == 148)) {
+				forceRegion = true;
+			}
+			for (int xCalc = (player.getLocation().getRegionX() - 6) / 8; xCalc &lt;= ((player.getLocation().getRegionX() + 6) / 8); xCalc++) {
+				for (int yCalc = (player.getLocation().getRegionY() - 6) / 8; yCalc &lt;= ((player.getLocation().getRegionY() + 6) / 8); yCalc++) {
+					final int region = yCalc + (xCalc &lt;&lt; 8);
+					final int[] mapData = Main.getMain().getMapData().getRegionData(region);
+					if (forceRegion &amp;&amp; ((yCalc == 49) || (yCalc == 149) || (yCalc == 147) || (xCalc == 50) || ((xCalc == 49) &amp;&amp; (yCalc == 47)))) {
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+						this.getOutStream().writeDWord(-1);
+					} else {
+						this.getOutStream().writeDWord(mapData[0]);
+						this.getOutStream().writeDWord(mapData[1]);
+						this.getOutStream().writeDWord(mapData[2]);
+						this.getOutStream().writeDWord(mapData[3]);
+					}
+				}
+			}
+			this.getOutStream().writeByteA(player.getLocation().getZ());
+			this.getOutStream().writeWord(player.getLocation().getX());
+			this.getOutStream().writeWord(player.getLocation().getRegionY());
+			this.getOutStream().endFrameVarSizeWord();
+
+			this.getOutStream().createFrame(50);
+			this.getOutStream().writeWordA(548);
+			this.getOutStream().writeWord(0);
+			this.getOutStream().writeByteS(0);
+
+			this.getOutStream().createFrame(50);
+			this.getOutStream().writeWordA(549);
+			this.getOutStream().writeWord(0);
+			this.getOutStream().writeByteS(0);
+			this.flushOutStream();
+			new GameEngine((GamePlayer) player);
+		}
+	}
+
+	public void flushOutStream() {
+		if (this.getOutStream() == null) {
+			System.out.println("Outstream is null.");
+			return;
+		}
+		if (this.getOutStream().getCurrentOffset() == 0) {
+			System.out.println("Current offset is 0.");
+			return;
+		}
+		try {
+			this.getOutputStream().write(this.getOutStream().getBuffer(), 0, this.getOutStream().getCurrentOffset());
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		this.getOutStream().setCurrentOffset(0);
+	}
+
+	public void fillInStream(final int forceRead) {
+		if (this.getInStream() == null) {
+			System.out.println("InStream is null.");
+			return;
+		}
+		this.getInStream().setCurrentOffset(0);
+		try {
+			this.getInputStream().read(this.getInStream().getBuffer(), 0, forceRead);
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+	}
+
+	public void setOutStream(final IOPacketBuffer outStream) {
+		this.outStream = outStream;
+	}
+
+	public IOPacketBuffer getOutStream() {
+		return this.outStream;
+	}
+
+	public void setInStream(final IOPacketBuffer inStream) {
+		this.inStream = inStream;
+	}
+
+	public IOPacketBuffer getInStream() {
+		return this.inStream;
+	}
+
+	public void setInputStream(final InputStream inputStream) {
+		this.inputStream = inputStream;
+	}
+
+	public InputStream getInputStream() {
+		return this.inputStream;
+	}
+
+	public void setOutputStream(final OutputStream outputStream) {
+		this.outputStream = outputStream;
+	}
+
+	public OutputStream getOutputStream() {
+		return this.outputStream;
+	}
+
+	public void setInStreamDecryption(final Cryption inStreamDecryption) {
+		this.inStreamDecryption = inStreamDecryption;
+	}
+
+	public Cryption getInStreamDecryption() {
+		return this.inStreamDecryption;
+	}
+
+	public void setOutStreamDecryption(final Cryption outStreamDecryption) {
+		this.outStreamDecryption = outStreamDecryption;
+	}
+
+	public Cryption getOutStreamDecryption() {
+		return this.outStreamDecryption;
+	}
+
+	public void setLoginStage(final LoginStage loginStage) {
+		this.loginStage = loginStage;
+	}
+
+	public LoginStage getLoginStage() {
+		return this.loginStage;
+	}
+}</code></pre>
+<aside class="quote" data-post="3" data-topic="543637">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/zyle1992/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> zyle1992:</div>
+<blockquote>
+<p>What Type does getOutputStream() return, and what Type is the UPDATE_KEYS[]?</p>
+</blockquote>
+</aside>
+<p>OutputStream is of type OutputStream.</p>
+<p>[size=10pt]<span class="bbcode-b">Update Keys:</span>[/size]</p>
+<pre><code class="lang-auto">	public static final int[] UPDATE_KEYS = {
+		-1, 0, -1, 0, 0, 0, 0, -24,
+		69, -2, -81, -42, 0, 0, 1, 109, 19, -70, 46, -45, 0, 0, 0, -32,
+		3, -96, -42, -122, 0, 0, 1, 57, 77, 50, -37, -107, 0, 0, 2, -62,
+		38, 98, -94, -120, 0, 0, 0, -62, 67, 101, -36, 14, 0, 0, 2, -66,
+		37, 10, -20, -38, 0, 0, 0, 48, -89, -35, -46, -87, 0, 0, 3, -68,
+		-9, -29, 0, -113, 0, 0, 0, -32, 126, -123, 61, -94, 0, 0, 1, 0,
+		41, 118, 39, 106, 0, 0, 0, 5, -57, -21, 28, 24, 0, 0, 0, 29,
+		120, -40, -46, -57, 0, 0, 2, -15, -117, -16, 126, 2, 0, 0, 0, 32,
+		-36, 110, -58, 45, 0, 0, 0, 27, 23, 48, -1, -82, 0, 0, 0, 6,
+		-126, 101, 82, -105, 0, 0, 2, 61, -50, 123, -76, -122, 0, 0, 1, 18,
+		-7, -46, 6, -47, 0, 0, 1, 100, -73, -63, 54, -77, 0, 0, 1, 32,
+		-122, 15, -91, 118, 0, 0, 4, 116, -29, -66, 26, -11, 0, 0, 0, 110,
+		119, 44, 56, 125, 0, 0, 0, -124, -46, 49, 46, 46, 0, 0, 0, -122,
+		-88, -59, -53, 91, 0, 0, 0, 51, 83, -52, -26, -52, 0, 0, 0, 5,
+		81, -44, 70, -90, 0, 0, 0, 113, 36, 87, 66, 92, 0, 0, 0, 0,
+		-9, -87, -3, 1, 0, 0, 0, 3,
+	};</code></pre>
+<p>Don’t mind the AsynchronousSocketChannel. I was testing it out beforehand so please disregard it. Above is the code for logging into a 562 client.</p>
+<aside class="quote" data-post="2" data-topic="543637">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Please provide more code and more insight to what you’re trying to achieve</p>
+</blockquote>
+</aside>
+<p>I’m trying to login to a 562 client but I keep on getting a SocketException: Software caused connection abort: socket write error. It always points at the Update Keys.</p>
+<p>When I use the AsynchronousSocketChannel rather than a regular Socket, I get the following:</p>
+<pre><code class="lang-auto">java.io.IOException: java.io.IOException: An established connection was aborted by the software in your host machine
+	at java.nio.channels.Channels$3.write(Unknown Source)
+	at java.io.OutputStream.write(Unknown Source)
+	at java.nio.channels.Channels$3.write(Unknown Source)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:71)
+	at com.runescape.revised.net.io.Login.run(Login.java:85)
+	at java.lang.Thread.run(Unknown Source)</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/4</link>
+        <pubDate>Thu, 05 Jun 2014 00:09:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-4</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>What Type does getOutputStream() return, and what Type is the UPDATE_KEYS[]?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/3</link>
+        <pubDate>Wed, 04 Jun 2014 18:01:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-3</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Please provide more code and more insight to what you’re trying to achieve</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/2</link>
+        <pubDate>Wed, 04 Jun 2014 03:07:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-2</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+      <item>
+        <title>SocketException - Update Keys</title>
+        <dc:creator><![CDATA[@Rodrigues Rodrigues]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodrigues">@Rodrigues</a> wrote:</p>
+          <blockquote>
+              <p>This is the error that is being printed out to the console:</p>
+<p><code>
+java.net.SocketException: Software caused connection abort: socket write error
+	at java.net.SocketOutputStream.socketWrite0(Native Method)
+	at java.net.SocketOutputStream.socketWrite(Unknown Source)
+	at java.net.SocketOutputStream.write(Unknown Source)
+	at com.runescape.revised.net.login.Login562.&lt;init&gt;(Login562.java:70)
+	at com.runescape.revised.net.io.Login.run(Login.java:86)
+	at java.lang.Thread.run(Unknown Source)
+</code></p>
+<p>Line 70 is this:</p>
+<p><code>
+this.getOutputStream().write(Constants.UPDATE_KEYS[i]);
+</code></p>
+<p>I’m completely lost as to how it’s not able to write out the update keys to the client. Am I missing something here? Thanks in advance.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/socketexception-update-keys/543637/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/socketexception-update-keys/543637/1</link>
+        <pubDate>Tue, 03 Jun 2014 22:19:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543637-1</guid>
+        <source url="https://forum.moparisthebest.com/t/socketexception-update-keys/543637.rss">SocketException - Update Keys</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,974 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+    <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609</link>
+    <description>[b]What is it?[/b]
+This is a basic download manager that support multiple, simultaneous downloads, and multiple, simultaneous zip archive extractions. The beauty of this application is that the DownloadManager instance will remain on the same thread as where it&#39;s implemented in (ex: rs2 client); meaning that the client will pause what it is doing to download these files. You can also receive a current percentage for each downloading file.
+
+[b]Where should I put this in my client?[/b]
+Most likely in signlink whilst the client is trying to locate the cache directory. I think the method is called findCacheDir() or something, you&#39;d have to check it out for yourself.
+
+[b]Example Usage:[/b]
+[code=java]
+
+/**
+ * Demonstrates how download manager works
+ * @author t4
+ */
+public class Example {
+
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) {
+		//Construct the singleton of DownloadManager
+		DownloadManager manager = DownloadManager.getInstance();
+		
+		//Enqueue a download task that is a zip file
+		manager.enqueueDownload(&quot;http://zip-framework.googlecode.com/files/ZipFramework-0.1.zip&quot;, &quot;/home/t4/workspace/test&quot;, true);
+		
+		//Execute the tasks
+		manager.executeTasks();
+	}
+
+}
+[/code]
+
+[b]Source:[/b]
+[code=java]
+import java.io.File;
+import java.net.MalformedURLException;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.Vector;
+
+/**
+ * Manages the downloading and extraction of remote files
+ * @author t4
+ */
+public class DownloadManager {	
+	
+	/** The download manager instance */
+	private static final DownloadManager instance = new DownloadManager();
+	
+	/** The tasks to download */
+	private Vector&lt;WGet&gt; downloadTasks;
+	
+	/** The tasks to extract */
+	private Vector&lt;ZipInflater&gt; extractionTasks;
+
+	/**
+	 * Constructs a new singleton download manager
+	 */
+	private DownloadManager() {
+		this.downloadTasks = new Vector&lt;WGet&gt;();
+		this.extractionTasks = new Vector&lt;ZipInflater&gt;();
+	}
+	
+	/**
+	 * Gets the singleton instance
+	 * @return
+	 */
+	public static DownloadManager getInstance() {
+		return instance;
+	}
+	
+	/**
+	 * Enqueues a download task
+	 * @param localLocation the remote location of the file
+	 * @param remoteLocation the location the file should be saved to
+	 * @param archive is the file to be downloaded an archive that needs to be extracted
+	 */
+	public void enqueueDownload(final String remoteLocation, final String localLocation, final boolean archive) {
+		try {
+			System.out.println(&quot;Enqueuing download for: &quot; + remoteLocation);
+			WGet task = new WGet(remoteLocation, localLocation, archive);
+			this.downloadTasks.add(task);
+		} catch (MalformedURLException e) {
+			System.err.println(&quot;Error adding download for: &quot; + remoteLocation);
+			e.printStackTrace();
+		}
+	}
+	
+	/**
+	 * Enqueues an extraction task
+	 * @param localLocation
+	 */
+	public void enqueueExtraction(final String localFile) {
+		System.out.println(&quot;Enqueuing extraction for: &quot; + localFile);
+		ZipInflater task = new ZipInflater(localFile);
+		this.extractionTasks.add(task);
+	}
+	
+	/**
+	 * Enqueues an extraction task
+	 * @param localLocation
+	 */
+	private void enqueueExtraction(final File localFile) {
+		System.out.println(&quot;Enqueuing extraction for: &quot; + localFile.getName());
+		ZipInflater task = new ZipInflater(localFile);
+		this.extractionTasks.add(task);
+	}
+	
+	/**
+	 * Executes the tasks in the queue
+	 */
+	public void executeTasks() {
+		while(this.downloadTasks.size() &gt; 0 || this.extractionTasks.size() &gt; 0) {
+			Queue&lt;WGet&gt; toRemove = new LinkedList&lt;WGet&gt;();
+			for(WGet current : this.downloadTasks) {
+				if(current.isComplete()) {
+					System.out.println(&quot;Completed download for: &quot; + current.getLocalFile().getName());
+					if(current.isArchive())
+						enqueueExtraction(current.getLocalFile());
+					toRemove.add(current);
+				} else {
+					//System.out.println(getDownloadProgress());
+					current.start(); //huehuehue
+				}
+			}		
+			
+			Queue&lt;ZipInflater&gt; toRemove_ = new LinkedList&lt;ZipInflater&gt;();
+			for(ZipInflater current : this.extractionTasks) {
+				if(current.isComplete()) {
+					toRemove_.add(current);
+					System.out.println(&quot;Completed extraction for: &quot; + current.getLocalFile().getName());
+				} else
+					current.start(); //huehuehue
+			}	
+			for(WGet current : toRemove)
+				this.downloadTasks.remove(current);
+					
+			for(ZipInflater current : toRemove_)
+				this.extractionTasks.remove(current);
+		}	
+	}
+	
+	/**
+	 * Gets the current download progress
+	 * @return
+	 */
+	public String getDownloadProgress() {
+		String str = &quot;&quot;;
+		for(WGet wget : this.downloadTasks)
+			str += wget.getLocalFile().getName() + &quot; .......... &quot; + wget.getPercentageCompleted() + &quot;\n&quot;;
+		return str;
+	}
+
+}
+[/code]
+
+[code=java]
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
+
+/**
+ * WGet Java implementation
+ * @author t4
+ */
+public class WGet implements Runnable {
+
+	/** The size of the download buffer */
+	private static final int BUFFER_SIZE = 1024;
+	
+	/** The threaded instance of this instance */
+	private Thread self;
+		
+	/** The remote location to download */
+	private URL remoteLocation;	
+	
+	/** The local location to save to */
+	private File localLocation, localFile;
+	
+	/** The local and remote file size */
+	private long localSize, remoteSize;
+	
+	/** Should the file be extracted, the the task complete */
+	private boolean archive, isComplete;
+
+	/**
+	 * Creates a new wget instance
+	 * @param remoteLocation the remote location
+	 * @throws MalformedURLException 
+	 */
+	public WGet(final String remoteLocation, final String localLocation, final boolean archive) throws MalformedURLException {
+		String[] args = remoteLocation.split(&quot;/&quot;);
+		this.remoteLocation = new URL(remoteLocation);
+		this.localLocation = new File(localLocation);
+		this.localFile = new File(localLocation + File.separator + args[args.length - 1]);
+		this.localSize = this.remoteSize = 0L;
+		this.archive = archive;
+		this.isComplete = false;
+	}
+	
+	/**
+	 * Gets the percentage of the remote file downloaded
+	 * @return
+	 */
+	public float getPercentageCompleted() {
+		if(this.remoteSize == 0)
+			return -1F;
+		return ((float) (this.localSize / this.remoteSize)) * 100;
+	}
+	
+	/**
+	 * Is the download task an archive
+	 * @return
+	 */
+	public boolean isArchive() {
+		return this.archive;
+	}
+	
+	/**
+	 * Is the download task complete
+	 * @return
+	 */
+	public boolean isComplete() {
+		return this.isComplete;
+	}
+	
+	/**
+	 * Gets the location of the local file
+	 * @return
+	 */
+	public File getLocalFile() {
+		return this.localFile;
+	}
+
+	/**
+	 * Starts a thread of this instance
+	 */
+	public void start() {
+		if(this.self == null) {
+			this.self = new Thread(this);
+			this.self.start();
+		}
+	}
+	
+	/**
+	 * What is executed when threaded instance is started
+	 */
+	@Override
+	public void run() {
+		try {
+			this.localLocation.mkdirs();
+			URLConnection connection = remoteLocation.openConnection();
+			this.remoteSize = connection.getContentLength();			
+			BufferedInputStream instream = new BufferedInputStream(this.remoteLocation.openStream());
+			BufferedOutputStream outstream = new BufferedOutputStream(new FileOutputStream(this.localFile), BUFFER_SIZE);	
+			byte data[] = new byte[BUFFER_SIZE];
+			int length;
+			while((length = instream.read(data)) &gt; -1) {
+				outstream.write(data, 0, length);
+				this.localSize += length;
+			}
+			outstream.flush();
+			outstream.close();
+			instream.close();
+			this.isComplete = true;
+		} catch (IOException e) {
+			System.err.println(&quot;Error downloading file: &quot; + this.remoteLocation.getFile() + &quot; / saving to path &quot; + this.localFile.getAbsolutePath());
+			e.printStackTrace();
+		}		
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		if(!(o instanceof WGet))
+			return false;
+		WGet other = (WGet) o;
+		return other.remoteLocation.equals(this.remoteLocation) &amp;&amp; other.localFile.equals(this.localFile);
+	}
+
+}
+[/code]
+
+[code=java]
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+/**
+ * Extracts Zip Archives
+ * @author t4
+ */
+public class ZipInflater implements Runnable {
+	
+	/** The size of the download buffer */
+	private static final int BUFFER_SIZE = 1024;
+	
+	/** The destination of the extraction process */
+	private String destination;
+	
+	/** The local location to save to */
+	private File localFile;
+	
+	/** Is the task complete */
+	private boolean isComplete;
+
+	/** The threaded instance of this instance */
+	private Thread self;
+	
+	/**
+	 * Creates a new zip inflater
+	 * @param localFile
+	 */
+	public ZipInflater(String localFile) {
+		this.localFile = new File(localFile);
+		this.destination = localFile.substring(0, localFile.lastIndexOf(File.separator));		
+	}
+
+	/**
+	 * Creates a new zip inflater
+	 * @param localFile
+	 */
+	public ZipInflater(File localFile) {
+		String strFile = localFile.getAbsolutePath();
+		this.localFile = localFile;
+		this.destination = strFile.substring(0, strFile.lastIndexOf(File.separator));		
+	}
+	
+	/**
+	 * Gets the location of the local file
+	 * @return
+	 */
+	public File getLocalFile() {
+		return this.localFile;
+	}
+
+
+	/**
+	 * Starts a thread of this instance
+	 */
+	public void start() {
+		if(this.self == null) {
+			this.self = new Thread(this);
+			this.self.start();
+		}
+	}
+	
+	/**
+	 * Is the download task complete
+	 * @return
+	 */
+	public boolean isComplete() {
+		return this.isComplete;
+	}
+	
+	/**
+	 * What is executed when threaded instance is started
+	 */
+	@Override
+	public void run() {
+		try {
+			byte[] data = new byte[BUFFER_SIZE];
+			ZipInputStream instream = new ZipInputStream(new FileInputStream(this.localFile));
+			ZipEntry entry;
+			while((entry = instream.getNextEntry()) != null) {
+				File newFile = new File(this.destination + File.separator + entry.getName());
+				if(entry.isDirectory()) {
+					newFile.mkdirs();
+					continue;
+				}
+	
+				FileOutputStream outstream = new FileOutputStream(this.destination + File.separator + entry.getName());
+
+				int length;
+				while((length = instream.read(data)) &gt; -1)
+					outstream.write(data);
+
+				outstream.close();
+				instream.closeEntry();
+			}	
+			instream.close();
+			this.isComplete = true;
+		} catch(Exception e) {
+			System.err.println(&quot;Error extracting archive: &quot; + this.localFile.getAbsolutePath());
+			e.printStackTrace();
+		}
+	}
+	
+	
+	@Override
+	public boolean equals(Object o) {
+		if(!(o instanceof ZipInflater))
+			return false;
+		ZipInflater other = (ZipInflater) o;
+		return this.localFile.equals(other.localFile);
+	}
+
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Sat, 04 Feb 2012 22:55:19 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>way to crush my dreams <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/9</link>
+        <pubDate>Sat, 04 Feb 2012 22:55:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-9</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:4, topic:431609”][quote author=t4 link=topic=534293.msg3906284#msg3906284 date=1328246649]</p>
+<aside class="quote">
+<blockquote>
+<p>You must be new here <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol">http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol</a></p>
+</blockquote>
+</aside>
+<p>i knew someone was going to post this. this is for the 99% who don’t utilize the full potential of the rs2 client ;).</p>
+<p>edit: funny you should bring that up considering i was the person who reconstructed the wiki <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+[/quote]</p>
+<p>if it is there, people will use it. yeah I know. sad that they can’t implement a simple little protocol such as that[/quote]</p>
+<p>I have it implemented for 317 in MoparScape 4, but the 508 version never worked right.</p>
+<p>Also this is similar to what I wrote for MoparScape 4 (and I’m releasing it under the GNU/GPL), but mine supports torrents in addition to http.  Also it checks the download for validity and re-downloads if needed (CRC32 for now).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/8</link>
+        <pubDate>Sat, 04 Feb 2012 22:34:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-8</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="431609">
+<div class="title">
+<div class="quote-controls"></div>
+ the elve age:</div>
+<blockquote>
+<p>What exactly are the benefits for it??</p>
+</blockquote>
+</aside>
+<p>It handles multiple downloads, it provides a progress %, and it extracts zip archives. It also is a 3 line implementation on the user’s side.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/7</link>
+        <pubDate>Fri, 03 Feb 2012 22:26:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-7</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@the_elve_age the elve age]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_elve_age">@the_elve_age</a> wrote:</p>
+          <blockquote>
+              <p>What exactly are the benefits for it??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/6</link>
+        <pubDate>Fri, 03 Feb 2012 21:31:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-6</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@RiiPiiNFtW RiiPiiNFtW]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/riipiinftw">@RiiPiiNFtW</a> wrote:</p>
+          <blockquote>
+              <p>Sweet. I’ll try it out.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/5</link>
+        <pubDate>Fri, 03 Feb 2012 06:00:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-5</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:3, topic:431609”][quote author=sinisoul link=topic=534293.msg3906281#msg3906281 date=1328246158]<br>
+You must be new here <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol" class="onebox" target="_blank" rel="nofollow noopener">http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol</a><br>
+[/quote]<br>
+i knew someone was going to post this. this is for the 99% who don’t utilize the full potential of the rs2 client ;).</p>
+<p>edit: funny you should bring that up considering i was the person who reconstructed the wiki :P[/quote]</p>
+<p>if it is there, people will use it. yeah I know. sad that they can’t implement a simple little protocol such as that</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/4</link>
+        <pubDate>Fri, 03 Feb 2012 05:29:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-4</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:2, topic:431609”]You must be new here <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol%5B/quote%5D" class="onebox" target="_blank" rel="nofollow noopener">http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol[/quote]</a><br>
+i knew someone was going to post this. this is for the 99% who don’t utilize the full potential of the rs2 client ;).</p>
+<p>edit: funny you should bring that up considering i was the person who reconstructed the wiki <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/3</link>
+        <pubDate>Fri, 03 Feb 2012 05:24:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-3</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>You must be new here <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><a href="http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol" class="onebox" target="_blank" rel="nofollow noopener">http://rswiki.moparisthebest.com/index.php?title=Category:Ondemand_Protocol</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/2</link>
+        <pubDate>Fri, 03 Feb 2012 05:15:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-2</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+      <item>
+        <title>DownloadManager - download zipped rs2 caches and extract them easily!</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">What is it?</span><br>
+This is a basic download manager that support multiple, simultaneous downloads, and multiple, simultaneous zip archive extractions. The beauty of this application is that the DownloadManager instance will remain on the same thread as where it’s implemented in (ex: rs2 client); meaning that the client will pause what it is doing to download these files. You can also receive a current percentage for each downloading file.</p>
+<p><span class="bbcode-b">Where should I put this in my client?</span><br>
+Most likely in signlink whilst the client is trying to locate the cache directory. I think the method is called findCacheDir() or something, you’d have to check it out for yourself.</p>
+<p><span class="bbcode-b">Example Usage:</span></p>
+<pre><code class="lang-auto">
+/**
+ * Demonstrates how download manager works
+ * @author t4
+ */
+public class Example {
+
+	/**
+	 * @param args
+	 */
+	public static void main(String[] args) {
+		//Construct the singleton of DownloadManager
+		DownloadManager manager = DownloadManager.getInstance();
+		
+		//Enqueue a download task that is a zip file
+		manager.enqueueDownload("http://zip-framework.googlecode.com/files/ZipFramework-0.1.zip", "/home/t4/workspace/test", true);
+		
+		//Execute the tasks
+		manager.executeTasks();
+	}
+
+}</code></pre>
+<p><span class="bbcode-b">Source:</span></p>
+<pre><code class="lang-auto">import java.io.File;
+import java.net.MalformedURLException;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.Vector;
+
+/**
+ * Manages the downloading and extraction of remote files
+ * @author t4
+ */
+public class DownloadManager {	
+	
+	/** The download manager instance */
+	private static final DownloadManager instance = new DownloadManager();
+	
+	/** The tasks to download */
+	private Vector&lt;WGet&gt; downloadTasks;
+	
+	/** The tasks to extract */
+	private Vector&lt;ZipInflater&gt; extractionTasks;
+
+	/**
+	 * Constructs a new singleton download manager
+	 */
+	private DownloadManager() {
+		this.downloadTasks = new Vector&lt;WGet&gt;();
+		this.extractionTasks = new Vector&lt;ZipInflater&gt;();
+	}
+	
+	/**
+	 * Gets the singleton instance
+	 * @return
+	 */
+	public static DownloadManager getInstance() {
+		return instance;
+	}
+	
+	/**
+	 * Enqueues a download task
+	 * @param localLocation the remote location of the file
+	 * @param remoteLocation the location the file should be saved to
+	 * @param archive is the file to be downloaded an archive that needs to be extracted
+	 */
+	public void enqueueDownload(final String remoteLocation, final String localLocation, final boolean archive) {
+		try {
+			System.out.println("Enqueuing download for: " + remoteLocation);
+			WGet task = new WGet(remoteLocation, localLocation, archive);
+			this.downloadTasks.add(task);
+		} catch (MalformedURLException e) {
+			System.err.println("Error adding download for: " + remoteLocation);
+			e.printStackTrace();
+		}
+	}
+	
+	/**
+	 * Enqueues an extraction task
+	 * @param localLocation
+	 */
+	public void enqueueExtraction(final String localFile) {
+		System.out.println("Enqueuing extraction for: " + localFile);
+		ZipInflater task = new ZipInflater(localFile);
+		this.extractionTasks.add(task);
+	}
+	
+	/**
+	 * Enqueues an extraction task
+	 * @param localLocation
+	 */
+	private void enqueueExtraction(final File localFile) {
+		System.out.println("Enqueuing extraction for: " + localFile.getName());
+		ZipInflater task = new ZipInflater(localFile);
+		this.extractionTasks.add(task);
+	}
+	
+	/**
+	 * Executes the tasks in the queue
+	 */
+	public void executeTasks() {
+		while(this.downloadTasks.size() &gt; 0 || this.extractionTasks.size() &gt; 0) {
+			Queue&lt;WGet&gt; toRemove = new LinkedList&lt;WGet&gt;();
+			for(WGet current : this.downloadTasks) {
+				if(current.isComplete()) {
+					System.out.println("Completed download for: " + current.getLocalFile().getName());
+					if(current.isArchive())
+						enqueueExtraction(current.getLocalFile());
+					toRemove.add(current);
+				} else {
+					//System.out.println(getDownloadProgress());
+					current.start(); //huehuehue
+				}
+			}		
+			
+			Queue&lt;ZipInflater&gt; toRemove_ = new LinkedList&lt;ZipInflater&gt;();
+			for(ZipInflater current : this.extractionTasks) {
+				if(current.isComplete()) {
+					toRemove_.add(current);
+					System.out.println("Completed extraction for: " + current.getLocalFile().getName());
+				} else
+					current.start(); //huehuehue
+			}	
+			for(WGet current : toRemove)
+				this.downloadTasks.remove(current);
+					
+			for(ZipInflater current : toRemove_)
+				this.extractionTasks.remove(current);
+		}	
+	}
+	
+	/**
+	 * Gets the current download progress
+	 * @return
+	 */
+	public String getDownloadProgress() {
+		String str = "";
+		for(WGet wget : this.downloadTasks)
+			str += wget.getLocalFile().getName() + " .......... " + wget.getPercentageCompleted() + "\n";
+		return str;
+	}
+
+}</code></pre>
+<pre><code class="lang-auto">import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
+
+/**
+ * WGet Java implementation
+ * @author t4
+ */
+public class WGet implements Runnable {
+
+	/** The size of the download buffer */
+	private static final int BUFFER_SIZE = 1024;
+	
+	/** The threaded instance of this instance */
+	private Thread self;
+		
+	/** The remote location to download */
+	private URL remoteLocation;	
+	
+	/** The local location to save to */
+	private File localLocation, localFile;
+	
+	/** The local and remote file size */
+	private long localSize, remoteSize;
+	
+	/** Should the file be extracted, the the task complete */
+	private boolean archive, isComplete;
+
+	/**
+	 * Creates a new wget instance
+	 * @param remoteLocation the remote location
+	 * @throws MalformedURLException 
+	 */
+	public WGet(final String remoteLocation, final String localLocation, final boolean archive) throws MalformedURLException {
+		String[] args = remoteLocation.split("/");
+		this.remoteLocation = new URL(remoteLocation);
+		this.localLocation = new File(localLocation);
+		this.localFile = new File(localLocation + File.separator + args[args.length - 1]);
+		this.localSize = this.remoteSize = 0L;
+		this.archive = archive;
+		this.isComplete = false;
+	}
+	
+	/**
+	 * Gets the percentage of the remote file downloaded
+	 * @return
+	 */
+	public float getPercentageCompleted() {
+		if(this.remoteSize == 0)
+			return -1F;
+		return ((float) (this.localSize / this.remoteSize)) * 100;
+	}
+	
+	/**
+	 * Is the download task an archive
+	 * @return
+	 */
+	public boolean isArchive() {
+		return this.archive;
+	}
+	
+	/**
+	 * Is the download task complete
+	 * @return
+	 */
+	public boolean isComplete() {
+		return this.isComplete;
+	}
+	
+	/**
+	 * Gets the location of the local file
+	 * @return
+	 */
+	public File getLocalFile() {
+		return this.localFile;
+	}
+
+	/**
+	 * Starts a thread of this instance
+	 */
+	public void start() {
+		if(this.self == null) {
+			this.self = new Thread(this);
+			this.self.start();
+		}
+	}
+	
+	/**
+	 * What is executed when threaded instance is started
+	 */
+	@Override
+	public void run() {
+		try {
+			this.localLocation.mkdirs();
+			URLConnection connection = remoteLocation.openConnection();
+			this.remoteSize = connection.getContentLength();			
+			BufferedInputStream instream = new BufferedInputStream(this.remoteLocation.openStream());
+			BufferedOutputStream outstream = new BufferedOutputStream(new FileOutputStream(this.localFile), BUFFER_SIZE);	
+			byte data[] = new byte[BUFFER_SIZE];
+			int length;
+			while((length = instream.read(data)) &gt; -1) {
+				outstream.write(data, 0, length);
+				this.localSize += length;
+			}
+			outstream.flush();
+			outstream.close();
+			instream.close();
+			this.isComplete = true;
+		} catch (IOException e) {
+			System.err.println("Error downloading file: " + this.remoteLocation.getFile() + " / saving to path " + this.localFile.getAbsolutePath());
+			e.printStackTrace();
+		}		
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		if(!(o instanceof WGet))
+			return false;
+		WGet other = (WGet) o;
+		return other.remoteLocation.equals(this.remoteLocation) &amp;&amp; other.localFile.equals(this.localFile);
+	}
+
+}</code></pre>
+<pre><code class="lang-auto">import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+/**
+ * Extracts Zip Archives
+ * @author t4
+ */
+public class ZipInflater implements Runnable {
+	
+	/** The size of the download buffer */
+	private static final int BUFFER_SIZE = 1024;
+	
+	/** The destination of the extraction process */
+	private String destination;
+	
+	/** The local location to save to */
+	private File localFile;
+	
+	/** Is the task complete */
+	private boolean isComplete;
+
+	/** The threaded instance of this instance */
+	private Thread self;
+	
+	/**
+	 * Creates a new zip inflater
+	 * @param localFile
+	 */
+	public ZipInflater(String localFile) {
+		this.localFile = new File(localFile);
+		this.destination = localFile.substring(0, localFile.lastIndexOf(File.separator));		
+	}
+
+	/**
+	 * Creates a new zip inflater
+	 * @param localFile
+	 */
+	public ZipInflater(File localFile) {
+		String strFile = localFile.getAbsolutePath();
+		this.localFile = localFile;
+		this.destination = strFile.substring(0, strFile.lastIndexOf(File.separator));		
+	}
+	
+	/**
+	 * Gets the location of the local file
+	 * @return
+	 */
+	public File getLocalFile() {
+		return this.localFile;
+	}
+
+
+	/**
+	 * Starts a thread of this instance
+	 */
+	public void start() {
+		if(this.self == null) {
+			this.self = new Thread(this);
+			this.self.start();
+		}
+	}
+	
+	/**
+	 * Is the download task complete
+	 * @return
+	 */
+	public boolean isComplete() {
+		return this.isComplete;
+	}
+	
+	/**
+	 * What is executed when threaded instance is started
+	 */
+	@Override
+	public void run() {
+		try {
+			byte[] data = new byte[BUFFER_SIZE];
+			ZipInputStream instream = new ZipInputStream(new FileInputStream(this.localFile));
+			ZipEntry entry;
+			while((entry = instream.getNextEntry()) != null) {
+				File newFile = new File(this.destination + File.separator + entry.getName());
+				if(entry.isDirectory()) {
+					newFile.mkdirs();
+					continue;
+				}
+	
+				FileOutputStream outstream = new FileOutputStream(this.destination + File.separator + entry.getName());
+
+				int length;
+				while((length = instream.read(data)) &gt; -1)
+					outstream.write(data);
+
+				outstream.close();
+				instream.closeEntry();
+			}	
+			instream.close();
+			this.isComplete = true;
+		} catch(Exception e) {
+			System.err.println("Error extracting archive: " + this.localFile.getAbsolutePath());
+			e.printStackTrace();
+		}
+	}
+	
+	
+	@Override
+	public boolean equals(Object o) {
+		if(!(o instanceof ZipInflater))
+			return false;
+		ZipInflater other = (ZipInflater) o;
+		return this.localFile.equals(other.localFile);
+	}
+
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609/1</link>
+        <pubDate>Fri, 03 Feb 2012 05:07:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-431609-1</guid>
+        <source url="https://forum.moparisthebest.com/t/downloadmanager-download-zipped-rs2-caches-and-extract-them-easily/431609.rss">DownloadManager - download zipped rs2 caches and extract them easily!</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,518 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>3D Triangle Rasterization Tutorial</title>
+    <link>https://forum.moparisthebest.com/t/3d-triangle-rasterization-tutorial/552385</link>
+    <description>
+[center][b][u]3D Triangle Rasterization Tutorial[/u]
+by Archive[/b][/center]
+
+
+[center]I decided to split up this tutorial into [u][b]two[/b][/u] sections:
+
+
+[b][u]Goal
+Implementation
+[/u][/b][/center]
+
+
+Note that this is a continuation to my previous tutorial, which was basic 3D graphics (wireframe drawing).
+
+
+[b][u]Section 1 : Goal[/u][/b]
+
+
+The goal for rasterizing triangles is to go from the Y value of the uppermost projected vertex of the triangle to the Y value of the lowest projected vertex of the triangle while filling in the x values within the borders of the triangle.
+
+
+Now, you might be wondering how we are going to find the borders of the triangle. Well all we need to do is interpolate the X values between the Y values of each projected vertex.
+
+
+Image Key:
+Blue = known vertices of triangle
+Red = the interpolated X values
+White = showing the x-y coordinate plane
+[IMG]http://i62.tinypic.com/2n9fg1u.png[/img]
+
+
+Then after we interpolate the X across the Y, we fill in from X1 to X2.
+
+
+[b][u]Section 2 : Implementation[/u][/b]
+
+
+First we need to encapsulate a triangle into a class.
+
+
+[code]public class Triangle { 
+
+	private final List&lt;Vector&gt; vertices;
+
+
+	private final Vector center;
+
+
+	public Triangle(List&lt;Vector&gt; vertices) {
+		this.vertices = vertices;
+		this.center = calculateCenter();
+	}
+
+
+	public List&lt;Vector&gt; getVertices() {
+		return vertices;
+	}
+
+
+	public Vector getVertex(int i) {
+		return vertices.get(i);
+	}
+
+
+	public Vector calculateCenter() {
+		float[] temp = new float[3];
+
+
+		for (Vector v : vertices) {
+			temp[0] += v.getX();
+			temp[1] += v.getY();
+			temp[2] += v.getZ();
+		}
+
+
+		for (int i = 0; i &lt; temp.length; i++) {
+			temp[i] /= vertices.size();
+		}
+
+
+		return new Vector(temp[0], temp[1], temp[2]);
+	}
+
+
+	public void rotate(Matrix mat) {
+		for (Vector v : vertices) {
+			v.subtract(center);
+		}
+		for (Vector v : vertices) {
+			v.setTo(mat.multiply(v));
+		}
+		for (Vector v : vertices) {
+			v.add(center);
+		}
+	}
+
+
+	public void interpret(Vector camera) {
+		for (Vector v : vertices) {
+			v.interpret(camera);
+		}
+	}
+
+
+	public void perspectiveProject() {
+		for (Vector v : vertices) {
+			v.perspectiveProject();
+		}
+	}
+
+
+	public Vector getCenter() {
+		return center;
+	}
+
+
+}
+[/code]
+
+
+Beautiful, so now we can create a triangle. 
+
+
+We need to use interpolation to find the X values right? Well let&#39;s implement interpolation.
+
+
+I prefer to use an array of the interpolated values rather than doing it as we go for the sake of readability.
+This goes in your utilities file.
+
+
+[code]
+            // Lerp is short for &quot;Linear Interpolation&quot; 	public static float[] lerpList(int steps, float a, float b) {
+		if (steps == 0) {
+			return new float[] { a };
+		}
+
+
+		float slope = (b - a) / steps;
+
+
+		float f = a;
+		float[] interpolatedValues = new float[steps];
+		for (int i = 0; i &lt; steps; i++) {
+			interpolatedValues[i] = f;
+			f += slope;
+		}
+
+
+		return interpolatedValues;
+	}
+	[/code]
+
+
+So now let&#39;s implement the drawing of the triangle.
+
+
+[code]	public void draw(Surface surface) {
+
+
+		Vector v1 = vertices.get(0);
+		Vector v2 = vertices.get(1);
+		Vector v3 = vertices.get(2);
+
+
+		int color = 0xFFFFFF; // Color of triangle (white)
+
+
+		float[] x = new float[3]; // (array containing the x values of the projected vertices)
+		float[] y = new float[3]; // (array containing the y values of the projected vertices)
+
+
+		x[0] = v1.getX();
+		x[1] = v2.getX();
+		x[2] = v3.getX();
+		y[0] = v1.getY();
+		y[1] = v2.getY();
+		y[2] = v3.getY();
+
+
+                // Do these swaps to make sure we start drawing from top to bottom
+		if (y[0] &gt; y[1]) {
+			MathUtil.swap(x, 0, 1);
+			MathUtil.swap(y, 0, 1);
+		}
+		if (y[0] &gt; y[2]) {
+			MathUtil.swap(x, 0, 2);
+			MathUtil.swap(y, 0, 2);
+		}
+		if (y[1] &gt; y[2]) {
+			MathUtil.swap(x, 1, 2);
+			MathUtil.swap(y, 1, 2);
+		}
+                // distance (in pixels) between the Y values
+		int steps01 = (int) Math.abs(y[1] - y[0]);
+		int steps12 = (int) Math.abs(y[2] - y[1]);
+		int steps02 = (int) Math.abs(y[2] - y[0]);
+		
+		float[] x01 = MathUtil.lerpList(steps01, x[0], x[1]);
+		float[] x12 = MathUtil.lerpList(steps12, x[1], x[2]);
+		float[] x02 = MathUtil.lerpList(steps02, x[0], x[2]);
+
+
+                // from top Y to middle Y
+		for (int i = (int) y[0]; i &lt; y[1]; i++) {
+			int pos = (int) (i - y[0]); // position in the interpolation lists. Basically what &quot;i&quot; would be if it started from 0
+			if (pos &gt;= x01.length) { // don&#39;t go out of bounds!
+				pos = x01.length - 1;
+			}
+			surface.drawHorizontalLine((int) x01[pos], (int) x02[pos], i, color);
+		}
+                // from middle Y to bottom Y
+		for (int i = (int) y[1]; i &lt; y[2]; i++) {
+			int pos = (int) (i - y[0]); // same logic however we need to change it for the x12 list.
+			int pos1 = (int) (i - y[1]);
+			if (pos1 &gt;= x12.length) {
+				pos1 = x12.length - 1;
+			}
+			if (pos &gt;= x02.length) {
+				pos = x02.length - 1;
+			}
+			surface.drawHorizontalLine((int) x12[pos1], (int) x02[pos], i, color);
+		}
+	}
+[/code]
+
+
+Now to prepare/draw the triangle, in the Rasterizer class...
+
+
+[code] 	public void rasterize() {
+		display.getSurface().clear();
+		
+		Vector camera = new Vector(0, 0, -75);
+
+
+		List&lt;Vector&gt; vertices = new ArrayList&lt;Vector&gt;();
+		vertices.add(new Vector(-5, -5, -10));
+		vertices.add(new Vector(10, 10, -10));
+		vertices.add(new Vector(-10, 10, -10));
+
+
+		Triangle tri = new Triangle(vertices);
+		
+		Matrix mat = new Matrix();
+
+
+		x += 0.05f;
+		if (x &gt; 6.28f) { //2 pi for full rotation
+			x = 0;
+		}
+		
+		mat.rotateY(x);
+		
+		tri.rotate(mat);
+		tri.interpret(camera);
+		tri.perspectiveProject();
+		
+		tri.draw(display.getSurface());
+	}
+[/code]
+
+
+This is what you should have created from this code (after weaving it into your program):
+
+
+[IMG]http://i58.tinypic.com/wsleoi.png[/img]</description>
+    
+    <lastBuildDate>Thu, 09 Jul 2015 05:30:06 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/3d-triangle-rasterization-tutorial/552385.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>3D Triangle Rasterization Tutorial</title>
+        <dc:creator><![CDATA[@Docent Limits]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/docent">@Docent</a> wrote:</p>
+          <blockquote>
+              <p>[center]<span class="bbcode-b"><span class="bbcode-u">3D Triangle Rasterization Tutorial</span><br>
+by Archive</span>[/center]</p>
+<p>[center]I decided to split up this tutorial into <span class="bbcode-u"><span class="bbcode-b">two</span></span> sections:</p>
+<p><span class="bbcode-b"><span class="bbcode-u">Goal<br>
+Implementation<br>
+</span></span>[/center]</p>
+<p>Note that this is a continuation to my previous tutorial, which was basic 3D graphics (wireframe drawing).</p>
+<p><span class="bbcode-b"><span class="bbcode-u">Section 1 : Goal</span></span></p>
+<p>The goal for rasterizing triangles is to go from the Y value of the uppermost projected vertex of the triangle to the Y value of the lowest projected vertex of the triangle while filling in the x values within the borders of the triangle.</p>
+<p>Now, you might be wondering how we are going to find the borders of the triangle. Well all we need to do is interpolate the X values between the Y values of each projected vertex.</p>
+<p>Image Key:<br>
+Blue = known vertices of triangle<br>
+Red = the interpolated X values<br>
+White = showing the x-y coordinate plane<br>
+<img src="http://i62.tinypic.com/2n9fg1u.png" alt width="500" height="500"></p>
+<p>Then after we interpolate the X across the Y, we fill in from X1 to X2.</p>
+<p><span class="bbcode-b"><span class="bbcode-u">Section 2 : Implementation</span></span></p>
+<p>First we need to encapsulate a triangle into a class.</p>
+<p>[code]public class Triangle {</p>
+<pre><code>private final List&lt;Vector&gt; vertices;
+
+
+private final Vector center;
+
+
+public Triangle(List&lt;Vector&gt; vertices) {
+	this.vertices = vertices;
+	this.center = calculateCenter();
+}
+
+
+public List&lt;Vector&gt; getVertices() {
+	return vertices;
+}
+
+
+public Vector getVertex(int i) {
+	return vertices.get(i);
+}
+
+
+public Vector calculateCenter() {
+	float[] temp = new float[3];
+
+
+	for (Vector v : vertices) {
+		temp[0] += v.getX();
+		temp[1] += v.getY();
+		temp[2] += v.getZ();
+	}
+
+
+	for (int i = 0; i &lt; temp.length; i++) {
+		temp[i] /= vertices.size();
+	}
+
+
+	return new Vector(temp[0], temp[1], temp[2]);
+}
+
+
+public void rotate(Matrix mat) {
+	for (Vector v : vertices) {
+		v.subtract(center);
+	}
+	for (Vector v : vertices) {
+		v.setTo(mat.multiply(v));
+	}
+	for (Vector v : vertices) {
+		v.add(center);
+	}
+}
+
+
+public void interpret(Vector camera) {
+	for (Vector v : vertices) {
+		v.interpret(camera);
+	}
+}
+
+
+public void perspectiveProject() {
+	for (Vector v : vertices) {
+		v.perspectiveProject();
+	}
+}
+
+
+public Vector getCenter() {
+	return center;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Beautiful, so now we can create a triangle.</p>
+<p>We need to use interpolation to find the X values right? Well let’s implement interpolation.</p>
+<p>I prefer to use an array of the interpolated values rather than doing it as we go for the sake of readability.<br>
+This goes in your utilities file.</p>
+<pre><code class="lang-auto">            // Lerp is short for "Linear Interpolation" 	public static float[] lerpList(int steps, float a, float b) {
+		if (steps == 0) {
+			return new float[] { a };
+		}
+
+
+		float slope = (b - a) / steps;
+
+
+		float f = a;
+		float[] interpolatedValues = new float[steps];
+		for (int i = 0; i &lt; steps; i++) {
+			interpolatedValues[i] = f;
+			f += slope;
+		}
+
+
+		return interpolatedValues;
+	}
+	[/code]
+
+
+So now let's implement the drawing of the triangle.
+
+
+[code]	public void draw(Surface surface) {
+
+
+		Vector v1 = vertices.get(0);
+		Vector v2 = vertices.get(1);
+		Vector v3 = vertices.get(2);
+
+
+		int color = 0xFFFFFF; // Color of triangle (white)
+
+
+		float[] x = new float[3]; // (array containing the x values of the projected vertices)
+		float[] y = new float[3]; // (array containing the y values of the projected vertices)
+
+
+		x[0] = v1.getX();
+		x[1] = v2.getX();
+		x[2] = v3.getX();
+		y[0] = v1.getY();
+		y[1] = v2.getY();
+		y[2] = v3.getY();
+
+
+                // Do these swaps to make sure we start drawing from top to bottom
+		if (y[0] &gt; y[1]) {
+			MathUtil.swap(x, 0, 1);
+			MathUtil.swap(y, 0, 1);
+		}
+		if (y[0] &gt; y[2]) {
+			MathUtil.swap(x, 0, 2);
+			MathUtil.swap(y, 0, 2);
+		}
+		if (y[1] &gt; y[2]) {
+			MathUtil.swap(x, 1, 2);
+			MathUtil.swap(y, 1, 2);
+		}
+                // distance (in pixels) between the Y values
+		int steps01 = (int) Math.abs(y[1] - y[0]);
+		int steps12 = (int) Math.abs(y[2] - y[1]);
+		int steps02 = (int) Math.abs(y[2] - y[0]);
+		
+		float[] x01 = MathUtil.lerpList(steps01, x[0], x[1]);
+		float[] x12 = MathUtil.lerpList(steps12, x[1], x[2]);
+		float[] x02 = MathUtil.lerpList(steps02, x[0], x[2]);
+
+
+                // from top Y to middle Y
+		for (int i = (int) y[0]; i &lt; y[1]; i++) {
+			int pos = (int) (i - y[0]); // position in the interpolation lists. Basically what "i" would be if it started from 0
+			if (pos &gt;= x01.length) { // don't go out of bounds!
+				pos = x01.length - 1;
+			}
+			surface.drawHorizontalLine((int) x01[pos], (int) x02[pos], i, color);
+		}
+                // from middle Y to bottom Y
+		for (int i = (int) y[1]; i &lt; y[2]; i++) {
+			int pos = (int) (i - y[0]); // same logic however we need to change it for the x12 list.
+			int pos1 = (int) (i - y[1]);
+			if (pos1 &gt;= x12.length) {
+				pos1 = x12.length - 1;
+			}
+			if (pos &gt;= x02.length) {
+				pos = x02.length - 1;
+			}
+			surface.drawHorizontalLine((int) x12[pos1], (int) x02[pos], i, color);
+		}
+	}</code></pre>
+<p>Now to prepare/draw the triangle, in the Rasterizer class…</p>
+<p>[code] 	public void rasterize() {<br>
+display.getSurface().clear();</p>
+<pre><code>	Vector camera = new Vector(0, 0, -75);
+
+
+	List&lt;Vector&gt; vertices = new ArrayList&lt;Vector&gt;();
+	vertices.add(new Vector(-5, -5, -10));
+	vertices.add(new Vector(10, 10, -10));
+	vertices.add(new Vector(-10, 10, -10));
+
+
+	Triangle tri = new Triangle(vertices);
+	
+	Matrix mat = new Matrix();
+
+
+	x += 0.05f;
+	if (x &gt; 6.28f) { //2 pi for full rotation
+		x = 0;
+	}
+	
+	mat.rotateY(x);
+	
+	tri.rotate(mat);
+	tri.interpret(camera);
+	tri.perspectiveProject();
+	
+	tri.draw(display.getSurface());
+}
+</code></pre>
+<p>[/code]</p>
+<p>This is what you should have created from this code (after weaving it into your program):</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="http://i58.tinypic.com/wsleoi.png" title="wsleoi.png" rel="nofollow noopener"><img src="http://i58.tinypic.com/wsleoi.png" alt width="664" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">wsleoi.png</span><span class="informations">801×603</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/3d-triangle-rasterization-tutorial/552385/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/3d-triangle-rasterization-tutorial/552385/1</link>
+        <pubDate>Thu, 09 Jul 2015 05:30:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-552385-1</guid>
+        <source url="https://forum.moparisthebest.com/t/3d-triangle-rasterization-tutorial/552385.rss">3D Triangle Rasterization Tutorial</source>
+      </item>
+  </channel>
+</rss>

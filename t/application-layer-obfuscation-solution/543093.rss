@@ -1,0 +1,865 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Application Layer Obfuscation Solution</title>
+    <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093</link>
+    <description>So, many of you know that there is an obfuscation format on outgoing/incoming game packets. I&#39;ve debated for a long time how to approach creating a solution to removing this and what the best route would be, and here is my rough solution.
+
+Practically, you have an ObfuscationInputStream/OutputStream object that you use to unobfuscate or obfuscate packets or other information. You can compile instruction sets on how to do this. I played around with a few models including strings which would simply specify how to read/write the packets but that didn&#39;t go as well as I wanted it to. An example script would look like:
+
+[code]
+READ 1 BYTE;
+READ 0 SHORT_A;
+WRITE 0 BYTE;
+WRITE 1 SHORT;
+[/code]
+
+Of course its a bit repetitive, but the idea is that if you were to use this system you would be generating these instruction sets instead of writing the scripts. The way it works is that bytes are inputted to a source buffer and read into memory to unobfuscate them (or just simply read them into memory in the case of obfuscating) then they are written to a destination buffer which resembles how the packet should have been written normally without obfuscation. From there you decode it normally.
+
+If you have different ideas about how this could be improved discuss it. :) I&#39;m hoping to eventually add basic arithmetic for dynamic packets (walking) and a stack/stack operations (PUSH, PEEK, POP).
+
+Here&#39;s the code:
+
+[code=java]
+package us.evelus.cobalt.obf;
+
+import us.evelus.cobalt.StringParser;
+
+import static us.evelus.cobalt.obf.InstructionSet.*;
+
+import java.io.IOException;
+
+/**
+ * Created by hadyn on 5/14/2014.
+ */
+public final class Parser {
+
+    /**
+     * The regular expression for a statement.
+     */
+    private static final String STATEMENT = &quot;[\\w\\s]+;&quot;;
+
+    /**
+     * The regular expression for characters that will be ignored by the parser.
+     */
+    private static final String IGNORE = &quot;\\s+&quot;;
+
+    /**
+     * The regular expression signifying the end of a statement.
+     */
+    private static final String STATEMENT_END = &quot;;&quot;;
+
+    /**
+     * The regular expression for each of the operation types.
+     */
+    private static final String OPS = &quot;(READ)|(WRITE)&quot;;
+
+    /**
+     * The regular expression for each of the value types.
+     */
+    private static final String VALUE = &quot;(BYTE)|(SHORT)|(INT)|(LONG)&quot;;
+
+    /**
+     * The regular expression for a numeric byte value.
+     */
+    private static final String NUMERIC = &quot;[1-2]?\\d?\\d&quot;;
+
+    private int[] instructions = new int[255];
+    private int[] operands = new int[255];
+    private int offset = 0;
+
+    private Parser(String str) throws IOException {
+        init(str);
+    }
+
+    private void init(String string) throws IOException {
+        StringParser parser = new StringParser(string);
+        while(!parser.eos()) {
+            // Scan for a statement which we can then parse
+            if(parser.scan(STATEMENT)) {
+                String statement = parser.result();
+                parseStatement(statement);
+            // Scan past all of the junk
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do
+            } else {
+                throw new IOException(&quot;Unknown characters &quot; + parser.peek(20));
+            }
+        }
+
+        // Append the return opcode
+        instructions[offset++] = RETURN_OP;
+    }
+
+    private void parseStatement(String string) throws IOException {
+        StringParser parser = new StringParser(string);
+        int flags = 0x0;
+        while(!parser.eos()) {
+            if(parser.scan(OPS)) {
+                String op = parser.result();
+                switch (op) {
+                    case &quot;READ&quot;:
+                    case &quot;WRITE&quot;:
+                        if(op.equals(&quot;READ&quot;)) {
+                            instructions[offset] = READ_OP;
+                        } else {
+                            instructions[offset] = WRITE_OP;
+                        }
+                        parseOperation(parser);
+                        break;
+                    default:
+                        throw new IOException(&quot;Unknown OP type: &#39;&quot; + op + &quot;&#39;&quot;);
+                }
+                // Flag that the statement was parsed
+                flags |= 0x1;
+                offset++;
+            // This sometimes isn&#39;t used but just in case of empty statements
+            } else if(parser.scan(STATEMENT_END)) {
+                if((flags &amp; 0x1) == 0) {
+                    throw new IOException(&quot;Empty statement!&quot;);
+                }
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do
+            } else {
+                throw new IOException(&quot;Unknown characters: &#39;&quot; + parser.peek(10) + &quot;&#39;&quot;);
+            }
+        }
+    }
+
+    private void parseOperation(StringParser parser) throws IOException {
+        int flags = 0x0;
+        int operand = 0;
+        while(!parser.eos()) {
+            if(parser.scan(NUMERIC)) {
+                // Check that we are not rereading the index
+                if(flags != 0x0) {
+                    throw new IOException(&quot;Unexpected numeric value: &#39;&quot; + parser.result() + &quot;&#39;&quot;);
+                }
+
+                // Parse the index
+                int index = Integer.parseInt(parser.result());
+
+                // Append the index information to the operand and note that the index was read
+                operand |= index &lt;&lt; 8;
+                flags   |= 0x1;
+            } else if(parser.scan(VALUE)) {
+                if((flags &amp; 0x1) != 0) {
+                    throw new IOException(&quot;Unexpected value type: &#39;&quot; + parser.result() + &quot;&#39;&quot;);
+                }
+
+                // Parse the value type
+                int type = parseValue(parser.result());
+
+                // Append the type information to the operand and note that the value was read
+                operand |= type;
+                flags   |= 0x2;
+            } else if(parser.scan(STATEMENT_END)) {
+                if(flags != 0x3) {
+                    throw new IOException(&quot;Unfinished statement&quot;);
+                }
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do here
+            } else {
+                throw new IOException(&quot;Unknown characters: &#39;&quot; + parser.peek(10) + &quot;&#39;&quot;);
+            }
+        }
+        operands[offset] = operand;
+    }
+
+    private int parseValue(String value) throws IOException {
+        switch(value) {
+            case &quot;BYTE&quot;:
+                return BYTE_TYPE;
+            case &quot;SHORT&quot;:
+                return SHORT_TYPE;
+            case &quot;INT&quot;:
+                return INT_TYPE;
+            case &quot;LONG&quot;:
+                return LONG_TYPE;
+            default:
+                throw new IOException(&quot;Unknown value type &#39;&quot; + value + &quot;&#39;&quot;);
+        }
+    }
+
+    public static InstructionSet parse(String str) throws IOException {
+        Parser parser = new Parser(str);
+        int[] opcodes = new int[parser.offset];
+        int[] operands = new int[parser.offset];
+        System.arraycopy(parser.instructions, 0, opcodes, 0, parser.offset);
+        System.arraycopy(parser.operands, 0, operands, 0, parser.offset);
+        return new InstructionSet(opcodes, operands);
+    }
+}
+[/code]
+
+[code=java]
+package us.evelus.cobalt.obf;
+
+import us.evelus.cobalt.Buffer;
+
+import static us.evelus.cobalt.obf.InstructionSet.*;
+
+/**
+ * Created by hadyn on 5/15/2014.
+ */
+public final class Obfuscator {
+
+    // TODO: Optimize creating buffers (Pooling em)
+    private final InstructionSet instructions;
+    private final Buffer dest = new Buffer(1024);
+    private final Buffer src = new Buffer(1024);
+
+    // Value stores for transferring values to and from buffers
+    private int[] intValues = new int[255];
+    private long[] longValues = new long[255];
+    private boolean[] flags = new boolean[255];
+
+    public Obfuscator(InstructionSet instructions) {
+        this.instructions = instructions;
+    }
+
+    // put methods
+
+    public void put(byte[] bytes) {
+        put(bytes, 0, bytes.length);
+    }
+
+    public void put(byte[] bytes, int off, int len) {
+        src.put(bytes, off, len);
+    }
+
+    // get methods
+
+    public void get(byte[] bytes) {
+        get(bytes, 0, bytes.length);
+    }
+
+    public void get(byte[] bytes, int off, int len) {
+        dest.get(bytes, off, len);
+    }
+
+    // process method
+
+    public void process() {
+        int[] opcodes = instructions.getOpcodes();
+        int[] operands = instructions.getOperands();
+        int offset = 0;
+        loop:
+        for(;;) {
+            int opcode = opcodes[offset];
+            int operand = operands[offset++];
+            switch(opcode) {
+                case READ_OP:
+                case WRITE_OP:
+                    int index = operand &gt;&gt; 8 &amp; 0xff;
+                    int type = operand &amp; 0xff;
+                    if(opcode == READ_OP) {
+                        switch (type) {
+                            case BYTE_TYPE:
+                            case SHORT_TYPE:
+                            case INT_TYPE:
+                                intValues[index] = readIntegerType(type);
+                                break;
+                            case LONG_TYPE:
+                                longValues[index] = readLongType(type);
+                                break;
+                        }
+                    } else {
+                        if(!flags[index]) {
+                            switch(type) {
+                                case BYTE_TYPE:
+                                case SHORT_TYPE:
+                                case INT_TYPE:
+                                    writeIntegerType(intValues[index], type);
+                                    break;
+                            }
+                        } else {
+                            switch(type) {
+                                case LONG_TYPE:
+                                    writeLongType(longValues[index], type);
+                                    break;
+                            }
+                        }
+                    }
+                    break;
+                case RETURN_OP:
+                    break loop;
+                default:
+                    throw new RuntimeException(&quot;Unknown OP &quot; + opcode);
+            }
+        }
+    }
+
+    private int readIntegerType(int type) {
+        switch(type) {
+            case BYTE_TYPE:
+                return src.get();
+            case SHORT_TYPE:
+                return src.getInt16();
+            case INT_TYPE:
+                return src.getInt32();
+            default:
+                throw new RuntimeException(&quot;Unknown type: &quot; + type);
+        }
+    }
+
+    private long readLongType(int type) {
+        switch(type) {
+            case LONG_TYPE:
+                return src.getInt64();
+            default:
+                throw new RuntimeException(&quot;Unknown type: &quot; + type);
+        }
+    }
+
+    private void writeIntegerType(int value, int type) {
+        switch(type) {
+            case BYTE_TYPE:
+                dest.put(value);
+                break;
+            case SHORT_TYPE:
+                dest.putInt16(value);
+                break;
+            case INT_TYPE:
+                dest.putInt32(value);
+                break;
+
+            default:
+                throw new RuntimeException(&quot;Unknown type: &quot; + type);
+        }
+    }
+
+    private void writeLongType(long value, int type) {
+        switch(type) {
+            case LONG_TYPE:
+                dest.putInt64(value);
+                break;
+            default:
+                throw new RuntimeException(&quot;Unknown type: &quot; + type);
+        }
+    }
+}
+
+[/code]
+
+[code=java]
+package us.evelus.cobalt.obf;
+
+/**
+ * Created by hadyn on 5/15/2014.
+ */
+public final class InstructionSet {
+
+    public static final int RETURN_OP = 0x1;
+    public static final int READ_OP   = 0x2;
+    public static final int WRITE_OP  = 0x3;
+
+    public static final int BYTE_TYPE = 0x1;
+    public static final int SHORT_TYPE = 0x2;
+    public static final int INT_TYPE = 0x3;
+    public static final int LONG_TYPE = 0x4;
+
+    private final int[] opcodes;
+    private final int[] operands;
+
+    public InstructionSet(int[] opcodes, int[] operands) {
+        this.opcodes = opcodes;
+        this.operands = operands;
+    }
+
+    public int[] getOpcodes() {
+        return opcodes;
+    }
+
+    public int[] getOperands() {
+        return operands;
+    }
+}
+
+[/code]</description>
+    
+    <lastBuildDate>Mon, 26 May 2014 06:27:08 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="543093">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>I’ll leave this here it contains an updater and javaagent example as I am not sure if you have access to the moparisthebest elite sections it will be enough to get started.</p>
+</blockquote>
+</aside>
+<p>Ty ty. Ur the best.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/7</link>
+        <pubDate>Mon, 26 May 2014 06:27:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-7</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>I’ll leave this here it contains an updater and javaagent example as I am not sure if you have access to the moparisthebest elite sections it will be enough to get started.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/6</link>
+        <pubDate>Mon, 26 May 2014 05:14:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-6</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Ah thank you Silab. I have to finish this for a future project <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> I will try and do what you suggested</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/5</link>
+        <pubDate>Sun, 25 May 2014 02:04:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-5</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>You might want to take my java agent approach. It works pretty well. I used bcel for hooking the stream class than just output the packet details with the option of crafting packets for testing.<br>
+<a href="http://silabsoft.org/wp-content/uploads/ss2.png" class="onebox" target="_blank" rel="nofollow noopener">http://silabsoft.org/wp-content/uploads/ss2.png</a></p>
+<p>you would then be able to perform a series of common tasks in game and log the packet data. I was using for private server trolling it worked pretty well I was able to find a lot of stupid exploits. For example I could log into a server telegrab my own item record the packet structure and construct my own have people drop their phats than telegrab them before it was visible to me. or withdrawing negative amount of items from the bank. I did take it into real runescape a few times but never found anything of real use.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/4</link>
+        <pubDate>Sat, 17 May 2014 07:22:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-4</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="543093">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/hcojustin/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> HcoJustin:</div>
+<blockquote>
+<p>The idea is nice, but a lot of the heavy lifting would be scanning through the client and generating these instruction sets</p>
+</blockquote>
+</aside>
+<p>I can attempt to do this in the future, I just honestly would write them out by hand.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/3</link>
+        <pubDate>Fri, 16 May 2014 05:39:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-3</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@HcoJustin HcoJustin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hcojustin">@HcoJustin</a> wrote:</p>
+          <blockquote>
+              <p>The idea is nice, but a lot of the heavy lifting would be scanning through the client and generating these instruction sets</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/2</link>
+        <pubDate>Fri, 16 May 2014 05:04:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-2</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+      <item>
+        <title>Application Layer Obfuscation Solution</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>So, many of you know that there is an obfuscation format on outgoing/incoming game packets. I’ve debated for a long time how to approach creating a solution to removing this and what the best route would be, and here is my rough solution.</p>
+<p>Practically, you have an ObfuscationInputStream/OutputStream object that you use to unobfuscate or obfuscate packets or other information. You can compile instruction sets on how to do this. I played around with a few models including strings which would simply specify how to read/write the packets but that didn’t go as well as I wanted it to. An example script would look like:</p>
+<pre><code class="lang-auto">READ 1 BYTE;
+READ 0 SHORT_A;
+WRITE 0 BYTE;
+WRITE 1 SHORT;</code></pre>
+<p>Of course its a bit repetitive, but the idea is that if you were to use this system you would be generating these instruction sets instead of writing the scripts. The way it works is that bytes are inputted to a source buffer and read into memory to unobfuscate them (or just simply read them into memory in the case of obfuscating) then they are written to a destination buffer which resembles how the packet should have been written normally without obfuscation. From there you decode it normally.</p>
+<p>If you have different ideas about how this could be improved discuss it. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> I’m hoping to eventually add basic arithmetic for dynamic packets (walking) and a stack/stack operations (PUSH, PEEK, POP).</p>
+<p>Here’s the code:</p>
+<pre><code class="lang-auto">package us.evelus.cobalt.obf;
+
+import us.evelus.cobalt.StringParser;
+
+import static us.evelus.cobalt.obf.InstructionSet.*;
+
+import java.io.IOException;
+
+/**
+ * Created by hadyn on 5/14/2014.
+ */
+public final class Parser {
+
+    /**
+     * The regular expression for a statement.
+     */
+    private static final String STATEMENT = "[\\w\\s]+;";
+
+    /**
+     * The regular expression for characters that will be ignored by the parser.
+     */
+    private static final String IGNORE = "\\s+";
+
+    /**
+     * The regular expression signifying the end of a statement.
+     */
+    private static final String STATEMENT_END = ";";
+
+    /**
+     * The regular expression for each of the operation types.
+     */
+    private static final String OPS = "(READ)|(WRITE)";
+
+    /**
+     * The regular expression for each of the value types.
+     */
+    private static final String VALUE = "(BYTE)|(SHORT)|(INT)|(LONG)";
+
+    /**
+     * The regular expression for a numeric byte value.
+     */
+    private static final String NUMERIC = "[1-2]?\\d?\\d";
+
+    private int[] instructions = new int[255];
+    private int[] operands = new int[255];
+    private int offset = 0;
+
+    private Parser(String str) throws IOException {
+        init(str);
+    }
+
+    private void init(String string) throws IOException {
+        StringParser parser = new StringParser(string);
+        while(!parser.eos()) {
+            // Scan for a statement which we can then parse
+            if(parser.scan(STATEMENT)) {
+                String statement = parser.result();
+                parseStatement(statement);
+            // Scan past all of the junk
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do
+            } else {
+                throw new IOException("Unknown characters " + parser.peek(20));
+            }
+        }
+
+        // Append the return opcode
+        instructions[offset++] = RETURN_OP;
+    }
+
+    private void parseStatement(String string) throws IOException {
+        StringParser parser = new StringParser(string);
+        int flags = 0x0;
+        while(!parser.eos()) {
+            if(parser.scan(OPS)) {
+                String op = parser.result();
+                switch (op) {
+                    case "READ":
+                    case "WRITE":
+                        if(op.equals("READ")) {
+                            instructions[offset] = READ_OP;
+                        } else {
+                            instructions[offset] = WRITE_OP;
+                        }
+                        parseOperation(parser);
+                        break;
+                    default:
+                        throw new IOException("Unknown OP type: '" + op + "'");
+                }
+                // Flag that the statement was parsed
+                flags |= 0x1;
+                offset++;
+            // This sometimes isn't used but just in case of empty statements
+            } else if(parser.scan(STATEMENT_END)) {
+                if((flags &amp; 0x1) == 0) {
+                    throw new IOException("Empty statement!");
+                }
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do
+            } else {
+                throw new IOException("Unknown characters: '" + parser.peek(10) + "'");
+            }
+        }
+    }
+
+    private void parseOperation(StringParser parser) throws IOException {
+        int flags = 0x0;
+        int operand = 0;
+        while(!parser.eos()) {
+            if(parser.scan(NUMERIC)) {
+                // Check that we are not rereading the index
+                if(flags != 0x0) {
+                    throw new IOException("Unexpected numeric value: '" + parser.result() + "'");
+                }
+
+                // Parse the index
+                int index = Integer.parseInt(parser.result());
+
+                // Append the index information to the operand and note that the index was read
+                operand |= index &lt;&lt; 8;
+                flags   |= 0x1;
+            } else if(parser.scan(VALUE)) {
+                if((flags &amp; 0x1) != 0) {
+                    throw new IOException("Unexpected value type: '" + parser.result() + "'");
+                }
+
+                // Parse the value type
+                int type = parseValue(parser.result());
+
+                // Append the type information to the operand and note that the value was read
+                operand |= type;
+                flags   |= 0x2;
+            } else if(parser.scan(STATEMENT_END)) {
+                if(flags != 0x3) {
+                    throw new IOException("Unfinished statement");
+                }
+            } else if(parser.scan(IGNORE)) {
+                // Nothing to do here
+            } else {
+                throw new IOException("Unknown characters: '" + parser.peek(10) + "'");
+            }
+        }
+        operands[offset] = operand;
+    }
+
+    private int parseValue(String value) throws IOException {
+        switch(value) {
+            case "BYTE":
+                return BYTE_TYPE;
+            case "SHORT":
+                return SHORT_TYPE;
+            case "INT":
+                return INT_TYPE;
+            case "LONG":
+                return LONG_TYPE;
+            default:
+                throw new IOException("Unknown value type '" + value + "'");
+        }
+    }
+
+    public static InstructionSet parse(String str) throws IOException {
+        Parser parser = new Parser(str);
+        int[] opcodes = new int[parser.offset];
+        int[] operands = new int[parser.offset];
+        System.arraycopy(parser.instructions, 0, opcodes, 0, parser.offset);
+        System.arraycopy(parser.operands, 0, operands, 0, parser.offset);
+        return new InstructionSet(opcodes, operands);
+    }
+}</code></pre>
+<pre><code class="lang-auto">package us.evelus.cobalt.obf;
+
+import us.evelus.cobalt.Buffer;
+
+import static us.evelus.cobalt.obf.InstructionSet.*;
+
+/**
+ * Created by hadyn on 5/15/2014.
+ */
+public final class Obfuscator {
+
+    // TODO: Optimize creating buffers (Pooling em)
+    private final InstructionSet instructions;
+    private final Buffer dest = new Buffer(1024);
+    private final Buffer src = new Buffer(1024);
+
+    // Value stores for transferring values to and from buffers
+    private int[] intValues = new int[255];
+    private long[] longValues = new long[255];
+    private boolean[] flags = new boolean[255];
+
+    public Obfuscator(InstructionSet instructions) {
+        this.instructions = instructions;
+    }
+
+    // put methods
+
+    public void put(byte[] bytes) {
+        put(bytes, 0, bytes.length);
+    }
+
+    public void put(byte[] bytes, int off, int len) {
+        src.put(bytes, off, len);
+    }
+
+    // get methods
+
+    public void get(byte[] bytes) {
+        get(bytes, 0, bytes.length);
+    }
+
+    public void get(byte[] bytes, int off, int len) {
+        dest.get(bytes, off, len);
+    }
+
+    // process method
+
+    public void process() {
+        int[] opcodes = instructions.getOpcodes();
+        int[] operands = instructions.getOperands();
+        int offset = 0;
+        loop:
+        for(;;) {
+            int opcode = opcodes[offset];
+            int operand = operands[offset++];
+            switch(opcode) {
+                case READ_OP:
+                case WRITE_OP:
+                    int index = operand &gt;&gt; 8 &amp; 0xff;
+                    int type = operand &amp; 0xff;
+                    if(opcode == READ_OP) {
+                        switch (type) {
+                            case BYTE_TYPE:
+                            case SHORT_TYPE:
+                            case INT_TYPE:
+                                intValues[index] = readIntegerType(type);
+                                break;
+                            case LONG_TYPE:
+                                longValues[index] = readLongType(type);
+                                break;
+                        }
+                    } else {
+                        if(!flags[index]) {
+                            switch(type) {
+                                case BYTE_TYPE:
+                                case SHORT_TYPE:
+                                case INT_TYPE:
+                                    writeIntegerType(intValues[index], type);
+                                    break;
+                            }
+                        } else {
+                            switch(type) {
+                                case LONG_TYPE:
+                                    writeLongType(longValues[index], type);
+                                    break;
+                            }
+                        }
+                    }
+                    break;
+                case RETURN_OP:
+                    break loop;
+                default:
+                    throw new RuntimeException("Unknown OP " + opcode);
+            }
+        }
+    }
+
+    private int readIntegerType(int type) {
+        switch(type) {
+            case BYTE_TYPE:
+                return src.get();
+            case SHORT_TYPE:
+                return src.getInt16();
+            case INT_TYPE:
+                return src.getInt32();
+            default:
+                throw new RuntimeException("Unknown type: " + type);
+        }
+    }
+
+    private long readLongType(int type) {
+        switch(type) {
+            case LONG_TYPE:
+                return src.getInt64();
+            default:
+                throw new RuntimeException("Unknown type: " + type);
+        }
+    }
+
+    private void writeIntegerType(int value, int type) {
+        switch(type) {
+            case BYTE_TYPE:
+                dest.put(value);
+                break;
+            case SHORT_TYPE:
+                dest.putInt16(value);
+                break;
+            case INT_TYPE:
+                dest.putInt32(value);
+                break;
+
+            default:
+                throw new RuntimeException("Unknown type: " + type);
+        }
+    }
+
+    private void writeLongType(long value, int type) {
+        switch(type) {
+            case LONG_TYPE:
+                dest.putInt64(value);
+                break;
+            default:
+                throw new RuntimeException("Unknown type: " + type);
+        }
+    }
+}
+</code></pre>
+<pre><code class="lang-auto">package us.evelus.cobalt.obf;
+
+/**
+ * Created by hadyn on 5/15/2014.
+ */
+public final class InstructionSet {
+
+    public static final int RETURN_OP = 0x1;
+    public static final int READ_OP   = 0x2;
+    public static final int WRITE_OP  = 0x3;
+
+    public static final int BYTE_TYPE = 0x1;
+    public static final int SHORT_TYPE = 0x2;
+    public static final int INT_TYPE = 0x3;
+    public static final int LONG_TYPE = 0x4;
+
+    private final int[] opcodes;
+    private final int[] operands;
+
+    public InstructionSet(int[] opcodes, int[] operands) {
+        this.opcodes = opcodes;
+        this.operands = operands;
+    }
+
+    public int[] getOpcodes() {
+        return opcodes;
+    }
+
+    public int[] getOperands() {
+        return operands;
+    }
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093/1</link>
+        <pubDate>Fri, 16 May 2014 04:06:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-543093-1</guid>
+        <source url="https://forum.moparisthebest.com/t/application-layer-obfuscation-solution/543093.rss">Application Layer Obfuscation Solution</source>
+      </item>
+  </channel>
+</rss>

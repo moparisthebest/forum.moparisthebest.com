@@ -1,0 +1,407 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Debugging in Eclipse to fix any bugs</title>
+    <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290</link>
+    <description>OK, i hope to make this tutorial short.
+
+I will be working on fixing the smelting x5 x10 thing, working with erasedpkz.
+
+Ok now we look at the method and it looks fine, but when clicking smelt 5 it only makes one bar. I looked at how the method works and it uses [COLOR=blue]smeltAmount[/COLOR].
+[CODE]	public void smelt(int barType) {
+		if (c.[COLOR=Red]smeltAmount[/COLOR] &gt; 0) {
+			c.getPA().closeAllWindows();
+			if (hasOres(barType)) {
+				c.getItems().deleteItem(oreId, c.getItems().getItemSlot(oreId), 1);
+				if (oreId2 &gt; 0)
+					c.getItems().deleteItem(oreId2, c.getItems().getItemSlot(oreId2), 1);
+				c.getItems().addItem(barId,1);
+				c.getPA().addSkillXP(exp * Config.SMITHING_EXPERIENCE, c.playerSmithing);
+				c.getPA().refreshSkill(c.playerSmithing);
+				c.smeltAmount--;
+				c.smeltTimer = 1;
+			} else {
+				c.sendMessage(&quot;You do not have the required ores to smelt this.&quot;);
+				c.getPA().removeAllWindows();
+			}
+		} else {
+			c.getPA().resetVariables();
+		}
+	}[/CODE]
+so If [COLOR=blue]smeltAmount[/COLOR] is greater than 0 then it will smelt, that means if we click smelt 5 and it doesn&#39;t make any bars or just makes one bar, that means the [COLOR=blue]smeltAmount [/COLOR]value has changed when clicking on Smelt 5.
+
+Once i find out the problem, i look for the cause.
+In eclipse you can right click [COLOR=blue]smeltAmount [/COLOR]and click [COLOR=Yellow]Open Call Heirarchy[/COLOR] to view where [COLOR=blue]smelthAmount [/COLOR]is used.
+I look for [COLOR=Red]smeltAmount = 0[/COLOR] and find it in [COLOR=blue]resetVariables()[/COLOR] function.
+[CODE]
+	public void resetVariables() {
+		c.getCrafting().resetCrafting();
+		c.usingGlory = false;
+		c.smeltInterface = false;
+		c.smeltType = 0;
+		[COLOR=Red]c.smeltAmount = 0;[/COLOR]
+		c.woodcut[0] = c.woodcut[1] = c.woodcut[2] = 0;
+		c.mining[0] = c.mining[1] = c.mining[2] = 0;
+	}
+[/CODE]
+
+ Now we want to find out what uses resetVariables(). To do that we put a breakpoint on it, like so
+[SPOILER=&quot;setting breakpoints images&quot;]
+[IMG]http://i43.tinypic.com/jtql8o.png[/img]
+[IMG]http://i42.tinypic.com/30ixq1x.png[/img]
+[/SPOILER]
+If you can&#39;t see images then in Eclipse, once selected the method [COLOR=blue]resetVariables()[/COLOR],  look at the outline box on the right side and right click [COLOR=blue]resetVariables [/COLOR]and click [COLOR=Yellow]Toggle Method Breakpoint[/COLOR]
+
+Now we run the server in [COLOR=Orange]debug mode[/COLOR](F11), but for now disable the breakpoint.
+Once you open up the smelting interface enable the breakpoint and click [COLOR=Yellow]Smelt 5[/COLOR]
+The client should freeze, but it&#39;s ok. Go to Eclipse window and you should see something like this
+[SPOILER=&quot;Hit breakpoint&quot;]
+[IMG]http://i39.tinypic.com/qzlqaa.png[/img]
+[/SPOILER]
+On the image we can see what used the [COLOR=blue]resetVariable[/COLOR], what led up to it.
+Click on each one of them and examine them, those in the debug Box. This is what i see, [COLOR=blue]Smithing.smelt()[/COLOR] method used[COLOR=blue] c.getPA().closeAllWindows();[/COLOR] and closeAllWindows() function that i had contained [COLOR=blue]declineTrade()[/COLOR]
+[CODE]
+	public void closeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+				c.isBanking = false;
+				c.isShopping = false;
+				[COLOR=Red]c.getTradeAndDuel().declineTrade();[/COLOR]
+				c.getTradeAndDuel().declineDuel();
+			}
+		//}
+	}
+[/CODE]
+and declineTrade() has declineTrade(true) which leads to this function here
+[SPOILER=&quot;declineTrade(boolean tellOther)&quot;][CODE]
+	public void declineTrade(boolean tellOther) {
+		[COLOR=Red]c.getPA().removeAllWindows();[/COLOR]
+		Client o = (Client) Server.playerHandler.players[c.tradeWith];
+		if (o == null) {
+			return;
+		}
+		
+		if(tellOther){
+			o.getTradeAndDuel().declineTrade(false);
+			o.getTradeAndDuel().c.getPA().removeAllWindows();
+		}
+			
+		for(GameItem item : offeredItems) {
+			if(item.amount &lt; 1) {
+				continue;
+			}
+			if(item.stackable) {
+				c.getItems().addItem(item.id, item.amount);
+			} else {
+				for(int i = 0; i &lt; item.amount; i++) {
+					c.getItems().addItem(item.id, 1);
+				}
+			}
+		}
+		c.canOffer = true;
+		c.tradeConfirmed = false;
+		c.tradeConfirmed2 = false;
+		offeredItems.clear();
+		c.inTrade = false;
+		c.tradeWith = 0;
+	}
+[/CODE][/SPOILER]
+declineTrade(boolean tellOther) method, which contains [COLOR=blue]c.getPA().removeAllWindows();[/COLOR] and if we look at [COLOR=blue]removeAllWindows()[/COLOR]
+[CODE]
+	public void removeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				[COLOR=Red]c.getPA().resetVariables();[/COLOR]
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+			}
+		//}
+	}
+[/CODE]
+ we can see it has [COLOR=blue]resetVariables()[/COLOR] call and resetVariables sets the smeltAmount to Zero! ok we found our cause now!
+
+Things we can do is, either remove [COLOR=blue]declineTrade[/COLOR] from the closeAllWindows() method or change couple things.
+You can try changing it to look something like this
+[CODE]
+	public void closeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+				c.isBanking = false;
+				c.isShopping = false;
+				if(c.tradeStatus == 1)
+					c.getTradeAndDuel().declineTrade();
+				if(c.duelStatus &gt;= 1 &amp;&amp; c.duelStatus &lt;= 4) // lol made a mistake here, put the || instead of the &amp;&amp;
+					c.getTradeAndDuel().declineDuel();
+			}
+		//}
+	}
+[/CODE]
+
+[COLOR=DeepSkyBlue]Problem Solved![/COLOR]
+
+[COLOR=MediumTurquoise]Please tell me how i can improve this tutorial :)[/COLOR]</description>
+    
+    <lastBuildDate>Tue, 06 Dec 2011 16:49:41 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@Mountainbit Mountainbit]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mountainbit">@Mountainbit</a> wrote:</p>
+          <blockquote>
+              <p>Client sided bank name<br>
+Welcome text in the entity class.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/8</link>
+        <pubDate>Tue, 06 Dec 2011 16:49:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-8</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@rapingpure rapingpure]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rapingpure">@rapingpure</a> wrote:</p>
+          <blockquote>
+              <p>Where to change the bank name and the welcome text?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/7</link>
+        <pubDate>Tue, 06 Dec 2011 16:48:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-7</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>What does this do? Show people how to enable debugging in eclipse? I’m confused as to the purpose of this “tutorial”.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/6</link>
+        <pubDate>Tue, 06 Dec 2011 05:20:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-6</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@lostmyphat lostmyphat]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lostmyphat">@lostmyphat</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“EvenSkull1, post:4, topic:424290”]withc program u used ?<br>
+and nice tut[/quote]<br>
+Read the title.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/5</link>
+        <pubDate>Tue, 06 Dec 2011 04:34:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-5</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@EvenSkull1 EvenSkull1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/evenskull1">@EvenSkull1</a> wrote:</p>
+          <blockquote>
+              <p>withc program u used ?<br>
+and nice tut</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/4</link>
+        <pubDate>Tue, 06 Dec 2011 04:28:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-4</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@xI_c_E xI c E]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xi_c_e">@xI_c_E</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for this! Eclipse is my favorite IDE and this will be really useful for me :D.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/3</link>
+        <pubDate>Tue, 06 Dec 2011 03:28:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-3</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@pk2play pk2play]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pk2play">@pk2play</a> wrote:</p>
+          <blockquote>
+              <p>Nice tutorial.<br>
+~Nik  <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/2</link>
+        <pubDate>Tue, 06 Dec 2011 03:06:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-2</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+      <item>
+        <title>Debugging in Eclipse to fix any bugs</title>
+        <dc:creator><![CDATA[@alksandr alksandr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/alksandr">@alksandr</a> wrote:</p>
+          <blockquote>
+              <p>OK, i hope to make this tutorial short.</p>
+<p>I will be working on fixing the smelting x5 x10 thing, working with erasedpkz.</p>
+<p>Ok now we look at the method and it looks fine, but when clicking smelt 5 it only makes one bar. I looked at how the method works and it uses [COLOR=blue]smeltAmount[/COLOR].</p>
+<p><code>	public void smelt(int barType) {
+		if (c.[COLOR=Red]smeltAmount[/COLOR] &gt; 0) {
+			c.getPA().closeAllWindows();
+			if (hasOres(barType)) {
+				c.getItems().deleteItem(oreId, c.getItems().getItemSlot(oreId), 1);
+				if (oreId2 &gt; 0)
+					c.getItems().deleteItem(oreId2, c.getItems().getItemSlot(oreId2), 1);
+				c.getItems().addItem(barId,1);
+				c.getPA().addSkillXP(exp * Config.SMITHING_EXPERIENCE, c.playerSmithing);
+				c.getPA().refreshSkill(c.playerSmithing);
+				c.smeltAmount--;
+				c.smeltTimer = 1;
+			} else {
+				c.sendMessage("You do not have the required ores to smelt this.");
+				c.getPA().removeAllWindows();
+			}
+		} else {
+			c.getPA().resetVariables();
+		}
+	}</code><br>
+so If [COLOR=blue]smeltAmount[/COLOR] is greater than 0 then it will smelt, that means if we click smelt 5 and it doesn’t make any bars or just makes one bar, that means the [COLOR=blue]smeltAmount [/COLOR]value has changed when clicking on Smelt 5.</p>
+<p>Once i find out the problem, i look for the cause.<br>
+In eclipse you can right click [COLOR=blue]smeltAmount [/COLOR]and click [COLOR=Yellow]Open Call Heirarchy[/COLOR] to view where [COLOR=blue]smelthAmount [/COLOR]is used.<br>
+I look for [COLOR=Red]smeltAmount = 0[/COLOR] and find it in [COLOR=blue]resetVariables()[/COLOR] function.</p>
+<pre><code class="lang-auto">	public void resetVariables() {
+		c.getCrafting().resetCrafting();
+		c.usingGlory = false;
+		c.smeltInterface = false;
+		c.smeltType = 0;
+		[COLOR=Red]c.smeltAmount = 0;[/COLOR]
+		c.woodcut[0] = c.woodcut[1] = c.woodcut[2] = 0;
+		c.mining[0] = c.mining[1] = c.mining[2] = 0;
+	}</code></pre>
+<p>Now we want to find out what uses resetVariables(). To do that we put a breakpoint on it, like so<br>
+[SPOILER=“setting breakpoints images”]<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i43.tinypic.com/jtql8o.png" title="jtql8o.png" rel="nofollow noopener"><img src="http://i43.tinypic.com/jtql8o.png" alt width="690" height="387"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">jtql8o.png</span><span class="informations">1366×768</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i42.tinypic.com/30ixq1x.png" title="30ixq1x.png" rel="nofollow noopener"><img src="http://i42.tinypic.com/30ixq1x.png" alt width="690" height="387"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">30ixq1x.png</span><span class="informations">1366×768</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+[/SPOILER]<br>
+If you can’t see images then in Eclipse, once selected the method [COLOR=blue]resetVariables()[/COLOR],  look at the outline box on the right side and right click [COLOR=blue]resetVariables [/COLOR]and click [COLOR=Yellow]Toggle Method Breakpoint[/COLOR]</p>
+<p>Now we run the server in [COLOR=Orange]debug mode<a>/COLOR</a>, but for now disable the breakpoint.<br>
+Once you open up the smelting interface enable the breakpoint and click [COLOR=Yellow]Smelt 5[/COLOR]<br>
+The client should freeze, but it’s ok. Go to Eclipse window and you should see something like this<br>
+[SPOILER=“Hit breakpoint”]<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i39.tinypic.com/qzlqaa.png" title="qzlqaa.png" rel="nofollow noopener"><img src="http://i39.tinypic.com/qzlqaa.png" alt width="690" height="387"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">qzlqaa.png</span><span class="informations">1366×768</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+[/SPOILER]<br>
+On the image we can see what used the [COLOR=blue]resetVariable[/COLOR], what led up to it.<br>
+Click on each one of them and examine them, those in the debug Box. This is what i see, [COLOR=blue]Smithing.smelt()[/COLOR] method used[COLOR=blue] c.getPA().closeAllWindows();[/COLOR] and closeAllWindows() function that i had contained [COLOR=blue]declineTrade()[/COLOR]</p>
+<pre><code class="lang-auto">	public void closeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+				c.isBanking = false;
+				c.isShopping = false;
+				[COLOR=Red]c.getTradeAndDuel().declineTrade();[/COLOR]
+				c.getTradeAndDuel().declineDuel();
+			}
+		//}
+	}</code></pre>
+<p>and declineTrade() has declineTrade(true) which leads to this function here<br>
+[SPOILER=“declineTrade(boolean tellOther)”][CODE]<br>
+public void declineTrade(boolean tellOther) {<br>
+[COLOR=Red]c.getPA().removeAllWindows();[/COLOR]<br>
+Client o = (Client) Server.playerHandler.players[c.tradeWith];<br>
+if (o == null) {<br>
+return;<br>
+}</p>
+<pre><code>	if(tellOther){
+		o.getTradeAndDuel().declineTrade(false);
+		o.getTradeAndDuel().c.getPA().removeAllWindows();
+	}
+		
+	for(GameItem item : offeredItems) {
+		if(item.amount &lt; 1) {
+			continue;
+		}
+		if(item.stackable) {
+			c.getItems().addItem(item.id, item.amount);
+		} else {
+			for(int i = 0; i &lt; item.amount; i++) {
+				c.getItems().addItem(item.id, 1);
+			}
+		}
+	}
+	c.canOffer = true;
+	c.tradeConfirmed = false;
+	c.tradeConfirmed2 = false;
+	offeredItems.clear();
+	c.inTrade = false;
+	c.tradeWith = 0;
+}
+</code></pre>
+<p>[/CODE][/SPOILER]<br>
+declineTrade(boolean tellOther) method, which contains [COLOR=blue]c.getPA().removeAllWindows();[/COLOR] and if we look at [COLOR=blue]removeAllWindows()[/COLOR]</p>
+<pre><code class="lang-auto">	public void removeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				[COLOR=Red]c.getPA().resetVariables();[/COLOR]
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+			}
+		//}
+	}</code></pre>
+<p>we can see it has [COLOR=blue]resetVariables()[/COLOR] call and resetVariables sets the smeltAmount to Zero! ok we found our cause now!</p>
+<p>Things we can do is, either remove [COLOR=blue]declineTrade[/COLOR] from the closeAllWindows() method or change couple things.<br>
+You can try changing it to look something like this</p>
+<pre><code class="lang-auto">	public void closeAllWindows() {
+		//synchronized(c) {
+			if(c.getOutStream() != null &amp;&amp; c != null) {
+				c.getOutStream().createFrame(219);
+				c.flushOutStream();
+				c.isBanking = false;
+				c.isShopping = false;
+				if(c.tradeStatus == 1)
+					c.getTradeAndDuel().declineTrade();
+				if(c.duelStatus &gt;= 1 &amp;&amp; c.duelStatus &lt;= 4) // lol made a mistake here, put the || instead of the &amp;&amp;
+					c.getTradeAndDuel().declineDuel();
+			}
+		//}
+	}</code></pre>
+<p>[COLOR=DeepSkyBlue]Problem Solved![/COLOR]</p>
+<p>[COLOR=MediumTurquoise]Please tell me how i can improve this tutorial :)[/COLOR]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290/1</link>
+        <pubDate>Tue, 06 Dec 2011 02:54:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-424290-1</guid>
+        <source url="https://forum.moparisthebest.com/t/debugging-in-eclipse-to-fix-any-bugs/424290.rss">Debugging in Eclipse to fix any bugs</source>
+      </item>
+  </channel>
+</rss>

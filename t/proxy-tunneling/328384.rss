@@ -1,0 +1,566 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Proxy tunneling</title>
+    <link>https://forum.moparisthebest.com/t/proxy-tunneling/328384</link>
+    <description>So i was looking for a program to act as an HTTP proxy that would tunnel all its incoming connections to a network proxy using the HTTP CONNECT method, i couldn&#39;t find any good program to do it so i made this : 
+
+Main.java : 
+
+[code=java]
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+
+public class Main extends Thread
+{
+	private Socket soc = null;
+	private String HOST = &quot;10.9.1.20&quot; /* &quot;91.200.132.1&quot; */;
+	private int PORT = 8080;
+	private String output = &quot;&quot;;
+
+	public Main(Socket s)
+	{
+		soc = s;
+	}
+
+	public void run()
+	{
+		try
+		{
+			String header = getHeader(soc);
+			String host = null;
+			int port = 80;
+
+			for (String s : header.split(&quot;\r\n&quot;))
+			{
+				if (s.toLowerCase().startsWith(&quot;host: &quot;))
+				{
+					host = s.split(&quot; &quot;)[1];
+				}
+			}
+
+			try
+			{
+				port = Integer.parseInt(host.substring(host.indexOf(&quot;:&quot;) + 1));
+				host = host.substring(0, host.indexOf(&quot;:&quot;));
+			}
+			catch (Exception e)
+			{
+			}
+
+			output += String.format(&quot;%-10s&quot;, header.split(&quot; &quot;)[0]) + &quot; - &quot; + (host.length() &gt; 20 ? host.substring(0, 17) + &quot;...&quot; : String.format(&quot;%-20s&quot;, host)) + &quot; - &quot; + (soc.getInetAddress().getCanonicalHostName().length() &gt; 20 ? soc.getInetAddress().getCanonicalHostName().substring(0, 17) + &quot;...&quot; : String.format(&quot;%-20s&quot;, soc.getInetAddress().getCanonicalHostName())) + &quot;\n&quot;;
+
+			if (header.split(&quot; &quot;)[0].toLowerCase().equals(&quot;connect&quot;))
+			{
+				header = header.replaceAll(host, InetAddress.getByName(host).getHostAddress());
+
+				output += String.format(&quot;%-50s&quot;, &quot;Connecting to server&quot;);
+
+				Socket server = new Socket(HOST, PORT);
+
+				output += &quot;Done\n&quot; + String.format(&quot;%-50s&quot;, &quot;Sending packets&quot;);
+
+				server.getOutputStream().write(header.getBytes());
+				header = getHeader(server);
+				soc.getOutputStream().write(header.getBytes());
+
+				output += &quot;Done\n&quot; + String.format(&quot;%-50s&quot;, &quot;Starting InOut threads&quot;);
+
+				new InOut(soc, server, 0).start();
+				new InOut(server, soc, 0).start();
+
+				output += &quot;Done\n&quot;;
+			}
+			else
+			{
+				if (header.split(&quot; &quot;)[1].startsWith(&quot;http&quot;))
+				{
+					String request = header.split(&quot; &quot;)[1].substring(header.split(&quot; &quot;)[1].indexOf(host) + host.length());
+
+					header = header.substring(0, header.indexOf(header.split(&quot; &quot;)[1])) + request + &quot; &quot; + header.substring(header.indexOf(header.split(&quot; &quot;)[2]));
+				}
+
+				long length = getLength(header);
+
+				output += String.format(&quot;%-50s&quot;, &quot;Connecting to server&quot;);
+				Socket server = new Socket(HOST, PORT);
+				output += &quot;Done\n&quot; + String.format(&quot;%-50s&quot;, &quot;Sending CONNECT header&quot;);
+
+				server.getOutputStream().write((&quot;CONNECT &quot; + InetAddress.getByName(host).getHostAddress() + &quot;:&quot; + port + &quot; HTTP/1.1\r\nUser-Agent: # Mozilla/5.0 (Windows; U; Windows NT 6.1; it; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6\r\nProxy-Connection: keep-alive\r\nHost: &quot; + InetAddress.getByName(host).getHostAddress() + &quot;\r\n\r\n&quot;).getBytes());
+
+				String tmp = &quot;&quot;;
+
+				if ((tmp = getHeader(server)) != null &amp;&amp; tmp.indexOf(&quot;200&quot;) == -1)
+				{
+					throw new Exception(&quot;Proxy refused&quot;);
+				}
+
+				output += &quot;Done\n&quot; + String.format(&quot;%-50s&quot;, &quot;Sending REQUEST header&quot; + (length != 0 ? &quot; and content ( &quot; + length + &quot;)&quot; : &quot;&quot;));
+
+				server.getOutputStream().write(header.getBytes());
+
+				if (length != 0)
+				{
+					new InOut(soc, server, length).run();
+				}
+
+				output += &quot;Done\n&quot;;
+
+				header = getHeader(server);
+				length = getLength(header);
+
+				output += String.format(&quot;%-50s&quot;, &quot;Sending RESPONSE header&quot; + (length != 0 ? &quot; and content (&quot; + length + &quot;)&quot; : &quot;&quot;));
+
+				soc.getOutputStream().write(header.getBytes());
+				new InOut(server, soc, length).run();
+
+				output += &quot;Done\n&quot; + String.format(&quot;%-50s&quot;, &quot;Closing socket&quot;);
+
+				try
+				{
+					soc.close();
+				}
+				catch (Exception e)
+				{
+					System.out.println(&quot;Error closing socket : &quot; + e);
+				}
+
+				output += &quot;Done\n&quot;;
+			}
+		}
+		catch (Exception e)
+		{
+			output += &quot;Error\n&quot;;
+
+			try
+			{
+				soc.close();
+			}
+			catch (Exception x)
+			{
+				output += &quot;Error closing socket : &quot; + x + &quot;\n&quot;;
+			}
+		}
+
+		System.out.println(output);
+	}
+
+	private long getLength(String header)
+	{
+		for (String s : header.split(&quot;\r\n&quot;))
+		{
+			if (s.toLowerCase().startsWith(&quot;content-length: &quot;))
+			{
+				try
+				{
+					return Long.parseLong(s.split(&quot; &quot;)[1]);
+				}
+				catch (Exception e)
+				{
+					return 0;
+				}
+			}
+		}
+
+		return 0;
+	}
+
+	private String getHeader(Socket soc)
+	{
+		try
+		{
+			String header = &quot;&quot;;
+			int i = 0, count = 0;
+
+			while (count != 4 &amp;&amp; (i = soc.getInputStream().read()) != -1)
+			{
+				if (!Character.isISOControl(i))
+				{
+					header += (char) i;
+					count = 0;
+				}
+				else
+				{
+					header += i == 10 ? &quot;\r\n&quot; : &quot;&quot;;
+					count++;
+				}
+			}
+
+			return header;
+		}
+		catch (Exception e)
+		{
+			new RuntimeException(e);
+		}
+
+		return null;
+	}
+
+	public static void main(String[] args)
+	{
+		try
+		{
+			ServerSocket serv = new ServerSocket(8080);
+
+			while (true)
+			{
+				new Main(serv.accept()).start();
+			}
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+		}
+	}
+}
+[/code]
+
+InOut.java
+
+[code=java]
+import java.net.Socket;
+
+public class InOut extends Thread
+{
+	private Socket in, out;
+	private long length = 0;
+
+	public InOut(Socket i, Socket o, long l)
+	{
+		in = i;
+		out = o;
+		length = l;
+
+		try
+		{
+			in.setSoTimeout(5000);
+		}
+		catch (Exception e)
+		{
+		}
+	}
+
+	public void run()
+	{
+		try
+		{
+			long read = 0;
+			int cur = 0;
+			byte[] buf = new byte[1024];
+
+			while ((cur = in.getInputStream().read(buf, 0, 1024)) != -1)
+			{
+				out.getOutputStream().write(buf, 0, cur);
+
+				read += cur;
+
+				if (length != 0 &amp;&amp; read == length)
+				{
+					break;
+				}
+			}
+		}
+		catch (Exception e)
+		{
+		}
+	}
+}
+[/code]
+
+(its for bypassing school network restrictions ofc.) 
+
+what you guys think?</description>
+    
+    <lastBuildDate>Sat, 06 Feb 2010 02:31:30 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/proxy-tunneling/328384.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Proxy tunneling</title>
+        <dc:creator><![CDATA[@shangtsung1 shangtsung1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shangtsung1">@shangtsung1</a> wrote:</p>
+          <blockquote>
+              <p>spoon proxy is good, especially when used with OpenSSH and putty.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proxy-tunneling/328384/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proxy-tunneling/328384/2</link>
+        <pubDate>Sat, 06 Feb 2010 02:31:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-328384-2</guid>
+        <source url="https://forum.moparisthebest.com/t/proxy-tunneling/328384.rss">Proxy tunneling</source>
+      </item>
+      <item>
+        <title>Proxy tunneling</title>
+        <dc:creator><![CDATA[@nueb35 Nueb35]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nueb35">@nueb35</a> wrote:</p>
+          <blockquote>
+              <p>So i was looking for a program to act as an HTTP proxy that would tunnel all its incoming connections to a network proxy using the HTTP CONNECT method, i couldn’t find any good program to do it so i made this :</p>
+<p>Main.java :</p>
+<pre><code class="lang-auto">import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+
+public class Main extends Thread
+{
+	private Socket soc = null;
+	private String HOST = "10.9.1.20" /* "91.200.132.1" */;
+	private int PORT = 8080;
+	private String output = "";
+
+	public Main(Socket s)
+	{
+		soc = s;
+	}
+
+	public void run()
+	{
+		try
+		{
+			String header = getHeader(soc);
+			String host = null;
+			int port = 80;
+
+			for (String s : header.split("\r\n"))
+			{
+				if (s.toLowerCase().startsWith("host: "))
+				{
+					host = s.split(" ")[1];
+				}
+			}
+
+			try
+			{
+				port = Integer.parseInt(host.substring(host.indexOf(":") + 1));
+				host = host.substring(0, host.indexOf(":"));
+			}
+			catch (Exception e)
+			{
+			}
+
+			output += String.format("%-10s", header.split(" ")[0]) + " - " + (host.length() &gt; 20 ? host.substring(0, 17) + "..." : String.format("%-20s", host)) + " - " + (soc.getInetAddress().getCanonicalHostName().length() &gt; 20 ? soc.getInetAddress().getCanonicalHostName().substring(0, 17) + "..." : String.format("%-20s", soc.getInetAddress().getCanonicalHostName())) + "\n";
+
+			if (header.split(" ")[0].toLowerCase().equals("connect"))
+			{
+				header = header.replaceAll(host, InetAddress.getByName(host).getHostAddress());
+
+				output += String.format("%-50s", "Connecting to server");
+
+				Socket server = new Socket(HOST, PORT);
+
+				output += "Done\n" + String.format("%-50s", "Sending packets");
+
+				server.getOutputStream().write(header.getBytes());
+				header = getHeader(server);
+				soc.getOutputStream().write(header.getBytes());
+
+				output += "Done\n" + String.format("%-50s", "Starting InOut threads");
+
+				new InOut(soc, server, 0).start();
+				new InOut(server, soc, 0).start();
+
+				output += "Done\n";
+			}
+			else
+			{
+				if (header.split(" ")[1].startsWith("http"))
+				{
+					String request = header.split(" ")[1].substring(header.split(" ")[1].indexOf(host) + host.length());
+
+					header = header.substring(0, header.indexOf(header.split(" ")[1])) + request + " " + header.substring(header.indexOf(header.split(" ")[2]));
+				}
+
+				long length = getLength(header);
+
+				output += String.format("%-50s", "Connecting to server");
+				Socket server = new Socket(HOST, PORT);
+				output += "Done\n" + String.format("%-50s", "Sending CONNECT header");
+
+				server.getOutputStream().write(("CONNECT " + InetAddress.getByName(host).getHostAddress() + ":" + port + " HTTP/1.1\r\nUser-Agent: # Mozilla/5.0 (Windows; U; Windows NT 6.1; it; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6\r\nProxy-Connection: keep-alive\r\nHost: " + InetAddress.getByName(host).getHostAddress() + "\r\n\r\n").getBytes());
+
+				String tmp = "";
+
+				if ((tmp = getHeader(server)) != null &amp;&amp; tmp.indexOf("200") == -1)
+				{
+					throw new Exception("Proxy refused");
+				}
+
+				output += "Done\n" + String.format("%-50s", "Sending REQUEST header" + (length != 0 ? " and content ( " + length + ")" : ""));
+
+				server.getOutputStream().write(header.getBytes());
+
+				if (length != 0)
+				{
+					new InOut(soc, server, length).run();
+				}
+
+				output += "Done\n";
+
+				header = getHeader(server);
+				length = getLength(header);
+
+				output += String.format("%-50s", "Sending RESPONSE header" + (length != 0 ? " and content (" + length + ")" : ""));
+
+				soc.getOutputStream().write(header.getBytes());
+				new InOut(server, soc, length).run();
+
+				output += "Done\n" + String.format("%-50s", "Closing socket");
+
+				try
+				{
+					soc.close();
+				}
+				catch (Exception e)
+				{
+					System.out.println("Error closing socket : " + e);
+				}
+
+				output += "Done\n";
+			}
+		}
+		catch (Exception e)
+		{
+			output += "Error\n";
+
+			try
+			{
+				soc.close();
+			}
+			catch (Exception x)
+			{
+				output += "Error closing socket : " + x + "\n";
+			}
+		}
+
+		System.out.println(output);
+	}
+
+	private long getLength(String header)
+	{
+		for (String s : header.split("\r\n"))
+		{
+			if (s.toLowerCase().startsWith("content-length: "))
+			{
+				try
+				{
+					return Long.parseLong(s.split(" ")[1]);
+				}
+				catch (Exception e)
+				{
+					return 0;
+				}
+			}
+		}
+
+		return 0;
+	}
+
+	private String getHeader(Socket soc)
+	{
+		try
+		{
+			String header = "";
+			int i = 0, count = 0;
+
+			while (count != 4 &amp;&amp; (i = soc.getInputStream().read()) != -1)
+			{
+				if (!Character.isISOControl(i))
+				{
+					header += (char) i;
+					count = 0;
+				}
+				else
+				{
+					header += i == 10 ? "\r\n" : "";
+					count++;
+				}
+			}
+
+			return header;
+		}
+		catch (Exception e)
+		{
+			new RuntimeException(e);
+		}
+
+		return null;
+	}
+
+	public static void main(String[] args)
+	{
+		try
+		{
+			ServerSocket serv = new ServerSocket(8080);
+
+			while (true)
+			{
+				new Main(serv.accept()).start();
+			}
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+		}
+	}
+}</code></pre>
+<p>InOut.java</p>
+<pre><code class="lang-auto">import java.net.Socket;
+
+public class InOut extends Thread
+{
+	private Socket in, out;
+	private long length = 0;
+
+	public InOut(Socket i, Socket o, long l)
+	{
+		in = i;
+		out = o;
+		length = l;
+
+		try
+		{
+			in.setSoTimeout(5000);
+		}
+		catch (Exception e)
+		{
+		}
+	}
+
+	public void run()
+	{
+		try
+		{
+			long read = 0;
+			int cur = 0;
+			byte[] buf = new byte[1024];
+
+			while ((cur = in.getInputStream().read(buf, 0, 1024)) != -1)
+			{
+				out.getOutputStream().write(buf, 0, cur);
+
+				read += cur;
+
+				if (length != 0 &amp;&amp; read == length)
+				{
+					break;
+				}
+			}
+		}
+		catch (Exception e)
+		{
+		}
+	}
+}</code></pre>
+<p>(its for bypassing school network restrictions ofc.)</p>
+<p>what you guys think?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/proxy-tunneling/328384/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/proxy-tunneling/328384/1</link>
+        <pubDate>Fri, 05 Feb 2010 22:32:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-328384-1</guid>
+        <source url="https://forum.moparisthebest.com/t/proxy-tunneling/328384.rss">Proxy tunneling</source>
+      </item>
+  </channel>
+</rss>

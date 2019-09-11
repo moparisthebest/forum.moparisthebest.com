@@ -1,0 +1,849 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[C++] mp3sorter</title>
+    <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732</link>
+    <description>[b]What is it?:[/b]
+Recursively searches a given location for MP3&#39;s, reads the tags, and organizes the files into ARTIST/YEAR - ALBUM/TRACK format in the destination output directory.
+
+[b]Compilation Instructions:[/b]
+[code]
+g++ -c sorter.cpp
+g++ -c mp3file.cpp
+g++ -o sorter sorter.o mp3file.o -lboost_filesystem
+[/code]
+
+[b]Dependencies:[/b]
+Boost
+
+[b]Execution Instructions:[/b]
+[code]
+usage: sort [directory] [output]
+
+[directory]: The directory to recursively search.
+[output]: The directory to place the output.
+[/code]
+
+[b]Source:[/b]
+
+[tt]sorter.cpp[/tt]
+[code=c++]
+/* 
+ * File: sorter.cpp
+ * Description: Sorts MP3s based on ID3v1/ID3v2 structures supplied by mp3file
+ * Author: t4
+ * 
+ */
+
+#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;dirent.h&gt;
+#include &lt;string.h&gt;
+#include &lt;boost/filesystem.hpp&gt;
+#include &quot;mp3file.h&quot;
+
+
+const char* sep = &quot;/&quot;;
+char* output_dir;
+	
+void directoryWalk(const char* directoryName, std::vector&lt;std::string*&gt;* files) {
+	DIR* dir;
+	dir = opendir(directoryName);
+	struct dirent* entry;
+	while((entry = readdir(dir)) != NULL) {
+		if((strcmp(entry-&gt;d_name, &quot;.&quot;) == 0) || 
+			(strcmp(entry-&gt;d_name, &quot;..&quot;) == 0) ||
+			(strcmp(entry-&gt;d_name, output_dir) == 0))
+			continue;
+		if(entry-&gt;d_type == DT_REG) {
+			char* absPath = new char[strlen(directoryName) + strlen(entry-&gt;d_name) + 2];
+			strcpy(absPath, directoryName);
+			strcat(absPath, sep);
+			strcat(absPath, entry-&gt;d_name);
+			files-&gt;push_back(new std::string(absPath));
+			delete [] absPath;
+		} else if(entry-&gt;d_type == DT_DIR) {
+			char* nextDir = new char[strlen(directoryName) + strlen(entry-&gt;d_name) + 2];
+			strcpy(nextDir, directoryName);
+			strcat(nextDir, sep);
+			strcat(nextDir, entry-&gt;d_name);
+			directoryWalk(nextDir, files);
+			delete [] nextDir;
+		}
+
+	}
+	closedir(dir);
+}
+
+/**
+ * Entry point
+ * @param argc the size of argv
+ * @param argv the array of command line arguments
+ */
+int main(int argc, char** argv) {
+	if(argc != 3) {
+		std::cout &lt;&lt; &quot;Incorrect usage: sort [directory] [output]&quot; &lt;&lt; std::endl;
+		return 0;
+	}
+	std::vector&lt;std::string*&gt;* files = new std::vector&lt;std::string*&gt;; 
+	
+	output_dir = argv[2];
+	directoryWalk(argv[1], files);
+	std::vector&lt;std::string*&gt;::iterator it;
+	boost::filesystem::create_directory(boost::filesystem::path(output_dir + std::string(&quot;/&quot;)));
+	for(it = files-&gt;begin(); it &lt; files-&gt;end(); ++it) {
+		if((*it)-&gt;substr((*it)-&gt;size() - 4).compare(&quot;.mp3&quot;) != 0)
+			continue;
+			
+		FILE* fs = fopen((*it)-&gt;c_str(), &quot;r&quot;);
+		MP3File mp3(fs);
+		if(mp3.isID3v1()) {
+			mp3.readID3v1();
+			std::string nDir(output_dir + std::string(&quot;/&quot;) + mp3.getArtist() + 
+						&quot;/&quot; + mp3.getYear() + &quot; - &quot; + mp3.getAlbum() + &quot;/&quot;);
+						
+			boost::filesystem::path p(nDir);
+			boost::filesystem::create_directories(p);
+			
+			std::string nFile(nDir + mp3.getTitle() + (*it)-&gt;substr((*it)-&gt;size() - 4));
+			
+			boost::filesystem::path o(**it);
+			boost::filesystem::path f(nFile);
+						
+			boost::filesystem::rename(o, f);			
+		}
+		delete *it;
+	}
+	delete files;
+	return 0;
+}
+[/code]
+
+[tt]mp3file.cpp[/tt]
+[code=c++]
+/* 
+ * File: mp3file.cpp
+ * Description: Provides a structure to house ID3v1/ID3v2 tags for MP3 files
+ * Author: t4
+ * 
+ */
+
+#include &quot;mp3file.h&quot;
+
+/**
+* Create a new MP3 file entry
+* @param fs the file stream
+*/
+MP3File::MP3File(FILE* fs) {
+	//seek to the end of the file the backtrace 128 bytes
+	fseek(fs, -128, SEEK_END); 
+	
+	//read those bytes and place into the buffer				
+	fread(buffer, 1, 128, fs); 
+	
+	//close the file stream
+	fclose(fs);
+}
+
+/**
+* Destructor
+*/
+MP3File::~MP3File() {
+	//do nothing
+}
+
+/**
+ * Is the file using ID3v1?
+ * @return true/false
+ */
+bool MP3File::isID3v1() {
+	//ID3v1 has the magic header of TAG at the start of the tag information
+	return (&#39;T&#39; == this-&gt;buffer[0] &amp;&amp; &#39;A&#39; == this-&gt;buffer[1] &amp;&amp; &#39;G&#39; == this-&gt;buffer[2]);
+}
+
+/**
+ * Is the file using ID3v2?
+ * @return true/false
+ */
+bool MP3File::isID3v2() {
+	return false; //TODO: detection
+}
+
+/**
+* Read ID3v1 tags
+*/
+void MP3File::readID3v1() {
+	for(int i = 3; i &lt; 30; ++i)
+		this-&gt;title += buffer[i];
+	this-&gt;title.erase(this-&gt;title.find_last_not_of(&quot; \n\r\t&quot;) + 1);
+	
+	for(int i = 33; i &lt; 63; ++i)
+		this-&gt;artist += buffer[i];
+	this-&gt;artist.erase(this-&gt;artist.find_last_not_of(&quot; \n\r\t&quot;) + 1);
+	
+	for(int i = 63; i &lt; 93; ++i)
+		this-&gt;album += buffer[i];
+	this-&gt;album.erase(this-&gt;album.find_last_not_of(&quot; \n\r\t&quot;) + 1);
+	
+	for(int i = 93; i &lt; 97; ++i)
+		this-&gt;year += buffer[i];
+	this-&gt;year.erase(this-&gt;year.find_last_not_of(&quot; \n\r\t&quot;) + 1);
+}
+
+/**
+* Read ID3v2 tags
+*/
+void MP3File::readID3v2() {
+	//TODO: functionality
+}
+
+/**
+* Getes the title of the track
+* @return title
+*/
+std::string MP3File::getTitle() {
+	return this-&gt;title;
+}
+	
+/**
+* Gets the artist of the track
+* @return artist
+*/	
+std::string MP3File::getArtist() {
+	return this-&gt;artist;
+}
+
+/**
+* Gets the album the track appears on 
+* @return album
+*/
+std::string MP3File::getAlbum() {
+	return this-&gt;album;
+}
+
+/**
+* Gets the year the album was published
+* @return year
+*/
+std::string MP3File::getYear() {
+	return this-&gt;year;
+}
+
+[/code]
+
+[tt]mp3file.h[/tt]
+[code=c++]
+/* 
+ * File: mp3file.h
+ * Description: Provides a structure to house ID3v1/ID3v2 tags for MP3 files
+ * Author: t4
+ * 
+ */
+
+#include &lt;string&gt;
+#include &lt;stdio.h&gt;
+
+#ifndef MP3FILE_H_
+#define MP3FILE_H_
+
+class MP3File {
+
+	private:		
+		/** The part of the file that will be read */
+		char buffer[128];
+		
+		/** The title of the track */
+		std::string title;
+		
+		/** The artist of the track */
+		std::string artist;
+		
+		/** The album the track appears on */
+		std::string album;
+		
+		/** The year the album was published */
+		std::string year;
+	
+	public:
+		/**
+		 * Create a new MP3 file entry
+		 * @param fs the file stream
+		 */
+		MP3File(FILE* fs);
+		
+		/**
+		 * Destructor
+		 */
+		~MP3File();
+		
+		/**
+		 * Is the file using ID3v1?
+		 * @return true/false
+		 */
+		bool isID3v1();
+		
+		/**
+		 * Is the file using ID3v2?
+		 * @return true/false
+		 */
+		bool isID3v2();
+		
+		/**
+		 * Read ID3v1 tags
+		 */
+		void readID3v1();
+		
+		/**
+		 * Read ID3v2 tags
+		 */
+		void readID3v2();
+		
+		/**
+		 * Getes the title of the track
+		 * @return title
+		 */
+		std::string getTitle();
+			
+		/**
+		 * Gets the artist of the track
+		 * @return artist
+		 */	
+		std::string getArtist();
+		
+		/**
+		 * Gets the album the track appears on 
+		 * @return album
+		 */
+		std::string getAlbum();
+		
+		/**
+		 * Gets the year the album was published
+		 * @return year
+		 */
+		std::string getYear();		
+
+};
+
+#endif
+[/code]</description>
+    
+    <lastBuildDate>Tue, 07 Feb 2012 22:51:00 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:8, topic:430732”][quote author=t4 link=topic=533409.msg3910291#msg3910291 date=1328654720]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+</blockquote>
+</aside>
+<p>i used objects and encapsulation and leet libraries like boost to create directory structures, you’ve got shit rename that takes a fuckin’ char array noob.</p>
+</blockquote>
+</aside>
+<p>cuz using oop and 99999 crappy libraries makes you cool</p>
+</blockquote>
+</aside>
+<p>cuz spamming 99999 instructions and using inflexible libraries makes you cool<br>
+[/quote]<br>
+cuz pretending you know what you’re talking about makes you cool[/quote]<br>
+cuz falling for trolls makes you cool <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/9</link>
+        <pubDate>Tue, 07 Feb 2012 22:51:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-9</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:7, topic:430732”][quote author=SpeedIsMeh link=topic=533409.msg3910288#msg3910288 date=1328654615]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+</blockquote>
+</aside>
+<p>i used objects and encapsulation and leet libraries like boost to create directory structures, you’ve got shit rename that takes a fuckin’ char array noob.</p>
+</blockquote>
+</aside>
+<p>cuz using oop and 99999 crappy libraries makes you cool<br>
+[/quote]<br>
+cuz spamming 99999 instructions and using inflexible libraries makes you cool[/quote]<br>
+cuz pretending you know what you’re talking about makes you cool</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/8</link>
+        <pubDate>Tue, 07 Feb 2012 22:46:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-8</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“SpeedIsMeh, post:6, topic:430732”][quote author=t4 link=topic=533409.msg3910273#msg3910273 date=1328653954]</p>
+<aside class="quote">
+<blockquote>
+<p>Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+</blockquote>
+</aside>
+<p>i used objects and encapsulation and leet libraries like boost to create directory structures, you’ve got shit rename that takes a fuckin’ char array noob.<br>
+[/quote]<br>
+cuz using oop and 99999 crappy libraries makes you cool[/quote]<br>
+cuz spamming 99999 instructions and using inflexible libraries makes you cool</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/7</link>
+        <pubDate>Tue, 07 Feb 2012 22:45:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-7</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“t4, post:5, topic:430732”][quote author=SpeedIsMeh link=topic=533409.msg3910170#msg3910170 date=1328645517]<br>
+Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.<br>
+[/quote]<br>
+i used objects and encapsulation and leet libraries like boost to create directory structures, you’ve got shit rename that takes a fuckin’ char array noob.[/quote]<br>
+cuz using oop and 99999 crappy libraries makes you cool</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/6</link>
+        <pubDate>Tue, 07 Feb 2012 22:43:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-6</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="430732">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/speedismeh/40/3403_1.png" class="avatar"> SpeedIsMeh:</div>
+<blockquote>
+<p>Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+</blockquote>
+</aside>
+<p>i used objects and encapsulation and leet libraries like boost to create directory structures, you’ve got shit rename that takes a fuckin’ char array noob.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/5</link>
+        <pubDate>Tue, 07 Feb 2012 22:32:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-5</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@SpeedIsMeh SpeedIsMeh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/speedismeh">@SpeedIsMeh</a> wrote:</p>
+          <blockquote>
+              <p>Same as my C version, <a href="http://www.moparisthebest.com/smf/index.php/topic,532930.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/4</link>
+        <pubDate>Tue, 07 Feb 2012 20:11:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-4</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <ol>
+<li>
+<p>Okay</p>
+</li>
+<li>
+<p>Yeah, I was more familiar with FILE*, so I figured I’d just go with it.</p>
+</li>
+<li>
+<p>I use g++, as to how old my revision is I’ve not a clue at the moment. Cool improvement, though.</p>
+</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/3</link>
+        <pubDate>Fri, 27 Jan 2012 21:14:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-3</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@The_Enforcer The Enforcer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_enforcer">@The_Enforcer</a> wrote:</p>
+          <blockquote>
+              <p>I glanced over you code, I got a few suggestions.</p>
+<ol>
+<li>
+<p>Include the  headers when using functions from the C standard library.</p>
+</li>
+<li>
+<p>std::ifstream instead of FILE*. Nothing wrong with FILE*, but it’s generally a good idea to always use what C++ offers and resort to C only if needed.</p>
+</li>
+<li>
+<p>Are you using a compiler that supports C++11? If so, don’t be afraid of stack allocating objects and returning them by value (this is about std::vector<a>std::string*</a>* files). All classes of the C++11 standard library implement a move constructor/assignment operator (invoked when for example pushing a temporary into a vector or returning by value). You can use std::move() if you want to move a named stack allocated object that you no longer plan to use. Returning by value gets even better when your compiler supports return value optimization - no copying/moving happens.</p>
+</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/2</link>
+        <pubDate>Fri, 27 Jan 2012 20:14:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-2</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+      <item>
+        <title>[C++] mp3sorter</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p><span class="bbcode-b">What is it?:</span><br>
+Recursively searches a given location for MP3’s, reads the tags, and organizes the files into ARTIST/YEAR - ALBUM/TRACK format in the destination output directory.</p>
+<p><span class="bbcode-b">Compilation Instructions:</span></p>
+<pre><code class="lang-auto">g++ -c sorter.cpp
+g++ -c mp3file.cpp
+g++ -o sorter sorter.o mp3file.o -lboost_filesystem</code></pre>
+<p><span class="bbcode-b">Dependencies:</span><br>
+Boost</p>
+<p><span class="bbcode-b">Execution Instructions:</span></p>
+<pre><code class="lang-auto">usage: sort [directory] [output]
+
+[directory]: The directory to recursively search.
+[output]: The directory to place the output.</code></pre>
+<p><span class="bbcode-b">Source:</span></p>
+<p>[tt]sorter.cpp[/tt]</p>
+<pre><code class="lang-auto">/* 
+ * File: sorter.cpp
+ * Description: Sorts MP3s based on ID3v1/ID3v2 structures supplied by mp3file
+ * Author: t4
+ * 
+ */
+
+#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;dirent.h&gt;
+#include &lt;string.h&gt;
+#include &lt;boost/filesystem.hpp&gt;
+#include "mp3file.h"
+
+
+const char* sep = "/";
+char* output_dir;
+	
+void directoryWalk(const char* directoryName, std::vector&lt;std::string*&gt;* files) {
+	DIR* dir;
+	dir = opendir(directoryName);
+	struct dirent* entry;
+	while((entry = readdir(dir)) != NULL) {
+		if((strcmp(entry-&gt;d_name, ".") == 0) || 
+			(strcmp(entry-&gt;d_name, "..") == 0) ||
+			(strcmp(entry-&gt;d_name, output_dir) == 0))
+			continue;
+		if(entry-&gt;d_type == DT_REG) {
+			char* absPath = new char[strlen(directoryName) + strlen(entry-&gt;d_name) + 2];
+			strcpy(absPath, directoryName);
+			strcat(absPath, sep);
+			strcat(absPath, entry-&gt;d_name);
+			files-&gt;push_back(new std::string(absPath));
+			delete [] absPath;
+		} else if(entry-&gt;d_type == DT_DIR) {
+			char* nextDir = new char[strlen(directoryName) + strlen(entry-&gt;d_name) + 2];
+			strcpy(nextDir, directoryName);
+			strcat(nextDir, sep);
+			strcat(nextDir, entry-&gt;d_name);
+			directoryWalk(nextDir, files);
+			delete [] nextDir;
+		}
+
+	}
+	closedir(dir);
+}
+
+/**
+ * Entry point
+ * @param argc the size of argv
+ * @param argv the array of command line arguments
+ */
+int main(int argc, char** argv) {
+	if(argc != 3) {
+		std::cout &lt;&lt; "Incorrect usage: sort [directory] [output]" &lt;&lt; std::endl;
+		return 0;
+	}
+	std::vector&lt;std::string*&gt;* files = new std::vector&lt;std::string*&gt;; 
+	
+	output_dir = argv[2];
+	directoryWalk(argv[1], files);
+	std::vector&lt;std::string*&gt;::iterator it;
+	boost::filesystem::create_directory(boost::filesystem::path(output_dir + std::string("/")));
+	for(it = files-&gt;begin(); it &lt; files-&gt;end(); ++it) {
+		if((*it)-&gt;substr((*it)-&gt;size() - 4).compare(".mp3") != 0)
+			continue;
+			
+		FILE* fs = fopen((*it)-&gt;c_str(), "r");
+		MP3File mp3(fs);
+		if(mp3.isID3v1()) {
+			mp3.readID3v1();
+			std::string nDir(output_dir + std::string("/") + mp3.getArtist() + 
+						"/" + mp3.getYear() + " - " + mp3.getAlbum() + "/");
+						
+			boost::filesystem::path p(nDir);
+			boost::filesystem::create_directories(p);
+			
+			std::string nFile(nDir + mp3.getTitle() + (*it)-&gt;substr((*it)-&gt;size() - 4));
+			
+			boost::filesystem::path o(**it);
+			boost::filesystem::path f(nFile);
+						
+			boost::filesystem::rename(o, f);			
+		}
+		delete *it;
+	}
+	delete files;
+	return 0;
+}</code></pre>
+<p>[tt]mp3file.cpp[/tt]</p>
+<pre><code class="lang-auto">/* 
+ * File: mp3file.cpp
+ * Description: Provides a structure to house ID3v1/ID3v2 tags for MP3 files
+ * Author: t4
+ * 
+ */
+
+#include "mp3file.h"
+
+/**
+* Create a new MP3 file entry
+* @param fs the file stream
+*/
+MP3File::MP3File(FILE* fs) {
+	//seek to the end of the file the backtrace 128 bytes
+	fseek(fs, -128, SEEK_END); 
+	
+	//read those bytes and place into the buffer				
+	fread(buffer, 1, 128, fs); 
+	
+	//close the file stream
+	fclose(fs);
+}
+
+/**
+* Destructor
+*/
+MP3File::~MP3File() {
+	//do nothing
+}
+
+/**
+ * Is the file using ID3v1?
+ * @return true/false
+ */
+bool MP3File::isID3v1() {
+	//ID3v1 has the magic header of TAG at the start of the tag information
+	return ('T' == this-&gt;buffer[0] &amp;&amp; 'A' == this-&gt;buffer[1] &amp;&amp; 'G' == this-&gt;buffer[2]);
+}
+
+/**
+ * Is the file using ID3v2?
+ * @return true/false
+ */
+bool MP3File::isID3v2() {
+	return false; //TODO: detection
+}
+
+/**
+* Read ID3v1 tags
+*/
+void MP3File::readID3v1() {
+	for(int i = 3; i &lt; 30; ++i)
+		this-&gt;title += buffer[i];
+	this-&gt;title.erase(this-&gt;title.find_last_not_of(" \n\r\t") + 1);
+	
+	for(int i = 33; i &lt; 63; ++i)
+		this-&gt;artist += buffer[i];
+	this-&gt;artist.erase(this-&gt;artist.find_last_not_of(" \n\r\t") + 1);
+	
+	for(int i = 63; i &lt; 93; ++i)
+		this-&gt;album += buffer[i];
+	this-&gt;album.erase(this-&gt;album.find_last_not_of(" \n\r\t") + 1);
+	
+	for(int i = 93; i &lt; 97; ++i)
+		this-&gt;year += buffer[i];
+	this-&gt;year.erase(this-&gt;year.find_last_not_of(" \n\r\t") + 1);
+}
+
+/**
+* Read ID3v2 tags
+*/
+void MP3File::readID3v2() {
+	//TODO: functionality
+}
+
+/**
+* Getes the title of the track
+* @return title
+*/
+std::string MP3File::getTitle() {
+	return this-&gt;title;
+}
+	
+/**
+* Gets the artist of the track
+* @return artist
+*/	
+std::string MP3File::getArtist() {
+	return this-&gt;artist;
+}
+
+/**
+* Gets the album the track appears on 
+* @return album
+*/
+std::string MP3File::getAlbum() {
+	return this-&gt;album;
+}
+
+/**
+* Gets the year the album was published
+* @return year
+*/
+std::string MP3File::getYear() {
+	return this-&gt;year;
+}
+</code></pre>
+<p>[tt]mp3file.h[/tt]</p>
+<pre><code class="lang-auto">/* 
+ * File: mp3file.h
+ * Description: Provides a structure to house ID3v1/ID3v2 tags for MP3 files
+ * Author: t4
+ * 
+ */
+
+#include &lt;string&gt;
+#include &lt;stdio.h&gt;
+
+#ifndef MP3FILE_H_
+#define MP3FILE_H_
+
+class MP3File {
+
+	private:		
+		/** The part of the file that will be read */
+		char buffer[128];
+		
+		/** The title of the track */
+		std::string title;
+		
+		/** The artist of the track */
+		std::string artist;
+		
+		/** The album the track appears on */
+		std::string album;
+		
+		/** The year the album was published */
+		std::string year;
+	
+	public:
+		/**
+		 * Create a new MP3 file entry
+		 * @param fs the file stream
+		 */
+		MP3File(FILE* fs);
+		
+		/**
+		 * Destructor
+		 */
+		~MP3File();
+		
+		/**
+		 * Is the file using ID3v1?
+		 * @return true/false
+		 */
+		bool isID3v1();
+		
+		/**
+		 * Is the file using ID3v2?
+		 * @return true/false
+		 */
+		bool isID3v2();
+		
+		/**
+		 * Read ID3v1 tags
+		 */
+		void readID3v1();
+		
+		/**
+		 * Read ID3v2 tags
+		 */
+		void readID3v2();
+		
+		/**
+		 * Getes the title of the track
+		 * @return title
+		 */
+		std::string getTitle();
+			
+		/**
+		 * Gets the artist of the track
+		 * @return artist
+		 */	
+		std::string getArtist();
+		
+		/**
+		 * Gets the album the track appears on 
+		 * @return album
+		 */
+		std::string getAlbum();
+		
+		/**
+		 * Gets the year the album was published
+		 * @return year
+		 */
+		std::string getYear();		
+
+};
+
+#endif</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/c-mp3sorter/430732/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/c-mp3sorter/430732/1</link>
+        <pubDate>Thu, 26 Jan 2012 22:49:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-430732-1</guid>
+        <source url="https://forum.moparisthebest.com/t/c-mp3sorter/430732.rss">[C++] mp3sorter</source>
+      </item>
+  </channel>
+</rss>

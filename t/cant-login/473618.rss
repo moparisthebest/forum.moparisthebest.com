@@ -1,0 +1,438 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Can&#39;t login</title>
+    <link>https://forum.moparisthebest.com/t/cant-login/473618</link>
+    <description>tried removing tpc, now I can&#39;t log in, I think I&#39;m getting the order of bytes im sending wrong or something
+
+login method
+
+[code=java]long diff = System.currentTimeMillis() - connectedAt;
+		if (diff &gt; (TIMEOUT * 1000)) {
+			throw new Exception(&quot;Timeout.&quot;);
+		}
+		if (state == State.LOGIN_START) {
+			if (fillinStream(2)) {
+				if (inStream.readUnsignedByte() != 14) {
+					throw new Exception(&quot;Expect login byte 14 from client.&quot;);
+				}
+				// this is part of the usename. Maybe it&#39;s used as a hash to
+				// select the appropriate
+				// login server
+				@SuppressWarnings(&quot;unused&quot;)
+				int namePart = inStream.readUnsignedByte();
+				for (int i = 0; i &lt; 8; i++)
+					out.write(0); // is being ignored by the client
+				// login response - 0 means exchange session key to establish
+				// encryption
+				// Note that we could use 2 right away to skip the cryption
+				// part, but i think this
+				// won&#39;t work in one case when the cryptor class is not set and
+				// will throw a NullPointerException
+				out.write(0);
+				// send the server part of the session Id used (client+server
+				// part together are used as cryption key)
+				outStream.writeQWord(serverSessionKey);
+				directFlushoutStream();
+				state = State.LOGIN_READ1;
+			}
+		} else if (state == State.LOGIN_READ1) {
+			if (fillinStream(2)) {
+				int loginType = inStream.readUnsignedByte(); // this is either
+																// 16 (new
+																// login) or 18
+																// (reconnect
+																// after lost
+																// connection)
+				if (loginType != 16 &amp;&amp; loginType != 18) {
+					throw new Exception(&quot;Unexpected login type &quot; + loginType);
+				}
+				loginPacketSize = inStream.readUnsignedByte();
+				loginEncryptPacketSize = loginPacketSize - (36 + 1 + 1 + 2); // the
+																				// size
+																				// of
+																				// the
+																				// RSA
+																				// encrypted
+																				// part
+																				// (containing
+																				// password)
+				// misc.println_debug(&quot;LoginPacket size: &quot;+loginPacketSize+&quot;, RSA packet size: &quot;+loginEncryptPacketSize);
+				if (loginEncryptPacketSize &lt;= 0) {
+					throw new Exception(&quot;Zero RSA packet size&quot;);
+				}
+				state = State.LOGIN_READ2;
+			}
+		} else if (state == State.LOGIN_READ2) {
+			if (fillinStream(loginPacketSize)) {
+				if (inStream.readUnsignedByte() != 255
+						|| inStream.readUnsignedWord() != 317) {
+					throw new Exception(
+							&quot;Wrong login packet magic ID (expected 255, 317)&quot;);
+				}
+				int lowMemoryVersion = inStream.readUnsignedByte();
+				// misc.println_debug(&quot;Client type: &quot;+((lowMemoryVersion==1) ?
+				// &quot;low&quot; : &quot;high&quot;)+&quot; memory version&quot;);
+				for (int i = 0; i &lt; 9; i++) {
+					// misc.println_debug(&quot;dataFileVersion[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(inStream.readDWord()));
+				}
+				// don&#39;t bother reading the RSA encrypted block because we can&#39;t
+				// unless
+				// we brute force jagex&#39; private key pair or employ a hacked
+				// client the removes
+				// the RSA encryption part or just uses our own key pair.
+				// Our current approach is to deactivate the RSA encryption of
+				// this block
+				// clientside by setting exp to 1 and mod to something large
+				// enough in (data^exp) % mod
+				// effectively rendering this tranformation inactive
+				loginEncryptPacketSize--; // don&#39;t count length byte
+				int tmp = inStream.readUnsignedByte();
+				if (loginEncryptPacketSize != tmp) {
+					throw new Exception(&quot;Encrypted packet data length (&quot;
+							+ loginEncryptPacketSize
+							+ &quot;) different from length byte thereof (&quot; + tmp
+							+ &quot;)&quot;);
+				}
+				tmp = inStream.readUnsignedByte();
+				if (tmp != 10) {
+					throw new Exception(&quot;Encrypted packet Id was &quot; + tmp
+							+ &quot; but expected 10&quot;);
+				}
+				clientSessionKey = inStream.readQWord();
+				serverSessionKey = inStream.readQWord();
+				int UID = inStream.readDWord();
+				// misc.println(&quot;UserId: &quot;+inStream.readDWord());
+				playerName = inStream.readString();
+				if (playerName == null || playerName.length() == 0)
+					throw new Exception(&quot;Blank username.&quot;);
+				playerPass = inStream.readString();
+				// misc.println(&quot;Ident: &quot;+playerName+&quot;:&quot;+playerPass);
+
+				int sessionKey[] = new int[4];
+				sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+				sessionKey[1] = (int) clientSessionKey;
+				sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+				sessionKey[3] = (int) serverSessionKey;
+
+				for (int i = 0; i &lt; 4; i++)
+					// misc.println_debug(&quot;inStreamSessionKey[&quot; + i + &quot;]: 0x&quot;
+					// + Integer.toHexString(sessionKey[i]));
+
+					inStreamDecryption = new ISAACCipher(sessionKey);
+				for (int i = 0; i &lt; 4; i++)
+					sessionKey[i] += 50;
+
+				for (int i = 0; i &lt; 4; i++)
+					// misc.println_debug(&quot;outStreamSessionKey[&quot; + i + &quot;]: 0x&quot;
+					// + Integer.toHexString(sessionKey[i]));
+					//
+					outStreamDecryption = new ISAACCipher(sessionKey);
+				outStream.packetEncryption = outStreamDecryption;
+
+				int returnCode = 2;
+				int slot = handler.getFreeSlot();
+				Client c = null;
+				if (Server.playerHandler.updateRunning) {
+					// updating
+					returnCode = 14;
+				} else if (slot == -1) {
+					// world full!
+					returnCode = 7;
+				} else if (handler.isPlayerOn(playerName)) {
+					returnCode = 5;
+				} else {
+					int loadgame = c.getData().loadgame(playerName, playerPass);
+
+					if (loadgame == 3) {
+						returnCode = 3;
+					}
+
+					c = new Client(socket, slot);
+				}
+				if (c != null) {
+					c.playerName = playerName;
+					c.playerPass = playerPass;
+					c.inStreamDecryption = inStreamDecryption;
+					c.outStreamDecryption = outStreamDecryption;
+					c.inStream = inStream;
+					c.outStream = outStream;
+					c.in = in;
+					c.out = out;
+					c.packetSize = 0;
+					c.packetType = -1;
+					c.readPtr = 0;
+					c.writePtr = 0;
+					c.handler = handler;
+					c.isActive = true;
+				}
+
+				out.write(returnCode);
+				if (returnCode == 2) {
+					handler.addClient(slot, c);
+					switch (c.getRights()) {
+					case MODERATOR:
+						out.write(1);
+						break;
+					case ADMINISTRATOR:
+					case OWNER:
+						out.write(2);
+						break;
+					default:
+						out.write(0);
+					}
+					out.write(0); // no log
+					this.socket = null;
+				} else {
+					out.write(0);
+					out.write(0);
+				}
+				directFlushoutStream();
+				return true;
+			}
+		}
+		return false;[/code]</description>
+    
+    <lastBuildDate>Sun, 16 Dec 2012 03:46:41 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/cant-login/473618.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Can&#39;t login</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="473618">
+<div class="title">
+<div class="quote-controls"></div>
+ runescape sucks:</div>
+<blockquote>
+<p>Just for the record, what does it say when you attempt to login?</p>
+</blockquote>
+</aside>
+<p>Ahh forget it, I just restarted. I’ll attempt it another time.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cant-login/473618/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cant-login/473618/3</link>
+        <pubDate>Sun, 16 Dec 2012 03:46:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-473618-3</guid>
+        <source url="https://forum.moparisthebest.com/t/cant-login/473618.rss">Can&#39;t login</source>
+      </item>
+      <item>
+        <title>Can&#39;t login</title>
+        <dc:creator><![CDATA[@runescape_sucks runescape sucks]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/runescape_sucks">@runescape_sucks</a> wrote:</p>
+          <blockquote>
+              <p>Just for the record, what does it say when you attempt to login?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cant-login/473618/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cant-login/473618/2</link>
+        <pubDate>Sun, 16 Dec 2012 02:27:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-473618-2</guid>
+        <source url="https://forum.moparisthebest.com/t/cant-login/473618.rss">Can&#39;t login</source>
+      </item>
+      <item>
+        <title>Can&#39;t login</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>tried removing tpc, now I can’t log in, I think I’m getting the order of bytes im sending wrong or something</p>
+<p>login method</p>
+<p>[code=java]long diff = System.currentTimeMillis() - connectedAt;<br>
+if (diff &gt; (TIMEOUT * 1000)) {<br>
+throw new Exception(“Timeout.”);<br>
+}<br>
+if (state == State.LOGIN_START) {<br>
+if (fillinStream(2)) {<br>
+if (inStream.readUnsignedByte() != 14) {<br>
+throw new Exception(“Expect login byte 14 from client.”);<br>
+}<br>
+// this is part of the usename. Maybe it’s used as a hash to<br>
+// select the appropriate<br>
+// login server<br>
+<span class="mention">@SuppressWarnings</span>(“unused”)<br>
+int namePart = inStream.readUnsignedByte();<br>
+for (int i = 0; i &lt; 8; i++)<br>
+out.write(0); // is being ignored by the client<br>
+// login response - 0 means exchange session key to establish<br>
+// encryption<br>
+// Note that we could use 2 right away to skip the cryption<br>
+// part, but i think this<br>
+// won’t work in one case when the cryptor class is not set and<br>
+// will throw a NullPointerException<br>
+out.write(0);<br>
+// send the server part of the session Id used (client+server<br>
+// part together are used as cryption key)<br>
+outStream.writeQWord(serverSessionKey);<br>
+directFlushoutStream();<br>
+state = State.LOGIN_READ1;<br>
+}<br>
+} else if (state == State.LOGIN_READ1) {<br>
+if (fillinStream(2)) {<br>
+int loginType = inStream.readUnsignedByte(); // this is either<br>
+// 16 (new<br>
+// login) or 18<br>
+// (reconnect<br>
+// after lost<br>
+// connection)<br>
+if (loginType != 16 &amp;&amp; loginType != 18) {<br>
+throw new Exception("Unexpected login type " + loginType);<br>
+}<br>
+loginPacketSize = inStream.readUnsignedByte();<br>
+loginEncryptPacketSize = loginPacketSize - (36 + 1 + 1 + 2); // the<br>
+// size<br>
+// of<br>
+// the<br>
+// RSA<br>
+// encrypted<br>
+// part<br>
+// (containing<br>
+// password)<br>
+// misc.println_debug(“LoginPacket size: “+loginPacketSize+”, RSA packet size: “+loginEncryptPacketSize);<br>
+if (loginEncryptPacketSize &lt;= 0) {<br>
+throw new Exception(“Zero RSA packet size”);<br>
+}<br>
+state = State.LOGIN_READ2;<br>
+}<br>
+} else if (state == State.LOGIN_READ2) {<br>
+if (fillinStream(loginPacketSize)) {<br>
+if (inStream.readUnsignedByte() != 255<br>
+|| inStream.readUnsignedWord() != 317) {<br>
+throw new Exception(<br>
+“Wrong login packet magic ID (expected 255, 317)”);<br>
+}<br>
+int lowMemoryVersion = inStream.readUnsignedByte();<br>
+// misc.println_debug(“Client type: “+((lowMemoryVersion==1) ?<br>
+// “low” : “high”)+” memory version”);<br>
+for (int i = 0; i &lt; 9; i++) {<br>
+// misc.println_debug(“dataFileVersion[”+i+”]: 0x”+Integer.toHexString(inStream.readDWord()));<br>
+}<br>
+// don’t bother reading the RSA encrypted block because we can’t<br>
+// unless<br>
+// we brute force jagex’ private key pair or employ a hacked<br>
+// client the removes<br>
+// the RSA encryption part or just uses our own key pair.<br>
+// Our current approach is to deactivate the RSA encryption of<br>
+// this block<br>
+// clientside by setting exp to 1 and mod to something large<br>
+// enough in (data^exp) % mod<br>
+// effectively rendering this tranformation inactive<br>
+loginEncryptPacketSize–; // don’t count length byte<br>
+int tmp = inStream.readUnsignedByte();<br>
+if (loginEncryptPacketSize != tmp) {<br>
+throw new Exception(“Encrypted packet data length (”<br>
++ loginEncryptPacketSize<br>
++ “) different from length byte thereof (” + tmp<br>
++ “)”);<br>
+}<br>
+tmp = inStream.readUnsignedByte();<br>
+if (tmp != 10) {<br>
+throw new Exception(“Encrypted packet Id was " + tmp<br>
++ " but expected 10”);<br>
+}<br>
+clientSessionKey = inStream.readQWord();<br>
+serverSessionKey = inStream.readQWord();<br>
+int UID = inStream.readDWord();<br>
+// misc.println("UserId: "+inStream.readDWord());<br>
+playerName = inStream.readString();<br>
+if (playerName == null || playerName.length() == 0)<br>
+throw new Exception(“Blank username.”);<br>
+playerPass = inStream.readString();<br>
+// misc.println(“Ident: “+playerName+”:”+playerPass);</p>
+<pre><code>			int sessionKey[] = new int[4];
+			sessionKey[0] = (int) (clientSessionKey &gt;&gt; 32);
+			sessionKey[1] = (int) clientSessionKey;
+			sessionKey[2] = (int) (serverSessionKey &gt;&gt; 32);
+			sessionKey[3] = (int) serverSessionKey;
+
+			for (int i = 0; i &lt; 4; i++)
+				// misc.println_debug("inStreamSessionKey[" + i + "]: 0x"
+				// + Integer.toHexString(sessionKey[i]));
+
+				inStreamDecryption = new ISAACCipher(sessionKey);
+			for (int i = 0; i &lt; 4; i++)
+				sessionKey[i] += 50;
+
+			for (int i = 0; i &lt; 4; i++)
+				// misc.println_debug("outStreamSessionKey[" + i + "]: 0x"
+				// + Integer.toHexString(sessionKey[i]));
+				//
+				outStreamDecryption = new ISAACCipher(sessionKey);
+			outStream.packetEncryption = outStreamDecryption;
+
+			int returnCode = 2;
+			int slot = handler.getFreeSlot();
+			Client c = null;
+			if (Server.playerHandler.updateRunning) {
+				// updating
+				returnCode = 14;
+			} else if (slot == -1) {
+				// world full!
+				returnCode = 7;
+			} else if (handler.isPlayerOn(playerName)) {
+				returnCode = 5;
+			} else {
+				int loadgame = c.getData().loadgame(playerName, playerPass);
+
+				if (loadgame == 3) {
+					returnCode = 3;
+				}
+
+				c = new Client(socket, slot);
+			}
+			if (c != null) {
+				c.playerName = playerName;
+				c.playerPass = playerPass;
+				c.inStreamDecryption = inStreamDecryption;
+				c.outStreamDecryption = outStreamDecryption;
+				c.inStream = inStream;
+				c.outStream = outStream;
+				c.in = in;
+				c.out = out;
+				c.packetSize = 0;
+				c.packetType = -1;
+				c.readPtr = 0;
+				c.writePtr = 0;
+				c.handler = handler;
+				c.isActive = true;
+			}
+
+			out.write(returnCode);
+			if (returnCode == 2) {
+				handler.addClient(slot, c);
+				switch (c.getRights()) {
+				case MODERATOR:
+					out.write(1);
+					break;
+				case ADMINISTRATOR:
+				case OWNER:
+					out.write(2);
+					break;
+				default:
+					out.write(0);
+				}
+				out.write(0); // no log
+				this.socket = null;
+			} else {
+				out.write(0);
+				out.write(0);
+			}
+			directFlushoutStream();
+			return true;
+		}
+	}
+	return false;[/code]</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cant-login/473618/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cant-login/473618/1</link>
+        <pubDate>Sun, 16 Dec 2012 02:26:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-473618-1</guid>
+        <source url="https://forum.moparisthebest.com/t/cant-login/473618.rss">Can&#39;t login</source>
+      </item>
+  </channel>
+</rss>

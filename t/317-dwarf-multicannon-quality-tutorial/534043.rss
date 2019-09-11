@@ -1,0 +1,897 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+    <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043</link>
+    <description>[u][b]Introduction[/b][/u]
+
+Moparscape member relaxlawl released a pretty bad (not even functional) dwarf multicannon system about two years ago. I took it and made it functional, cleaned it, documented it, and added lots of new features that previously were not there.
+
+Some of my code may be different from what you use, figure it out and if you really can&#39;t then send me a pm or post below.
+
+I did this on Project Insanity, so decent programmers shouldn&#39;t have a problem getting this to work on similar derivatives.
+
+
+
+
+[u][b]Features[/b][/u]
+
+[ul][li]Cannon loading, and reloading[/li]
+[li]Single and multiplayer firing support[/li]
+[li]Selective mob firing based on the cannons rotation[/li]
+[li]You cannot fire or pickup another player&#39;s cannon[/li]
+[li]You cannot build a cannon within a certain amount of tiles of another cannon[/li]
+[li]You cannot build more than one cannon[/li]
+[li]On logout the cannon is stopped and returned to the inventory[/li]
+[li]On death the cannon is stopped[/li][/ul]
+
+
+Probably more, can&#39;t remember.
+
+
+
+
+[u][b]The Tutorial[/b][/u]
+
+Ok lets get this show on the road.
+
+Firstly, add these two classes. Almost everything is explained in the documentation, seriously. You&#39;d have to be illiterate to not understand what&#39;s going on. Pastebin was used to compensate for the character limit.
+
+
+[i]DwarfCannon.java[/i]
+
+http://pastebin.com/hHuwBZHB
+
+
+[i]MultiCannonObject.java[/i]
+
+[code=java]package server.rs2.players;
+
+import server.world.Position;
+import server.world.objects.Objects;
+
+/**
+ * Represents a dwarf multicannon that will be placed in the rs2 world. We
+ * extend {@link Objects} so that we can inherit all the traits of a regular
+ * Object, plus add our own traits.
+ * 
+ * @author lare96
+ */
+public class MultiCannonObject extends Objects {
+
+    /**
+     * The player in control of this dwarf multicannon. This field is very
+     * important because it ensures that no one else can fire, or pickup this
+     * cannon.
+     */
+    private Player owner;
+
+    /**
+     * Construct a new dwarf multicannon
+     */
+    public MultiCannonObject(int id, Player owner) {
+        super(id, new Position(owner.absX, owner.absY, owner.heightLevel), 0, 10);
+        this.setOwner(owner);
+    }
+
+    /**
+     * @return the owner
+     */
+    public Player getOwner() {
+        return owner;
+    }
+
+    /**
+     * @param owner
+     *            the owner to set
+     */
+    public void setOwner(Player owner) {
+        this.owner = owner;
+    }
+}[/code]
+
+
+
+First we have to instance the class per player, so open up your [i]Player[/i] class and add this
+
+[code=java]private DwarfCannon cannon = new DwarfCannon(this);
+
+    /**
+     * @return the cannon
+     */
+    public DwarfCannon getCannon() {
+        return cannon;
+    } [/code]
+
+
+
+Second, we have to make it so that when we are setting up the cannon we won&#39;t move. In your [i]Walking[/i] class, at the beginning of the [i]processPacket[/i] method, add
+
+[code=java]        if (c.getCannon().isBulding()) {
+            return;
+        } [/code]
+
+
+
+Next, we have to make it so we can fire and pickup the cannon. In [i]ActionHandler[/i], in the [i]firstClickObject[/i] method, add
+
+[code=java]            case 6:
+                player.getCannon().shoot(new Position(player.objectX, player.objectY, player.heightLevel));
+                break; [/code]
+
+and in the [i]secondClickObject[/i] method, add
+
+[code=java]            case 6:
+                player.getCannon().pickup(new Position(player.objectX, player.objectY, player.heightLevel));
+                break;[/code]
+
+
+
+Then, we have to make it so on death the cannon stops. In [i]PlayerAssistant[/i], at the end of the [i]giveLife()[/i] method, add
+
+[code=java]            MultiCannonObject o = getCannon().cannon;
+
+            if (o != null) {
+                Position p = new Position(o.getPosition().getX(), o.getPosition().getY(), o.getPosition().getZ());
+                getCannon().pickup(p);
+            }
+[/code]
+
+
+
+Next, we have to make it so on logout the cannon is stopped. In [i]Player[/i], somewhere in the [i]logout()[/i] method add
+
+[code=java]            MultiCannonObject o = getCannon().cannon;
+
+            if (o != null) {
+                Position p = new Position(o.getPosition().getX(), o.getPosition().getY(), o.getPosition().getZ());
+                getCannon().pickup(p);
+            }[/code]
+
+
+
+And finally, add this class, and these methods if you don&#39;t have them. We need the methods to fire the cannonball projectiles, and we need the class to represent a [i]Position[/i] point. 
+
+[code=java]    public void createPlayersObjectAnim(int X, int Y, int animationID, int tileObjectType, int orientation) {
+        try {
+            player.getOutStream().createFrame(85);
+            player.getOutStream().writeByteC(Y - (player.mapRegionY * 8));
+            player.getOutStream().writeByteC(X - (player.mapRegionX * 8));
+            int x = 0;
+            int y = 0;
+            player.getOutStream().createFrame(160);
+            player.getOutStream().writeByteS(((x &amp; 7) &lt;&lt; 4) + (y &amp; 7));// tiles
+                                                                       // away
+            // - could
+            // just send 0
+            player.getOutStream().writeByteS((tileObjectType &lt;&lt; 2) + (orientation &amp; 3));
+            player.getOutStream().writeWordA(animationID);// animation id
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+ 
+    public void objectAnim(int X, int Y, int animationID, int tileObjectType, int orientation) {
+        for (Player p : PlayerHandler.players) {
+            if (p != null) {
+ 
+                if (p.distanceToPoint(X, Y) &lt;= 25) {
+                    p.getPA().createPlayersObjectAnim(X, Y, animationID, tileObjectType, orientation);
+                }
+            }
+        }
+    }
+ [/code]
+
+
+[i]Position.java[/i]
+
+[code=java]package server.world;
+ 
+/**
+ * Represents any position point in the rs2 world
+ *
+ * @author lare96
+ */
+public class Position {
+ 
+    /**
+     * Fields that repesent the x, y, and z coordinates
+     */
+    private int x, y, z;
+ 
+    /**
+     * Constructs a new Position with the specified coordinates.
+     *
+     * @param x
+     *            the X coordinate
+     * @param y
+     *            the Y coordinate
+     * @param z
+     *            the Z coordinate
+     */
+    public Position(int x, int y, int z) {
+        setX(x);
+        setY(y);
+        setZ(z);
+    }
+ 
+    /**
+     * Constructs a new Position with the specified coordinates. and the height
+     * as 0
+     *
+     * @param x
+     *            the X coordinate
+     * @param y
+     *            the Y coordinate
+     * @param z
+     *            the Z coordinate
+     */
+    public Position(int x, int y) {
+        setX(x);
+        setY(y);
+        setZ(0);
+    }
+ 
+    /**
+     * Sets the X coordinate.
+     *
+     * @param x
+     *            the X coordinate
+     */
+    public void setX(int x) {
+        this.x = x;
+    }
+ 
+    /**
+     * Gets the X coordinate.
+     *
+     * @return the X coordinate
+     */
+    public int getX() {
+        return x;
+    }
+ 
+    /**
+     * Sets the Y coordinate.
+     *
+     * @param y
+     *            the Y coordinate
+     */
+    public void setY(int y) {
+        this.y = y;
+    }
+ 
+    /**
+     * Gets the Y coordinate.
+     *
+     * @return the Y coordinate
+     */
+    public int getY() {
+        return y;
+    }
+ 
+    /**
+     * Sets the Z coordinate.
+     *
+     * @param z
+     *            the Z coordinate
+     */
+    public void setZ(int z) {
+        this.z = z;
+    }
+ 
+    /**
+     * Gets the Z coordinate.
+     *
+     * @return the Z coordinate.
+     */
+    public int getZ() {
+        return z;
+    }
+ 
+    /**
+     * Checks if the position is within a another position
+     */
+    public boolean withinDistance(Position position, int distance) {
+        if (this.getZ() != position.getZ())
+            return false;
+ 
+        return Math.abs(position.getX() - this.getX()) &lt;= distance &amp;&amp; Math.abs(position.getY() - this.getY()) &lt;= distance;
+    }
+ 
+    /**
+     * Checks if the position is viewable from another position
+     */
+    public boolean isViewableFrom(Position position) {
+        if (this.getZ() != position.getZ())
+            return false;
+ 
+        return Math.abs(position.getX() - this.getX()) &lt;= 14 &amp;&amp; Math.abs(position.getY() - this.getY()) &lt;= 14;
+    }
+ 
+    /**
+     * Checks if this position is equal to another position
+     */
+    @Override
+    public boolean equals(Object anObject) {
+        if (!(anObject instanceof Position)) {
+            return false;
+        }
+ 
+        Position p = (Position) anObject;
+ 
+        if (p == this) {
+            return true;
+        }
+ 
+        if (p.getX() == this.getX() &amp;&amp; p.getY() == this.getY() &amp;&amp; p.getZ() == this.getZ()) {
+            return true;
+        }
+        return false;
+    }
+ 
+    /**
+     * Returns the current position in a string literal
+     */
+    @Override
+    public String toString() {
+        return &quot;[x: &quot; + this.getX() + &quot; || y: &quot; + this.getY() + &quot; || z &quot; + this.getZ() + &quot;]&quot;;
+    }
+ 
+    /**
+     * Returns a duplicate position of the instance calling this method
+     */
+    @Override
+    public Object clone() {
+        return new Position(x, y, z);
+    }
+}[/code]
+
+And that&#39;s pretty much it! Everything else is handled in the [i]DwarfCannon[/i] class.
+
+
+
+
+[b][u]Results[/u][/b]
+
+Remember, it&#39;s not perfect. After using it for awhile you may come across bugs I missed. Think of this as something to build off from. [b]Not[/b] something to leech. The npcs in this GIF had increased health in case you&#39;re wondering.
+
+[img]http://i891.photobucket.com/albums/ac113/zezimo52/lol_zpsbc43669a.gif[/img]
+
+
+
+
+[b][u]Credits[/u][/b]
+
+relaxlawl</description>
+    
+    <lastBuildDate>Thu, 24 Oct 2013 18:44:37 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>fix the offset for the projectile when it starts, that looks nasty</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/28</link>
+        <pubDate>Thu, 24 Oct 2013 18:44:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-28</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:26, topic:534043”]Java doc:</p>
+<p>[quote]<br>
+Most programmers will have no use for this method. It is designed for use by sophisticated enum-based data structures, such as EnumSet and EnumMap.[/quote]</p>
+<p>You shouldn’t rely on implicit ordering or the enum values, for example if one is to add another field in the enum, or even reorder it alphabetically, your code will break and it will be almost impossible to figure out why.</p>
+<p>More elegant solution: <a href="http://stackoverflow.com/questions/1574580/is-it-bad-practice-to-use-an-enums-ordinal-value-to-index-an-array-in-java%5B/quote%5D" rel="nofollow noopener">http://stackoverflow.com/questions/1574580/is-it-bad-practice-to-use-an-enums-ordinal-value-to-index-an-array-in-java[/quote]</a><br>
+going to read up on this a bit, thanks i appriciate it!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/27</link>
+        <pubDate>Tue, 15 Oct 2013 21:18:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-27</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Java doc:</p>
+<blockquote>Most programmers will have no use for this method. It is designed for use by sophisticated enum-based data structures, such as EnumSet and EnumMap.</blockquote>
+<p>You shouldn’t rely on implicit ordering or the enum values, for example if one is to add another field in the enum, or even reorder it alphabetically, your code will break and it will be almost impossible to figure out why.</p>
+<p>More elegant solution: <a href="http://stackoverflow.com/questions/1574580/is-it-bad-practice-to-use-an-enums-ordinal-value-to-index-an-array-in-java" rel="nofollow noopener">http://stackoverflow.com/questions/1574580/is-it-bad-practice-to-use-an-enums-ordinal-value-to-index-an-array-in-java</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/26</link>
+        <pubDate>Tue, 15 Oct 2013 18:27:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-26</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:22, topic:534043”]<code>
+   /**
+     * The six cannon setup stages in chronological order (note: do not change
+     * order, order is crucial!).
+     */</code></p>
+<p>This is why you shouldn’t use [tt]ordinal()[/tt][/quote]<br>
+hm, mind elaborating ryley?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/25</link>
+        <pubDate>Tue, 15 Oct 2013 07:03:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-25</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>Shutup aeham</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/24</link>
+        <pubDate>Tue, 15 Oct 2013 03:17:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-24</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="19" data-topic="534043">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/strucker/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Strucker:</div>
+<blockquote>
+<p>Can i ask why we have a cannon instance per player?</p>
+</blockquote>
+</aside>
+<p>Because the Player <span class="bbcode-i">owns</span> the Cannon.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/23</link>
+        <pubDate>Tue, 15 Oct 2013 02:30:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-23</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p><code>
+   /**
+     * The six cannon setup stages in chronological order (note: do not change
+     * order, order is crucial!).
+     */</code></p>
+<p>This is why you shouldn’t use [tt]ordinal()[/tt]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/22</link>
+        <pubDate>Tue, 15 Oct 2013 01:34:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-22</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:20, topic:534043”][quote author=Strucker link=topic=652841.msg4374785#msg4374785 date=1381782988]<br>
+Can i ask why we have a cannon instance per player?</p>
+<p>also i see what u dud hir i laek it <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>   /**
+     * The six cannon setup stages in chronological order (note: do not change
+     * order, order is crucial!).
+     */
+    private enum Setup {
+        NO_CANNON, BASE, STAND, BARRELS, FURNACE, COMPLETE_CANNON
+    }</code><br>
+order is crucial cuz ur using the ordinal method right?<br>
+[/quote]<br>
+So we can declare fields meant for the player in the <span class="bbcode-i">DwarfCannon</span> class. Also, if we accessed the <span class="bbcode-i">DwarfCannon</span> class statically or through the singleton-design we would have to have an instance of the player as a parameter in almost every method. I find it easier to just instance the class itself,  but all and all it just comes down to preference <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>And yup[/quote]Oh i get you…<br>
+<img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> good job then</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/21</link>
+        <pubDate>Tue, 15 Oct 2013 01:09:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-21</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Strucker, post:19, topic:534043”]Can i ask why we have a cannon instance per player?</p>
+<p>also i see what u dud hir i laek it <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>   /**
+     * The six cannon setup stages in chronological order (note: do not change
+     * order, order is crucial!).
+     */
+    private enum Setup {
+        NO_CANNON, BASE, STAND, BARRELS, FURNACE, COMPLETE_CANNON
+    }</code><br>
+order is crucial cuz ur using the ordinal method right?[/quote]<br>
+So we can declare fields meant for the player in the <span class="bbcode-i">DwarfCannon</span> class. Also, if we accessed the <span class="bbcode-i">DwarfCannon</span> class statically or through the singleton-design we would have to have an instance of the player as a parameter in almost every method. I find it easier to just instance the class itself,  but all and all it just comes down to preference <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>And yup</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/20</link>
+        <pubDate>Tue, 15 Oct 2013 00:50:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-20</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>Can i ask why we have a cannon instance per player?</p>
+<p>also i see what u dud hir i laek it <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p><code>   /**
+     * The six cannon setup stages in chronological order (note: do not change
+     * order, order is crucial!).
+     */
+    private enum Setup {
+        NO_CANNON, BASE, STAND, BARRELS, FURNACE, COMPLETE_CANNON
+    }</code><br>
+order is crucial cuz ur using the ordinal method right?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/19</link>
+        <pubDate>Mon, 14 Oct 2013 20:36:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-19</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sertan8 sertan8]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sertan8">@sertan8</a> wrote:</p>
+          <blockquote>
+              <p>alrighty pmed u</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/18</link>
+        <pubDate>Mon, 14 Oct 2013 20:09:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-18</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sertan8, post:16, topic:534043”][quote author=sk8rdude461 link=topic=652841.msg4374760#msg4374760 date=1381776326]</p>
+<aside class="quote">
+<blockquote>
+<p>95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63</p>
+</blockquote>
+</aside>
+<p>I can give you the code I used (I manually fixed all errors) but it’s probably not the same as yours (I used cycle events):<br>
+<a href="http://pastebin.com/nEdZntjc" data-bbcode="true" rel="nofollow noopener">DwarfCannon.java</a><br>
+<a href="http://pastebin.com/G0jnUP5f" data-bbcode="true" rel="nofollow noopener">MultiCannonObject.java</a><br>
+<a href="http://pastebin.com/gjpV7e4R" data-bbcode="true" rel="nofollow noopener">Position.java</a><br>
+And my <a href="http://pastebin.com/0Qsp2sNK" data-bbcode="true" rel="nofollow noopener">Objects.java</a></p>
+<p>I added a method to fill the cannon in DwarfCannon.java so be happy. You still have to implement everything.<br>
+[/quote]</p>
+<p>Thank you i will use it and see if i got any errors left</p>
+<p><a class="mention" href="/u/clawz">@clawz</a> fury</p>
+<p>if you could do that its very very appreciated is it okay if i pm u the link of my source?[/quote]<br>
+sure go for it dude</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/17</link>
+        <pubDate>Mon, 14 Oct 2013 19:20:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-17</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sertan8 sertan8]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sertan8">@sertan8</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:14, topic:534043”][quote author=sertan8 link=topic=652841.msg4374753#msg4374753 date=1381774149]<br>
+95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63<br>
+[/quote]<br>
+I can give you the code I used (I manually fixed all errors) but it’s probably not the same as yours (I used cycle events):<br>
+<a href="http://pastebin.com/nEdZntjc" data-bbcode="true" rel="nofollow noopener">DwarfCannon.java</a><br>
+<a href="http://pastebin.com/G0jnUP5f" data-bbcode="true" rel="nofollow noopener">MultiCannonObject.java</a><br>
+<a href="http://pastebin.com/gjpV7e4R" data-bbcode="true" rel="nofollow noopener">Position.java</a><br>
+And my <a href="http://pastebin.com/0Qsp2sNK" data-bbcode="true" rel="nofollow noopener">Objects.java</a></p>
+<p>I added a method to fill the cannon in DwarfCannon.java so be happy. You still have to implement everything.[/quote]</p>
+<p>Thank you i will use it and see if i got any errors left</p>
+<p><a class="mention" href="/u/clawz">@clawz</a> fury</p>
+<p>if you could do that its very very appreciated is it okay if i pm u the link of my source?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/16</link>
+        <pubDate>Mon, 14 Oct 2013 19:00:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-16</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:14, topic:534043”][quote author=sertan8 link=topic=652841.msg4374753#msg4374753 date=1381774149]<br>
+95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63<br>
+[/quote]<br>
+I can give you the code I used (I manually fixed all errors) but it’s probably not the same as yours (I used cycle events):<br>
+<a href="http://pastebin.com/nEdZntjc" data-bbcode="true" rel="nofollow noopener">DwarfCannon.java</a><br>
+<a href="http://pastebin.com/G0jnUP5f" data-bbcode="true" rel="nofollow noopener">MultiCannonObject.java</a><br>
+<a href="http://pastebin.com/gjpV7e4R" data-bbcode="true" rel="nofollow noopener">Position.java</a><br>
+And my <a href="http://pastebin.com/0Qsp2sNK" data-bbcode="true" rel="nofollow noopener">Objects.java</a></p>
+<p>I added a method to fill the cannon in DwarfCannon.java so be happy. You still have to implement everything.[/quote]<br>
+some of the code in that is wrong but yeah I gave him the fix for it over skype so if you want you can ask him, and you don’t need a method to fill the cannon it does that for you when you click fire</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/15</link>
+        <pubDate>Mon, 14 Oct 2013 18:53:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-15</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sertan8, post:12, topic:534043”]95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63[/quote]<br>
+I can give you the code I used (I manually fixed all errors) but it’s probably not the same as yours (I used cycle events):<br>
+<a href="http://pastebin.com/nEdZntjc" data-bbcode="true" rel="nofollow noopener">DwarfCannon.java</a><br>
+<a href="http://pastebin.com/G0jnUP5f" data-bbcode="true" rel="nofollow noopener">MultiCannonObject.java</a><br>
+<a href="http://pastebin.com/gjpV7e4R" data-bbcode="true" rel="nofollow noopener">Position.java</a><br>
+And my <a href="http://pastebin.com/0Qsp2sNK" data-bbcode="true" rel="nofollow noopener">Objects.java</a></p>
+<p>I added a method to fill the cannon in DwarfCannon.java so be happy. You still have to implement everything.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/14</link>
+        <pubDate>Mon, 14 Oct 2013 18:45:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-14</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sertan8, post:12, topic:534043”]95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63[/quote]<br>
+Are you using an IDE? If not, upload your base and send it to me, I’ll fix the errors if you really can’t get them.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/13</link>
+        <pubDate>Mon, 14 Oct 2013 18:36:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-13</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sertan8 sertan8]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sertan8">@sertan8</a> wrote:</p>
+          <blockquote>
+              <p>95 errors <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>i would really appreciate if anyone offers to help me<br>
+also i’m using a pi based source.</p>
+<p>edit: fixed some errors now got 63</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/12</link>
+        <pubDate>Mon, 14 Oct 2013 18:09:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-12</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>That was a bug on RuneScape too, not even joking. I don’t know if they ever fixed that but yeah.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/11</link>
+        <pubDate>Mon, 14 Oct 2013 17:29:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-11</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:9, topic:534043”][quote author=Clawz fury link=topic=652841.msg4374319#msg4374319 date=1381622899]<br>
+yeah, sorry about that its not really my best work <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+[/quote]<br>
+To be honest, you shouldn’t have the title say “Quality Tutorial” if it’s not your best work nor if it’s not so good.[/quote]<br>
+Well, it’s a quality tutorial in the sense where everything is explained to the best of my ability and for someone who doesn’t know java very well to still understand what’s going on.</p>
+<p>The code itself isn’t my best work but the cannon works just fine. The only problem I’ve noticed is that sometimes if the cannon is facing diagonally it’ll shoot straight (If it’s facing north west, it’ll shoot at npcs that are north, etc.). But I’m going to attempt to fix that, and I’ll update the topic once I do. I didn’t really take the time out to make every little thing perfect, that’s the developers job <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/10</link>
+        <pubDate>Mon, 14 Oct 2013 17:18:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-10</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="534043">
+<div class="title">
+<div class="quote-controls"></div>
+ Clawz fury:</div>
+<blockquote>
+<p>yeah, sorry about that its not really my best work <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>To be honest, you shouldn’t have the title say “Quality Tutorial” if it’s not your best work nor if it’s not so good.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/9</link>
+        <pubDate>Mon, 14 Oct 2013 16:24:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-9</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:7, topic:534043”]Make a better gif next time :P[/quote]shutup lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/8</link>
+        <pubDate>Mon, 14 Oct 2013 12:40:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-8</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>Make a better gif next time <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/7</link>
+        <pubDate>Sun, 13 Oct 2013 17:29:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-7</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="534043">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ohokay/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> ohokay:</div>
+<blockquote>
+<p>The shooting looks a bit dodgy, not sure if it’s supposed to be like that?</p>
+</blockquote>
+</aside>
+<p>Like I said. It’s not perfect. Plus I was never a member so I really don’t know how it’s supposed to look.</p>
+<p>[quote=“sk8rdude461, post:5, topic:534043”]Great work. Going to play with it and see if my server likes it.<br>
+Lots of conversion <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+Also, I don’t like how you did the server ticks for building. Couldn’t you just have 1 that cycles 4 times and builds each piece?[/quote]<br>
+yeah, sorry about that its not really my best work <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/6</link>
+        <pubDate>Sun, 13 Oct 2013 00:08:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-6</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>Great work. Going to play with it and see if my server likes it.<br>
+Lots of conversion <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+Also, I don’t like how you did the server ticks for building. Couldn’t you just have 1 that cycles 4 times and builds each piece?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/5</link>
+        <pubDate>Sat, 12 Oct 2013 23:58:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-5</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+      <item>
+        <title>[317] Dwarf Multicannon || Quality Tutorial</title>
+        <dc:creator><![CDATA[@ohokay ohokay]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ohokay">@ohokay</a> wrote:</p>
+          <blockquote>
+              <p>The shooting looks a bit dodgy, not sure if it’s supposed to be like that?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043/4</link>
+        <pubDate>Sat, 12 Oct 2013 23:55:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-534043-4</guid>
+        <source url="https://forum.moparisthebest.com/t/317-dwarf-multicannon-quality-tutorial/534043.rss">[317] Dwarf Multicannon || Quality Tutorial</source>
+      </item>
+  </channel>
+</rss>

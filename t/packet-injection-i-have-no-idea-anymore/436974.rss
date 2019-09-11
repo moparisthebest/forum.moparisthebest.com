@@ -1,0 +1,925 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Packet Injection - I have no idea anymore</title>
+    <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974</link>
+    <description>Edit2: FML. I forgot an else-clause for returning (Not forwarding packets) if they were not part of the communication between the router and the client.  Added it to the attached source. Problem is pretty much solved. 
+[hr]
+Edit: I am open to any solutions that enable me to forward and stop any ethernet frame/ip packet as well as craft &amp; send my own custom ones (either as replacements for the ones I stopped or in addition to the normal ones). For the latter to work, it would obviously need at least some scripting support in the case of TCP to make both sides happy about sequence numbers. 
+[hr]
+
+I have been trying to get a Python module (ScaPy) running on a machine to work as a relay between my router and another, local machine. The relay will review all network traffic and either forward or modify before forwarding any traffic. 
+
+&quot;Seeing&quot; the traffic, modifying the parts I would like modified, creating custom replacement-frames/packets/segments and so on are things I have no issues with. 
+
+What I do have problems with is the actual forwarding of the traffic.
+I am associating the relay&#39;s mac address with the routers IP address in the local machines ARP-table, though things kind of stop working from there; as far as I understand, the attached script should replace the relevant addresses before forwarding traffic, but the local machine does not seem to be able to connect to the internet after having its ARP-cache poisoned, and after a short while (10 seconds or so), the ARP-cache updates so that the gateways IP associates with the gateways MAC (id est the way it usually is). 
+
+Is there something I have overlooked? 
+
+I have blocked all outgoing/incoming traffic on the relay with iptables; ScaPy circumvents the OS&#39; TCP/IP stack, so iptables does not affect ScaPy. I have (at least as far as I know) to use iptables like this because the OS more likely than not would get angry at getting these weird packets it never asked for. This is also the reason I would prefer the modifying of traffic to happen on a machine in the middle. If the packet crafting were to happen on the local machine the traffic is bound for, I would have to deal with TCP handshakes and so on manually (because of ScaPy circumventing the TCP/IP stack), rather than letting the local machine do all the handshakes on its own with the relay just forwarding traffic. 
+[hr]
+
+[code=Python]
+#!/usr/bin/env python
+from scapy.all import *
+&quot;&quot;&quot;
+iptables -A INPUT -j DROP
+iptables -A OUTPUT -j DROP
+iptables -A FORWARD -j DROP
+&quot;&quot;&quot;
+
+ClientIP  = &quot;192.168.1.9&quot; # IP Address of local computer to forward traffic to/from
+ClientMAC = getmacbyip(ClientIP)
+
+HostIP  = &quot;192.168.1.4&quot; # IP address of the computer that is to be between the gateway and the client
+HostMAC = &quot;&quot; # MAC address of this computer
+
+GatewayIP  = &quot;192.168.1.254&quot; # IP address of default gateway
+GatewayMAC = getmacbyip(GatewayIP)
+
+class Forwarding(object):
+    def __init__(self):
+        self.ARP_Poison()
+        sniff(prn=self.FrameAdjust)
+    
+    def ARP_Poison(self):
+        &quot;&quot;&quot;Poison Client&#39;s ARP cache&quot;&quot;&quot;
+        p = Ether(dst=ClientMAC)/ARP(op=&quot;who-has&quot;, psrc=GatewayIP, pdst=ClientIP)
+        sendp(p)
+
+    def LayerList(self, x):
+        &quot;&quot;&quot;Generate a list of layers present in x&quot;&quot;&quot;
+        Layers = []
+        while x.name != &quot;NoPayload&quot;:
+            Layers.append(x.name)
+            x=x.payload
+        return Layers
+    def FilterFrame(self, x):
+        &quot;&quot;&quot;Function for adjusting certain frames&quot;&quot;&quot;
+        return x
+    
+    def FrameAdjust(self, x):
+        &quot;&quot;&quot;Replace src/dst addresses, recalculate checksums and forward&quot;&quot;&quot;
+        layers = self.LayerList(x)
+        
+        # Client --&gt; Host --&gt; Gateway
+        if x.src.lower() == ClientMAC.lower() and x.dst.lower() == HostMAC.lower():
+            #put hostip/mac instead of clientip/mac as src
+            for l in layers:
+                if hasattr(x[l], &quot;src&quot;):
+                    #mac address
+                    if &quot;:&quot; in x[l].src and not &quot;::&quot; in x[l].src:
+                        x[l].src = HostMAC
+                    #ip address
+                    elif &quot;.&quot; in x[l].src:
+                        x[l].src = HostIP
+                    #what
+                    else:
+                        print &quot;C-&gt;H-&gt;G #2&quot;
+                        x.show()
+                        
+            #put gateway mac instead of host mac as dst
+            if x.name == &quot;Ethernet&quot;:
+                x.dst = GatewayMAC
+            else:
+                print &quot;C-&gt;H-&gt;G&quot;
+                x.show()
+             
+        # Gateway --&gt; Host --&gt; Client
+        elif x.src.lower() == GatewayMAC and x.dst.lower() == HostMAC.lower():
+            #put hostmac instead of gatewaymac as src
+            if x.name == &quot;Ethernet&quot;:
+                x.src = HostMAC
+            else:
+                print &quot;G-&gt;H-&gt;C&quot;
+                x.show()
+
+            #put clientip/mac instead of hostip/mac as dst
+            for l in layers:
+                if hasattr(x[l], &quot;dst&quot;):
+                    #mac address
+                    if &quot;:&quot; in x[l].dst and not &quot;::&quot; in x[l].dst:
+                        x[l].dst = ClientMAC
+                    #ip address
+                    elif &quot;.&quot; in x[l].dst:
+                        x[l].dst = ClientIP
+                    #what
+                    else:
+                        print &quot;G-&gt;H-&gt;C #2&quot;
+                        x.show()
+        #FML for forgetting this. 
+        else:
+            return
+
+        x = self.FilterFrame(x)
+        
+        #Remove incorrect checksums
+        for l in layers:
+            if hasattr(x[l], &quot;chksum&quot;):
+                del x[l].chksum
+        #Rebuild with correct checksums
+        fixed = Ether(str(x))
+        
+        #Forward the frame
+        sendp(fixed)
+
+Forwarding()
+[/code]
+
+
+
+The swapping around of addresses works more or less like this:
+
+LMAC = Local Machine&#39;s Mac Address
+LIP    = Local Machine&#39;s IP address
+
+RMAC = Relay macines&#39; MAC address
+RIP = Relay Machine&#39;s IP address
+
+GMAC = Gateway&#39;s MAC
+GIP = Gateways&#39; IP
+
+With traffic that goes from the local machine to the gateway through the relay, I change:
+
+Source mac from LMAC to RMAC (to make the gateway send any replies to the relays&#39; mac address)
+Source IP from LIP to RIP (to make the IP match the mac as far as the gateway is concerned)
+
+Destination MAC from RMAC to GMAC (because the traffic is being forwarded to the gateway).
+
+
+With traffic that goes from the gateway to the local machine through the relay, I change:
+
+Source MAC from GMAC to RMAC (because the local machine thinks RMAC is the mac address of the gateway)
+
+Destination MAC and IP addresses from RMAC and RIP to LMAC and LIP (because the destination is the local machine). 
+
+[hr]
+
+
+Though seriously, there must be some easier way of doing this that I am unaware of, because this way is just a mess (that I have not even managed to get working).</description>
+    
+    <lastBuildDate>Tue, 27 Mar 2012 03:06:22 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>Jeeze. I have no idea why the server is re-sending the packet.</p>
+<p>(All packets have their checksums recalculated before they are forwarded; these have incorrect checksums - But as they are recalculated, the checksums should not be the issue).</p>
+<p>Edit: Actually, it might be the lack of a timestamp in the TCP-options of the ACK and an invalid id in the IP-part of the ACK.</p>
+<blockquote>#Blocked from reaching client:
+###[ IP ]###
+  version= 4L
+  ihl= 5L
+  tos= 0x0
+  len= 81
+  id= 47895
+  flags= DF
+  frag= 0L
+  ttl= 53
+  proto= tcp
+  chksum= 0xf4ad
+  src= 64.79.147.135
+  dst= 192.168.1.99
+  options= ''
+###[ TCP ]###
+     sport= 43594
+     dport= 49501
+     seq= 1895795549
+     ack= 407447034
+     dataofs= 5L
+     reserved= 0L
+     flags= PA
+     window= 54
+     chksum= 0x70b9
+     urgptr= 0
+     options= []
+###[ Raw ]###
+        load= "/'\x01\x01\x00\x00\x00\x00\x00,&amp;\xc7\x00AAAAAAAAAAA\x00\x85yAAAAAAAAAAA\x00\x01\x13"
+<p><span class="hashtag">#len</span>(load) = 41 and 1895795549 + 41 = 1895795590</p>
+<p><span class="hashtag">#Generated</span> ACK to make server think client received the above - If anything, this is where the error lies as far as I know.<br>
+###[ IP ]###<br>
+version= 4L<br>
+ihl= 5L<br>
+tos= 0x0<br>
+len= 40<br>
+id= 1<br>
+flags= DF<br>
+frag= 0L<br>
+ttl= 64<br>
+proto= tcp<br>
+chksum= 0xa4ed<br>
+src= 192.168.1.99<br>
+dst= 64.79.147.135<br>
+options= ‘’<br>
+###[ TCP ]###<br>
+sport= 49501<br>
+dport= 43594<br>
+seq= 407447033<br>
+ack= 1895795590<br>
+dataofs= 5L<br>
+reserved= 0L<br>
+flags= PA<br>
+window= 8192<br>
+chksum= 0x537a<br>
+urgptr= 0<br>
+options= {}</p>
+<p>#{49501: 41} &lt;-- Seq shortage on that server-sport as a result of blocking packet</p>
+<h1>No idea what this is. It does not advance any seqs, anyways.</h1>
+<p>###[ IP ]###<br>
+version= 4L<br>
+ihl= 5L<br>
+tos= 0x0<br>
+len= 40<br>
+id= 47896<br>
+flags= DF<br>
+frag= 0L<br>
+ttl= 53<br>
+proto= tcp<br>
+chksum= 0xf4d6<br>
+src= 64.79.147.135<br>
+dst= 192.168.1.99<br>
+options= ‘’<br>
+###[ TCP ]###<br>
+sport= 43594<br>
+dport= 49501<br>
+seq= 1895795549<br>
+ack= 407447034<br>
+dataofs= 5L<br>
+reserved= 0L<br>
+flags= A<br>
+window= 54<br>
+chksum= 0x7375<br>
+urgptr= 0<br>
+options= {}<br>
+###[ Padding ]###<br>
+load= ‘\x00\x00\x00\x00\x00\x00’</p>
+<h1>Y U RESEND THIS, SERVER?</h1>
+<p>###[ IP ]###<br>
+version= 4L<br>
+ihl= 5L<br>
+tos= 0x0<br>
+len= 81<br>
+id= 47897<br>
+flags= DF<br>
+frag= 0L<br>
+ttl= 53<br>
+proto= tcp<br>
+chksum= 0xf4ab<br>
+src= 64.79.147.135<br>
+dst= 192.168.1.99<br>
+options= ‘’<br>
+###[ TCP ]###<br>
+sport= 43594<br>
+dport= 49501<br>
+seq= 1895795549<br>
+ack= 407447034<br>
+dataofs= 5L<br>
+reserved= 0L<br>
+flags= PA<br>
+window= 54<br>
+chksum= 0x70b9<br>
+urgptr= 0<br>
+options= []<br>
+###[ Raw ]###<br>
+load= “/’\x01\x01\x00\x00\x00\x00\x00,&amp;\xc7\x00AAAAAAAAAAA\x00\x85yAAAAAAAAAAA\x00\x01\x13”</p>
+</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/16</link>
+        <pubDate>Tue, 27 Mar 2012 03:06:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-16</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Enigma1 Enigma_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enigma1">@Enigma1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:13, topic:436974”][quote author=Enigma_ link=topic=539690.msg3955054#msg3955054 date=1332665138]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection</p>
+</blockquote>
+</aside>
+<p>Like for example?..</p>
+<p>The injection-part of this program is only partially related to my other thread. This thread is about a general-purpose program for packet inspection and injection.</p>
+<aside class="quote">
+<blockquote>
+<p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+</blockquote>
+</aside>
+<p>So I have to get the information in that first~ login-packet to decode messages?</p>
+</blockquote>
+</aside>
+<p>Well, I believe David has fixed the deob of the Arcanists Client I sent him awhile back.<br>
+Needless to say, we could simply add a client-side patch for our little issue.<br>
+[/quote]No actually I redid the entire thing myself :p[/quote]<br>
+Oooh, in that case, it’s even sexier than I thought.<br>
+Would you mind sending me a copy so I can work with tweaking some things?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/15</link>
+        <pubDate>Sun, 25 Mar 2012 23:23:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-15</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>I can see this one solution I have not tried; instead of sending smaller replacement-frames, I can block the frame alltogether from reaching the client and downjust/upjust ack/seq numbers on all incoming/outgoing TCP segments on the connection in question.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/14</link>
+        <pubDate>Sun, 25 Mar 2012 22:05:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-14</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Enigma_, post:11, topic:436974”][quote author=Yume link=topic=539690.msg3954287#msg3954287 date=1332607283]</p>
+<aside class="quote">
+<blockquote>
+<p>its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection</p>
+</blockquote>
+</aside>
+<p>Like for example?..</p>
+<p>The injection-part of this program is only partially related to my other thread. This thread is about a general-purpose program for packet inspection and injection.</p>
+<aside class="quote">
+<blockquote>
+<p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+</blockquote>
+</aside>
+<p>So I have to get the information in that first~ login-packet to decode messages?<br>
+[/quote]</p>
+<p>Well, I believe David has fixed the deob of the Arcanists Client I sent him awhile back.<br>
+Needless to say, we could simply add a client-side patch for our little issue.[/quote]No actually I redid the entire thing myself <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/13</link>
+        <pubDate>Sun, 25 Mar 2012 15:02:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-13</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Enigma_, post:11, topic:436974”][quote author=Yume link=topic=539690.msg3954287#msg3954287 date=1332607283]</p>
+<aside class="quote">
+<blockquote>
+<p>its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection</p>
+</blockquote>
+</aside>
+<p>Like for example?..</p>
+<p>The injection-part of this program is only partially related to my other thread. This thread is about a general-purpose program for packet inspection and injection.</p>
+<aside class="quote">
+<blockquote>
+<p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+</blockquote>
+</aside>
+<p>So I have to get the information in that first~ login-packet to decode messages?<br>
+[/quote]</p>
+<p>Well, I believe David has fixed the deob of the Arcanists Client I sent him awhile back.<br>
+Needless to say, we could simply add a client-side patch for our little issue.[/quote]</p>
+<p>That would probably be easier, I suppose.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/12</link>
+        <pubDate>Sun, 25 Mar 2012 09:09:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-12</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Enigma1 Enigma_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enigma1">@Enigma1</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Yume, post:10, topic:436974”][quote author=Davidi2 link=topic=539690.msg3954211#msg3954211 date=1332599757]<br>
+its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection<br>
+[/quote]</p>
+<p>Like for example?..</p>
+<p>The injection-part of this program is only partially related to my other thread. This thread is about a general-purpose program for packet inspection and injection.</p>
+<aside class="quote">
+<blockquote>
+<p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+</blockquote>
+</aside>
+<p>So I have to get the information in that first~ login-packet to decode messages?[/quote]</p>
+<p>Well, I believe David has fixed the deob of the Arcanists Client I sent him awhile back.<br>
+Needless to say, we could simply add a client-side patch for our little issue.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/11</link>
+        <pubDate>Sun, 25 Mar 2012 08:45:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-11</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:9, topic:436974”]its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection[/quote]</p>
+<p>Like for example?..</p>
+<p>The injection-part of this program is only partially related to my other thread. This thread is about a general-purpose program for packet inspection and injection.</p>
+<aside class="quote">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+</blockquote>
+</aside>
+<p>So I have to get the information in that first~ login-packet to decode messages?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/10</link>
+        <pubDate>Sat, 24 Mar 2012 16:41:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-10</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>its an arcanists orgy!</p>
+<p>there are better ways to do what you want than packet injection</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/9</link>
+        <pubDate>Sat, 24 Mar 2012 14:35:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-9</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>if i am not mistaken funorb also uses the ISSAC encyption on packets.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/8</link>
+        <pubDate>Sat, 24 Mar 2012 14:32:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-8</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Enigma_, post:6, topic:436974”][quote author=Yume link=topic=539690.msg3953203#msg3953203 date=1332487850]<br>
+It should have been pretty obvious to you. =w=<br>
+[/quote]</p>
+<p>Isn’t it obvious that it was obvious? :P[/quote]</p>
+<p>Though I kind of used different names to not immediately associate the two to just abouts everyone.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/7</link>
+        <pubDate>Fri, 23 Mar 2012 12:52:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-7</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Enigma1 Enigma_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enigma1">@Enigma1</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="436974">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/yume/40/9259_1.png" class="avatar"> Yume:</div>
+<blockquote>
+<p>It should have been pretty obvious to you. =w=</p>
+</blockquote>
+</aside>
+<p>Isn’t it obvious that it was obvious? <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/6</link>
+        <pubDate>Fri, 23 Mar 2012 09:15:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-6</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>It should have been pretty obvious to you. =w=</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/5</link>
+        <pubDate>Fri, 23 Mar 2012 07:30:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-5</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Enigma1 Enigma_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enigma1">@Enigma1</a> wrote:</p>
+          <blockquote>
+              <p>You’re definitely Zira.<br>
+I found you! <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/4</link>
+        <pubDate>Thu, 22 Mar 2012 22:38:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-4</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="436974">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/mopman/40/33_1.png" class="avatar"> Mopman:</div>
+<blockquote>
+<p>am i just stupid, or is there some reason you have to bypass the network stack rather than just putting it in promiscuous mode?</p>
+</blockquote>
+</aside>
+<p>As far as I have understood it, ScaPy uses raw sockets for sending.<br>
+I am not sure whether or not the same would be achieved with promiscuous mode (or whether it is relevant in the case of ScaPy).</p>
+<p>From what I have read, I have gathered that the OS is unaware of what ScaPy does, anyways.</p>
+<p>I also realized I did not have to use ARP-poisoning as I could just set the gateway of the client to the host manually.<br>
+[hr]<br>
+I edit posts way too much (indecisiveness I guess =w=). Anyways, you might be right -</p>
+<p><a href="http://comments.gmane.org/gmane.comp.security.scapy.general/4218" class="onebox" target="_blank" rel="nofollow noopener">http://comments.gmane.org/gmane.comp.security.scapy.general/4218</a></p>
+<blockquote>If you want to inject packets on any interface on Linux:
+- at layer 2 (Ethernet, 802.11, etc.) you need to be root
+- at layer 3 (raw sockets) you need to be root
+- at layer 4 (tcp/udp sockets) you do not need to be root
+<p>Scapy can use all those sockets, but I guess that if you want to test an<br>
+IP stack, you’d like at least layer 3 (btw, for injection into loopback to<br>
+be listened to by kernel and forwarded to an application, you have to use<br>
+raw sockets. Layer 2 injections are ignored by kernel).</p>
+</blockquote>
+<p>I am not sure why Layer 2 injections are ignored by the kernel. If I am understanding this right, the TCP/IP stack and raw sockets only really apply at layer 3?</p>
+<p>[hr]</p>
+<p>This one should be pretty functional, anyways (latest version):</p>
+<pre><code class="lang-auto">#!/usr/bin/env python
+
+from scapy.all import *
+import re, time
+
+"""
+Configurations for this computer (Host):
+
+iptables -A INPUT -j DROP
+iptables -A OUTPUT -j DROP
+iptables -A FORWARD -j DROP
+"""
+
+"""
+Configurations for client:
+
+Default Gateway: Host IP
+DNS: Whatever it usually is
+"""
+
+ClientIP  = "192.168.1.3" # IP Address of local computer to forward traffic to/from
+ClientMAC = getmacbyip(ClientIP)
+
+HostIP  = "192.168.1.4" # IP address of the computer that is to be between the gateway and the client
+HostMAC = "" # MAC address of this computer
+
+GatewayIP  = "192.168.1.254" # IP address of default gateway
+GatewayMAC = getmacbyip(GatewayIP)
+
+class Forwarding(object):
+    def __init__(self):
+        #self.ARP_Poison(ARPsrc="192.168.1.254", hwsrc=HostMAC, Edst=ClientMAC, ARPdst=ClientIP, Esrc="00:00:00:00:00:00")
+        sniff(prn=self.FrameAdjust)
+    
+    #Currently unused. 
+    def ARP_Poison(self, Edst=ClientMAC, Esrc=HostMAC, ARPsrc=GatewayIP, ARPdst=ClientIP, hwsrc=HostMAC):
+        """Poison Client's ARP cache
+        Default behaviour associates sending machine's mac address with Gateways IP address in clients ARP-cache
+        
+        ARPsrc = IP address that is to be associated with ...
+        hwsrc  =  ... this mac address, in the ARP-cache of ...
+        Edst = ... the machine with this MAC address and ...
+        ARPdst = ... this IP address.
+        
+        Esrc = Address in the source-field of the Ethernet-packet containing the ARP-message. Could as far as I know be anything, default is the host.
+        """
+        p = Ether(dst=Edst, src=Esrc)/ARP(op="who-has", hwsrc=hwsrc, psrc=ARPsrc, pdst=ARPdst)
+        sendp(p)
+        #return p
+
+    def LayerList(self, x):
+        """Generate a list of layers present in x"""
+        Layers = []
+        while x.name != "NoPayload":
+            Layers.append(x.name)
+            x=x.payload
+        return Layers
+    def FilterFrame(self, x):
+        """Function for adjusting certain frames
+        
+        addresses have been adjusted by this point.
+        """
+        
+        return [x]
+        
+        
+    
+    def FrameAdjust(self, x):
+        """Replace src/dst addresses, recalculate checksums and forward"""
+        layers = self.LayerList(x)
+        
+        # Client --&gt; Host --&gt; Gateway
+        if x.src.lower() == ClientMAC.lower() and x.dst.lower() == HostMAC.lower():
+            #put hostip/mac instead of clientip/mac as src
+            for l in layers:
+                if hasattr(x[l], "src"):
+                    #mac address
+                    if re.match("([0-9A-Fa-f]{2}(-|:)){5}[0-9A-Fa-f]{2}$", x[l].src):
+                        x[l].src = HostMAC
+                    #ipv4 address
+                    elif re.match("([0-9]{1,3}(\.)){3}[0-9]{1,3}$", x[l].src):
+                        x[l].src = HostIP
+                    #what
+                    else:
+                        print "C-&gt;H-&gt;G #2"
+                        x.show()
+                        
+            #put gateway mac instead of host mac as dst
+            if x.name == "Ethernet":
+                x.dst = GatewayMAC
+            else:
+                print "C-&gt;H-&gt;G"
+                x.show()
+        # Gateway --&gt; Host --&gt; Client
+        elif x.src.lower() == GatewayMAC and x.dst.lower() == HostMAC.lower():
+            #put hostmac instead of gatewaymac as src
+            if x.name == "Ethernet":
+                x.src = HostMAC
+            else:
+                print "G-&gt;H-&gt;C"
+                x.show()
+
+            #put clientip/mac instead of hostip/mac as dst
+            for l in layers:
+                if hasattr(x[l], "dst"):
+                    #mac address
+                    if re.match("([0-9A-Fa-f]{2}(-|:)){5}[0-9A-Fa-f]{2}$", x[l].dst):
+                        x[l].dst = ClientMAC
+                    #ipv4 address
+                    elif re.match("([0-9]{1,3}(\.)){3}[0-9]{1,3}$", x[l].dst):
+                        x[l].dst = ClientIP
+                    #what
+                    else:
+                        print "G-&gt;H-&gt;C #2"
+                        x.show()
+        else:
+            return
+        
+        #Filter function. Usually returns a list with just one or more (usually one) frames.
+        packets_ = self.FilterFrame(x)
+        
+        #Remove incorrect checksums
+        for x in packets_:
+            for l in layers:
+                if hasattr(x[l], "chksum"):
+                    del x[l].chksum
+
+        #Rebuild with correct checksums
+        packets = [Ether(str(x)) for x in packets_]
+        
+        #Forward the frame
+        for packet in packets:
+            try:
+                sendp(packet)
+                try:
+                    print repr(packet[Raw].load)
+                except:
+                    pass
+            #Not sure what causes this, but it seems to get over it with possible retransmissions.
+            except socket.error:
+                print "Socket Error"
+            except:
+                raise
+        
+            
+f = Forwarding()
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/3</link>
+        <pubDate>Wed, 21 Mar 2012 01:34:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-3</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <p>am i just stupid, or is there some reason you have to bypass the network stack rather than just putting it in promiscuous mode?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/2</link>
+        <pubDate>Wed, 21 Mar 2012 00:56:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-2</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+      <item>
+        <title>Packet Injection - I have no idea anymore</title>
+        <dc:creator><![CDATA[@Yume Yume]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yume">@Yume</a> wrote:</p>
+          <blockquote>
+              <p>Edit2: FML. I forgot an else-clause for returning (Not forwarding packets) if they were not part of the communication between the router and the client.  Added it to the attached source. Problem is pretty much solved.<br>
+[hr]<br>
+Edit: I am open to any solutions that enable me to forward and stop any ethernet frame/ip packet as well as craft &amp; send my own custom ones (either as replacements for the ones I stopped or in addition to the normal ones). For the latter to work, it would obviously need at least some scripting support in the case of TCP to make both sides happy about sequence numbers.<br>
+[hr]</p>
+<p>I have been trying to get a Python module (ScaPy) running on a machine to work as a relay between my router and another, local machine. The relay will review all network traffic and either forward or modify before forwarding any traffic.</p>
+<p>“Seeing” the traffic, modifying the parts I would like modified, creating custom replacement-frames/packets/segments and so on are things I have no issues with.</p>
+<p>What I do have problems with is the actual forwarding of the traffic.<br>
+I am associating the relay’s mac address with the routers IP address in the local machines ARP-table, though things kind of stop working from there; as far as I understand, the attached script should replace the relevant addresses before forwarding traffic, but the local machine does not seem to be able to connect to the internet after having its ARP-cache poisoned, and after a short while (10 seconds or so), the ARP-cache updates so that the gateways IP associates with the gateways MAC (id est the way it usually is).</p>
+<p>Is there something I have overlooked?</p>
+<p>I have blocked all outgoing/incoming traffic on the relay with iptables; ScaPy circumvents the OS’ TCP/IP stack, so iptables does not affect ScaPy. I have (at least as far as I know) to use iptables like this because the OS more likely than not would get angry at getting these weird packets it never asked for. This is also the reason I would prefer the modifying of traffic to happen on a machine in the middle. If the packet crafting were to happen on the local machine the traffic is bound for, I would have to deal with TCP handshakes and so on manually (because of ScaPy circumventing the TCP/IP stack), rather than letting the local machine do all the handshakes on its own with the relay just forwarding traffic.<br>
+[hr]</p>
+<pre><code class="lang-auto">#!/usr/bin/env python
+from scapy.all import *
+"""
+iptables -A INPUT -j DROP
+iptables -A OUTPUT -j DROP
+iptables -A FORWARD -j DROP
+"""
+
+ClientIP  = "192.168.1.9" # IP Address of local computer to forward traffic to/from
+ClientMAC = getmacbyip(ClientIP)
+
+HostIP  = "192.168.1.4" # IP address of the computer that is to be between the gateway and the client
+HostMAC = "" # MAC address of this computer
+
+GatewayIP  = "192.168.1.254" # IP address of default gateway
+GatewayMAC = getmacbyip(GatewayIP)
+
+class Forwarding(object):
+    def __init__(self):
+        self.ARP_Poison()
+        sniff(prn=self.FrameAdjust)
+    
+    def ARP_Poison(self):
+        """Poison Client's ARP cache"""
+        p = Ether(dst=ClientMAC)/ARP(op="who-has", psrc=GatewayIP, pdst=ClientIP)
+        sendp(p)
+
+    def LayerList(self, x):
+        """Generate a list of layers present in x"""
+        Layers = []
+        while x.name != "NoPayload":
+            Layers.append(x.name)
+            x=x.payload
+        return Layers
+    def FilterFrame(self, x):
+        """Function for adjusting certain frames"""
+        return x
+    
+    def FrameAdjust(self, x):
+        """Replace src/dst addresses, recalculate checksums and forward"""
+        layers = self.LayerList(x)
+        
+        # Client --&gt; Host --&gt; Gateway
+        if x.src.lower() == ClientMAC.lower() and x.dst.lower() == HostMAC.lower():
+            #put hostip/mac instead of clientip/mac as src
+            for l in layers:
+                if hasattr(x[l], "src"):
+                    #mac address
+                    if ":" in x[l].src and not "::" in x[l].src:
+                        x[l].src = HostMAC
+                    #ip address
+                    elif "." in x[l].src:
+                        x[l].src = HostIP
+                    #what
+                    else:
+                        print "C-&gt;H-&gt;G #2"
+                        x.show()
+                        
+            #put gateway mac instead of host mac as dst
+            if x.name == "Ethernet":
+                x.dst = GatewayMAC
+            else:
+                print "C-&gt;H-&gt;G"
+                x.show()
+             
+        # Gateway --&gt; Host --&gt; Client
+        elif x.src.lower() == GatewayMAC and x.dst.lower() == HostMAC.lower():
+            #put hostmac instead of gatewaymac as src
+            if x.name == "Ethernet":
+                x.src = HostMAC
+            else:
+                print "G-&gt;H-&gt;C"
+                x.show()
+
+            #put clientip/mac instead of hostip/mac as dst
+            for l in layers:
+                if hasattr(x[l], "dst"):
+                    #mac address
+                    if ":" in x[l].dst and not "::" in x[l].dst:
+                        x[l].dst = ClientMAC
+                    #ip address
+                    elif "." in x[l].dst:
+                        x[l].dst = ClientIP
+                    #what
+                    else:
+                        print "G-&gt;H-&gt;C #2"
+                        x.show()
+        #FML for forgetting this. 
+        else:
+            return
+
+        x = self.FilterFrame(x)
+        
+        #Remove incorrect checksums
+        for l in layers:
+            if hasattr(x[l], "chksum"):
+                del x[l].chksum
+        #Rebuild with correct checksums
+        fixed = Ether(str(x))
+        
+        #Forward the frame
+        sendp(fixed)
+
+Forwarding()</code></pre>
+<p>The swapping around of addresses works more or less like this:</p>
+<p>LMAC = Local Machine’s Mac Address<br>
+LIP    = Local Machine’s IP address</p>
+<p>RMAC = Relay macines’ MAC address<br>
+RIP = Relay Machine’s IP address</p>
+<p>GMAC = Gateway’s MAC<br>
+GIP = Gateways’ IP</p>
+<p>With traffic that goes from the local machine to the gateway through the relay, I change:</p>
+<p>Source mac from LMAC to RMAC (to make the gateway send any replies to the relays’ mac address)<br>
+Source IP from LIP to RIP (to make the IP match the mac as far as the gateway is concerned)</p>
+<p>Destination MAC from RMAC to GMAC (because the traffic is being forwarded to the gateway).</p>
+<p>With traffic that goes from the gateway to the local machine through the relay, I change:</p>
+<p>Source MAC from GMAC to RMAC (because the local machine thinks RMAC is the mac address of the gateway)</p>
+<p>Destination MAC and IP addresses from RMAC and RIP to LMAC and LIP (because the destination is the local machine).</p>
+<p>[hr]</p>
+<p>Though seriously, there must be some easier way of doing this that I am unaware of, because this way is just a mess (that I have not even managed to get working).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974/1</link>
+        <pubDate>Tue, 20 Mar 2012 11:47:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-436974-1</guid>
+        <source url="https://forum.moparisthebest.com/t/packet-injection-i-have-no-idea-anymore/436974.rss">Packet Injection - I have no idea anymore</source>
+      </item>
+  </channel>
+</rss>

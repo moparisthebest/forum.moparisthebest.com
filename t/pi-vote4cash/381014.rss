@@ -1,0 +1,873 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI] Vote4Cash</title>
+    <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014</link>
+    <description>[CENTER]This is Vote4Cash on PI.
+
+In your webhost, make a new file called vote.php. Add the code inside of it.
+
+[CODE]
+&lt;?php
+
+/**
+ * @author Stuart &lt;RogueX | iVariable&gt;
+ * @version 1.1 UPDATED: 06.09.2010
+ * @comment fixed a few bugs
+ */
+
+/**
+ * mysql database hostname
+ */
+define(&quot;MYSQL_HOST&quot;, &quot;localhost&quot;);
+/**
+ *  mysql username to connect to the database server
+ */
+define(&quot;MYSQL_USERNAME&quot;, &quot;sqlusername&quot;);
+/**
+ *  mysql password the password to connect to the database server
+ */
+define(&quot;MYSQL_PASSWORD&quot;, &quot;sqlpass&quot;);
+/**
+ *  mysql database the database name in which you have your vote table setup
+ */
+define(&quot;MYSQL_DATABASE&quot;, &quot;sqldatabase&quot;);
+/**
+ *  vote url this is the url which where users will be sent to on voting
+ */
+define(&quot;VOTE_URL&quot;, &quot;http://www.runelocus.com/toplist/index.php?action=vote&amp;id=102&quot;);
+/**
+ * The number of hours between voting
+ */
+define(&quot;VOTE_HOURS&quot;, 24);
+
+
+/**
+ *  connect() this function is used to connect to the mysql database server.
+ */
+function connect()
+{
+    if (!@mysql_connect(MYSQL_HOST, MYSQL_USERNAME, MYSQL_PASSWORD))
+        die(&quot;Could not connect to mysql database: &quot; . mysql_error());
+    if (!@mysql_select_db(MYSQL_DATABASE))
+        die(&quot;Could not select mysql database: &quot; . mysql_error());
+    $tables = mysql_list_tables(MYSQL_DATABASE);
+    while (list($temp) = mysql_fetch_array($tables)) {
+        if ($temp == &quot;votes&quot;) {
+            return;
+        }
+    }
+    query(&quot;CREATE TABLE `votes` (
+        `playerName` VARCHAR( 255 ) NOT NULL ,
+        `ip` VARCHAR( 255 ) NOT NULL,
+        `time` BIGINT NOT NULL ,
+        `recieved` INT( 1 ) NOT NULL DEFAULT &#39;0&#39;)&quot;);
+}
+/**
+ *  query(string query) this function is used to query the mysql database server.
+ */
+function query($s)
+{
+    $query = @mysql_query($s);
+    if (!$query)
+        die(&quot;Error running query(&#39;&quot; . $s . &quot;&#39;): &quot; . mysql_error());
+    return $query;
+}
+/**
+ *  anti_inject(string text) this function is used to make sure no injections can be made.
+ */
+function anti_inject($sql)
+{
+    $sql = preg_replace(sql_regcase(&quot;/(from|select|insert|delete|where|drop table|show tables|#|\*|--|\\\\)/&quot;),
+        &quot;&quot;, $sql);
+    $sql = trim($sql);
+    $sql = strip_tags($sql);
+    $sql = addslashes($sql);
+    $sql = strtolower($sql);
+    return $sql;
+}
+/**
+ *  clean_request(int timestamp, string username) this function is used to delete any entries if they have already expired.
+ */
+function clean_request($time, $username)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+    if (mysql_num_rows($query) &gt; 0) {
+        $row = mysql_fetch_array($query);
+        $timerequested = $row[&#39;time&#39;];
+        if ($time - $timerequested &gt; VOTE_HOURS * 3600)
+            query(&quot;DELETE FROM `votes` WHERE time=&#39;&quot; . $timerequested . &quot;&#39;&quot;);
+    }
+}
+/**
+ *  vote_entries(string ip) this function is used return the number of rows within the table
+ */
+function vote_entries($ip)
+{
+    $query = query(&quot;SELECT * FROM `votes` WHERE ip=&#39;&quot; . $ip . &quot;&#39;&quot;);
+    return mysql_num_rows($query);
+}
+
+
+/**
+ * This is the actual working of the script please do not touch anything below if you do not know what you are doing...
+ */
+if (isset($_POST[&#39;submit&#39;]) || isset($_GET[&#39;username&#39;]) &amp;&amp; isset($_GET[&#39;type&#39;])) {
+    connect();
+    if ($_POST[&#39;submit&#39;]) {
+        if(@fsockopen($_SERVER[&#39;REMOTE_ADDR&#39;], 80, $errno, $errstr, 1))
+            die(&quot;Sorry but you have port 80 open, this is to stop voting by proxy address.&quot;);
+        if(isset($_COOKIE[&#39;voted&#39;]))
+            die(&quot;Sorry but it looks like you have already voted...&quot;);
+        $username = anti_inject($_POST[&#39;username&#39;]);
+        $ip = gethostbyaddr($_SERVER[&#39;REMOTE_ADDR&#39;]);
+        clean_request(time(), $username);
+        if (vote_entries($ip) == 0) {
+            setcookie (&quot;voted&quot;, &quot;yes&quot;, VOTE_HOURS * 3600);
+            query(&quot;INSERT INTO `votes` (`playerName`, `ip`, `time`) VALUES (&#39;&quot; . $username .
+                &quot;&#39;, &#39;&quot; . $ip . &quot;&#39;, &#39;&quot; . time() . &quot;&#39;)&quot;);
+            header(&quot;Location: &quot; . VOTE_URL . &quot;&quot;);
+        } else {
+            die(&quot;You have already voted once today.&quot;);
+        }
+    } elseif ($_GET[&#39;type&#39;] == &quot;checkvote&quot;) {
+        $username = anti_inject($_GET[&#39;username&#39;]);
+        $query = query(&quot;SELECT * FROM `votes` WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+        if (mysql_num_rows($query) == 1) {
+            $results = mysql_fetch_array($query);
+            if ($results[&#39;recieved&#39;] == 0) {
+                query(&quot;UPDATE `votes` SET `recieved`=&#39;1&#39; WHERE `playerName`=&#39;&quot; . $username . &quot;&#39;&quot;);
+                die(&quot;user needs reward...&quot;);
+            } else {
+                die(&quot;user been given reward...&quot;);
+            }
+        } else {
+          die(&quot;Vote not found... &quot;.  $username .&quot;.&quot;);
+        }
+    }
+}
+
+?&gt;
+
+&lt;!DOCTYPE html PUBLIC &quot;-//W3C//DTD XHTML 1.0 Transitional//EN&quot; &quot;http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd&quot;&gt;
+&lt;html xmlns=&quot;http://www.w3.org/1999/xhtml&quot;&gt;
+&lt;head&gt;
+&lt;meta http-equiv=&quot;Content-Type&quot; content=&quot;text/html; charset=utf-8&quot; /&gt;
+&lt;title&gt;Vote for a reward!&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div align=&quot;center&quot; style=&quot;color:#00F&quot;&gt;&lt;h2&gt;Vote for a reward!&lt;/h3&gt;&lt;/div&gt;
+&lt;table align=&quot;center&quot;&gt;
+
+&lt;form action=&quot;vote.php&quot; method=&quot;post&quot;&gt;
+  &lt;tr&gt;
+    &lt;td align=&quot;right&quot;&gt;Username: &lt;/td&gt;
+    &lt;td&gt;&lt;input name=&quot;username&quot; type=&quot;text&quot; /&gt;&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+  	&lt;td&gt;&amp;nbsp;&lt;/td&gt;
+    &lt;td align=&quot;center&quot;&gt;&lt;input type=&quot;submit&quot; name=&quot;submit&quot; value=&quot;Vote now&quot; /&gt;&lt;/td&gt;
+  &lt;/tr&gt;
+
+&lt;/form&gt;
+&lt;/table&gt;
+&lt;/body&gt;
+&lt;/html&gt;[/CODE]
+
+It would be much easier to use [URL=http://hostgator.com]HostGator[/URL] because the mysql is very easy to set up. For this part you&#39;ll have to go to mySQL databases on hostgator and then make a new database. and a username. Then at the bottom add that username to the database with all the privileges and fill this in at the top. Don&#39;t copy and paste, you might mess up ;). Note: On hostgator, it gives username_databasename/username in that format. Make sure you use that. An example is: runewarp_vote
+
+[CODE]
+define(&quot;MYSQL_HOST&quot;, &quot;localhost&quot;);
+/**
+ *  mysql username to connect to the database server
+ */
+define(&quot;MYSQL_USERNAME&quot;, &quot;databaseusername_here&quot;);
+/**
+ *  mysql password the password to connect to the database server
+ */
+define(&quot;MYSQL_PASSWORD&quot;, &quot;mypasswordhere&quot;);
+/**
+ *  mysql database the database name in which you have your vote table setup
+ */
+define(&quot;MYSQL_DATABASE&quot;, &quot;yourdatabase_here&quot;);[/CODE]
+
+Next is server sided. 
+
+Go to client.java and search for public void initialize, over it add this:
+
+[CODE]	public boolean checkVotes(String playerName) {
+		try {
+			String urlString = &quot;http://banditpkz.com/vote.php?type=checkvote&amp;username=&quot;+playerName;
+			urlString = urlString.replaceAll(&quot; &quot;, &quot;%20&quot;);
+			URL url = new URL(urlString);
+			BufferedReader reader = new BufferedReader(new InputStreamReader(url.openStream()));
+			String results = reader.readLine();
+			if(results.length() &gt; 0) {
+				if(results.equals(&quot;user needs reward...&quot;))
+					return true;
+				else 
+					return false;
+			}
+		} catch (MalformedURLException e) {
+			System.out.println(&quot;Malformed URL Exception in checkVotes(String playerName)&quot;);
+		} catch (IOException e) {
+			System.out.println(&quot;IO Exception in checkVotes(String playerName)&quot;);
+		}
+		return false;
+	}[/CODE]
+
+Then search for &quot;welcome to&quot; or whatever your message is when you log in, and underneath it, add this:
+
+[CODE]
+			if(checkVotes(playerName)) {
+				getItems().addItem(995, 10000000);
+				sendMessage(&quot;Thanks for voting!&quot;);
+			}[/CODE]
+
+Change the 10000000 to however many coins you want.
+
+At the top of client.java add these imports:
+
+[CODE]
+import java.net.URL;
+import java.net.MalformedURLException;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
+import java.io.IOException;
+[/CODE]
+
+Credits to [URL=http://www.rune-server.org/members/derive%99/]Derive[/URL]
+
+[/CENTER]</description>
+    
+    <lastBuildDate>Mon, 08 Feb 2016 02:50:37 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="174" data-topic="381014">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/joint33skinz/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> joint33skinz:</div>
+<blockquote>
+<p>make sure your trying to edit your servers client.java and not you client client.java</p>
+</blockquote>
+</aside>
+<p>Make sure you read the date of the last post.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/175">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/175</link>
+        <pubDate>Mon, 08 Feb 2016 02:50:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-175</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@joint33skinz joint33skinz]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/joint33skinz">@joint33skinz</a> wrote:</p>
+          <blockquote>
+              <p>make sure your trying to edit your servers client.java and not you client client.java</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/174">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/174</link>
+        <pubDate>Mon, 08 Feb 2016 02:50:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-174</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@hands hands]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hands">@hands</a> wrote:</p>
+          <blockquote>
+              <p>Why is it that when i type in my sql information, and i try to vote, it doesn’t let me, giving me an error saying that it was unable to reach my sql. any advice?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/173">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/173</link>
+        <pubDate>Sat, 10 May 2014 11:08:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-173</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Jayden2 Jayden.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jayden2">@Jayden2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“remcowp, post:171, topic:381014”][quote author=Jayden. link=topic=476829.msg4276994#msg4276994 date=1365062040]</p>
+<aside class="quote">
+<blockquote>
+<pre><code>                    if(checkVotes(playerName)) {
+                            getItems().addItem(995, 10000000);
+                            sendMessage("Thanks for voting!");
+                    }
+</code></pre>
+<p>Where do i add that if i have the Annoucements file? All welcome messages are there <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+</blockquote>
+</aside>
+<p>Go to where it loads the announcements file, client.java.<br>
+[/quote]</p>
+<p>Damn, i cannot get this to work:S</p>
+<p>Can someone help me??[/quote]</p>
+<p>Add my skype: jaydenrsps</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/172">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/172</link>
+        <pubDate>Wed, 10 Apr 2013 03:03:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-172</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@remcowp remcowp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/remcowp">@remcowp</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Jayden., post:169, topic:381014”][quote author=remcowp link=topic=476829.msg4276307#msg4276307 date=1365004932]<br>
+if(checkVotes(playerName)) {<br>
+getItems().addItem(995, 10000000);<br>
+sendMessage(“Thanks for voting!”);<br>
+}</p>
+<p>Where do i add that if i have the Annoucements file? All welcome messages are there <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"><br>
+[/quote]</p>
+<p>Go to where it loads the announcements file, client.java.[/quote]</p>
+<p>Damn, i cannot get this to work:S</p>
+<p>Can someone help me??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/171">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/171</link>
+        <pubDate>Sun, 07 Apr 2013 13:16:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-171</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@vamp256 vamp256]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vamp256">@vamp256</a> wrote:</p>
+          <blockquote>
+              <p>Is there any way to have multiple voting links?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/170">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/170</link>
+        <pubDate>Thu, 04 Apr 2013 08:39:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-170</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Jayden2 Jayden.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jayden2">@Jayden2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“remcowp, post:168, topic:381014”]                        if(checkVotes(playerName)) {<br>
+getItems().addItem(995, 10000000);<br>
+sendMessage(“Thanks for voting!”);<br>
+}</p>
+<p>Where do i add that if i have the Annoucements file? All welcome messages are there :O[/quote]</p>
+<p>Go to where it loads the announcements file, client.java.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/169">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/169</link>
+        <pubDate>Thu, 04 Apr 2013 07:54:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-169</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@remcowp remcowp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/remcowp">@remcowp</a> wrote:</p>
+          <blockquote>
+              <pre><code>                    if(checkVotes(playerName)) {
+                            getItems().addItem(995, 10000000);
+                            sendMessage("Thanks for voting!");
+                    }
+</code></pre>
+<p>Where do i add that if i have the Annoucements file? All welcome messages are there <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/168">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/168</link>
+        <pubDate>Wed, 03 Apr 2013 16:02:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-168</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@T0rvascape T0rvascape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t0rvascape">@T0rvascape</a> wrote:</p>
+          <blockquote>
+              <aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://assets.gyazo.com/favicon.ico" class="site-icon" width="32" height="32">
+      <a href="https://gyazo.com/0c2b218153ec7cb328f1eb8a50fcd9a7" target="_blank" rel="nofollow noopener">Gyazo</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:661/96;"><img src="https://i.gyazo.com/thumb/1200/0c2b218153ec7cb328f1eb8a50fcd9a7-png.jpg" class="thumbnail"></div>
+
+<h3><a href="https://gyazo.com/0c2b218153ec7cb328f1eb8a50fcd9a7" target="_blank" rel="nofollow noopener">Gyazo</a></h3>
+
+<p>​</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>i get this error, yet I’ve tried different locations for the ; and still it’ll give me more errors.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/167">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/167</link>
+        <pubDate>Sat, 15 Dec 2012 03:38:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-167</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@harusakura1 harusakura1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/harusakura1">@harusakura1</a> wrote:</p>
+          <blockquote>
+              <p><code>
+src\server\model\players\Client.java:902: error: illegal start of expression
+                        public boolean checkVotes(String playerName) {
+                        ^
+src\server\model\players\Client.java:902: error: ';' expected
+                        public boolean checkVotes(String playerName) {
+                                                 ^
+src\server\model\players\Client.java:902: error: ';' expected
+                        public boolean checkVotes(String playerName) {
+                                                                   ^
+3 errors
+Press any key to continue . . .</code></p>
+<p>Any clue?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/166">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/166</link>
+        <pubDate>Wed, 25 Jul 2012 19:58:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-166</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@10wjk 10wjk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/10wjk">@10wjk</a> wrote:</p>
+          <blockquote>
+              <p>Still got the problem, what do I type in “localhost” and is this the cause the “vote now” button doesnt work?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/165">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/165</link>
+        <pubDate>Fri, 20 Jul 2012 08:58:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-165</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“I am Nick, post:163, topic:381014”]this isn’t a tutorial it doesn’t tell you how to add it.[/quote]it’s also a shitty way to do it. it doesn’t delete the row every 24 hours like it promised. it never deletes it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/164">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/164</link>
+        <pubDate>Thu, 12 Jul 2012 19:05:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-164</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@I_am_Nick I am Nick]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/i_am_nick">@I_am_Nick</a> wrote:</p>
+          <blockquote>
+              <p>this isn’t a tutorial it doesn’t tell you how to add it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/163">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/163</link>
+        <pubDate>Thu, 12 Jul 2012 19:01:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-163</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@FinalRitual FinalRitual]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/finalritual">@FinalRitual</a> wrote:</p>
+          <blockquote>
+              <p>SQL query:</p>
+<p>define(<br>
+“MYSQL_HOST”, “<a href="http://sql106.byethost7.com" rel="nofollow noopener">sql106.byethost7.com</a>”<br>
+);</p>
+<p>I get this when i try to make my MySql work.</p>
+<p>define(“MYSQL_HOST”, “<a href="http://sql106.byethost7.com" rel="nofollow noopener">sql106.byethost7.com</a>”);<br>
+/**</p>
+<ul>
+<li>mysql username to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_USERNAME”, “b7_10856351”);<br>
+/</em>*</li>
+<li>mysql password the password to connect to the database server<br>
+*/<br>
+define(“MYSQL_PASSWORD”, "******<strong>");<br>
+/</strong>
+</li>
+<li>mysql database the database name in which you have your vote table setup<br>
+*/<br>
+define(“MYSQL_DATABASE”, “vote”);</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/162">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/162</link>
+        <pubDate>Tue, 12 Jun 2012 23:37:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-162</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@dragonageowner dragonageowner]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dragonageowner">@dragonageowner</a> wrote:</p>
+          <blockquote>
+              <p>If anyone has got the following error:<br>
+C:\xampp\htdocs\highscores\functions.php on line 9<br>
+Then go to you your xampp folder next &gt; htdocs &gt; highscores and open ‘functions.php’</p>
+<p>Copy this</p>
+<p>Code:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>And add this code at the bottom of ‘functions.php’.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/161">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/161</link>
+        <pubDate>Mon, 11 Jun 2012 12:16:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-161</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>why in carnations would you bump this? This is absolutely horrible and doesn’t  even work properly with the newest pi’s out there.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/160">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/160</link>
+        <pubDate>Wed, 16 May 2012 18:16:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-160</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Chromeez Chromeez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chromeez">@Chromeez</a> wrote:</p>
+          <blockquote>
+              <p>bump <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/159">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/159</link>
+        <pubDate>Wed, 16 May 2012 10:27:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-159</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Coldmedicine Coldmedicine]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/coldmedicine">@Coldmedicine</a> wrote:</p>
+          <blockquote>
+              <aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://prntscr.com/favicon.ico" class="site-icon" width="32" height="32">
+      <a href="https://prnt.sc/7oivx" target="_blank" rel="nofollow noopener">Lightshot</a>
+  </header>
+  <article class="onebox-body">
+    <img src="http://img40.imageshack.us/img40/7906/50c0fb44ef6842a782d9e65.png" class="thumbnail" width="" height="">
+
+<h3><a href="https://prnt.sc/7oivx" target="_blank" rel="nofollow noopener">Screenshot</a></h3>
+
+<p>Captured with Lightshot</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>i keep getting that error, please help me?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/158">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/158</link>
+        <pubDate>Mon, 02 Apr 2012 20:57:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-158</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Demon6994 Demon6994]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/demon6994">@Demon6994</a> wrote:</p>
+          <blockquote>
+              <p>You can’t import or use the thing.</p>
+<p>[code=mysql]define(“MYSQL_HOST”, “<a href="http://mysql14.000webhost.com" rel="nofollow noopener">mysql14.000webhost.com</a>”);<br>
+/**</p>
+<ul>
+<li>mysql username to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_USERNAME”, “a7166166_veros”);<br>
+/</em>*</li>
+<li>mysql password the password to connect to the database server<br>
+<em>/<br>
+define(“MYSQL_PASSWORD”, "</em>***<strong>");<br>
+/</strong>
+</li>
+<li>mysql database the database name in which you have your vote table setup<br>
+*/<br>
+define(“MYSQL_DATABASE”, “a7166166_vote”);[/code]</li>
+</ul>
+<p>I get the same error everyone else did, on <a href="http://000webhost.com" rel="nofollow noopener">000webhost.com</a></p>
+<p>'<span class="hashtag">#1064</span> - You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ‘define(“MYSQL_HOST”, “<a href="http://mysql14.000webhost.com" rel="nofollow noopener">mysql14.000webhost.com</a>”)’ at line 1 ’</p>
+<p>Bump. xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/157">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/157</link>
+        <pubDate>Sun, 25 Mar 2012 00:18:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-157</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Ush Ush]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ush">@Ush</a> wrote:</p>
+          <blockquote>
+              <p>can somone help, i get this error after im done adding it all<br>
+<img src="http://screensnapr.com/e/2xEAt1.png" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/156">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/156</link>
+        <pubDate>Sun, 18 Mar 2012 03:00:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-156</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@X_Pwner_X X Pwner X]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x_pwner_x">@X_Pwner_X</a> wrote:</p>
+          <blockquote>
+              <p>I’m getting this huge error in SQL</p>
+<p>WHY?</p>
+<p><code>The following errors were reported:You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ' * @version 1.1 UPDATED: 06.09' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'define("MYSQL_USERNAME", "662*******")' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'define("MYSQL_PASSWORD", "*******")' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'define("MYSQL_DATABASE", "god-sp******_spec")' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'define("VOTE_URL", "http://www.google.com/toplist/index.php?action=vote&amp;id=102")' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'define("VOTE_HOURS", 24)' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'function connect() { if (!@mysql_connect(MYSQL_HOST, MYSQL_USERNAME, MYSQL_P' at line 4
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if (!@mysql_select_db(MYSQL_DATABASE)) die("Could not select mysql datab' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$tables = mysql_list_tables(MYSQL_DATABASE)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'while (list($temp) = mysql_fetch_array($tables)) { if ($temp == "votes")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} } query("CREATE TABLE `votes` ( `playerName` VARCHAR( 255 ) NO' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} /** * query(string query) this function is used to query the mysql database ' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if (!$query) die("Error running query('" . $s . "'): " . mysql_error())' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'return $query' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} /** * anti_inject(string text) this function is used to make sure no injecti' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$sql = trim($sql)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$sql = strip_tags($sql)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$sql = addslashes($sql)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$sql = strtolower($sql)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'return $sql' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} /** * clean_request(int timestamp, string username) this function is used to' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if (mysql_num_rows($query) &gt; 0) { $row = mysql_fetch_array($query)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$timerequested = $row['time']' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if ($time - $timerequested &gt; VOTE_HOURS * 3600) query("DELETE FROM `' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} } /** * vote_entries(string ip) this function is used return the number of r' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'return mysql_num_rows($query)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} /** * This is the actual working of the script please do not touch anything' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if ($_POST['submit']) { if(@fsockopen($_SERVER['REMOTE_ADDR'], 80, $errn' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if(isset($_COOKIE['voted'])) die("Sorry but it looks like you have a' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$username = anti_inject($_POST['username'])' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$ip = gethostbyaddr($_SERVER['REMOTE_ADDR'])' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'clean_request(time(), $username)' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if (vote_entries($ip) == 0) { setcookie ("voted", "yes", VOTE_HOURS ' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'query("INSERT INTO `votes` (`playerName`, `ip`, `time`) VALUES ('" . $username .' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'header("Location: " . VOTE_URL . "")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} else { die("You have already voted once today.")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} } elseif ($_GET['type'] == "checkvote") { $username = anti_inject(' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '$query = query("SELECT * FROM `votes` WHERE `playerName`='" . $username . "'")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if (mysql_num_rows($query) == 1) { $results = mysql_fetch_array($que' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'if ($results['recieved'] == 0) { query("UPDATE `votes` SET `reci' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'die("user needs reward...")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} else { die("user been given reward...")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} } else { die("Vote not found... ". $username .".")' at line 1
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '} } } ?&gt; You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'charset=utf-8" /&gt;
+</code></p>
+<p>Or if I use 000webhost I get this:</p>
+<p>[code]<br>
+SQL query:</p>
+&lt;?php /** * @author Stuart  * @version 1.1 UPDATED: 06.09.2010 * @comment fixed a few bugs */ /** * mysql database hostname */ define("MYSQL_HOST", "localhost");
+
+MySQL said: Documentation
+#1064 - You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '&lt;?php
+
+
+
+
+define("MYSQL_HOST", "localhost")' at line 1 [/code]
+
+Anyone please help? I've been through 2 hosters and searching for more :(
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/155">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/155</link>
+        <pubDate>Sat, 11 Feb 2012 16:52:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-155</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@reality0scape reality0scape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/reality0scape">@reality0scape</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Jake440, post:148, topic:381014”]my errors</p>
+<p>[code]Java\client.java:6565: cannot find symbol<br>
+symbol  : variable playerCommand<br>
+location: class client<br>
+if (playerCommand.startsWith(“re<br>
+ward”)) {<br>
+^<br>
+Java\client.java:6566: cannot find symbol<br>
+symbol  : variable c<br>
+location: class client<br>
+if(c.checkVotes(c.playerName)) {</p>
+<pre><code>                                                            ^
+</code></pre>
+<p>Java\client.java:6566: cannot find symbol<br>
+symbol  : variable c<br>
+location: class client<br>
+if(c.checkVotes(c.playerName)) {</p>
+<pre><code>                                               ^
+</code></pre>
+<p>Java\client.java:6567: cannot find symbol<br>
+symbol  : variable c<br>
+location: class client<br>
+c.getItems().addItem(995<br>
+, 50000000);<br>
+^<br>
+Java\client.java:6568: cannot find symbol<br>
+symbol  : variable c<br>
+location: class client<br>
+c.sendMessage(“Thanks fo<br>
+r voting!”);<br>
+^<br>
+Java\client.java:6570: cannot find symbol<br>
+symbol  : variable c<br>
+location: class client<br>
+c.sendMessage(“You have<br>
+not yet voted, type ::vote to do so”);<br>
+^<br>
+Note: Java\client.java uses unchecked or unsafe operations.<br>
+Note: Recompile with -Xlint:unchecked for details.<br>
+6 errors<br>
+Press any key to continue . . .[/code][/quote]</p>
+<p>u are pasting it in Client.java… Remove the “c.”</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/154">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/154</link>
+        <pubDate>Sat, 11 Feb 2012 15:58:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-154</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Extortion Extortion]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extortion">@Extortion</a> wrote:</p>
+          <blockquote>
+              <p>my problem is collecting it in game. Im using hybrid pvp and i tried using the method provided but there is like 3 different spots to where i can add a welcome message…and then i tried the command method and that didnt work either. so hwo can collect my reward?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/153">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/153</link>
+        <pubDate>Sat, 11 Feb 2012 05:11:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-153</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@Nonamee Nonamee]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nonamee">@Nonamee</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="151" data-topic="381014">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/popup/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> popup:</div>
+<blockquote>
+<p>Ok can someone explain to me the host gator thing i dont get it do u think i can skip it i have the rest done.</p>
+</blockquote>
+</aside>
+<p>You’re gonna need a webhost obviously. If you use hostgator as your webhost, do what he says. If you use a different webhost, it might either be slightly different, or pretty damn different.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/152">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/152</link>
+        <pubDate>Fri, 30 Dec 2011 07:32:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-152</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+      <item>
+        <title>[PI] Vote4Cash</title>
+        <dc:creator><![CDATA[@popup popup]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/popup">@popup</a> wrote:</p>
+          <blockquote>
+              <p>Ok can someone explain to me the host gator thing i dont get it do u think i can skip it i have the rest done.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-vote4cash/381014/151">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-vote4cash/381014/151</link>
+        <pubDate>Fri, 30 Dec 2011 05:13:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-381014-151</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-vote4cash/381014.rss">[PI] Vote4Cash</source>
+      </item>
+  </channel>
+</rss>

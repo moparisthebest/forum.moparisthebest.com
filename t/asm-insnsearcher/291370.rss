@@ -1,0 +1,560 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ASM InsnSearcher</title>
+    <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370</link>
+    <description>This is a regex pattern-based AbstractInsnNode finder class I created to emulate BCEL&#39;s InstructionFinder class for use in my Playray game deobfuscator.
+
+[code]package org.lolsuper.playray.deob.util;
+
+import static java.lang.reflect.Modifier.*;
+
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.InsnList;
+
+import java.util.*;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.lang.reflect.Field;
+
+/**
+ * @author super_
+ */
+    
+public class InsnSearcher {
+
+    private static final Map&lt;Integer, String&gt; OPCODE_NAME_MAP;
+    private static final Pattern[] NON_INSTRUCTION_CONST_PATTERNS = new Pattern[] {
+            Pattern.compile(&quot;acc_.+&quot;), Pattern.compile(&quot;t_.+&quot;), Pattern.compile(&quot;v1_.+&quot;)
+    };
+    
+    private InsnList insns;
+    private Map&lt;AbstractInsnNode, Integer&gt; instrIndexMap;
+    private String mappedCode;
+
+    public InsnSearcher(InsnList insns) {
+        this.insns = insns;
+        reload();
+    }
+
+    public void reload() {
+        StringBuffer buffer = new StringBuffer();
+        instrIndexMap = new HashMap&lt;AbstractInsnNode, Integer&gt;();
+        Iterator&lt;AbstractInsnNode&gt; iterator = insns.iterator();
+        while (iterator.hasNext()) {
+            AbstractInsnNode insn = iterator.next();
+            //ignore psuedo instructions
+            if (insn.getOpcode() &lt; 0) {
+                continue;
+            }
+            instrIndexMap.put(insn, buffer.length());
+            buffer.append(OPCODE_NAME_MAP.get(insn.getOpcode())).append(&quot; &quot;);
+        }
+        mappedCode = buffer.toString();
+    }
+
+    private AbstractInsnNode getKey(Integer val) {
+        for (Map.Entry&lt;AbstractInsnNode, Integer&gt; entry : instrIndexMap.entrySet()) {
+            if (entry.getValue().equals(val)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    private AbstractInsnNode[] getMatchFromRange(int start, int end) {
+        AbstractInsnNode startInsn = getKey(start);
+        int realEndIdx = -1;
+        for (int x = end - 1; x &gt;= start; --x) {
+            if (mappedCode.charAt(x) == &#39; &#39;) {
+                realEndIdx = x + 1;
+                break;
+            }
+        }
+        AbstractInsnNode endInsn = getKey(realEndIdx);
+        int startInsnIdx = insns.indexOf(startInsn);
+        AbstractInsnNode[] match = new AbstractInsnNode[insns.indexOf(endInsn) - startInsnIdx + 1];
+        for (int idx = 0; idx &lt; match.length; ++idx) {
+            match[idx] = insns.get(startInsnIdx + idx);
+        }
+        return match;
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(String pattern, AbstractInsnNode from) {
+        return search(Pattern.compile(pattern.toLowerCase()), from, null);
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(String pattern, Constraint constraint) {
+        return search(Pattern.compile(pattern.toLowerCase()), insns.getFirst(), constraint);
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(String pattern) {
+        return search(Pattern.compile(pattern.toLowerCase()), insns.getFirst());
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, AbstractInsnNode from) {
+        return search(pattern, from, null);
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, Constraint constraint) {
+        return search(pattern, insns.getFirst(), constraint);
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern) {
+        return search(pattern, insns.getFirst());
+    }
+
+    public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, AbstractInsnNode from,
+                                                   Constraint constraint) {
+        Matcher matcher = pattern.matcher(mappedCode);
+        int startIdx = instrIndexMap.get(from);
+        List&lt;AbstractInsnNode[]&gt; matches = new LinkedList&lt;AbstractInsnNode[]&gt;();
+        while (matcher.find(startIdx)) {
+            int start = matcher.start();
+            int end = matcher.end();
+            AbstractInsnNode[] match = getMatchFromRange(start, end);
+            if (constraint == null || constraint.accept(match)) {
+                matches.add(match);
+            }
+            startIdx = end;
+        }
+        return matches;
+    }
+
+    public static interface Constraint {
+
+        public boolean accept(AbstractInsnNode[] match);
+    }
+
+    static {
+        OPCODE_NAME_MAP = new HashMap&lt;Integer, String&gt;();
+        Class&lt;?&gt; opcodes = Opcodes.class;
+        Field[] declaredFields = opcodes.getDeclaredFields();
+        for (Field field : declaredFields) {
+            int modifiers = field.getModifiers();
+            if (isPublic(modifiers) &amp;&amp; isStatic(modifiers)
+                    &amp;&amp; isFinal(modifiers) &amp;&amp; field.getType() == Integer.TYPE) {
+                try {
+                    String name = field.getName().toLowerCase();
+                    boolean failed = false;
+                    for (Pattern pattern : NON_INSTRUCTION_CONST_PATTERNS) {
+                        Matcher matcher = pattern.matcher(name);
+                        if (matcher.find() &amp;&amp; matcher.start() == 0) {
+                            failed = true;
+                            break;
+                        }
+                    }
+                    if (failed) {
+                        continue;
+                    }
+                    int constant = field.getInt(null);
+                    OPCODE_NAME_MAP.put(constant, name);
+                } catch (IllegalAccessException ex) {
+                    //cant happen
+                }
+            }
+        }
+    }
+}
+[/code]
+
+Warning: Very ugly but it works :) FEEL FREE TO FLAME
+
+Usage:
+[code]            for (AbstractInsnNode[] match : searcher.search(&quot;(iconst_.|bipush) ldc jsr aastore (dup|putstatic)&quot;)) {
+[/code]</description>
+    
+    <lastBuildDate>Tue, 28 Jul 2009 15:34:48 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>Depends how it was used. CBF looking. Post that section.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/11</link>
+        <pubDate>Tue, 28 Jul 2009 15:34:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-11</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="9" data-topic="291370">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/bash/40/5_513041d5f7104045db30895d3b90af16.png" class="avatar"> BAsh:</div>
+<blockquote>
+<p>Assign FrameNode a value of -2 and LabelNode a value of -1. Then the conversion of opcode to character used an addition of a large arbitrary number which made the character way outside of the range of ASCII. So large number + (-2) = large number. No problem there. Just make sure Frame and Label have different values.</p>
+</blockquote>
+</aside>
+<p>Okay, thats a good solution. Couldn’t I just use Short.MAX_VALUE like BCEL for the offset?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/10</link>
+        <pubDate>Tue, 28 Jul 2009 15:21:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-10</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>Assign FrameNode a value of -2 and LabelNode a value of -1. Then the conversion of opcode to character used an addition of a large arbitrary number which made the character way outside of the range of ASCII. So large number + (-2) = large number. No problem there. Just make sure Frame and Label have different values.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/9</link>
+        <pubDate>Tue, 28 Jul 2009 15:18:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-9</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>Ok I’ve run into an issue[quote=“BAsh, post:7, topic:291370”]I would prefer getting rid of the array and use flags like the constructor of ClassWriter but up to you.[/quote]</p>
+<p>Sorry lol, too much time looking at the NIO.2 javadocs (<a href="http://openjdk.java.net/projects/nio/javadoc/index.html" rel="nofollow noopener">http://openjdk.java.net/projects/nio/javadoc/index.html</a>, they use this Option way of flags too[br][br][size=1]Posted on: July 27, 2009, 09:46:10 pm[/size][hr]BTW BAsh, if I choose to go the way BCEL does (where it encodes the instructions into single chars) and simplify parsing, what would I use for opcodes for the psuedoinstructions so I could use them?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/8</link>
+        <pubDate>Tue, 28 Jul 2009 13:43:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-8</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>I would prefer getting rid of the array and use flags like the constructor of ClassWriter but up to you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/7</link>
+        <pubDate>Tue, 28 Jul 2009 13:39:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-7</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BAsh, post:5, topic:291370”][quote author=oksuper_ link=topic=385072.msg2888957#msg2888957 date=1248783276]<br>
+Hey BAsh. I didn’t want matching to break say if there was a FrameNode or LabelNode which ASM placed there that your standard disassembler (javap) wouldnt give you <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+[/quote]<br>
+Maybe give the user an option then. A flag to include LabelNodes and another to include FrameNodes.[/quote]</p>
+<p>Something like</p>
+<pre><code class="lang-auto">public enum IncludeOptions {
+   INCLUDE_LABELNODE, INCLUDE_FRAMENODE
+}</code></pre>
+<p>and then adding it as a an additional argument to the constructor and reload().</p>
+<pre><code class="lang-auto">public InsnSearcher(InsnList insns, IncludeOption... options) {
+    this.insns = insns;
+    reload(options);
+}</code></pre>
+<pre><code class="lang-auto">    public void reload(IncludeOption... options) {
+        List&lt;IncludeOption&gt; ops = Arrays.asList(options);
+        boolean includeFrameNode = ops.contains(IncludeOption.INCLUDE_FRAMENODE);
+        boolean includeLabelNode = ops.contains(IncludeOption.INCLUDE_LABELNODE);
+        StringBuffer buffer = new StringBuffer();
+        instrIndexMap = new HashMap&lt;AbstractInsnNode, Integer&gt;();
+        Iterator&lt;AbstractInsnNode&gt; iterator = insns.iterator();
+        while (iterator.hasNext()) {
+            AbstractInsnNode insn = iterator.next();
+            //ignore psuedo instructions
+            if (insn.geOpcode() &lt; 0) {
+                if ((insn instanceof FrameNode &amp;&amp; !includeFrameNode) 
+                        || (insn instanceof LabelNode &amp;&amp; !includeLabelNode)) {
+                    continue;
+                }
+            }
+            instrIndexMap.put(insn, buffer.length());
+            buffer.append(OPCODE_NAME_MAP.get(insn.getOpcode())).append(" ");
+        }
+        mappedCode = buffer.toString();
+    }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/6</link>
+        <pubDate>Tue, 28 Jul 2009 13:02:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-6</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="4" data-topic="291370">
+<div class="title">
+<div class="quote-controls"></div>
+ oksuper_:</div>
+<blockquote>
+<p>Hey BAsh. I didn’t want matching to break say if there was a FrameNode or LabelNode which ASM placed there that your standard disassembler (javap) wouldnt give you <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>Maybe give the user an option then. A flag to include LabelNodes and another to include FrameNodes.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/5</link>
+        <pubDate>Tue, 28 Jul 2009 12:44:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-5</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>Hey BAsh. I didn’t want matching to break say if there was a FrameNode or LabelNode which ASM placed there that your standard disassembler (javap) wouldnt give you <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<ol>
+<li>I just might <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:">
+</li>
+<li>Yeah I saw that… it would make it alot easier.</li>
+<li>Thanks, will do.</li>
+<li>Thank you <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> [br][br][size=1]Posted on: July 27, 2009, 08:15:39 pm[/size][hr]BTW apologize for shit naming etc in code that prevents anyone from understanding it.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/4</link>
+        <pubDate>Tue, 28 Jul 2009 12:14:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-4</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p><code>            //ignore psuedo instructions
+            if (insn.getOpcode() &lt; 0) {
+                continue;
+            }</code><br>
+Why? LabelNodes make ASM much more powerful that BCEL. With BCEL you have to deal with InstructionTargeter Exceptions. (Apologies on incorrect naming).</p>
+<p>Also:<br>
+-Import most of BCEL’s definitions. CONST representing a whole bunch of constant instructions rather than requiring you to write out a list of instructions is so much easier.<br>
+-BCEL’s non-ascii characters for instructions is a brilliant idea and while it means you have to convert it back into plain text it is very useful with parsing.<br>
+-InsnList allows you to read the index property of Instructions. Once the list has been generated (on first call to toArray() or calling getIndex() on any Instruction) it is much faster than a HashMap lookup. If you want you can jam an interface over it with your class but it would still be much faster.<br>
+-BCEL’s idea of progressive searching where you don’t get a list of matches but an iterator makes so much more sense to me.<br>
+-Parsing of opcode names doesn’t look very good. I would prefer it (but personal preference) if you used org.objectweb.asm.util.AbstractVisitor.OPCODES.</p>
+<p>Good though. ASM is lacking some vital components.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/3</link>
+        <pubDate>Tue, 28 Jul 2009 09:55:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-3</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>better than that crappy knockoff of psbs searcher that someone else released</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/2</link>
+        <pubDate>Tue, 28 Jul 2009 02:44:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-2</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+      <item>
+        <title>ASM InsnSearcher</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>This is a regex pattern-based AbstractInsnNode finder class I created to emulate BCEL’s InstructionFinder class for use in my Playray game deobfuscator.</p>
+<p>[code]package org.lolsuper.playray.deob.util;</p>
+<p>import static java.lang.reflect.Modifier.*;</p>
+<p>import org.objectweb.asm.Opcodes;<br>
+import org.objectweb.asm.tree.AbstractInsnNode;<br>
+import org.objectweb.asm.tree.InsnList;</p>
+<p>import java.util.*;<br>
+import java.util.regex.Pattern;<br>
+import java.util.regex.Matcher;<br>
+import java.lang.reflect.Field;</p>
+<p>/**</p>
+<ul>
+<li>
+<span class="mention">@author</span> super_<br>
+*/</li>
+</ul>
+<p>public class InsnSearcher {</p>
+<pre><code>private static final Map&lt;Integer, String&gt; OPCODE_NAME_MAP;
+private static final Pattern[] NON_INSTRUCTION_CONST_PATTERNS = new Pattern[] {
+        Pattern.compile("acc_.+"), Pattern.compile("t_.+"), Pattern.compile("v1_.+")
+};
+
+private InsnList insns;
+private Map&lt;AbstractInsnNode, Integer&gt; instrIndexMap;
+private String mappedCode;
+
+public InsnSearcher(InsnList insns) {
+    this.insns = insns;
+    reload();
+}
+
+public void reload() {
+    StringBuffer buffer = new StringBuffer();
+    instrIndexMap = new HashMap&lt;AbstractInsnNode, Integer&gt;();
+    Iterator&lt;AbstractInsnNode&gt; iterator = insns.iterator();
+    while (iterator.hasNext()) {
+        AbstractInsnNode insn = iterator.next();
+        //ignore psuedo instructions
+        if (insn.getOpcode() &lt; 0) {
+            continue;
+        }
+        instrIndexMap.put(insn, buffer.length());
+        buffer.append(OPCODE_NAME_MAP.get(insn.getOpcode())).append(" ");
+    }
+    mappedCode = buffer.toString();
+}
+
+private AbstractInsnNode getKey(Integer val) {
+    for (Map.Entry&lt;AbstractInsnNode, Integer&gt; entry : instrIndexMap.entrySet()) {
+        if (entry.getValue().equals(val)) {
+            return entry.getKey();
+        }
+    }
+    return null;
+}
+
+private AbstractInsnNode[] getMatchFromRange(int start, int end) {
+    AbstractInsnNode startInsn = getKey(start);
+    int realEndIdx = -1;
+    for (int x = end - 1; x &gt;= start; --x) {
+        if (mappedCode.charAt(x) == ' ') {
+            realEndIdx = x + 1;
+            break;
+        }
+    }
+    AbstractInsnNode endInsn = getKey(realEndIdx);
+    int startInsnIdx = insns.indexOf(startInsn);
+    AbstractInsnNode[] match = new AbstractInsnNode[insns.indexOf(endInsn) - startInsnIdx + 1];
+    for (int idx = 0; idx &lt; match.length; ++idx) {
+        match[idx] = insns.get(startInsnIdx + idx);
+    }
+    return match;
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(String pattern, AbstractInsnNode from) {
+    return search(Pattern.compile(pattern.toLowerCase()), from, null);
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(String pattern, Constraint constraint) {
+    return search(Pattern.compile(pattern.toLowerCase()), insns.getFirst(), constraint);
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(String pattern) {
+    return search(Pattern.compile(pattern.toLowerCase()), insns.getFirst());
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, AbstractInsnNode from) {
+    return search(pattern, from, null);
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, Constraint constraint) {
+    return search(pattern, insns.getFirst(), constraint);
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern) {
+    return search(pattern, insns.getFirst());
+}
+
+public List&lt;AbstractInsnNode[]&gt; search(Pattern pattern, AbstractInsnNode from,
+                                               Constraint constraint) {
+    Matcher matcher = pattern.matcher(mappedCode);
+    int startIdx = instrIndexMap.get(from);
+    List&lt;AbstractInsnNode[]&gt; matches = new LinkedList&lt;AbstractInsnNode[]&gt;();
+    while (matcher.find(startIdx)) {
+        int start = matcher.start();
+        int end = matcher.end();
+        AbstractInsnNode[] match = getMatchFromRange(start, end);
+        if (constraint == null || constraint.accept(match)) {
+            matches.add(match);
+        }
+        startIdx = end;
+    }
+    return matches;
+}
+
+public static interface Constraint {
+
+    public boolean accept(AbstractInsnNode[] match);
+}
+
+static {
+    OPCODE_NAME_MAP = new HashMap&lt;Integer, String&gt;();
+    Class&lt;?&gt; opcodes = Opcodes.class;
+    Field[] declaredFields = opcodes.getDeclaredFields();
+    for (Field field : declaredFields) {
+        int modifiers = field.getModifiers();
+        if (isPublic(modifiers) &amp;&amp; isStatic(modifiers)
+                &amp;&amp; isFinal(modifiers) &amp;&amp; field.getType() == Integer.TYPE) {
+            try {
+                String name = field.getName().toLowerCase();
+                boolean failed = false;
+                for (Pattern pattern : NON_INSTRUCTION_CONST_PATTERNS) {
+                    Matcher matcher = pattern.matcher(name);
+                    if (matcher.find() &amp;&amp; matcher.start() == 0) {
+                        failed = true;
+                        break;
+                    }
+                }
+                if (failed) {
+                    continue;
+                }
+                int constant = field.getInt(null);
+                OPCODE_NAME_MAP.put(constant, name);
+            } catch (IllegalAccessException ex) {
+                //cant happen
+            }
+        }
+    }
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Warning: Very ugly but it works <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> FEEL FREE TO FLAME</p>
+<p>Usage:</p>
+<p><code>            for (AbstractInsnNode[] match : searcher.search("(iconst_.|bipush) ldc jsr aastore (dup|putstatic)")) {
+</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/asm-insnsearcher/291370/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/asm-insnsearcher/291370/1</link>
+        <pubDate>Tue, 28 Jul 2009 00:15:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-291370-1</guid>
+        <source url="https://forum.moparisthebest.com/t/asm-insnsearcher/291370.rss">ASM InsnSearcher</source>
+      </item>
+  </channel>
+</rss>

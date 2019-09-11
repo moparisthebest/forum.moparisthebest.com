@@ -1,0 +1,792 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>317 pi rsa problem</title>
+    <link>https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400</link>
+    <description>hey guys i get a problem with my rsa.
+
+When i add my rsa i get: no response from loginserver.
+
+
+serverside code:
+[code]	loginEncryptPacketSize--;
+						if(loginEncryptPacketSize != (in.get() &amp; 0xff)) {
+							System.out.println(&quot;Encrypted size mismatch.&quot;);
+							session.close();
+							return false;
+						}
+                        byte[] encryptionBytes = new byte[loginEncryptPacketSize];
+                        in.get(encryptionBytes);
+                        ByteBuffer rsaBuffer = ByteBuffer.wrap(new BigInteger(encryptionBytes)
+                                .modPow(RSA_EXPONENT, RSA_MODULUS).toByteArray());
+						if((rsaBuffer.get() &amp; 0xff) != 10) {
+							System.out.println(&quot;Encrypted id != 10.&quot;);
+							session.close();
+							return false;
+						}
+						long clientSessionKey = rsaBuffer.getLong();
+						long serverSessionKey = rsaBuffer.getLong();
+						int uid = rsaBuffer.getInt();
+						
+						if(uid == 0 || uid == 99735086) {
+							session.close();
+							return false;
+						}
+						if(uid != 12345) {
+								session.close();
+								return false;
+						} 
+						
+						String name = readRS2String(rsaBuffer);
+						String pass = readRS2String(rsaBuffer);[/code]
+
+
+Whole RS2LoginProtocolDecoder.java:
+
+(I delete my private code)
+
+[code]package server.net;
+
+import org.apache.mina.common.ByteBuffer;
+import java.math.BigInteger;
+import org.apache.mina.common.IoFuture;
+import org.apache.mina.common.IoFutureListener;
+import org.apache.mina.common.IoSession;
+import org.apache.mina.filter.codec.CumulativeProtocolDecoder;
+import org.apache.mina.filter.codec.ProtocolCodecFilter;
+import org.apache.mina.filter.codec.ProtocolDecoderOutput;
+import server.util.Misc;
+import server.Config;
+import server.Connection;
+import server.Server;
+import server.world.map.*;
+import server.model.players.Client;
+import server.model.players.PlayerHandler;
+import server.model.players.PlayerSave;
+import server.util.ISAACRandomGen;
+
+/**
+ * Login protocol decoder.
+ * @author Graham
+ * @author Ryan / Lmctruck30 &lt;- login Protocol fixes
+ *
+ */
+public class RS2LoginProtocolDecoder extends CumulativeProtocolDecoder {
+	
+	private static final BigInteger RSA_MODULUS = new BigInteger(&quot;secret&quot;);
+
+	private static final BigInteger RSA_EXPONENT = new BigInteger(&quot;secret&quot;);
+
+	
+	
+	public int clientVer;
+	/**
+	 * Parses the data in the provided byte buffer and writes it to
+	 * &lt;code&gt;out&lt;/code&gt; as a &lt;code&gt;Packet&lt;/code&gt;.
+	 *
+	 * @param session The IoSession the data was read from
+	 * @param in	  The buffer
+	 * @param out	 The decoder output stream to which to write the &lt;code&gt;Packet&lt;/code&gt;
+	 * @return Whether enough data was available to create a packet
+	 */
+	@Override
+	public boolean doDecode(IoSession session, ByteBuffer in, ProtocolDecoderOutput out) {
+			synchronized(session) {
+				Object loginStageObj = session.getAttribute(&quot;LOGIN_STAGE&quot;);
+				int loginStage = 0;
+				if(loginStageObj != null) {
+					loginStage = (Integer)loginStageObj;
+				}
+				//Logger.log(&quot;recv login packet, stage: &quot;+loginStage);
+				switch(loginStage) {
+				case 0:
+					if(2 &lt;= in.remaining()) {
+						int protocol = in.get() &amp; 0xff;
+						@SuppressWarnings(&quot;unused&quot;)
+						int nameHash = in.get() &amp; 0xff;
+						if(protocol == 14) {
+							long serverSessionKey = ((long) (java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long) (java.lang.Math.random() * 99999999D);
+						    StaticPacketBuilder s1Response = new StaticPacketBuilder();
+						    s1Response.setBare(true).addBytes(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0 }).addByte((byte) 0).addLong(serverSessionKey);
+						    session.setAttribute(&quot;SERVER_SESSION_KEY&quot;, serverSessionKey);
+						    session.write(s1Response.toPacket());
+						    session.setAttribute(&quot;LOGIN_STAGE&quot;, 1);
+						}
+						return true;
+					} else {
+						in.rewind();
+						return false;
+					}
+				case 1:
+					@SuppressWarnings(&quot;unused&quot;)
+					int loginType = -1, loginPacketSize = -1, loginEncryptPacketSize = -1;
+					if(2 &lt;= in.remaining()) {
+						loginType = in.get() &amp; 0xff; //should be 16 or 18
+						loginPacketSize = in.get() &amp; 0xff;
+						loginEncryptPacketSize = loginPacketSize-(36+1+1+2);
+						if(loginPacketSize &lt;= 0 || loginEncryptPacketSize &lt;= 0) {
+							System.out.println(&quot;Zero or negative login size.&quot;);
+							session.close();
+							return false;
+						}
+					} else {
+						in.rewind();
+						return false;
+					}
+					if(loginPacketSize &lt;= in.remaining()) {
+						int magic = in.get() &amp; 0xff;
+						int version = in.getUnsignedShort();
+						if(magic != 255) {
+							//System.out.println(&quot;Wrong magic id.&quot;);
+							session.close();
+							return false;
+						}
+						if(version != 1) {
+							//Dont Add Anything
+						}
+						@SuppressWarnings(&quot;unused&quot;)
+						int lowMem = in.get() &amp; 0xff;
+						for(int i = 0; i &lt; 9; i++) {
+							in.getInt();
+						}
+						loginEncryptPacketSize--;
+						if(loginEncryptPacketSize != (in.get() &amp; 0xff)) {
+							System.out.println(&quot;Encrypted size mismatch.&quot;);
+							session.close();
+							return false;
+						}
+                        byte[] encryptionBytes = new byte[loginEncryptPacketSize];
+                        in.get(encryptionBytes);
+                        ByteBuffer rsaBuffer = ByteBuffer.wrap(new BigInteger(encryptionBytes)
+                                .modPow(RSA_EXPONENT, RSA_MODULUS).toByteArray());
+						if((rsaBuffer.get() &amp; 0xff) != 10) {
+							System.out.println(&quot;Encrypted id != 10.&quot;);
+							session.close();
+							return false;
+						}
+						long clientSessionKey = rsaBuffer.getLong();
+						long serverSessionKey = rsaBuffer.getLong();
+						int uid = rsaBuffer.getInt();
+						
+						if(uid == 0 || uid == 99735086) {
+							session.close();
+							return false;
+						}
+						if(uid != 12345) {
+								session.close();
+								return false;
+						} 
+						
+						String name = readRS2String(rsaBuffer);
+						String pass = readRS2String(rsaBuffer);
+						int sessionKey[] = new int[4];
+						sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+						sessionKey[1] = (int)clientSessionKey;
+						sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+						sessionKey[3] = (int)serverSessionKey;
+						ISAACRandomGen inC = new ISAACRandomGen(sessionKey);
+						for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+						ISAACRandomGen outC = new ISAACRandomGen(sessionKey);
+						load(session, uid, name, pass, inC, outC, version);
+						// WorkerThread.load(session, name, pass, inC, outC);
+						session.getFilterChain().remove(&quot;protocolFilter&quot;);
+						session.getFilterChain().addLast(&quot;protocolFilter&quot;, new ProtocolCodecFilter(new GameCodecFactory(inC)));
+						return true;
+					} else {
+						in.rewind();
+						return false;
+					}
+				}
+			}
+		return false;
+	}
+
+	private synchronized void load(final IoSession session, final int uid, String name, String pass, final ISAACRandomGen inC, ISAACRandomGen outC, int version) {
+		session.setAttribute(&quot;opcode&quot;, -1);
+		session.setAttribute(&quot;size&quot;, -1);
+		int loginDelay = 1;
+		int returnCode = 2;
+		
+		name = name.trim();
+		name = name.toLowerCase();
+		pass = pass.toLowerCase();
+		
+		if(!name.matches(&quot;[A-Za-z0-9 ]+&quot;)) {
+			returnCode = 4;
+		}
+		
+		if(name.length() &gt; 12) {
+			returnCode = 8;
+		}
+		
+		Client cl = new Client(session, -1);
+		cl.playerName = Misc.optimizeText(name);
+		cl.playerName2 = cl.playerName;
+		cl.playerPass = pass;
+		cl.setInStreamDecryption(inC);
+		cl.setOutStreamDecryption(outC);
+		cl.outStream.packetEncryption = outC;
+				
+		cl.saveCharacter = false;
+		
+		char first = name.charAt(0);
+		cl.properName = Character.toUpperCase(first)+ name.substring(1, name.length());
+		
+		if(Connection.isNamedBanned(cl.playerName) || cl.banStart == 1) {
+//PlayerSave.loadGame(cl, cl.playerName, cl.playerPass);
+		returnCode = 4;
+}
+		
+		if(PlayerHandler.isPlayerOn(name)) {
+			returnCode = 5;
+		}
+		
+		//if(Config.CLIENT_VERSION != version) {
+			//returnCode = 6;
+		//}
+		
+		if(PlayerHandler.playerCount &gt;= Config.MAX_PLAYERS) {
+			returnCode = 7;
+		}
+		
+		if(clientVer != 2) {
+		returnCode = 6;
+		}
+		
+//		Login Limit Exceeded
+//		if() {
+//			returnCode = 9;
+//		}
+		
+		if(Server.UpdateServer) {
+			returnCode = 14;
+		}
+		
+//		if(Connection.checkLoginList(loginIp)) {
+//			returnCode = 16;
+//		}
+		
+//		Just Left World Login Delay Included
+//		if() {
+//			returnCode = 21;
+//		}
+		
+		if(returnCode == 2) {
+			int load = PlayerSave.loadGame(cl, cl.playerName, cl.playerPass);
+			if (load == 0)
+				cl.addStarter = true;
+			if(load == 3) {
+				returnCode = 3;
+				cl.saveFile = false;
+			} else {
+				for(int i = 0; i &lt; cl.playerEquipment.length; i++) {
+					if(cl.playerEquipment[i] == 0) {
+						cl.playerEquipment[i] = -1;
+						cl.playerEquipmentN[i] = 0;
+					}
+				}
+				if(!Server.playerHandler.newPlayerClient(cl)) {
+					returnCode = 7;
+					cl.saveFile = false;
+				} else {
+					cl.saveFile = true;
+				}
+			}
+		}
+		
+		cl.packetType = -1;
+		cl.packetSize = 0;
+		
+		StaticPacketBuilder bldr = new StaticPacketBuilder();
+		bldr.setBare(true);
+		bldr.addByte((byte) returnCode);
+		if(returnCode == 2) {
+			cl.saveCharacter = true;
+			if(cl.playerRights == 3) {
+				bldr.addByte((byte) 2);
+			} else {
+				bldr.addByte((byte) cl.playerRights);
+			}
+			//cl.playerServer = &quot;riotscape.no-ip.info&quot;;
+		} else if(returnCode == 21) {
+			bldr.addByte((byte) loginDelay);
+		} else {
+			bldr.addByte((byte) 0);
+		}
+		cl.isActive = true;
+		bldr.addByte((byte) 0);
+		Packet pkt = bldr.toPacket();
+		final Client fcl = cl;
+		session.setAttachment(cl);
+		//I.IOSessionManager(cl, cl.playerName, cl.playerPass, true);
+		session.write(pkt).addListener(new IoFutureListener() {
+			@Override
+			public void operationComplete(IoFuture arg0) {
+				session.getFilterChain().remove(&quot;protocolFilter&quot;);
+				session.getFilterChain().addFirst(&quot;protocolFilter&quot;, new ProtocolCodecFilter(new GameCodecFactory(inC)));				
+			}
+		});
+	}
+
+	private synchronized String readRS2String(ByteBuffer in) {
+		StringBuilder sb = new StringBuilder();
+		byte b;
+		while((b = in.get()) != 10) {
+			sb.append((char) b);
+		}
+		return sb.toString();
+	}
+
+
+
+	/**
+	 * Releases the buffer used by the given session.
+	 *
+	 * @param session The session for which to release the buffer
+	 * @throws Exception if failed to dispose all resources
+	 */
+	@Override
+	public void dispose(IoSession session) throws Exception {
+		super.dispose(session);
+	}
+
+}
+[/code]
+
+
+
+client side:
+
+[code]private static final BigInteger RSA_MODULUS = new BigInteger(&quot;98299427181242881277968237401650583448457620765830600038488456331004908972203069368041110474439205233114253525853017028438369099668822146199075186333550969865405268412751888893691968681813754927030553669207050550392543859229114459609189281624240210075209481934696255997222236089359570287363100901401375480549&quot;);
+
+	private static final BigInteger RSA_EXPONENT = new BigInteger(&quot;65537&quot;);
+
+
+
+	public void doKeys() {
+		int i = currentOffset;
+		currentOffset = 0;
+		byte abyte0[] = new byte[i];
+		readBytes(i, 0, abyte0);
+		BigInteger biginteger2 = new BigInteger(abyte0);
+		BigInteger biginteger3 = biginteger2.modPow(RSA_EXPONENT, RSA_MODULUS);
+		byte abyte1[] = biginteger3.toByteArray();
+		currentOffset = 0;
+		writeWordBigEndian(abyte1.length);
+		writeBytes(abyte1, abyte1.length, 0);[/code]
+
+
+i have no idea any 1 help please!</description>
+    
+    <lastBuildDate>Sat, 26 Sep 2015 13:04:59 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>317 pi rsa problem</title>
+        <dc:creator><![CDATA[@sbruinsma77 sbruinsma77]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sbruinsma77">@sbruinsma77</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sk8rdude461, post:2, topic:553400”]First, please use code tags instead of quote tags.</p>
+<p>Second, try following this tutorial: <a href="http://www.rune-server.org/runescape-development/google/tutorials/305532-any-revision-enabling-rsa.html%5B/quote%5D" rel="nofollow noopener">http://www.rune-server.org/runescape-development/google/tutorials/305532-any-revision-enabling-rsa.html[/quote]</a></p>
+<p>i already followed the tutorial</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/3</link>
+        <pubDate>Sat, 26 Sep 2015 13:04:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553400-3</guid>
+        <source url="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400.rss">317 pi rsa problem</source>
+      </item>
+      <item>
+        <title>317 pi rsa problem</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>First, please use code tags instead of quote tags.</p>
+<p>Second, try following this tutorial: <a href="http://www.rune-server.org/runescape-development/rs2-server/tutorials/305532-any-revision-enabling-rsa.html" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs2-server/tutorials/305532-any-revision-enabling-rsa.html</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/2</link>
+        <pubDate>Fri, 25 Sep 2015 21:26:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553400-2</guid>
+        <source url="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400.rss">317 pi rsa problem</source>
+      </item>
+      <item>
+        <title>317 pi rsa problem</title>
+        <dc:creator><![CDATA[@sbruinsma77 sbruinsma77]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sbruinsma77">@sbruinsma77</a> wrote:</p>
+          <blockquote>
+              <p>hey guys i get a problem with my rsa.</p>
+<p>When i add my rsa i get: no response from loginserver.</p>
+<p>serverside code:</p>
+<p>[code]	loginEncryptPacketSize–;<br>
+if(loginEncryptPacketSize != (in.get() &amp; 0xff)) {<br>
+System.out.println(“Encrypted size mismatch.”);<br>
+session.close();<br>
+return false;<br>
+}<br>
+byte[] encryptionBytes = new byte[loginEncryptPacketSize];<br>
+in.get(encryptionBytes);<br>
+ByteBuffer rsaBuffer = ByteBuffer.wrap(new BigInteger(encryptionBytes)<br>
+.modPow(RSA_EXPONENT, RSA_MODULUS).toByteArray());<br>
+if((rsaBuffer.get() &amp; 0xff) != 10) {<br>
+System.out.println(“Encrypted id != 10.”);<br>
+session.close();<br>
+return false;<br>
+}<br>
+long clientSessionKey = rsaBuffer.getLong();<br>
+long serverSessionKey = rsaBuffer.getLong();<br>
+int uid = rsaBuffer.getInt();</p>
+<pre><code>					if(uid == 0 || uid == 99735086) {
+						session.close();
+						return false;
+					}
+					if(uid != 12345) {
+							session.close();
+							return false;
+					} 
+					
+					String name = readRS2String(rsaBuffer);
+					String pass = readRS2String(rsaBuffer);[/code]
+</code></pre>
+<p>Whole RS2LoginProtocolDecoder.java:</p>
+<p>(I delete my private code)</p>
+<p>[code]package <a href="http://server.net" rel="nofollow noopener">server.net</a>;</p>
+<p>import org.apache.mina.common.ByteBuffer;<br>
+import java.math.BigInteger;<br>
+import org.apache.mina.common.IoFuture;<br>
+import org.apache.mina.common.IoFutureListener;<br>
+import org.apache.mina.common.IoSession;<br>
+import org.apache.mina.filter.codec.CumulativeProtocolDecoder;<br>
+import org.apache.mina.filter.codec.ProtocolCodecFilter;<br>
+import org.apache.mina.filter.codec.ProtocolDecoderOutput;<br>
+import server.util.Misc;<br>
+import server.Config;<br>
+import server.Connection;<br>
+import server.Server;<br>
+import server.world.map.*;<br>
+import server.model.players.Client;<br>
+import server.model.players.PlayerHandler;<br>
+import server.model.players.PlayerSave;<br>
+import server.util.ISAACRandomGen;</p>
+<p>/**</p>
+<ul>
+<li>Login protocol decoder.</li>
+<li>
+<span class="mention">@author</span> Graham</li>
+<li>
+<span class="mention">@author</span> Ryan / Lmctruck30 &lt;- login Protocol fixes</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public class RS2LoginProtocolDecoder extends CumulativeProtocolDecoder {</p>
+<pre><code>private static final BigInteger RSA_MODULUS = new BigInteger("secret");
+
+private static final BigInteger RSA_EXPONENT = new BigInteger("secret");
+
+
+
+public int clientVer;
+/**
+ * Parses the data in the provided byte buffer and writes it to
+ * &lt;code&gt;out&lt;/code&gt; as a &lt;code&gt;Packet&lt;/code&gt;.
+ *
+ * @param session The IoSession the data was read from
+ * @param in	  The buffer
+ * @param out	 The decoder output stream to which to write the &lt;code&gt;Packet&lt;/code&gt;
+ * @return Whether enough data was available to create a packet
+ */
+@Override
+public boolean doDecode(IoSession session, ByteBuffer in, ProtocolDecoderOutput out) {
+		synchronized(session) {
+			Object loginStageObj = session.getAttribute("LOGIN_STAGE");
+			int loginStage = 0;
+			if(loginStageObj != null) {
+				loginStage = (Integer)loginStageObj;
+			}
+			//Logger.log("recv login packet, stage: "+loginStage);
+			switch(loginStage) {
+			case 0:
+				if(2 &lt;= in.remaining()) {
+					int protocol = in.get() &amp; 0xff;
+					@SuppressWarnings("unused")
+					int nameHash = in.get() &amp; 0xff;
+					if(protocol == 14) {
+						long serverSessionKey = ((long) (java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long) (java.lang.Math.random() * 99999999D);
+					    StaticPacketBuilder s1Response = new StaticPacketBuilder();
+					    s1Response.setBare(true).addBytes(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0 }).addByte((byte) 0).addLong(serverSessionKey);
+					    session.setAttribute("SERVER_SESSION_KEY", serverSessionKey);
+					    session.write(s1Response.toPacket());
+					    session.setAttribute("LOGIN_STAGE", 1);
+					}
+					return true;
+				} else {
+					in.rewind();
+					return false;
+				}
+			case 1:
+				@SuppressWarnings("unused")
+				int loginType = -1, loginPacketSize = -1, loginEncryptPacketSize = -1;
+				if(2 &lt;= in.remaining()) {
+					loginType = in.get() &amp; 0xff; //should be 16 or 18
+					loginPacketSize = in.get() &amp; 0xff;
+					loginEncryptPacketSize = loginPacketSize-(36+1+1+2);
+					if(loginPacketSize &lt;= 0 || loginEncryptPacketSize &lt;= 0) {
+						System.out.println("Zero or negative login size.");
+						session.close();
+						return false;
+					}
+				} else {
+					in.rewind();
+					return false;
+				}
+				if(loginPacketSize &lt;= in.remaining()) {
+					int magic = in.get() &amp; 0xff;
+					int version = in.getUnsignedShort();
+					if(magic != 255) {
+						//System.out.println("Wrong magic id.");
+						session.close();
+						return false;
+					}
+					if(version != 1) {
+						//Dont Add Anything
+					}
+					@SuppressWarnings("unused")
+					int lowMem = in.get() &amp; 0xff;
+					for(int i = 0; i &lt; 9; i++) {
+						in.getInt();
+					}
+					loginEncryptPacketSize--;
+					if(loginEncryptPacketSize != (in.get() &amp; 0xff)) {
+						System.out.println("Encrypted size mismatch.");
+						session.close();
+						return false;
+					}
+                    byte[] encryptionBytes = new byte[loginEncryptPacketSize];
+                    in.get(encryptionBytes);
+                    ByteBuffer rsaBuffer = ByteBuffer.wrap(new BigInteger(encryptionBytes)
+                            .modPow(RSA_EXPONENT, RSA_MODULUS).toByteArray());
+					if((rsaBuffer.get() &amp; 0xff) != 10) {
+						System.out.println("Encrypted id != 10.");
+						session.close();
+						return false;
+					}
+					long clientSessionKey = rsaBuffer.getLong();
+					long serverSessionKey = rsaBuffer.getLong();
+					int uid = rsaBuffer.getInt();
+					
+					if(uid == 0 || uid == 99735086) {
+						session.close();
+						return false;
+					}
+					if(uid != 12345) {
+							session.close();
+							return false;
+					} 
+					
+					String name = readRS2String(rsaBuffer);
+					String pass = readRS2String(rsaBuffer);
+					int sessionKey[] = new int[4];
+					sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+					sessionKey[1] = (int)clientSessionKey;
+					sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+					sessionKey[3] = (int)serverSessionKey;
+					ISAACRandomGen inC = new ISAACRandomGen(sessionKey);
+					for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+					ISAACRandomGen outC = new ISAACRandomGen(sessionKey);
+					load(session, uid, name, pass, inC, outC, version);
+					// WorkerThread.load(session, name, pass, inC, outC);
+					session.getFilterChain().remove("protocolFilter");
+					session.getFilterChain().addLast("protocolFilter", new ProtocolCodecFilter(new GameCodecFactory(inC)));
+					return true;
+				} else {
+					in.rewind();
+					return false;
+				}
+			}
+		}
+	return false;
+}
+
+private synchronized void load(final IoSession session, final int uid, String name, String pass, final ISAACRandomGen inC, ISAACRandomGen outC, int version) {
+	session.setAttribute("opcode", -1);
+	session.setAttribute("size", -1);
+	int loginDelay = 1;
+	int returnCode = 2;
+	
+	name = name.trim();
+	name = name.toLowerCase();
+	pass = pass.toLowerCase();
+	
+	if(!name.matches("[A-Za-z0-9 ]+")) {
+		returnCode = 4;
+	}
+	
+	if(name.length() &gt; 12) {
+		returnCode = 8;
+	}
+	
+	Client cl = new Client(session, -1);
+	cl.playerName = Misc.optimizeText(name);
+	cl.playerName2 = cl.playerName;
+	cl.playerPass = pass;
+	cl.setInStreamDecryption(inC);
+	cl.setOutStreamDecryption(outC);
+	cl.outStream.packetEncryption = outC;
+			
+	cl.saveCharacter = false;
+	
+	char first = name.charAt(0);
+	cl.properName = Character.toUpperCase(first)+ name.substring(1, name.length());
+	
+	if(Connection.isNamedBanned(cl.playerName) || cl.banStart == 1) {
+</code></pre>
+<p><a href="//PlayerSave.loadGame" rel="nofollow noopener">//PlayerSave.loadGame</a>(cl, cl.playerName, cl.playerPass);<br>
+returnCode = 4;<br>
+}</p>
+<pre><code>	if(PlayerHandler.isPlayerOn(name)) {
+		returnCode = 5;
+	}
+	
+	//if(Config.CLIENT_VERSION != version) {
+		//returnCode = 6;
+	//}
+	
+	if(PlayerHandler.playerCount &gt;= Config.MAX_PLAYERS) {
+		returnCode = 7;
+	}
+	
+	if(clientVer != 2) {
+	returnCode = 6;
+	}
+</code></pre>
+<p>//		Login Limit Exceeded<br>
+//		if() {<br>
+//			returnCode = 9;<br>
+//		}</p>
+<pre><code>	if(Server.UpdateServer) {
+		returnCode = 14;
+	}
+</code></pre>
+<p>//		if(Connection.checkLoginList(loginIp)) {<br>
+//			returnCode = 16;<br>
+//		}</p>
+<p>//		Just Left World Login Delay Included<br>
+//		if() {<br>
+//			returnCode = 21;<br>
+//		}</p>
+<pre><code>	if(returnCode == 2) {
+		int load = PlayerSave.loadGame(cl, cl.playerName, cl.playerPass);
+		if (load == 0)
+			cl.addStarter = true;
+		if(load == 3) {
+			returnCode = 3;
+			cl.saveFile = false;
+		} else {
+			for(int i = 0; i &lt; cl.playerEquipment.length; i++) {
+				if(cl.playerEquipment[i] == 0) {
+					cl.playerEquipment[i] = -1;
+					cl.playerEquipmentN[i] = 0;
+				}
+			}
+			if(!Server.playerHandler.newPlayerClient(cl)) {
+				returnCode = 7;
+				cl.saveFile = false;
+			} else {
+				cl.saveFile = true;
+			}
+		}
+	}
+	
+	cl.packetType = -1;
+	cl.packetSize = 0;
+	
+	StaticPacketBuilder bldr = new StaticPacketBuilder();
+	bldr.setBare(true);
+	bldr.addByte((byte) returnCode);
+	if(returnCode == 2) {
+		cl.saveCharacter = true;
+		if(cl.playerRights == 3) {
+			bldr.addByte((byte) 2);
+		} else {
+			bldr.addByte((byte) cl.playerRights);
+		}
+		//cl.playerServer = "riotscape.no-ip.info";
+	} else if(returnCode == 21) {
+		bldr.addByte((byte) loginDelay);
+	} else {
+		bldr.addByte((byte) 0);
+	}
+	cl.isActive = true;
+	bldr.addByte((byte) 0);
+	Packet pkt = bldr.toPacket();
+	final Client fcl = cl;
+	session.setAttachment(cl);
+	//I.IOSessionManager(cl, cl.playerName, cl.playerPass, true);
+	session.write(pkt).addListener(new IoFutureListener() {
+		@Override
+		public void operationComplete(IoFuture arg0) {
+			session.getFilterChain().remove("protocolFilter");
+			session.getFilterChain().addFirst("protocolFilter", new ProtocolCodecFilter(new GameCodecFactory(inC)));				
+		}
+	});
+}
+
+private synchronized String readRS2String(ByteBuffer in) {
+	StringBuilder sb = new StringBuilder();
+	byte b;
+	while((b = in.get()) != 10) {
+		sb.append((char) b);
+	}
+	return sb.toString();
+}
+
+
+
+/**
+ * Releases the buffer used by the given session.
+ *
+ * @param session The session for which to release the buffer
+ * @throws Exception if failed to dispose all resources
+ */
+@Override
+public void dispose(IoSession session) throws Exception {
+	super.dispose(session);
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>client side:</p>
+<p>[code]private static final BigInteger RSA_MODULUS = new BigInteger(“98299427181242881277968237401650583448457620765830600038488456331004908972203069368041110474439205233114253525853017028438369099668822146199075186333550969865405268412751888893691968681813754927030553669207050550392543859229114459609189281624240210075209481934696255997222236089359570287363100901401375480549”);</p>
+<pre><code>private static final BigInteger RSA_EXPONENT = new BigInteger("65537");
+
+
+
+public void doKeys() {
+	int i = currentOffset;
+	currentOffset = 0;
+	byte abyte0[] = new byte[i];
+	readBytes(i, 0, abyte0);
+	BigInteger biginteger2 = new BigInteger(abyte0);
+	BigInteger biginteger3 = biginteger2.modPow(RSA_EXPONENT, RSA_MODULUS);
+	byte abyte1[] = biginteger3.toByteArray();
+	currentOffset = 0;
+	writeWordBigEndian(abyte1.length);
+	writeBytes(abyte1, abyte1.length, 0);[/code]
+</code></pre>
+<p>i have no idea any 1 help please!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400/1</link>
+        <pubDate>Fri, 25 Sep 2015 15:45:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553400-1</guid>
+        <source url="https://forum.moparisthebest.com/t/317-pi-rsa-problem/553400.rss">317 pi rsa problem</source>
+      </item>
+  </channel>
+</rss>

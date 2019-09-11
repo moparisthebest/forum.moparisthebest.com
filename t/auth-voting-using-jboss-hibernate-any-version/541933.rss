@@ -1,0 +1,671 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Auth Voting using JBoss Hibernate [Any Version]</title>
+    <link>https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933</link>
+    <description>This tutorial is to show you how to use [url=http://hibernate.org/]JBoss Hibernate [/url] and I&#39;m going to be using &#39;auth&#39; voting as an example. The reason I&#39;m basing this around authentication keys is because I&#39;ve seen many people wanting that sort of system. 
+
+The idea was based around Stuarts work.
+
+[hr]
+
+[size=12pt][u]Server Sided[/u][/size]
+You are going to need to include the [b]Hibernate Libraries[/b] which can be downloaded at http://hibernate.org/orm/downloads/ The version this tutorial is using was [i]4.3.5 Final[/i] because that was the current version at the time. You will also need the MySQL connector libraries. 
+
+Once you have downloaded that, you need to add them to your project. If you don&#39;t know how to a quick Google search should help you.
+
+As soon as that is all downloaded at setup to be used, you will need to add a few classes and files to your server to get the voting system working.
+
+[HibernateUtil.java]
+[code=java]
+import org.hibernate.SessionFactory;
+import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+import org.hibernate.cfg.Configuration;
+import org.hibernate.service.ServiceRegistry;
+
+public final class HibernateUtil {
+	private static SessionFactory sessionFactory = buildSessionFactory();
+	private static ServiceRegistry serviceRegistry;
+
+	private static SessionFactory buildSessionFactory() {
+		Configuration configuration = new Configuration();
+		configuration.configure();
+		serviceRegistry = new StandardServiceRegistryBuilder().applySettings(configuration.getProperties()).build();
+		sessionFactory = configuration.buildSessionFactory(serviceRegistry);
+		return sessionFactory;
+	}
+
+	public static SessionFactory getSessionFactory() {
+		return sessionFactory;
+	}
+}
+[/code]
+
+HibernateUtil is a helper class that works as a bridge to allow you to access the needed methods/features of hibernate for our vote system to work.
+
+
+[Vote.java]
+[code=java]
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.Table;
+
+@Entity
+@Table(name = &quot;vote&quot;)
+public class Vote {
+	private long id;
+	
+	@Column(name = &quot;username&quot;, updatable = false)
+	private String username;
+	
+	@Column(name = &quot;auth&quot;, updatable = false)
+	private String auth;
+	
+	@Column(name = &quot;claimed&quot;)
+	private int claimed = 0;
+	
+	@Id
+	@Column(name = &quot;id&quot;)
+	public long getId() {
+		return id;
+	}
+	
+	public void setId(long id) {
+		this.id = id;
+	}
+	
+	public String getUsername() {
+		return username;
+	}
+	
+	public String setUsername(String username) {
+		return this.username = username;
+	}
+	
+	public String getAuth() {
+		return auth;
+	}
+	
+	public String setAuth(String auth) {
+		return this.auth = auth;
+	}
+	
+	public int getClaimed() {
+		return claimed;
+	}
+	
+	public int setClaimed(int claimed) {
+		return this.claimed = claimed;
+	}
+
+	public void claim() {
+		this.claimed = 1;
+                //rewards etc., can go here.
+	}
+	
+}
+[/code]
+
+The vote class is a [b]mapping[/b] class that allows you to select the table that the vote will be using and the tables colums and fields that correspond to the data we have. A better way to explain this is if you look at:
+[code=java]
+@Column(name = &quot;username&quot;, updatable = false)
+private String username;
+[/code]
+What that does is sets the username variable to the username column which is in the mysql database.
+
+
+
+[VoteHandler.java]
+[code=java]
+import java.util.Iterator;
+
+import org.hibernate.Query;
+import org.hibernate.Session;
+
+import com.vote.util.HibernateUtil;
+
+public class VoteHandler {
+	private Player player;
+	
+	public VoteHandler(Player player) {
+		this.player = player;
+	}
+	
+	public void claimVote() {
+		Session session = HibernateUtil.getSessionFactory().openSession();
+		session.beginTransaction();
+
+		try {
+			Query query = session.createQuery(&quot;FROM Vote WHERE username=:name AND claimed=0&quot;);
+			query.setParameter(&quot;name&quot;, player.getUsername());
+			Iterator&lt;?&gt; votes = query.iterate();
+
+			while(votes.hasNext()) {
+				Vote vote = (Vote) votes.next();
+				vote.claim();
+				session.update(vote);
+			}
+		} finally {
+			session.getTransaction().commit();
+		}
+	}
+	
+	public boolean checkVote(String auth) {
+		Session session = HibernateUtil.getSessionFactory().openSession();
+		session.beginTransaction();
+		try {
+			Query query = session.createQuery(&quot;FROM Vote WHERE username=:name AND auth=:auth AND claimed=0&quot;);
+			query.setParameter(&quot;name&quot;, player.getUsername());
+			query.setParameter(&quot;auth&quot;, auth);
+			return query.iterate().hasNext();
+		} finally {
+			session.getTransaction().commit();
+		}
+	}
+	
+}
+[/code]
+VoteHandler is used to handle checking and claiming the vote. The checkVote(String auth) does the simple job of searching the database for the user and then checks if the auth entered matches the one in the database. The claimVote() method updates the database and calls the claim() method in Vote.java which is used to claim the vote.
+
+Back to Vote.java - The claim() method sets int claimed to 1, which will also update in the database so when session.update(vote) in the claimVote() method is called it will update the values.
+
+
+All you have left to do is create a command or process that will take the users input and execute the methods.
+An example of how a command may look like in your server may be:
+[code=java]
+if (args[0].contains(&quot;auth&quot;) {
+    String auth = args[1].toLowerCase(); //the auth in the database shouldn&#39;t have any uppercase letters
+    if (player.getVoteHandler().checkVote(auth)) {
+       player.getVoteHandler().claimVote();
+    } else {
+        player.sendMessage(&quot;There was an error with claiming your vote. Please check your auth and try again.&quot;);
+    }
+}
+[/code]
+
+Now you just need to initlize the VoteHandler which can be done by adding the following in your Player class.
+[code=java]
+VoteHandler handler = new VoteHandler(this);
+[/code]
+
+
+The last thing you need to do is add [b]hibernate.cfg.xml[/b] (maybe in the bin directory) - It is for Hibernate to locate the mapping files, find out the database information (name, host etc), and other techy things that you don&#39;t need to worry about. 
+
+Just modify the file according to your preferences. 
+
+[code=xml]
+&lt;?xml version=&#39;1.0&#39; encoding=&#39;utf-8&#39;?&gt;
+&lt;!DOCTYPE hibernate-configuration PUBLIC
+		&quot;-//Hibernate/Hibernate Configuration DTD 3.0//EN&quot;
+        &quot;http://hibernate.sourceforge.net/hibernate-configuration-3.0.dtd&quot;&gt;
+
+&lt;hibernate-configuration&gt;
+
+	&lt;session-factory&gt;
+		&lt;!-- Database connection settings --&gt;
+		&lt;property name=&quot;connection.driver_class&quot;&gt;com.mysql.jdbc.Driver&lt;/property&gt;
+		&lt;property name=&quot;connection.url&quot;&gt;jdbc:mysql://localhost/hibernate&lt;/property&gt;
+
+		&lt;property name=&quot;connection.username&quot;&gt;root&lt;/property&gt;
+		&lt;property name=&quot;connection.password&quot;&gt;&lt;/property&gt;
+
+		&lt;!-- JDBC connection pool (use the built-in) --&gt;
+		&lt;!-- &lt;property name=&quot;connection.pool_size&quot;&gt;1&lt;/property&gt; --&gt;
+
+		&lt;!-- SQL dialect --&gt;
+		&lt;property name=&quot;dialect&quot;&gt;org.hibernate.dialect.MySQLDialect&lt;/property&gt;
+
+		&lt;!-- Enable Hibernate&#39;s automatic session context management --&gt;
+		&lt;property name=&quot;current_session_context_class&quot;&gt;thread&lt;/property&gt;
+
+		&lt;!-- Disable the second-level cache --&gt;
+		&lt;property name=&quot;cache.provider_class&quot;&gt;org.hibernate.cache.NoCacheProvider&lt;/property&gt;
+
+		&lt;!-- Echo all executed SQL to stdout --&gt;
+		&lt;property name=&quot;show_sql&quot;&gt;false&lt;/property&gt;
+
+		&lt;!-- Drop and re-create the database schema on startup --&gt;
+		&lt;property name=&quot;hbm2ddl.auto&quot;&gt;update&lt;/property&gt;
+
+		&lt;!-- Path to Mapping files --&gt;
+		&lt;mapping class=&quot;com.vote.Vote&quot; /&gt;
+
+	&lt;/session-factory&gt;
+
+&lt;/hibernate-configuration&gt;
+[/code]
+
+
+That&#39;s all for the server sided stuff!
+
+[hr]
+
+[size=12pt]Website[/size]
+
+[vote.php]
+[code=php]
+&lt;?php
+	$conn = mysql_connect(&quot;localhost&quot;, &quot;user&quot;, &quot;password&quot;) or die (mysql_error());
+	mysql_select_db(&quot;database&quot;, $conn);
+	
+	function grabIP() {
+		foreach (array(&#39;HTTP_CLIENT_IP&#39;, &#39;HTTP_X_FORWARDED_FOR&#39;, &#39;HTTP_X_FORWARDED&#39;, &#39;HTTP_X_CLUSTER_CLIENT_IP&#39;, &#39;HTTP_FORWARDED_FOR&#39;, &#39;HTTP_FORWARDED&#39;, &#39;REMOTE_ADDR&#39;) as $key){
+			if (array_key_exists($key, $_SERVER) === true) {
+				foreach (explode(&#39;,&#39;, $_SERVER[$key]) as $ip){
+					$ip = trim($ip);
+					if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+						return $ip;
+					}
+				}
+			}
+		}
+	}
+	
+	function generateAuth() {
+		return substr(sha1(mt_rand()), 0, 5);
+	}
+	
+	if(isset($_POST[&#39;username&#39;])) {
+		$username = $_POST[&quot;username&quot;];
+		$auth = generateAuth();
+		$ip = grabIP();
+		mysql_query(&quot;INSERT INTO vote (username, auth, ip) VALUES (&#39;$username&#39;, &#39;$auth&#39;, &#39;$ip&#39;)&quot;, $conn);
+		
+		session_start();
+		$_SESSION[&#39;username&#39;] = $username;
+		$_SESSION[&#39;auth&#39;] = $auth;
+		
+		header(&quot;Location: success.php&quot;);
+	}
+
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+	&lt;head&gt;
+		&lt;meta charset=&quot;utf-8&quot;&gt;
+		&lt;meta http-equiv=&quot;X-UA-Compatible&quot; content=&quot;IE=edge&quot;&gt;
+		&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+		&lt;title&gt;Auth Voting&lt;/title&gt;
+	&lt;/head&gt;
+	&lt;body&gt;
+		&lt;form method=&quot;post&quot;&gt;
+			&lt;input type=&quot;text&quot; name=&quot;username&quot; id=&quot;username&quot; /&gt;
+			&lt;input type=&quot;submit&quot; value=&quot;Enter&quot; name=&quot;submit&quot; id=&quot;submit&quot; /&gt;
+		&lt;/form&gt;
+	&lt;/body&gt;
+&lt;/html&gt;
+[/code]
+
+[success.php]
+[code=php]
+&lt;?php
+	session_start();
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+	&lt;head&gt;
+		&lt;meta charset=&quot;utf-8&quot;&gt;
+		&lt;meta http-equiv=&quot;X-UA-Compatible&quot; content=&quot;IE=edge&quot;&gt;
+		&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+		&lt;title&gt;Auth Voting&lt;/title&gt;
+	&lt;/head&gt;
+	&lt;body&gt;
+		Thank you for voting! 
+		&lt;br&gt;
+		&lt;?php 
+			echo $_SESSION[&#39;username&#39;] . &quot; your auth is &quot; . $_SESSION[&#39;auth&#39;];
+		?&gt;
+		&lt;br&gt;
+	&lt;/body&gt;
+&lt;/html&gt;
+[/code]
+
+Some may argue that the code here is not brilliant, this is because of my minimal knowledge of PHP. Feel free to change it to what best suits you.
+
+You&#39;re going to need to create a database. 
+The query you are going to need is:
+[code=sql]
+CREATE TABLE IF NOT EXISTS `vote` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `username` text NOT NULL,
+  `auth` text NOT NULL,
+  `ip` text NOT NULL,
+  `claimed` int(11) NOT NULL DEFAULT &#39;0&#39;,
+  PRIMARY KEY (`id`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;
+[/code]
+
+
+And that&#39;s it!
+
+[hr]
+
+Note: The website sided code is just a skeleton so that you can implement it into an existing vote system. If you are looking for callbacks etc., there are other systems out there and implementing my system will not be hard assuming you know what you are doing.
+
+
+If you have any questions, just ask.
+Enjoy.</description>
+    
+    <lastBuildDate>Sat, 12 Apr 2014 19:33:01 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Auth Voting using JBoss Hibernate [Any Version]</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>change the title to “VOTE4CASH [PI] [EASY SETUP]” if you want comments</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933/2</link>
+        <pubDate>Sat, 12 Apr 2014 19:33:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541933-2</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933.rss">Auth Voting using JBoss Hibernate [Any Version]</source>
+      </item>
+      <item>
+        <title>Auth Voting using JBoss Hibernate [Any Version]</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>This tutorial is to show you how to use <a href="http://hibernate.org/" data-bbcode="true" rel="nofollow noopener">JBoss Hibernate </a> and I’m going to be using ‘auth’ voting as an example. The reason I’m basing this around authentication keys is because I’ve seen many people wanting that sort of system.</p>
+<p>The idea was based around Stuarts work.</p>
+<p>[hr]</p>
+<p>[size=12pt]<span class="bbcode-u">Server Sided</span>[/size]<br>
+You are going to need to include the <span class="bbcode-b">Hibernate Libraries</span> which can be downloaded at <a href="http://hibernate.org/orm/downloads/" rel="nofollow noopener">http://hibernate.org/orm/downloads/</a> The version this tutorial is using was <span class="bbcode-i">4.3.5 Final</span> because that was the current version at the time. You will also need the MySQL connector libraries.</p>
+<p>Once you have downloaded that, you need to add them to your project. If you don’t know how to a quick Google search should help you.</p>
+<p>As soon as that is all downloaded at setup to be used, you will need to add a few classes and files to your server to get the voting system working.</p>
+<p>[HibernateUtil.java]</p>
+<pre><code class="lang-auto">import org.hibernate.SessionFactory;
+import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+import org.hibernate.cfg.Configuration;
+import org.hibernate.service.ServiceRegistry;
+
+public final class HibernateUtil {
+	private static SessionFactory sessionFactory = buildSessionFactory();
+	private static ServiceRegistry serviceRegistry;
+
+	private static SessionFactory buildSessionFactory() {
+		Configuration configuration = new Configuration();
+		configuration.configure();
+		serviceRegistry = new StandardServiceRegistryBuilder().applySettings(configuration.getProperties()).build();
+		sessionFactory = configuration.buildSessionFactory(serviceRegistry);
+		return sessionFactory;
+	}
+
+	public static SessionFactory getSessionFactory() {
+		return sessionFactory;
+	}
+}</code></pre>
+<p>HibernateUtil is a helper class that works as a bridge to allow you to access the needed methods/features of hibernate for our vote system to work.</p>
+<p>[Vote.java]</p>
+<pre><code class="lang-auto">import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.Table;
+
+@Entity
+@Table(name = "vote")
+public class Vote {
+	private long id;
+	
+	@Column(name = "username", updatable = false)
+	private String username;
+	
+	@Column(name = "auth", updatable = false)
+	private String auth;
+	
+	@Column(name = "claimed")
+	private int claimed = 0;
+	
+	@Id
+	@Column(name = "id")
+	public long getId() {
+		return id;
+	}
+	
+	public void setId(long id) {
+		this.id = id;
+	}
+	
+	public String getUsername() {
+		return username;
+	}
+	
+	public String setUsername(String username) {
+		return this.username = username;
+	}
+	
+	public String getAuth() {
+		return auth;
+	}
+	
+	public String setAuth(String auth) {
+		return this.auth = auth;
+	}
+	
+	public int getClaimed() {
+		return claimed;
+	}
+	
+	public int setClaimed(int claimed) {
+		return this.claimed = claimed;
+	}
+
+	public void claim() {
+		this.claimed = 1;
+                //rewards etc., can go here.
+	}
+	
+}</code></pre>
+<p>The vote class is a <span class="bbcode-b">mapping</span> class that allows you to select the table that the vote will be using and the tables colums and fields that correspond to the data we have. A better way to explain this is if you look at:</p>
+<pre><code class="lang-auto">@Column(name = "username", updatable = false)
+private String username;</code></pre>
+<p>What that does is sets the username variable to the username column which is in the mysql database.</p>
+<p>[VoteHandler.java]</p>
+<pre><code class="lang-auto">import java.util.Iterator;
+
+import org.hibernate.Query;
+import org.hibernate.Session;
+
+import com.vote.util.HibernateUtil;
+
+public class VoteHandler {
+	private Player player;
+	
+	public VoteHandler(Player player) {
+		this.player = player;
+	}
+	
+	public void claimVote() {
+		Session session = HibernateUtil.getSessionFactory().openSession();
+		session.beginTransaction();
+
+		try {
+			Query query = session.createQuery("FROM Vote WHERE username=:name AND claimed=0");
+			query.setParameter("name", player.getUsername());
+			Iterator&lt;?&gt; votes = query.iterate();
+
+			while(votes.hasNext()) {
+				Vote vote = (Vote) votes.next();
+				vote.claim();
+				session.update(vote);
+			}
+		} finally {
+			session.getTransaction().commit();
+		}
+	}
+	
+	public boolean checkVote(String auth) {
+		Session session = HibernateUtil.getSessionFactory().openSession();
+		session.beginTransaction();
+		try {
+			Query query = session.createQuery("FROM Vote WHERE username=:name AND auth=:auth AND claimed=0");
+			query.setParameter("name", player.getUsername());
+			query.setParameter("auth", auth);
+			return query.iterate().hasNext();
+		} finally {
+			session.getTransaction().commit();
+		}
+	}
+	
+}</code></pre>
+<p>VoteHandler is used to handle checking and claiming the vote. The checkVote(String auth) does the simple job of searching the database for the user and then checks if the auth entered matches the one in the database. The claimVote() method updates the database and calls the claim() method in Vote.java which is used to claim the vote.</p>
+<p>Back to Vote.java - The claim() method sets int claimed to 1, which will also update in the database so when session.update(vote) in the claimVote() method is called it will update the values.</p>
+<p>All you have left to do is create a command or process that will take the users input and execute the methods.<br>
+An example of how a command may look like in your server may be:</p>
+<pre><code class="lang-auto">if (args[0].contains("auth") {
+    String auth = args[1].toLowerCase(); //the auth in the database shouldn't have any uppercase letters
+    if (player.getVoteHandler().checkVote(auth)) {
+       player.getVoteHandler().claimVote();
+    } else {
+        player.sendMessage("There was an error with claiming your vote. Please check your auth and try again.");
+    }
+}</code></pre>
+<p>Now you just need to initlize the VoteHandler which can be done by adding the following in your Player class.</p>
+<pre><code class="lang-auto">VoteHandler handler = new VoteHandler(this);</code></pre>
+<p>The last thing you need to do is add <span class="bbcode-b">hibernate.cfg.xml</span> (maybe in the bin directory) - It is for Hibernate to locate the mapping files, find out the database information (name, host etc), and other techy things that you don’t need to worry about.</p>
+<p>Just modify the file according to your preferences.</p>
+<pre><code class="lang-auto">&lt;?xml version='1.0' encoding='utf-8'?&gt;
+&lt;!DOCTYPE hibernate-configuration PUBLIC
+		"-//Hibernate/Hibernate Configuration DTD 3.0//EN"
+        "http://hibernate.sourceforge.net/hibernate-configuration-3.0.dtd"&gt;
+
+&lt;hibernate-configuration&gt;
+
+	&lt;session-factory&gt;
+		&lt;!-- Database connection settings --&gt;
+		&lt;property name="connection.driver_class"&gt;com.mysql.jdbc.Driver&lt;/property&gt;
+		&lt;property name="connection.url"&gt;jdbc:mysql://localhost/hibernate&lt;/property&gt;
+
+		&lt;property name="connection.username"&gt;root&lt;/property&gt;
+		&lt;property name="connection.password"&gt;&lt;/property&gt;
+
+		&lt;!-- JDBC connection pool (use the built-in) --&gt;
+		&lt;!-- &lt;property name="connection.pool_size"&gt;1&lt;/property&gt; --&gt;
+
+		&lt;!-- SQL dialect --&gt;
+		&lt;property name="dialect"&gt;org.hibernate.dialect.MySQLDialect&lt;/property&gt;
+
+		&lt;!-- Enable Hibernate's automatic session context management --&gt;
+		&lt;property name="current_session_context_class"&gt;thread&lt;/property&gt;
+
+		&lt;!-- Disable the second-level cache --&gt;
+		&lt;property name="cache.provider_class"&gt;org.hibernate.cache.NoCacheProvider&lt;/property&gt;
+
+		&lt;!-- Echo all executed SQL to stdout --&gt;
+		&lt;property name="show_sql"&gt;false&lt;/property&gt;
+
+		&lt;!-- Drop and re-create the database schema on startup --&gt;
+		&lt;property name="hbm2ddl.auto"&gt;update&lt;/property&gt;
+
+		&lt;!-- Path to Mapping files --&gt;
+		&lt;mapping class="com.vote.Vote" /&gt;
+
+	&lt;/session-factory&gt;
+
+&lt;/hibernate-configuration&gt;</code></pre>
+<p>That’s all for the server sided stuff!</p>
+<p>[hr]</p>
+<p>[size=12pt]Website[/size]</p>
+<p>[vote.php]</p>
+<pre><code class="lang-auto">&lt;?php
+	$conn = mysql_connect("localhost", "user", "password") or die (mysql_error());
+	mysql_select_db("database", $conn);
+	
+	function grabIP() {
+		foreach (array('HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 'REMOTE_ADDR') as $key){
+			if (array_key_exists($key, $_SERVER) === true) {
+				foreach (explode(',', $_SERVER[$key]) as $ip){
+					$ip = trim($ip);
+					if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+						return $ip;
+					}
+				}
+			}
+		}
+	}
+	
+	function generateAuth() {
+		return substr(sha1(mt_rand()), 0, 5);
+	}
+	
+	if(isset($_POST['username'])) {
+		$username = $_POST["username"];
+		$auth = generateAuth();
+		$ip = grabIP();
+		mysql_query("INSERT INTO vote (username, auth, ip) VALUES ('$username', '$auth', '$ip')", $conn);
+		
+		session_start();
+		$_SESSION['username'] = $username;
+		$_SESSION['auth'] = $auth;
+		
+		header("Location: success.php");
+	}
+
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+	&lt;head&gt;
+		&lt;meta charset="utf-8"&gt;
+		&lt;meta http-equiv="X-UA-Compatible" content="IE=edge"&gt;
+		&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+		&lt;title&gt;Auth Voting&lt;/title&gt;
+	&lt;/head&gt;
+	&lt;body&gt;
+		&lt;form method="post"&gt;
+			&lt;input type="text" name="username" id="username" /&gt;
+			&lt;input type="submit" value="Enter" name="submit" id="submit" /&gt;
+		&lt;/form&gt;
+	&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+<p>[success.php]</p>
+<pre><code class="lang-auto">&lt;?php
+	session_start();
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+	&lt;head&gt;
+		&lt;meta charset="utf-8"&gt;
+		&lt;meta http-equiv="X-UA-Compatible" content="IE=edge"&gt;
+		&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+		&lt;title&gt;Auth Voting&lt;/title&gt;
+	&lt;/head&gt;
+	&lt;body&gt;
+		Thank you for voting! 
+		&lt;br&gt;
+		&lt;?php 
+			echo $_SESSION['username'] . " your auth is " . $_SESSION['auth'];
+		?&gt;
+		&lt;br&gt;
+	&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+<p>Some may argue that the code here is not brilliant, this is because of my minimal knowledge of PHP. Feel free to change it to what best suits you.</p>
+<p>You’re going to need to create a database.<br>
+The query you are going to need is:</p>
+<pre><code class="lang-auto">CREATE TABLE IF NOT EXISTS `vote` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `username` text NOT NULL,
+  `auth` text NOT NULL,
+  `ip` text NOT NULL,
+  `claimed` int(11) NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;</code></pre>
+<p>And that’s it!</p>
+<p>[hr]</p>
+<p>Note: The website sided code is just a skeleton so that you can implement it into an existing vote system. If you are looking for callbacks etc., there are other systems out there and implementing my system will not be hard assuming you know what you are doing.</p>
+<p>If you have any questions, just ask.<br>
+Enjoy.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933/1</link>
+        <pubDate>Sun, 06 Apr 2014 16:03:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-541933-1</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-using-jboss-hibernate-any-version/541933.rss">Auth Voting using JBoss Hibernate [Any Version]</source>
+      </item>
+  </channel>
+</rss>

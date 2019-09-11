@@ -1,0 +1,713 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI]dungeoneering minigame</title>
+    <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914</link>
+    <description>Well this is sort-of a project type thing in development, but i decided to just let the idea out there for people to complete this as i am basically done with RSPS related shit. 
+The Idea: So basically this is just like castle wars and what not. There are 2 teams (red &amp; blue). Each team scores a point when they kill a boss and each member of the team enters the portal (under a certain amount of time). So an example: Red team kills blue teams boss, but now everyone of the members on the red team must now enter the portal (the blue team can attack/stop them while they are trieng to enter the portal) and they have a set time limit of 60 seconds(1 minute). If all of the team enter&#39;s the portal then they score a point. 10 points is auto-win, and if it is a auto-win then they earn double the points they normally would from winning a match normally. 
+
+Also please note this is nowhere near finished, i will eventually update this thread finishing/adding to this. And another thing; I am willing to take idea&#39;s for this as i sort of ran out while working on the objects
+so anyways here we go make a new class called dungeoneering.
+and add this;
+[code]package server.model.minigames;
+
+
+import java.util.ArrayList;
+
+import server.Server;
+import server.model.players.Client;
+import server.util.Misc;
+
+	/**
+ 	 * author Mts
+	 **/
+public class Dungeoneering {
+	
+	private DungeoneeringObjects do = new DungeoneeringObjects();
+        private DungeoneeringNpcs dn = new DungeoneeringNpcs();
+	
+	public Dungeoneering() {
+		/**
+		* Constructor
+		*/
+	}
+	
+	public ArrayList&lt;Integer&gt; red = new ArrayList&lt;Integer&gt; (); //team 1 south
+	public ArrayList&lt;Integer&gt; blue = new ArrayList&lt;Integer&gt; (); //team 2 north
+	public ArrayList&lt;Integer&gt; redWait = new ArrayList&lt;Integer&gt; (); //team 1 south
+	public ArrayList&lt;Integer&gt; blueWait = new ArrayList&lt;Integer&gt; (); //team 2 north
+	public int redScore = 0;
+	public int blueScore = 0;
+	public int portalPoints = 0;
+	public int floorLevel = 0;
+	public boolean blueBossSafe = true;
+	public boolean redBossSafe = true;
+	public boolean portalUsed = false;
+	private final int GAME_TIMER = 200; //1500 * 600 = 900000ms = 15 minutes
+	private final int GAME_START_TIMER = 20;	
+	public int timeRemaining = -1;
+	public int gameStartTimer = GAME_START_TIMER;
+	
+
+	public void joinWait(Client c, int team) {
+		if (c.playerEquipment[c.playerHat] &gt; 0 || c.playerEquipment[c.playerCape] &gt; 0 || c.playerEquipment[c.playerWeapon] &gt; 0) {
+			c.sendMessage(&quot;You may not wear any armor into dungeoneering.&quot;);
+			return;
+		}
+		if (team == 1) {
+			if (blueWait.size() &gt; redWait.size()) {
+				c.sendMessage(&quot;This team is currently full.&quot;);
+				return;
+			} else {
+				blueWait.add(c.playerId);
+				c.castleWarsTeam = 1;
+			}
+		} else if (team == 2) {
+			if (redWait.size() &gt; redWait.size()) {
+				c.sendMessage(&quot;This team is currently full.&quot;);
+				return;
+			} else {
+				redWait.add(c.playerId);
+				c.dungeoneeringTeam = 2;
+			}
+		} else {
+			if (redWait.size() &gt; redWait.size()) {
+				redWait.add(c.playerId);
+				c.sendMessage(&quot;You have been added to the Red team.&quot;);
+				c.dungeoneeringTeam = 1;
+			} else {
+				redWait.add(c.playerId);
+				c.sendMessage(&quot;You have been added to the red team.&quot;);
+				c.dungeoneeringTeam = 2;
+			}
+		}
+		toWaitingRoom(c, c.dungeoneeringTeam);
+	}
+
+	public void toWaitingRoom(Client c, int team) {
+		if (team == 1) {
+			c.getPA().movePlayer(2377 + Misc.random(10), 9485 + Misc.random(5),0);
+		} else if (team == 2) {
+			c.getPA().movePlayer(2417 + Misc.random(10), 9485 + Misc.random(7),0);
+		}
+		c.inDoWait = true;
+	}
+	
+	public void leaveWaitingRoom(Client c) {
+		c.inCwWait = false;
+		c.getPA().movePlayer(2439 + Misc.random(4), 3085 + Misc.random(5), 0);
+		if (c.dungeoneeringTeam == 1) {
+			blueWait.remove(blue.indexOf(c.playerId));
+			c.castleWarsTeam = -1;
+		} else if (c.castleWarsTeam == 2) {
+			redWait.remove(red.indexOf(c.playerId));
+			c.dungeoneeringTeam = -1;
+		}			
+	}
+	
+	
+	int properTimer = 0;
+	public void process() {
+		if (properTimer &gt; 0) {
+			properTimer--;
+			return;
+		} else {
+			properTimer = 4;
+		}
+			
+		if (gameStartTimer &gt; 0) {
+			gameStartTimer--;
+			updatePlayers();
+		} else if (gameStartTimer == 0) {
+			startGame();
+		}
+		if (timeRemaining &gt; 0) {
+			timeRemaining--;
+			updateInGamePlayers();
+		} else if (timeRemaining == 0) {
+			endGame();
+		}
+		/** 
+		* The process of the dungeoneering team - called every 3 seconds
+		* Thank you sanity
+		*/
+	}
+	
+	public void updatePlayers() {
+		//Blue team players
+		for (int player : blueWait) {
+			if (Server.playerHandler.players[player] != null) {
+				Client c = (Client) Server.playerHandler.players[player];
+				c.getPA().walkableInterface(6673);
+				c.getPA().sendFrame126(&quot;Next Game Begins In : &quot; + ((gameStartTimer * 3) + (timeRemaining * 3)) + &quot; seconds.&quot;, 6570);
+				c.getPA().sendFrame126(&quot;&quot;, 6572);
+				c.getPA().sendFrame126(&quot;&quot;, 6664);
+			//update interface here
+			} else {
+				blueWait.remove(blueWait.indexOf(player));
+			}
+		}
+		for (int player : redWait) {
+			if (Server.playerHandler.players[player] != null) {
+				Client c = (Client) Server.playerHandler.players[player];
+				c.getPA().walkableInterface(6673);
+				c.getPA().sendFrame126(&quot;Next Game Begins In : &quot; + gameStartTimer * 3 + &quot; seconds.&quot;, 6570);
+				c.getPA().sendFrame126(&quot;&quot;, 6572);
+				c.getPA().sendFrame126(&quot;&quot;, 6664);
+			//update interface here
+			} else {
+				redWait.remove(redWait.indexOf(player));
+			}
+		}
+	}
+	
+	public void updateInGamePlayers() {
+		if (blue.size() &gt; 0) {
+			for (int player : blue) {
+				if (Server.playerHandler.players[player] != null) {
+					Client c = (Client) Server.playerHandler.players[player];
+					c.getPA().walkableInterface(11146);
+					c.getPA().sendFrame126(blueScore + &quot; = Blue&quot;, 11148);
+					c.getPA().sendFrame126(&quot;red = &quot; + redScore, 11147);
+					c.getPA().sendFrame126(gameStartTimer * 3 + &quot; secs&quot;, 11155);
+					c.getPA().sendFrame126(&quot;&quot;, 11158);
+					c.getPA().sendFrame126(&quot;&quot;, 11160);
+					c.getPA().sendFrame126(&quot;&quot;, 11162);
+					c.getPA().sendFrame126(&quot;&quot;, 11164);
+					c.getPA().sendFrame126(&quot;&quot;, 11168);
+					if (blueBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11166);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Killed&quot;, 11166);
+					}
+					if (redBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11167);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Killed&quot;, 11167);
+					}
+				//update interface here
+				} else {
+					blue.remove(blue.indexOf(player));
+				}
+			
+			}
+		}
+		if (red.size() &gt; 0) {
+			for (int player : red) {
+				if (Server.playerHandler.players[player] != null) {
+					Client c = (Client) Server.playerHandler.players[player];
+					c.getPA().walkableInterface(11146);
+					c.getPA().sendFrame126(blueScore + &quot; = Blue&quot;, 11148);
+					c.getPA().sendFrame126(&quot;Red = &quot; + redScore, 11147);
+					c.getPA().sendFrame126(gameStartTimer * 3 + &quot; secs&quot;, 11155);
+					c.getPA().sendFrame126(&quot;@red@Players in portal: &quot; + portalUsed + +&quot;.&quot;, 11158);
+					c.getPA().sendFrame126(&quot;&quot;, 11160);
+					c.getPA().sendFrame126(&quot;&quot;, 11162);
+					c.getPA().sendFrame126(&quot;&quot;, 11164);
+					c.getPA().sendFrame126(&quot;&quot;, 11168);
+					if (blueBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11166);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Portal Open!&quot;, 11166);
+					}
+					if (redBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11167);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Portal Open!&quot;, 11167);
+					}
+				//update interface here
+				} else {
+					red.remove(red.indexOf(player));
+				}
+		if (red.size() &gt; 0) {
+			for (int player : red) {
+				if (Server.playerHandler.players[player] != null) {
+					Client c = (Client) Server.playerHandler.players[player];
+					c.getPA().walkableInterface(11146);
+					c.getPA().sendFrame126(blueScore + &quot; = Blue&quot;, 11148);
+					c.getPA().sendFrame126(&quot;Remaining Bosses = &quot; + redScore, 11147);
+					c.getPA().sendFrame126(&quot;&quot;, 11155);
+					c.getPA().sendFrame126(&quot;@red@Players in portal: &quot; + portalUsed + &quot;.&quot;, 11158);
+					}
+					if (blueBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11166);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Killed&quot;, 11166);
+					} else {
+						c.getPA().sendFrame126(&quot;@gre@Floor 1&quot;, 11168);
+					}
+					if (redBossSafe) {
+						c.getPA().sendFrame126(&quot;@gre@Safe&quot;, 11167);
+					} else {
+						c.getPA().sendFrame126(&quot;@red@Killed&quot;, 11167);
+					}
+				//update interface here
+				} else {
+					red.remove(red.indexOf(player));
+			
+			}
+		}	
+	
+	}
+	public void startGame() {
+		gameStartTimer = -1;
+		System.out.println(&quot;A dungeoneering game is taking place.&quot;);
+		sM(&quot;Dungeoneering floor: &quot; + floorLevel + &quot;.&quot;);
+		timeRemaining = GAME_TIMER;
+		for (int player : blueWait) {
+			if (Server.playerHandler.players[player] != null) {
+				//put player @ coords
+				Client c = (Client)Server.playerHandler.players[player];
+				c.getPA().walkableInterface(-1);
+				c.getPA().movePlayer(2426 + Misc.random(3), 3076 - Misc.random(3), 1);
+				blue.add(player);
+				c.inCwWait = false;
+				c.inCwGame = true;
+			}		
+		}
+		blueWait.clear();
+		
+		for (int player : redWait) {
+			if (Server.playerHandler.players[player] != null) {
+				//put player @ coords
+				Client c = (Client)Server.playerHandler.players[player];
+				c.getPA().walkableInterface(-1);
+				c.getPA().movePlayer(2373 + Misc.random(3), 3131 - Misc.random(3), 1);
+				red.add(player);
+				c.inCwWait = false;
+				c.inCwGame = true;
+			}		
+		}
+		blueWait.clear();
+	}
+	
+	public void endGame() {
+		timeRemaining = -1;
+		System.out.println(&quot;Dungeoneering round ending.&quot;);
+		gameStartTimer = GAME_START_TIMER;
+	}
+	
+	public void handleObjects(Client c, int objectId, int objectX, int objectY){
+		cwo.handleObject(c, objectId, objectX, objectY);
+	}
+	
+	
+
+
+}[/code]
+Most credits go to insanity as i ripped the base of this project from him and just started to make a basic custom dungeoneering game out of it.
+Once i finish with the objects / npcs for this i will then post it on here. And this is mainly to start idea&#39;s for people, and along with noobs as this is really easy to do and should be easy to complete</description>
+    
+    <lastBuildDate>Sun, 01 May 2011 19:27:57 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@i_code_rsps i code rsps]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/i_code_rsps">@i_code_rsps</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="1" data-topic="392982">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/ddragonimp/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar">
+</div>
+<blockquote>
+<p>Looks good although delta coder but good concept if i was to code this i would probaly heavily change it but its pretty good idea.</p>
+</blockquote>
+</aside>
+<p>Just stop.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/7</link>
+        <pubDate>Sun, 01 May 2011 19:27:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-7</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>Good luck with your last project. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/6</link>
+        <pubDate>Fri, 29 Apr 2011 03:16:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-6</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@Darthax Darthax]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/darthax">@Darthax</a> wrote:</p>
+          <blockquote>
+              <p>Krackkid when did your rep get reset?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/5</link>
+        <pubDate>Thu, 28 Apr 2011 14:06:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-5</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@krackkid Krackkid]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/krackkid">@krackkid</a> wrote:</p>
+          <blockquote>
+              <blockquote>General Programming
+A place to discuss programming, regardless of language choice, that isn't related to private server development.</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/4</link>
+        <pubDate>Thu, 28 Apr 2011 07:14:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-4</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@Fury4 Fury_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fury4">@Fury4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="2" data-topic="392914">
+<div class="title">
+<div class="quote-controls"></div>
+ Andrew Ferguson:</div>
+<blockquote>
+<p>So your done with “RSPS shit” yet your working on a PI server, with a minigame that has the name of something from RuneScape and doing it all the the General programing section. Anyone else see problems with this?</p>
+</blockquote>
+</aside>
+<p>What I meant was this was my last project.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/3</link>
+        <pubDate>Thu, 28 Apr 2011 07:12:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-3</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@Andrew_Ferguson The317Guy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/andrew_ferguson">@Andrew_Ferguson</a> wrote:</p>
+          <blockquote>
+              <p>So your done with “RSPS shit” yet your working on a PI server, with a minigame that has the name of something from RuneScape and doing it all the the General programing section. Anyone else see problems with this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/2</link>
+        <pubDate>Thu, 28 Apr 2011 07:11:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-2</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+      <item>
+        <title>[PI]dungeoneering minigame</title>
+        <dc:creator><![CDATA[@Fury4 Fury_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fury4">@Fury4</a> wrote:</p>
+          <blockquote>
+              <p>Well this is sort-of a project type thing in development, but i decided to just let the idea out there for people to complete this as i am basically done with RSPS related shit.<br>
+The Idea: So basically this is just like castle wars and what not. There are 2 teams (red &amp; blue). Each team scores a point when they kill a boss and each member of the team enters the portal (under a certain amount of time). So an example: Red team kills blue teams boss, but now everyone of the members on the red team must now enter the portal (the blue team can attack/stop them while they are trieng to enter the portal) and they have a set time limit of 60 seconds(1 minute). If all of the team enter’s the portal then they score a point. 10 points is auto-win, and if it is a auto-win then they earn double the points they normally would from winning a match normally.</p>
+<p>Also please note this is nowhere near finished, i will eventually update this thread finishing/adding to this. And another thing; I am willing to take idea’s for this as i sort of ran out while working on the objects<br>
+so anyways here we go make a new class called dungeoneering.<br>
+and add this;</p>
+<p>[code]package server.model.minigames;</p>
+<p>import java.util.ArrayList;</p>
+<p>import server.Server;<br>
+import server.model.players.Client;<br>
+import server.util.Misc;</p>
+<pre><code>/**
+ * author Mts
+ **/
+</code></pre>
+<p>public class Dungeoneering {</p>
+<pre><code>private DungeoneeringObjects do = new DungeoneeringObjects();
+    private DungeoneeringNpcs dn = new DungeoneeringNpcs();
+
+public Dungeoneering() {
+	/**
+	* Constructor
+	*/
+}
+
+public ArrayList&lt;Integer&gt; red = new ArrayList&lt;Integer&gt; (); //team 1 south
+public ArrayList&lt;Integer&gt; blue = new ArrayList&lt;Integer&gt; (); //team 2 north
+public ArrayList&lt;Integer&gt; redWait = new ArrayList&lt;Integer&gt; (); //team 1 south
+public ArrayList&lt;Integer&gt; blueWait = new ArrayList&lt;Integer&gt; (); //team 2 north
+public int redScore = 0;
+public int blueScore = 0;
+public int portalPoints = 0;
+public int floorLevel = 0;
+public boolean blueBossSafe = true;
+public boolean redBossSafe = true;
+public boolean portalUsed = false;
+private final int GAME_TIMER = 200; //1500 * 600 = 900000ms = 15 minutes
+private final int GAME_START_TIMER = 20;	
+public int timeRemaining = -1;
+public int gameStartTimer = GAME_START_TIMER;
+
+
+public void joinWait(Client c, int team) {
+	if (c.playerEquipment[c.playerHat] &gt; 0 || c.playerEquipment[c.playerCape] &gt; 0 || c.playerEquipment[c.playerWeapon] &gt; 0) {
+		c.sendMessage("You may not wear any armor into dungeoneering.");
+		return;
+	}
+	if (team == 1) {
+		if (blueWait.size() &gt; redWait.size()) {
+			c.sendMessage("This team is currently full.");
+			return;
+		} else {
+			blueWait.add(c.playerId);
+			c.castleWarsTeam = 1;
+		}
+	} else if (team == 2) {
+		if (redWait.size() &gt; redWait.size()) {
+			c.sendMessage("This team is currently full.");
+			return;
+		} else {
+			redWait.add(c.playerId);
+			c.dungeoneeringTeam = 2;
+		}
+	} else {
+		if (redWait.size() &gt; redWait.size()) {
+			redWait.add(c.playerId);
+			c.sendMessage("You have been added to the Red team.");
+			c.dungeoneeringTeam = 1;
+		} else {
+			redWait.add(c.playerId);
+			c.sendMessage("You have been added to the red team.");
+			c.dungeoneeringTeam = 2;
+		}
+	}
+	toWaitingRoom(c, c.dungeoneeringTeam);
+}
+
+public void toWaitingRoom(Client c, int team) {
+	if (team == 1) {
+		c.getPA().movePlayer(2377 + Misc.random(10), 9485 + Misc.random(5),0);
+	} else if (team == 2) {
+		c.getPA().movePlayer(2417 + Misc.random(10), 9485 + Misc.random(7),0);
+	}
+	c.inDoWait = true;
+}
+
+public void leaveWaitingRoom(Client c) {
+	c.inCwWait = false;
+	c.getPA().movePlayer(2439 + Misc.random(4), 3085 + Misc.random(5), 0);
+	if (c.dungeoneeringTeam == 1) {
+		blueWait.remove(blue.indexOf(c.playerId));
+		c.castleWarsTeam = -1;
+	} else if (c.castleWarsTeam == 2) {
+		redWait.remove(red.indexOf(c.playerId));
+		c.dungeoneeringTeam = -1;
+	}			
+}
+
+
+int properTimer = 0;
+public void process() {
+	if (properTimer &gt; 0) {
+		properTimer--;
+		return;
+	} else {
+		properTimer = 4;
+	}
+		
+	if (gameStartTimer &gt; 0) {
+		gameStartTimer--;
+		updatePlayers();
+	} else if (gameStartTimer == 0) {
+		startGame();
+	}
+	if (timeRemaining &gt; 0) {
+		timeRemaining--;
+		updateInGamePlayers();
+	} else if (timeRemaining == 0) {
+		endGame();
+	}
+	/** 
+	* The process of the dungeoneering team - called every 3 seconds
+	* Thank you sanity
+	*/
+}
+
+public void updatePlayers() {
+	//Blue team players
+	for (int player : blueWait) {
+		if (Server.playerHandler.players[player] != null) {
+			Client c = (Client) Server.playerHandler.players[player];
+			c.getPA().walkableInterface(6673);
+			c.getPA().sendFrame126("Next Game Begins In : " + ((gameStartTimer * 3) + (timeRemaining * 3)) + " seconds.", 6570);
+			c.getPA().sendFrame126("", 6572);
+			c.getPA().sendFrame126("", 6664);
+		//update interface here
+		} else {
+			blueWait.remove(blueWait.indexOf(player));
+		}
+	}
+	for (int player : redWait) {
+		if (Server.playerHandler.players[player] != null) {
+			Client c = (Client) Server.playerHandler.players[player];
+			c.getPA().walkableInterface(6673);
+			c.getPA().sendFrame126("Next Game Begins In : " + gameStartTimer * 3 + " seconds.", 6570);
+			c.getPA().sendFrame126("", 6572);
+			c.getPA().sendFrame126("", 6664);
+		//update interface here
+		} else {
+			redWait.remove(redWait.indexOf(player));
+		}
+	}
+}
+
+public void updateInGamePlayers() {
+	if (blue.size() &gt; 0) {
+		for (int player : blue) {
+			if (Server.playerHandler.players[player] != null) {
+				Client c = (Client) Server.playerHandler.players[player];
+				c.getPA().walkableInterface(11146);
+				c.getPA().sendFrame126(blueScore + " = Blue", 11148);
+				c.getPA().sendFrame126("red = " + redScore, 11147);
+				c.getPA().sendFrame126(gameStartTimer * 3 + " secs", 11155);
+				c.getPA().sendFrame126("", 11158);
+				c.getPA().sendFrame126("", 11160);
+				c.getPA().sendFrame126("", 11162);
+				c.getPA().sendFrame126("", 11164);
+				c.getPA().sendFrame126("", 11168);
+				if (blueBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11166);
+				} else {
+					c.getPA().sendFrame126("@red@Killed", 11166);
+				}
+				if (redBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11167);
+				} else {
+					c.getPA().sendFrame126("@red@Killed", 11167);
+				}
+			//update interface here
+			} else {
+				blue.remove(blue.indexOf(player));
+			}
+		
+		}
+	}
+	if (red.size() &gt; 0) {
+		for (int player : red) {
+			if (Server.playerHandler.players[player] != null) {
+				Client c = (Client) Server.playerHandler.players[player];
+				c.getPA().walkableInterface(11146);
+				c.getPA().sendFrame126(blueScore + " = Blue", 11148);
+				c.getPA().sendFrame126("Red = " + redScore, 11147);
+				c.getPA().sendFrame126(gameStartTimer * 3 + " secs", 11155);
+				c.getPA().sendFrame126("@red@Players in portal: " + portalUsed + +".", 11158);
+				c.getPA().sendFrame126("", 11160);
+				c.getPA().sendFrame126("", 11162);
+				c.getPA().sendFrame126("", 11164);
+				c.getPA().sendFrame126("", 11168);
+				if (blueBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11166);
+				} else {
+					c.getPA().sendFrame126("@red@Portal Open!", 11166);
+				}
+				if (redBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11167);
+				} else {
+					c.getPA().sendFrame126("@red@Portal Open!", 11167);
+				}
+			//update interface here
+			} else {
+				red.remove(red.indexOf(player));
+			}
+	if (red.size() &gt; 0) {
+		for (int player : red) {
+			if (Server.playerHandler.players[player] != null) {
+				Client c = (Client) Server.playerHandler.players[player];
+				c.getPA().walkableInterface(11146);
+				c.getPA().sendFrame126(blueScore + " = Blue", 11148);
+				c.getPA().sendFrame126("Remaining Bosses = " + redScore, 11147);
+				c.getPA().sendFrame126("", 11155);
+				c.getPA().sendFrame126("@red@Players in portal: " + portalUsed + ".", 11158);
+				}
+				if (blueBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11166);
+				} else {
+					c.getPA().sendFrame126("@red@Killed", 11166);
+				} else {
+					c.getPA().sendFrame126("@gre@Floor 1", 11168);
+				}
+				if (redBossSafe) {
+					c.getPA().sendFrame126("@gre@Safe", 11167);
+				} else {
+					c.getPA().sendFrame126("@red@Killed", 11167);
+				}
+			//update interface here
+			} else {
+				red.remove(red.indexOf(player));
+		
+		}
+	}	
+
+}
+public void startGame() {
+	gameStartTimer = -1;
+	System.out.println("A dungeoneering game is taking place.");
+	sM("Dungeoneering floor: " + floorLevel + ".");
+	timeRemaining = GAME_TIMER;
+	for (int player : blueWait) {
+		if (Server.playerHandler.players[player] != null) {
+			//put player @ coords
+			Client c = (Client)Server.playerHandler.players[player];
+			c.getPA().walkableInterface(-1);
+			c.getPA().movePlayer(2426 + Misc.random(3), 3076 - Misc.random(3), 1);
+			blue.add(player);
+			c.inCwWait = false;
+			c.inCwGame = true;
+		}		
+	}
+	blueWait.clear();
+	
+	for (int player : redWait) {
+		if (Server.playerHandler.players[player] != null) {
+			//put player @ coords
+			Client c = (Client)Server.playerHandler.players[player];
+			c.getPA().walkableInterface(-1);
+			c.getPA().movePlayer(2373 + Misc.random(3), 3131 - Misc.random(3), 1);
+			red.add(player);
+			c.inCwWait = false;
+			c.inCwGame = true;
+		}		
+	}
+	blueWait.clear();
+}
+
+public void endGame() {
+	timeRemaining = -1;
+	System.out.println("Dungeoneering round ending.");
+	gameStartTimer = GAME_START_TIMER;
+}
+
+public void handleObjects(Client c, int objectId, int objectX, int objectY){
+	cwo.handleObject(c, objectId, objectX, objectY);
+}
+</code></pre>
+<p>}[/code]<br>
+Most credits go to insanity as i ripped the base of this project from him and just started to make a basic custom dungeoneering game out of it.<br>
+Once i finish with the objects / npcs for this i will then post it on here. And this is mainly to start idea’s for people, and along with noobs as this is really easy to do and should be easy to complete</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914/1</link>
+        <pubDate>Thu, 28 Apr 2011 06:39:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-392914-1</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-dungeoneering-minigame/392914.rss">[PI]dungeoneering minigame</source>
+      </item>
+  </channel>
+</rss>

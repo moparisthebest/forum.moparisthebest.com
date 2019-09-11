@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</title>
+    <link>https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744</link>
+    <description>The official server has gone through a lot of iterations of how content is scripted. Originally, I had coupled the source with a Ruby plugin system. When I took my leave, David moved from this system to using static instances written in Java. After I started my return I moved from Ruby to Lua for reasons of performance, and improved functionality. Now there is an discussion about using Groovy and or Lua.
+
+To give a little background on content, we should look back to how various sources have done it in the past. I will discuss where those systems have failed, why, and what the optimal system is.
+
+[u]Traditional[/u]
+
+The traditional system of doing content is presented in PI, Hyperion, and other popular sources. This system often created single instances of contexts that were handed a player variable or were done statically. These systems were simple but lacked proper hierarchy, the ability to provide timings, and proper flow. This traditional method also exemplified a very toxic code smell: [url=http://unixjunkie.blogspot.com/2006/07/singleton-smell_25.html]link[/url]. Even if you used a &#39;content context&#39;:
+
+[code=java]
+class Firemaking {
+   Firemaking(You you) {
+      this.you = you;
+   }
+
+   ... :|
+}
+[/code]
+
+This could be boiled down to the singleton form:
+
+[code=java]
+class Firemaking {
+  static void doSomething(You you, ...) {
+  }
+
+}
+[/code]
+
+This form is present in our current source, [url=https://github.com/davidi2/mopar/blob/master/src/net/scapeemulator/game/content/alkharid/TollGate.java]example[/url]. As you can see because there is static context, you are forced to use other static context:
+
+[code=java]
+    ObjectDispatcher.getInstance().bind(new ObjectHandler(Option.ONE) {
+            @Override
+            public void handle(Player player, GroundObject object, String optionName, HandlerContext context) {
+                if (object != GateObjects.closedLeft &amp;&amp; object != GateObjects.closedRight) {
+                    return;
+                }
+                player.startAction(new WalkToGate(player, object, false));
+            }
+        });
+[/code]
+
+[u]Action based[/u]
+
+The first step forward was presented by Graham, with his task based content system that was also authored by Blakeman. I think everyone may be familiar with the static singleton TaskExecutor or a derived form of that. This gave people the ability to break content into smaller, timed pieces where a task was a concrete context of a stage of content. It was more organized than the original traditional form but was not centralized. This paradigm causes a lot of headache when you have to create content broken up by many delays and for each delay you have to create a new task or embed timings into the task like a flag for when the task was initialized.
+
+For example, from the Apollo source:
+
+[code=ruby]
+class RunecraftingAction &lt; DistancedAction
+  attr_reader :player, :rune
+
+  def initialize(player, rune, object_position)
+    super(1, true, player, object_position, 3)
+    @player = player
+    @rune = rune
+    @position = object_position
+    @executions = 0
+  end
+
+  def executeAction
+    runecrafting_level = @player.skill_set.get_skill(Skill::RUNECRAFT).current_level
+
+    if (runecrafting_level &lt; @rune.level)
+      @player.send_message(&quot;You need a runecrafting level of #{@rune.level} to craft this rune.&quot;)
+      stop
+    elsif !@player.inventory.contains(RUNE_ESSENCE_ID)
+      @player.send_message(&#39;You need rune essence to craft runes.&#39;) 
+      stop
+    elsif @executions == 0 # Sini note: Here &lt;-
+      @player.turn_to(@position)
+      @player.play_animation(RUNECRAFTING_ANIMATION)
+      @player.play_graphic(RUNECRAFTING_GRAPHIC)
+      @executions += 1
+    elsif @executions == 1 # Sini note: Here &lt;-
+      removed = @player.inventory.remove(RUNE_ESSENCE_ID, @player.inventory.get_amount(RUNE_ESSENCE_ID))
+      added = removed * @rune.multiplier(runecrafting_level)
+      @player.inventory.add(@rune.id, added)
+
+      @player.send_message(&quot;Your craft the rune essence into #{added &gt; 1 ? &#39;some &#39; + @rune.name + &#39;s&#39; : &#39;an &#39; + @rune.name}.&quot;, true)
+      @player.skill_set.add_experience(Skill::RUNECRAFT, removed * @rune.experience)
+      stop
+    end
+  end
+
+  def equals(other)
+    return (get_class == other.get_class &amp;&amp; @player == other.player &amp;&amp; @rune == other.rune)
+  end
+
+end
+[/code]
+
+[u]Yielding based[/u]
+
+As RSPS has evolved, we have started to realize that integrating the ability to embed delays and interrupts into scripts is a wise idea so that we can centralize our logic in a simple and efficient manner. The first topic that raised a solution for this was a project presented by Mgi125 [url=http://www.rune-server.org/runescape-development/rs-503-client-server/projects/530186-dusk-runetek-5-a.html]link[/url]. Here is an example from the topic:
+
+[code=java]
+playAnimation(1000);
+wait(2); // wait 1200ms
+playAnimation(3222);
+wait(4); // wait 2400ms
+teleport(1222,1222,0); // teleport somewher
+[/code]
+
+This solution, however the most efficient and satisfactory for content creation doesn&#39;t work well with many modern languages without some intricate trickery. That reason being that in order to delay logic flow you have to yield to another context and allow for that context to marshal execution. Cue my solution, using Lua coroutines to allow for yielding.
+
+[code=lua]
+-- prayer.lua
+-- written by sini
+
+local prayer = {}
+
+-- Animation for burying
+local burying = 827
+
+-- Burying bones!
+prayer.bury = function()
+
+	-- Fetch the amount of experience gained from burying
+	local exp = get(&#39;burying.exp&#39;)
+
+	-- Start the animation and wait a few ticks 
+	msg(&#39;You dig a hole in the ground&#39;)
+	animate(burying)
+	delay(2)
+
+	-- Remove the bone from the inventory and give the experience
+	msg(&#39;You bury the bones.&#39;)
+	inv_remove(inv, last_slot)
+	addxp(skills.prayer, exp)
+end
+
+return prayer
+[/code]
+
+As you can see this piece of content is efficient by being condensed, and it even would be without the use of metadata and helper functions. Although this solution is satisfactory to creating yielding based content, it also jeopardizes internal server stability by creating a thread for [i]each[/i] action through the JLua coroutine library. 
+
+[code=java]
+	LuaThread previous_thread = LuaThread.running_thread;
+	try {
+		LuaThread.running_thread = new_thread;
+		this.args = args;
+		if (this.status == STATUS_INITIAL) {
+			this.status = STATUS_RUNNING; 
+			new Thread(this, &quot;Coroutine-&quot;+(++coroutine_count)).start(); // &lt;- Here
+		} else {
+			this.notify();
+		}
+		previous_thread.state.status = STATUS_NORMAL;
+		this.status = STATUS_RUNNING;
+		this.wait();
+		return (this.error != null? 
+			LuaValue.varargsOf(LuaValue.FALSE, LuaValue.valueOf(this.error)):
+			LuaValue.varargsOf(LuaValue.TRUE, this.result));
+	} catch (InterruptedException ie) {
+		throw new OrphanedThread();
+	} finally {
+		running_thread = previous_thread;
+		running_thread.state.status =STATUS_RUNNING;
+		this.args = LuaValue.NONE;
+		this.result = LuaValue.NONE;
+		this.error = null;
+	}
+}
+[/code]
+
+[u]Yielding based : Custom Languages[/u]
+
+Velocity, a Rune-Server programmer posted a link to an archived Andrew Gower blog which presented the original instructions for the early Runescript rendition which can be found [url=https://web.archive.org/web/20090129160605/http://gowerarchive.googlepages.com/documents]here[/url]. This was enough evidence to convince me that yes, it was imperative to create a yielding based content system. As you can see, the command &#39;Delay&#39; gave Runescape developers the ability to wait a specified amount of ticks.
+
+That same programmer also created a compiler for a similar Runescript grammar from photos given by Jagex developers that employed the delay command which can be found [url=http://www.rune-server.org/runescape-development/rs-503-client-server/projects/565720-adderscript-unifying-content-creation.html]here[/url].
+
+This method of content creation is on the far end of the spectrum for difficulty and programmer capability. Writing, maintaining, and compiling a custom language grammar is beyond the capabilities of many programmers here. So, it has been rarely attempted however it&#39;s not impossible.
+
+[u]The bottom line[/u]
+
+I will never in my future years working as a RSPS programmer stray from a yielding based content development. No matter how comfortable people are with using the traditional, or action based model it isn&#39;t a sustainable way of developing content efficiently and in a timely manner. It isn&#39;t something I&#39;m willing to negotiate.
+
+I don&#39;t condemn how content has been done up to this point. I condemn if we stray from an efficient model. If we are going to emulate Runescape in a efficient manner we have to stop thinking of ourselves as RSPS programmers and become game developers. The two, although seemingly synonymous, are not.</description>
+    
+    <lastBuildDate>Sat, 07 Feb 2015 02:49:18 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="3" data-topic="549744">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/rodgerwilco/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Rodgerwilco:</div>
+<blockquote>
+<p>Since this is being discussed in both the RSC and RS2 community, if Objects (Protosstribes) script system becomes popular, then you guys should highly consider it. Also, a thing I dislike and i’ll put it out there (I haven’t read your thread but am assuming) is the fact that I hate servers who use multiple languages for plugins. Stick to one plugin system and make it the norm.</p>
+</blockquote>
+</aside>
+<p>I like how he created a way to build graphs for content however I dont agree with that use and application.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/4</link>
+        <pubDate>Sat, 07 Feb 2015 02:49:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549744-4</guid>
+        <source url="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744.rss">The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</source>
+      </item>
+      <item>
+        <title>The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>Since this is being discussed in both the RSC and RS2 community, if Objects (Protosstribes) script system becomes popular, then you guys should highly consider it. Also, a thing I dislike and i’ll put it out there (I haven’t read your thread but am assuming) is the fact that I hate servers who use multiple languages for plugins. Stick to one plugin system and make it the norm.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/3</link>
+        <pubDate>Sat, 07 Feb 2015 02:46:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549744-3</guid>
+        <source url="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744.rss">The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</source>
+      </item>
+      <item>
+        <title>The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</title>
+        <dc:creator><![CDATA[@Sessy_Pk3r Sessy Pk3r]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sessy_pk3r">@Sessy_Pk3r</a> wrote:</p>
+          <blockquote>
+              <p>Good read.</p>
+<aside class="quote" data-post="1" data-topic="549744">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sinisoul/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sinisoul:</div>
+<blockquote>
+<p>If we are going to emulate Runescape in a efficient manner we have to stop thinking of ourselves as RSPS programmers and become game developers.</p>
+</blockquote>
+</aside>
+<p>By far the most compelling and intuitive statement on this entire website.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/2</link>
+        <pubDate>Sat, 07 Feb 2015 02:08:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549744-2</guid>
+        <source url="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744.rss">The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</source>
+      </item>
+      <item>
+        <title>The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>The official server has gone through a lot of iterations of how content is scripted. Originally, I had coupled the source with a Ruby plugin system. When I took my leave, David moved from this system to using static instances written in Java. After I started my return I moved from Ruby to Lua for reasons of performance, and improved functionality. Now there is an discussion about using Groovy and or Lua.</p>
+<p>To give a little background on content, we should look back to how various sources have done it in the past. I will discuss where those systems have failed, why, and what the optimal system is.</p>
+<p><span class="bbcode-u">Traditional</span></p>
+<p>The traditional system of doing content is presented in PI, Hyperion, and other popular sources. This system often created single instances of contexts that were handed a player variable or were done statically. These systems were simple but lacked proper hierarchy, the ability to provide timings, and proper flow. This traditional method also exemplified a very toxic code smell: <a href="http://unixjunkie.blogspot.com/2006/07/singleton-smell_25.html" data-bbcode="true" rel="nofollow noopener">link</a>. Even if you used a ‘content context’:</p>
+<pre><code class="lang-auto">class Firemaking {
+   Firemaking(You you) {
+      this.you = you;
+   }
+
+   ... :|
+}</code></pre>
+<p>This could be boiled down to the singleton form:</p>
+<pre><code class="lang-auto">class Firemaking {
+  static void doSomething(You you, ...) {
+  }
+
+}</code></pre>
+<p>This form is present in our current source, <a href="https://github.com/davidi2/mopar/blob/master/src/net/scapeemulator/game/content/alkharid/TollGate.java" data-bbcode="true" rel="nofollow noopener">example</a>. As you can see because there is static context, you are forced to use other static context:</p>
+<pre><code class="lang-auto">    ObjectDispatcher.getInstance().bind(new ObjectHandler(Option.ONE) {
+            @Override
+            public void handle(Player player, GroundObject object, String optionName, HandlerContext context) {
+                if (object != GateObjects.closedLeft &amp;&amp; object != GateObjects.closedRight) {
+                    return;
+                }
+                player.startAction(new WalkToGate(player, object, false));
+            }
+        });</code></pre>
+<p><span class="bbcode-u">Action based</span></p>
+<p>The first step forward was presented by Graham, with his task based content system that was also authored by Blakeman. I think everyone may be familiar with the static singleton TaskExecutor or a derived form of that. This gave people the ability to break content into smaller, timed pieces where a task was a concrete context of a stage of content. It was more organized than the original traditional form but was not centralized. This paradigm causes a lot of headache when you have to create content broken up by many delays and for each delay you have to create a new task or embed timings into the task like a flag for when the task was initialized.</p>
+<p>For example, from the Apollo source:</p>
+<pre><code class="lang-auto">class RunecraftingAction &lt; DistancedAction
+  attr_reader :player, :rune
+
+  def initialize(player, rune, object_position)
+    super(1, true, player, object_position, 3)
+    @player = player
+    @rune = rune
+    @position = object_position
+    @executions = 0
+  end
+
+  def executeAction
+    runecrafting_level = @player.skill_set.get_skill(Skill::RUNECRAFT).current_level
+
+    if (runecrafting_level &lt; @rune.level)
+      @player.send_message("You need a runecrafting level of #{@rune.level} to craft this rune.")
+      stop
+    elsif !@player.inventory.contains(RUNE_ESSENCE_ID)
+      @player.send_message('You need rune essence to craft runes.') 
+      stop
+    elsif @executions == 0 # Sini note: Here &lt;-
+      @player.turn_to(@position)
+      @player.play_animation(RUNECRAFTING_ANIMATION)
+      @player.play_graphic(RUNECRAFTING_GRAPHIC)
+      @executions += 1
+    elsif @executions == 1 # Sini note: Here &lt;-
+      removed = @player.inventory.remove(RUNE_ESSENCE_ID, @player.inventory.get_amount(RUNE_ESSENCE_ID))
+      added = removed * @rune.multiplier(runecrafting_level)
+      @player.inventory.add(@rune.id, added)
+
+      @player.send_message("Your craft the rune essence into #{added &gt; 1 ? 'some ' + @rune.name + 's' : 'an ' + @rune.name}.", true)
+      @player.skill_set.add_experience(Skill::RUNECRAFT, removed * @rune.experience)
+      stop
+    end
+  end
+
+  def equals(other)
+    return (get_class == other.get_class &amp;&amp; @player == other.player &amp;&amp; @rune == other.rune)
+  end
+
+end</code></pre>
+<p><span class="bbcode-u">Yielding based</span></p>
+<p>As RSPS has evolved, we have started to realize that integrating the ability to embed delays and interrupts into scripts is a wise idea so that we can centralize our logic in a simple and efficient manner. The first topic that raised a solution for this was a project presented by Mgi125 <a href="http://www.rune-server.org/runescape-development/rs-503-client-server/projects/530186-dusk-runetek-5-a.html" data-bbcode="true" rel="nofollow noopener">link</a>. Here is an example from the topic:</p>
+<pre><code class="lang-auto">playAnimation(1000);
+wait(2); // wait 1200ms
+playAnimation(3222);
+wait(4); // wait 2400ms
+teleport(1222,1222,0); // teleport somewher</code></pre>
+<p>This solution, however the most efficient and satisfactory for content creation doesn’t work well with many modern languages without some intricate trickery. That reason being that in order to delay logic flow you have to yield to another context and allow for that context to marshal execution. Cue my solution, using Lua coroutines to allow for yielding.</p>
+<pre><code class="lang-auto">-- prayer.lua
+-- written by sini
+
+local prayer = {}
+
+-- Animation for burying
+local burying = 827
+
+-- Burying bones!
+prayer.bury = function()
+
+	-- Fetch the amount of experience gained from burying
+	local exp = get('burying.exp')
+
+	-- Start the animation and wait a few ticks 
+	msg('You dig a hole in the ground')
+	animate(burying)
+	delay(2)
+
+	-- Remove the bone from the inventory and give the experience
+	msg('You bury the bones.')
+	inv_remove(inv, last_slot)
+	addxp(skills.prayer, exp)
+end
+
+return prayer</code></pre>
+<p>As you can see this piece of content is efficient by being condensed, and it even would be without the use of metadata and helper functions. Although this solution is satisfactory to creating yielding based content, it also jeopardizes internal server stability by creating a thread for <span class="bbcode-i">each</span> action through the JLua coroutine library.</p>
+<pre><code class="lang-auto">	LuaThread previous_thread = LuaThread.running_thread;
+	try {
+		LuaThread.running_thread = new_thread;
+		this.args = args;
+		if (this.status == STATUS_INITIAL) {
+			this.status = STATUS_RUNNING; 
+			new Thread(this, "Coroutine-"+(++coroutine_count)).start(); // &lt;- Here
+		} else {
+			this.notify();
+		}
+		previous_thread.state.status = STATUS_NORMAL;
+		this.status = STATUS_RUNNING;
+		this.wait();
+		return (this.error != null? 
+			LuaValue.varargsOf(LuaValue.FALSE, LuaValue.valueOf(this.error)):
+			LuaValue.varargsOf(LuaValue.TRUE, this.result));
+	} catch (InterruptedException ie) {
+		throw new OrphanedThread();
+	} finally {
+		running_thread = previous_thread;
+		running_thread.state.status =STATUS_RUNNING;
+		this.args = LuaValue.NONE;
+		this.result = LuaValue.NONE;
+		this.error = null;
+	}
+}</code></pre>
+<p><span class="bbcode-u">Yielding based : Custom Languages</span></p>
+<p>Velocity, a Rune-Server programmer posted a link to an archived Andrew Gower blog which presented the original instructions for the early Runescript rendition which can be found <a href="https://web.archive.org/web/20090129160605/http://gowerarchive.googlepages.com/documents" data-bbcode="true" rel="nofollow noopener">here</a>. This was enough evidence to convince me that yes, it was imperative to create a yielding based content system. As you can see, the command ‘Delay’ gave Runescape developers the ability to wait a specified amount of ticks.</p>
+<p>That same programmer also created a compiler for a similar Runescript grammar from photos given by Jagex developers that employed the delay command which can be found <a href="http://www.rune-server.org/runescape-development/rs-503-client-server/projects/565720-adderscript-unifying-content-creation.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+<p>This method of content creation is on the far end of the spectrum for difficulty and programmer capability. Writing, maintaining, and compiling a custom language grammar is beyond the capabilities of many programmers here. So, it has been rarely attempted however it’s not impossible.</p>
+<p><span class="bbcode-u">The bottom line</span></p>
+<p>I will never in my future years working as a RSPS programmer stray from a yielding based content development. No matter how comfortable people are with using the traditional, or action based model it isn’t a sustainable way of developing content efficiently and in a timely manner. It isn’t something I’m willing to negotiate.</p>
+<p>I don’t condemn how content has been done up to this point. I condemn if we stray from an efficient model. If we are going to emulate Runescape in a efficient manner we have to stop thinking of ourselves as RSPS programmers and become game developers. The two, although seemingly synonymous, are not.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744/1</link>
+        <pubDate>Fri, 06 Feb 2015 23:27:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-549744-1</guid>
+        <source url="https://forum.moparisthebest.com/t/the-scripting-acquisition-the-groundwork-for-how-we-develop-blog-opinion/549744.rss">The Scripting Acquisition, The groundwork for how we develop : Blog [OPINION]</source>
+      </item>
+  </channel>
+</rss>

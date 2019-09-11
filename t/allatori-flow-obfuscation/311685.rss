@@ -1,0 +1,657 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Allatori flow obfuscation</title>
+    <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685</link>
+    <description>it does nasty stuff like changing
+[code]
+    public static Token from(char code) {
+        for (Token token : Token.values()) {
+            if (token.code == code) {
+                return token;
+            }
+        }
+        return Token.UNKNOWN;
+    }
+[/code]
+to
+[code]    public static b from(char a)
+    {
+        b a[];
+        int a = (a = values()).length;
+        int a = 0;
+_L3:
+        a;
+        JVM INSTR icmpge 37;
+           goto _L1 _L2
+_L1:
+        b a;
+        if((a = a[a]).code == a)
+            return a;
+        ++a;
+          goto _L3
+_L2:
+        return UNKNOWN;
+    }
+[/code]
+lets look at this from a bytecode perspective:
+[code]public static supers.***.Token from(char);
+  Code:
+   0:   invokestatic    #8; //Method values:()[Lsupers/***/Token;
+   3:   astore_1
+   4:   aload_1
+   5:   arraylength
+   6:   istore_2
+   7:   iconst_0
+   8:   istore_3
+   9:   iload_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  astore  4
+   19:  aload   4
+   21:  getfield        #7; //Field code:I
+   24:  iload_0
+   25:  if_icmpne       31
+   28:  aload   4
+   30:  areturn
+   31:  iinc    3, 1
+   34:  goto    9
+   37:  getstatic       #9; //Field UNKNOWN:Lsupers/***/Token;
+   40:  areturn[/code]
+to
+[code]public static a.a.b.b from(char);
+  Code:
+   0:   invokestatic    #8; //Method a/a/b/b.values:()[La/a/b/b;
+   3:   dup
+   4:   astore_1
+   5:   arraylength
+   6:   istore_2
+   7:   iconst_0
+   8:   dup
+   9:   istore_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  dup
+   18:  astore  4
+   20:  getfield        #7; //Field a/a/b/b.code:I
+   23:  iload_0
+   24:  if_icmpne       30
+   27:  aload   4
+   29:  areturn
+   30:  iinc    3, 1
+   33:  iload_3
+   34:  goto    10
+   37:  getstatic       #9; //Field a/a/b/b.UNKNOWN:La/a/b/b;
+   40:  areturn[/code]
+the code is the same length... but there is something strange; the jump locations are off.
+lets compare:
+[code]   9:   iload_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  astore  4
+   19:  aload   4
+   21:  getfield        #7; //Field code:I
+   24:  iload_0
+   25:  if_icmpne       31
+   28:  aload   4
+   30:  areturn
+   31:  iinc    3, 1
+   34:  goto    9
+   37:  getstatic       #9; //Field UNKNOWN:Lsupers/***/Token;[/code]
+[code]   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  dup
+   18:  astore  4
+   20:  getfield        #7; //Field a/a/b/b.code:I
+   23:  iload_0
+   24:  if_icmpne       30
+   27:  aload   4
+   29:  areturn
+   30:  iinc    3, 1
+   33:  iload_3
+   34:  goto    10
+   37:  getstatic       #9; //Field a/a/b/b.UNKNOWN:La/a/b/b;[/code]
+as you can see, allatori copies the instruction it would normally jump to, inserts it before the goto, and increments the goto&#39;s target. the code will have the same result, but decompilers will choke because it plays with the stack. how to fix? compare the instruction at goto_idx - 1 to the instruction at target_idx - 1. if equal, then remove goto_idx - 1, and set target_idx to target_idx - 1.[br][br][size=1]Posted on: October 31, 2009, 07:10:07 pm[/size][hr]another example
+[code]    protected b b()
+    {
+        a;
+_L3:
+        a;
+        b.UNKNOWN;
+        JVM INSTR if_acmpne 25;
+           goto _L1 _L2
+_L1:
+        this.a = a.a.b.b.from(a());
+        a;
+          goto _L3
+_L2:
+        return this.a;
+    }[/code]
+from
+[code]
+
+
+    protected boolean hasNextToken() {
+        cur_token = Token.from(next());
+        while (cur_token == Token.UNKNOWN) {
+            char code = next();
+            if (code == Character.MAX_VALUE) {
+                return false;
+            }
+            cur_token = Token.from(code);
+        }
+        return true;
+    }
+
+[/code]
+bytecode:
+[code]protected boolean hasNextToken();
+  Code:
+   0:   aload_0
+   1:   aload_0
+   2:   invokespecial   #13; //Method next:()C
+   5:   invokestatic    #14; //Method supers/***/Token.from:(C)Lsup
+ers/***/Token;
+   8:   putfield        #3; //Field cur_token:Lsupers/***/Token;
+   11:  aload_0
+   12:  getfield        #3; //Field cur_token:Lsupers/***/Token;
+   15:  getstatic       #2; //Field supers/***/Token.UNKNOWN:Lsuper
+s/***/Token;
+   18:  if_acmpne       45
+   21:  aload_0
+   22:  invokespecial   #13; //Method next:()C
+   25:  istore_1
+   26:  iload_1
+   27:  ldc     #12; //int 65535
+   29:  if_icmpne       34
+   32:  iconst_0
+   33:  ireturn
+   34:  aload_0
+   35:  iload_1
+   36:  invokestatic    #14; //Method supers/***/Token.from:(C)Lsup
+ers/***/Token;
+   39:  putfield        #3; //Field cur_token:Lsupers/***/Token;
+   42:  goto    11
+   45:  iconst_1
+   46:  ireturn[/code]
+to
+[code]
+protected boolean A();
+  Code:
+   0:   aload_0
+   1:   aload_0
+   2:   invokespecial   #13; //Method a/a/b/c.a:()C
+   5:   invokestatic    #14; //Method a/a/b/b.from:(C)La/a/b/b;
+   8:   putfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   11:  aload_0
+   12:  getfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   15:  getstatic       #2; //Field a/a/b/b.UNKNOWN:La/a/b/b;
+   18:  if_acmpne       46
+   21:  aload_0
+   22:  invokespecial   #13; //Method a/a/b/c.a:()C
+   25:  dup
+   26:  istore_1
+   27:  ldc     #12; //int 65535
+   29:  if_icmpne       34
+   32:  iconst_0
+   33:  ireturn
+   34:  aload_0
+   35:  iload_1
+   36:  invokestatic    #14; //Method a/a/b/b.from:(C)La/a/b/b;
+   39:  putfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   42:  aload_0
+   43:  goto    12
+   46:  iconst_1
+   47:  ireturn
+[/code]
+look at:
+[code]   11:  aload_0
+   12:  getfield        #3; //Field cur_token:Lsupers/***/Token;
+   ...
+   42:  goto    11[/code]
+[code]   11:  aload_0
+   12:  getfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   ...
+   42:  aload_0
+   43:  goto    12[/code]
+same pattern; it jumps over the aload_0 and puts a copy of it right before the goto.</description>
+    
+    <lastBuildDate>Sun, 01 Nov 2009 14:12:08 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BAsh, post:3, topic:311685”]First PLEASE disable naming variables based upon the LocalVariableTable. They are just to throw you with identical names so get rid of them.</p>
+<p>I think JODE can decompile this. I noticed when I was building an AST of the client.</p>
+<p>Ordinary loop:<br>
+goto conditional<br>
+body:</p>
+
+conditional:
+if condition then goto body
+<p>Fucked up loop:<br>
+conditional:<br>
+if !condition then goto end</p>
+
+goto conditional
+end:
+<p>What all the sudden interest in deobers all of a sudden?[/quote]</p>
+<p>this has nothing to do with the client ps i have been interested in obfuscation for a very long time[br][br][size=1]Posted on: November 01, 2009, 04:05:32 pm[/size][hr][quote=“abraham2119, post:4, topic:311685”][quote author=BAsh link=topic=408126.msg3013774#msg3013774 date=1257039026]<br>
+What all the sudden interest in deobers all of a sudden?<br>
+[/quote]probably due to the fact that the deober most people were using has fucked up</p>
+<p>anyways super_, good job</p>
+<p>edit: just a question, why doesnt allatori simply remove the instruction it was originally supposed to jump to?</p>
+<p>example:</p>
+<p><code>
+1: aload_0
+2: invokevirtual
+...
+29 : aload_0
+30: goto 2</code>why doesnt it remove instruction 1? its not jumped-to anyways, so whats the point of leaving it there?</p>
+<p>is it the pushing onto the stack before the GOTO instruction what makes the decompiler fuck up, or is it the unused instruction?[/quote]</p>
+<p>because it is required for when the code begins the loop</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/7</link>
+        <pubDate>Sun, 01 Nov 2009 14:12:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-7</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:5, topic:311685”][quote author=BAsh link=topic=408126.msg3013774#msg3013774 date=1257039026]<br>
+What all the sudden interest in deobers all of a sudden?<br>
+[/quote]r u daft[/quote]<br>
+r u</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/6</link>
+        <pubDate>Sun, 01 Nov 2009 06:14:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-6</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BAsh, post:3, topic:311685”]What all the sudden interest in deobers all of a sudden?[/quote]r u daft</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/5</link>
+        <pubDate>Sun, 01 Nov 2009 05:46:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-5</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“BAsh, post:3, topic:311685”]What all the sudden interest in deobers all of a sudden?[/quote]probably due to the fact that the deober most people were using has fucked up</p>
+<p>anyways super_, good job</p>
+<p>edit: just a question, why doesnt allatori simply remove the instruction it was originally supposed to jump to?</p>
+<p>example:</p>
+<p><code>
+1: aload_0
+2: invokevirtual
+...
+29 : aload_0
+30: goto 2</code>why doesnt it remove instruction 1? its not jumped-to anyways, so whats the point of leaving it there?</p>
+<p>is it the pushing onto the stack before the GOTO instruction what makes the decompiler fuck up, or is it the unused instruction?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/4</link>
+        <pubDate>Sun, 01 Nov 2009 02:55:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-4</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>First PLEASE disable naming variables based upon the LocalVariableTable. They are just to throw you with identical names so get rid of them.</p>
+<p>I think JODE can decompile this. I noticed when I was building an AST of the client.</p>
+<p>Ordinary loop:<br>
+goto conditional<br>
+body:</p>
+
+conditional:
+if condition then goto body
+<p>Fucked up loop:<br>
+conditional:<br>
+if !condition then goto end</p>
+
+goto conditional
+end:
+<p>What all the sudden interest in deobers all of a sudden?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/3</link>
+        <pubDate>Sun, 01 Nov 2009 01:30:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-3</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@CheatoX CheatoX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cheatox">@CheatoX</a> wrote:</p>
+          <blockquote>
+              <p>I wrote the following method to remove the nasty stuff but i get an exception when replacing methods</p>
+<pre><code class="lang-auto">public static void undoObfuscation(ClassGen g) throws TargetLostException {
+        for (Method m : g.getMethods()) {
+            if (!m.isAbstract() &amp;&amp; !m.isNative()) {
+                InstructionFinder find = new InstructionFinder(new InstructionList(m.getCode().getCode()));
+                Iterator it = find.search("GOTO");
+                MethodGen gen = new MethodGen(m,g.getClassName(),g.getConstantPool());
+                InstructionList li = gen.getInstructionList();
+
+                while (it.hasNext()) {
+                    InstructionHandle[] h = (InstructionHandle[]) it.next();
+                    GOTO go = (GOTO) (h)[0].getInstruction();
+                    InstructionHandle target = go.getTarget();
+
+                    InstructionHandle newtarget = go.getTarget().getPrev();
+                    InstructionHandle prev = h[0].getPrev();
+
+                     if (newtarget != null &amp;&amp; prev != null &amp;&amp; prev.getInstruction().equals(newtarget.getInstruction())) {
+                        li.delete(prev);
+                        go.setTarget(newtarget);
+                        h[0].setInstruction(go);
+                   //     System.out.println("Done one "+g.getClassName()+"M: "+m.toString());
+                    }
+                }
+
+                gen.setInstructionList(li);
+                gen.setMaxLocals();
+                gen.setMaxStack();
+
+                
+                g.replaceMethod(m,gen.getMethod());
+                li.dispose();
+          /*      try {
+            g.getJavaClass().dump(g.getClassName()+".class");
+        } catch (IOException e) {
+            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+        } */
+            }
+        }
+    }</code></pre>
+<pre><code class="lang-auto">Exception in thread "main" java.lang.ArrayIndexOutOfBoundsException: 111
+	at com.sun.org.apache.bcel.internal.generic.InstructionList.setPositions(InstructionList.java:921)
+	at com.sun.org.apache.bcel.internal.generic.InstructionList.setPositions(InstructionList.java:865)
+	at com.sun.org.apache.bcel.internal.generic.InstructionList.getByteCode(InstructionList.java:972)
+	at com.sun.org.apache.bcel.internal.generic.MethodGen.getMethod(MethodGen.java:616)</code></pre>
+<p>can anyone find my mistake, it’s probably something stupid thought</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/2</link>
+        <pubDate>Sat, 31 Oct 2009 23:30:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-2</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+      <item>
+        <title>Allatori flow obfuscation</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>it does nasty stuff like changing</p>
+<pre><code class="lang-auto">    public static Token from(char code) {
+        for (Token token : Token.values()) {
+            if (token.code == code) {
+                return token;
+            }
+        }
+        return Token.UNKNOWN;
+    }</code></pre>
+<p>to</p>
+<p><code>    public static b from(char a)
+    {
+        b a[];
+        int a = (a = values()).length;
+        int a = 0;
+_L3:
+        a;
+        JVM INSTR icmpge 37;
+           goto _L1 _L2
+_L1:
+        b a;
+        if((a = a[a]).code == a)
+            return a;
+        ++a;
+          goto _L3
+_L2:
+        return UNKNOWN;
+    }
+</code><br>
+lets look at this from a bytecode perspective:</p>
+<p><code>public static supers.***.Token from(char);
+  Code:
+   0:   invokestatic    #8; //Method values:()[Lsupers/***/Token;
+   3:   astore_1
+   4:   aload_1
+   5:   arraylength
+   6:   istore_2
+   7:   iconst_0
+   8:   istore_3
+   9:   iload_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  astore  4
+   19:  aload   4
+   21:  getfield        #7; //Field code:I
+   24:  iload_0
+   25:  if_icmpne       31
+   28:  aload   4
+   30:  areturn
+   31:  iinc    3, 1
+   34:  goto    9
+   37:  getstatic       #9; //Field UNKNOWN:Lsupers/***/Token;
+   40:  areturn</code><br>
+to</p>
+<p><code>public static a.a.b.b from(char);
+  Code:
+   0:   invokestatic    #8; //Method a/a/b/b.values:()[La/a/b/b;
+   3:   dup
+   4:   astore_1
+   5:   arraylength
+   6:   istore_2
+   7:   iconst_0
+   8:   dup
+   9:   istore_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  dup
+   18:  astore  4
+   20:  getfield        #7; //Field a/a/b/b.code:I
+   23:  iload_0
+   24:  if_icmpne       30
+   27:  aload   4
+   29:  areturn
+   30:  iinc    3, 1
+   33:  iload_3
+   34:  goto    10
+   37:  getstatic       #9; //Field a/a/b/b.UNKNOWN:La/a/b/b;
+   40:  areturn</code><br>
+the code is the same length… but there is something strange; the jump locations are off.<br>
+lets compare:</p>
+<p><code>   9:   iload_3
+   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  astore  4
+   19:  aload   4
+   21:  getfield        #7; //Field code:I
+   24:  iload_0
+   25:  if_icmpne       31
+   28:  aload   4
+   30:  areturn
+   31:  iinc    3, 1
+   34:  goto    9
+   37:  getstatic       #9; //Field UNKNOWN:Lsupers/***/Token;</code></p>
+<p><code>   10:  iload_2
+   11:  if_icmpge       37
+   14:  aload_1
+   15:  iload_3
+   16:  aaload
+   17:  dup
+   18:  astore  4
+   20:  getfield        #7; //Field a/a/b/b.code:I
+   23:  iload_0
+   24:  if_icmpne       30
+   27:  aload   4
+   29:  areturn
+   30:  iinc    3, 1
+   33:  iload_3
+   34:  goto    10
+   37:  getstatic       #9; //Field a/a/b/b.UNKNOWN:La/a/b/b;</code><br>
+as you can see, allatori copies the instruction it would normally jump to, inserts it before the goto, and increments the goto’s target. the code will have the same result, but decompilers will choke because it plays with the stack. how to fix? compare the instruction at goto_idx - 1 to the instruction at target_idx - 1. if equal, then remove goto_idx - 1, and set target_idx to target_idx - 1.[br][br][size=1]Posted on: October 31, 2009, 07:10:07 pm[/size][hr]another example</p>
+<p><code>    protected b b()
+    {
+        a;
+_L3:
+        a;
+        b.UNKNOWN;
+        JVM INSTR if_acmpne 25;
+           goto _L1 _L2
+_L1:
+        this.a = a.a.b.b.from(a());
+        a;
+          goto _L3
+_L2:
+        return this.a;
+    }</code><br>
+from</p>
+<pre><code class="lang-auto">
+
+    protected boolean hasNextToken() {
+        cur_token = Token.from(next());
+        while (cur_token == Token.UNKNOWN) {
+            char code = next();
+            if (code == Character.MAX_VALUE) {
+                return false;
+            }
+            cur_token = Token.from(code);
+        }
+        return true;
+    }
+</code></pre>
+<p>bytecode:</p>
+<p><code>protected boolean hasNextToken();
+  Code:
+   0:   aload_0
+   1:   aload_0
+   2:   invokespecial   #13; //Method next:()C
+   5:   invokestatic    #14; //Method supers/***/Token.from:(C)Lsup
+ers/***/Token;
+   8:   putfield        #3; //Field cur_token:Lsupers/***/Token;
+   11:  aload_0
+   12:  getfield        #3; //Field cur_token:Lsupers/***/Token;
+   15:  getstatic       #2; //Field supers/***/Token.UNKNOWN:Lsuper
+s/***/Token;
+   18:  if_acmpne       45
+   21:  aload_0
+   22:  invokespecial   #13; //Method next:()C
+   25:  istore_1
+   26:  iload_1
+   27:  ldc     #12; //int 65535
+   29:  if_icmpne       34
+   32:  iconst_0
+   33:  ireturn
+   34:  aload_0
+   35:  iload_1
+   36:  invokestatic    #14; //Method supers/***/Token.from:(C)Lsup
+ers/***/Token;
+   39:  putfield        #3; //Field cur_token:Lsupers/***/Token;
+   42:  goto    11
+   45:  iconst_1
+   46:  ireturn</code><br>
+to</p>
+<pre><code class="lang-auto">protected boolean A();
+  Code:
+   0:   aload_0
+   1:   aload_0
+   2:   invokespecial   #13; //Method a/a/b/c.a:()C
+   5:   invokestatic    #14; //Method a/a/b/b.from:(C)La/a/b/b;
+   8:   putfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   11:  aload_0
+   12:  getfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   15:  getstatic       #2; //Field a/a/b/b.UNKNOWN:La/a/b/b;
+   18:  if_acmpne       46
+   21:  aload_0
+   22:  invokespecial   #13; //Method a/a/b/c.a:()C
+   25:  dup
+   26:  istore_1
+   27:  ldc     #12; //int 65535
+   29:  if_icmpne       34
+   32:  iconst_0
+   33:  ireturn
+   34:  aload_0
+   35:  iload_1
+   36:  invokestatic    #14; //Method a/a/b/b.from:(C)La/a/b/b;
+   39:  putfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   42:  aload_0
+   43:  goto    12
+   46:  iconst_1
+   47:  ireturn</code></pre>
+<p>look at:</p>
+<p><code>   11:  aload_0
+   12:  getfield        #3; //Field cur_token:Lsupers/***/Token;
+   ...
+   42:  goto    11</code></p>
+<p><code>   11:  aload_0
+   12:  getfield        #3; //Field a/a/b/c.a:La/a/b/b;
+   ...
+   42:  aload_0
+   43:  goto    12</code><br>
+same pattern; it jumps over the aload_0 and puts a copy of it right before the goto.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685/1</link>
+        <pubDate>Sat, 31 Oct 2009 19:02:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-311685-1</guid>
+        <source url="https://forum.moparisthebest.com/t/allatori-flow-obfuscation/311685.rss">Allatori flow obfuscation</source>
+      </item>
+  </channel>
+</rss>

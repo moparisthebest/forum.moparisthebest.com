@@ -1,0 +1,494 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Bcel instruction replacing help?</title>
+    <link>https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764</link>
+    <description>EDIT: i managed it, no thanks to you guys :mad:
+
+im trying to get bcel to replace one instruction with another, having some problems though
+
+heres the class im trying to modify
+[code]
+public class SomeInstructions {
+
+	public static String fieldVar;
+
+	public static void main(String[] args) {
+		fieldVar = &quot;field&quot;;
+	}
+}
+[/code]
+
+im trying to make it so it says 
+[code]
+fieldVar = Bot.getField();
+[/code]
+
+heres the class for that
+[code]
+public class Bot {
+
+	public static String getField() {
+		System.out.println(&quot;Called getField()&quot;);
+		return &quot;aField&quot;;
+	}
+}
+[/code]
+
+i know i have to replace the LDC with an INVOKESTATIC
+this is the class which uses bcel to replace
+[code]
+import org.apache.bcel.Repository;
+import org.apache.bcel.classfile.*;
+import org.apache.bcel.generic.*;
+import java.io.IOException;
+import static org.apache.bcel.Constants.*;
+
+public class ReplaceInstruction {
+
+	public static void main(String[] args) {
+		new ReplaceInstruction();
+	}
+
+	public JavaClass theClass;
+	public ClassGen theClassGen;
+
+	public ReplaceInstruction() {
+
+		loadClass();
+		replace();
+		dumpClass();
+	}
+
+	public void loadClass() {
+		try{
+			theClass = Repository.lookupClass(&quot;SomeInstructions&quot;);
+			theClassGen = new ClassGen(theClass);
+		}
+		catch(ClassNotFoundException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	public void replace() {
+
+		//find the main method object
+		Method mainMethod = null;
+		for(Method m : theClass.getMethods())
+			if(m.getName().equals(&quot;main&quot;)) {
+				mainMethod = m;
+				break;
+			}
+
+		//get the instructions of main()
+		InstructionList iList = new InstructionList(mainMethod.getCode().getCode());
+
+		//get the LDC instruction
+		ConstantPoolGen theCPool = theClassGen.getConstantPool();
+		LDC theLDC = null;
+		for(Instruction i : iList.getInstructions())
+			if(i instanceof LDC)
+				if( ((LDC)i).getValue(theCPool).toString().equals(&quot;field&quot;) ) {
+					theLDC = (LDC)i;
+					System.out.println(&quot;Found LDC instruction&quot;);
+					break;
+				}
+
+		//gets the LDC instruction handle
+		InstructionHandle ldcHandle = null;
+		InstructionHandle[] iHandles = iList.getInstructionHandles();
+		for(InstructionHandle ih : iHandles)
+			if(ih.getInstruction().equals(theLDC)) {
+				ldcHandle = ih;
+				System.out.println(&quot;Found LDC instruction handle&quot;);
+				break;
+			}
+
+		//creates the invokestatic
+		InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+		InvokeInstruction getField = iFactory.createInvoke(&quot;Bot&quot;,&quot;getField&quot;,Type.STRING,Type.NO_ARGS,INVOKESTATIC);
+
+		//replace it
+		ldcHandle.setInstruction(getField);
+
+		//place it back in the method
+		MethodGen mainMethodGen = new MethodGen(mainMethod,&quot;SomeInstructions&quot;,theCPool);
+		mainMethodGen.setInstructionList(iList);
+		mainMethodGen.setMaxStack();
+		mainMethodGen.setMaxLocals();
+
+		iList.dispose();
+
+		//puts the method back into the class
+		Method[] methods = theClassGen.getMethods();
+		for(Method m : methods)
+			if(m.getName().equals(&quot;main&quot;)) {
+				System.out.println(&quot;found main&quot;);
+				m = mainMethodGen.getMethod();
+			}
+		theClassGen.setMethods(methods);
+	}
+
+	public void dumpClass() {
+		try{
+			theClassGen.getJavaClass().dump(&quot;SomeInstructionsclass&quot;);
+		}
+		catch(IOException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+}
+[/code]
+
+its dumps the class, but when i decompile it, its the same as if i hadnt change it at all
+i think im just not placing the intructions back to the ClassGen correctly
+
+anyone know whats wrong?
+
+EDIT: this is what the class looked like when i managed it
+[code]
+import org.apache.bcel.Repository;
+import org.apache.bcel.classfile.*;
+import org.apache.bcel.generic.*;
+import java.io.IOException;
+import static org.apache.bcel.Constants.*;
+
+public class ReplaceInstruction {
+
+	public static void main(String[] args) {
+		new ReplaceInstruction();
+	}
+
+	public JavaClass theClass;
+	public ClassGen theClassGen;
+
+	public ReplaceInstruction() {
+
+		loadClass();
+		replace();
+		dumpClass();
+	}
+
+	public void loadClass() {
+		try{
+			theClass = Repository.lookupClass(&quot;SomeInstructions&quot;);
+			theClassGen = new ClassGen(theClass);
+		}
+		catch(ClassNotFoundException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	public void replace() {
+
+		//find the main method object
+		Method mainMethod = null;
+		for(Method m : theClass.getMethods())
+			if(m.getName().equals(&quot;main&quot;)) {
+				mainMethod = m;
+				break;
+			}
+
+
+		ConstantPoolGen theCPool = theClassGen.getConstantPool();
+		MethodGen mainMethodGen = new MethodGen(mainMethod,theClassGen.getClassName(),theCPool);
+		InstructionList iList = mainMethodGen.getInstructionList();		
+
+		//get the LDC instruction handle
+		InstructionHandle ldcHandle = null;
+		Instruction[] insts = iList.getInstructions();
+		for(int f=0;f&lt;insts.length;f++) {
+			if(insts[f] instanceof PUTSTATIC) {
+				InstructionHandle[] iHandles = iList.getInstructionHandles();
+				ldcHandle = iHandles[f].getPrev();
+			}
+		}
+
+		//creates the invokestatic
+		InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+		InvokeInstruction getField = iFactory.createInvoke(&quot;Bot&quot;,&quot;getField&quot;,Type.STRING,Type.NO_ARGS,INVOKESTATIC);
+
+		//replace it
+		ldcHandle.setInstruction(getField);
+		iList.setPositions();
+
+		mainMethodGen.setInstructionList(iList);
+		mainMethodGen.setMaxStack();
+		mainMethodGen.setMaxLocals();
+		mainMethodGen.removeLineNumbers();
+		theClassGen.replaceMethod(mainMethod,mainMethodGen.getMethod());		
+	}
+
+	public void dumpClass() {
+		try{
+			theClassGen.getJavaClass().dump(&quot;SomeInstructionsclass&quot;);
+		}
+		catch(IOException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+}
+[/code]</description>
+    
+    <lastBuildDate>Wed, 06 Jun 2007 20:47:47 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Bcel instruction replacing help?</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>iv already got that, i think my problem is that i didnt get InstructionHandle or Instruction in the right way, or im not putting them back in the right way</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/3</link>
+        <pubDate>Wed, 06 Jun 2007 20:47:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-106764-3</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764.rss">Bcel instruction replacing help?</source>
+      </item>
+      <item>
+        <title>Bcel instruction replacing help?</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p>try InstructionHandle.setInstruction(Instruction), obvioyusly replace InstructionHandle and Instruction with your suffs.</p>
+<p>that should replace it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/2</link>
+        <pubDate>Wed, 06 Jun 2007 18:42:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-106764-2</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764.rss">Bcel instruction replacing help?</source>
+      </item>
+      <item>
+        <title>Bcel instruction replacing help?</title>
+        <dc:creator><![CDATA[@yakman yakman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yakman">@yakman</a> wrote:</p>
+          <blockquote>
+              <p>EDIT: i managed it, no thanks to you guys :mad:</p>
+<p>im trying to get bcel to replace one instruction with another, having some problems though</p>
+<p>heres the class im trying to modify</p>
+<pre><code class="lang-auto">public class SomeInstructions {
+
+	public static String fieldVar;
+
+	public static void main(String[] args) {
+		fieldVar = "field";
+	}
+}</code></pre>
+<p>im trying to make it so it says</p>
+<pre><code class="lang-auto">fieldVar = Bot.getField();</code></pre>
+<p>heres the class for that</p>
+<pre><code class="lang-auto">public class Bot {
+
+	public static String getField() {
+		System.out.println("Called getField()");
+		return "aField";
+	}
+}</code></pre>
+<p>i know i have to replace the LDC with an INVOKESTATIC<br>
+this is the class which uses bcel to replace</p>
+<pre><code class="lang-auto">import org.apache.bcel.Repository;
+import org.apache.bcel.classfile.*;
+import org.apache.bcel.generic.*;
+import java.io.IOException;
+import static org.apache.bcel.Constants.*;
+
+public class ReplaceInstruction {
+
+	public static void main(String[] args) {
+		new ReplaceInstruction();
+	}
+
+	public JavaClass theClass;
+	public ClassGen theClassGen;
+
+	public ReplaceInstruction() {
+
+		loadClass();
+		replace();
+		dumpClass();
+	}
+
+	public void loadClass() {
+		try{
+			theClass = Repository.lookupClass("SomeInstructions");
+			theClassGen = new ClassGen(theClass);
+		}
+		catch(ClassNotFoundException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	public void replace() {
+
+		//find the main method object
+		Method mainMethod = null;
+		for(Method m : theClass.getMethods())
+			if(m.getName().equals("main")) {
+				mainMethod = m;
+				break;
+			}
+
+		//get the instructions of main()
+		InstructionList iList = new InstructionList(mainMethod.getCode().getCode());
+
+		//get the LDC instruction
+		ConstantPoolGen theCPool = theClassGen.getConstantPool();
+		LDC theLDC = null;
+		for(Instruction i : iList.getInstructions())
+			if(i instanceof LDC)
+				if( ((LDC)i).getValue(theCPool).toString().equals("field") ) {
+					theLDC = (LDC)i;
+					System.out.println("Found LDC instruction");
+					break;
+				}
+
+		//gets the LDC instruction handle
+		InstructionHandle ldcHandle = null;
+		InstructionHandle[] iHandles = iList.getInstructionHandles();
+		for(InstructionHandle ih : iHandles)
+			if(ih.getInstruction().equals(theLDC)) {
+				ldcHandle = ih;
+				System.out.println("Found LDC instruction handle");
+				break;
+			}
+
+		//creates the invokestatic
+		InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+		InvokeInstruction getField = iFactory.createInvoke("Bot","getField",Type.STRING,Type.NO_ARGS,INVOKESTATIC);
+
+		//replace it
+		ldcHandle.setInstruction(getField);
+
+		//place it back in the method
+		MethodGen mainMethodGen = new MethodGen(mainMethod,"SomeInstructions",theCPool);
+		mainMethodGen.setInstructionList(iList);
+		mainMethodGen.setMaxStack();
+		mainMethodGen.setMaxLocals();
+
+		iList.dispose();
+
+		//puts the method back into the class
+		Method[] methods = theClassGen.getMethods();
+		for(Method m : methods)
+			if(m.getName().equals("main")) {
+				System.out.println("found main");
+				m = mainMethodGen.getMethod();
+			}
+		theClassGen.setMethods(methods);
+	}
+
+	public void dumpClass() {
+		try{
+			theClassGen.getJavaClass().dump("SomeInstructionsclass");
+		}
+		catch(IOException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+}</code></pre>
+<p>its dumps the class, but when i decompile it, its the same as if i hadnt change it at all<br>
+i think im just not placing the intructions back to the ClassGen correctly</p>
+<p>anyone know whats wrong?</p>
+<p>EDIT: this is what the class looked like when i managed it</p>
+<pre><code class="lang-auto">import org.apache.bcel.Repository;
+import org.apache.bcel.classfile.*;
+import org.apache.bcel.generic.*;
+import java.io.IOException;
+import static org.apache.bcel.Constants.*;
+
+public class ReplaceInstruction {
+
+	public static void main(String[] args) {
+		new ReplaceInstruction();
+	}
+
+	public JavaClass theClass;
+	public ClassGen theClassGen;
+
+	public ReplaceInstruction() {
+
+		loadClass();
+		replace();
+		dumpClass();
+	}
+
+	public void loadClass() {
+		try{
+			theClass = Repository.lookupClass("SomeInstructions");
+			theClassGen = new ClassGen(theClass);
+		}
+		catch(ClassNotFoundException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	public void replace() {
+
+		//find the main method object
+		Method mainMethod = null;
+		for(Method m : theClass.getMethods())
+			if(m.getName().equals("main")) {
+				mainMethod = m;
+				break;
+			}
+
+
+		ConstantPoolGen theCPool = theClassGen.getConstantPool();
+		MethodGen mainMethodGen = new MethodGen(mainMethod,theClassGen.getClassName(),theCPool);
+		InstructionList iList = mainMethodGen.getInstructionList();		
+
+		//get the LDC instruction handle
+		InstructionHandle ldcHandle = null;
+		Instruction[] insts = iList.getInstructions();
+		for(int f=0;f&lt;insts.length;f++) {
+			if(insts[f] instanceof PUTSTATIC) {
+				InstructionHandle[] iHandles = iList.getInstructionHandles();
+				ldcHandle = iHandles[f].getPrev();
+			}
+		}
+
+		//creates the invokestatic
+		InstructionFactory iFactory = new InstructionFactory(theClassGen,theCPool);
+		InvokeInstruction getField = iFactory.createInvoke("Bot","getField",Type.STRING,Type.NO_ARGS,INVOKESTATIC);
+
+		//replace it
+		ldcHandle.setInstruction(getField);
+		iList.setPositions();
+
+		mainMethodGen.setInstructionList(iList);
+		mainMethodGen.setMaxStack();
+		mainMethodGen.setMaxLocals();
+		mainMethodGen.removeLineNumbers();
+		theClassGen.replaceMethod(mainMethod,mainMethodGen.getMethod());		
+	}
+
+	public void dumpClass() {
+		try{
+			theClassGen.getJavaClass().dump("SomeInstructionsclass");
+		}
+		catch(IOException ex) {
+			ex.printStackTrace();
+		}
+	}
+
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764/1</link>
+        <pubDate>Wed, 06 Jun 2007 14:38:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-106764-1</guid>
+        <source url="https://forum.moparisthebest.com/t/bcel-instruction-replacing-help/106764.rss">Bcel instruction replacing help?</source>
+      </item>
+  </channel>
+</rss>

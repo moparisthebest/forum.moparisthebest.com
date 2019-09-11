@@ -1,0 +1,701 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Auth Voting System</title>
+    <link>https://forum.moparisthebest.com/t/auth-voting-system/459690</link>
+    <description>Seeing as several people are now selling work they do not own nor created on their own, I do not see a logical reason for why they should be able to make money out of it.
+
+Download and upload these files onto your webhost: [url=http://www.mediafire.com/?x254hekj80p6oys]Files.zip[/url]
+
+Import this SQL:
+
+[CODE]CREATE TABLE `tempvotes` (
+  `id` int(5) NOT NULL,
+  `time` int(9) NOT NULL,
+  `ipaddress` varchar(15) NOT NULL,
+  `voted` int(1) NOT NULL default &#39;0&#39;
+) ENGINE=MyISAM;
+
+CREATE TABLE `votes` (
+  `id` int(11) NOT NULL auto_increment,
+  `time` int(9) NOT NULL,
+  `ipaddress` varchar(15) NOT NULL,
+  `authcode` varchar(6) NOT NULL,
+  `used` int(1) NOT NULL default &#39;0&#39;,
+  `username` varchar(14) NOT NULL,
+  `guid` varchar(45) NOT NULL,
+  PRIMARY KEY  (`id`)
+) ENGINE=MyISAM[/CODE]
+
+
+Create a new file titled &quot;[B]database.xml[/B]&quot; in your server&#39;s main folder. 
+
+[CODE]&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE properties SYSTEM &quot;http://java.sun.com/dtd/properties.dtd&quot;&gt;
+&lt;properties&gt;
+	&lt;comment&gt;Database connection settings&lt;/comment&gt;
+	&lt;entry key=&quot;host&quot;&gt;www.google.com&lt;/entry&gt;
+	&lt;entry key=&quot;port&quot;&gt;3306&lt;/entry&gt;
+	&lt;entry key=&quot;name&quot;&gt;database&lt;/entry&gt;
+	&lt;entry key=&quot;username&quot;&gt;username&lt;/entry&gt;
+	&lt;entry key=&quot;password&quot;&gt;password&lt;/entry&gt;
+&lt;/properties&gt;
+
+[/CODE]
+
+[b]Example: [/b]
+[IMG]http://img268.imageshack.us/img268/8175/f84956e424c7423bb8c689c.png[/img]
+
+Add this in the server.java processes
+
+[CODE]try {
+	Database.init();
+} catch (Exception e) {
+	e.printStackTrace();
+	return;
+}[/CODE]
+
+Import this in server.java
+
+[CODE]import server.Database;[/CODE]
+
+Create a new class &quot;Database.java&quot; in the same directory where your server.java is located.
+
+[CODE]package server;
+
+import java.io.FileInputStream;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+
+public class Database {
+
+	private static final Logger LOG = Logger.getLogger(Database.class.getName());
+	private static Properties props = new Properties();
+	private static Connection conn = null;
+	private static long lastUsed = System.currentTimeMillis();
+	
+	public static void init() throws Exception {
+		try {
+			FileInputStream fis = new FileInputStream(&quot;database.xml&quot;);
+			props.loadFromXML(fis);
+		} catch (Exception e) {
+			throw new Exception(&quot;error loading database properties&quot;);
+		}
+		connect();
+	}
+
+	private static void connect() throws Exception {
+		try {
+			Class.forName(&quot;com.mysql.jdbc.Driver&quot;).newInstance();
+		} catch (Exception e) {
+			throw new Exception(&quot;error loading mysql driver&quot;);
+		}
+		try {
+			conn = DriverManager.getConnection(
+					&quot;jdbc:mysql://&quot; + props.getProperty(&quot;host&quot;) + &quot;:&quot;
+							+ props.getProperty(&quot;port&quot;) + &quot;/&quot;
+							+ props.getProperty(&quot;name&quot;),
+					props.getProperty(&quot;username&quot;),
+					props.getProperty(&quot;password&quot;));
+		} catch (Exception e) {
+			throw new Exception(&quot;error connecting to database &quot;
+					+ e.getMessage());
+		}
+	}
+
+	public static Connection getConnection() throws Exception {
+		if (conn == null) {
+			throw new Exception(&quot;connection is null&quot;);
+		}
+		if (System.currentTimeMillis() - lastUsed &gt; 300000) {
+			try {
+				lastUsed = System.currentTimeMillis();
+				conn.close();
+				connect();
+			} catch (Exception e) {
+				throw new Exception(&quot;error refreshing database connection&quot;);
+			}
+		}
+		return conn;
+	}
+
+	public static void close() throws Exception {
+		if (conn == null) {
+			throw new Exception(&quot;connection is null&quot;);
+		}
+		conn.close();
+	}
+
+}[/CODE]
+
+Add this command in your commands class which should be located in server packets.
+
+[CODE]if (playerCommand.startsWith(&quot;auth&quot;) &amp;&amp; playerCommand.length() &gt; 5) {
+			if (!Config.MYSQL_ACTIVE) {
+				c.sendMessage(&quot;Sorry this is currently disabled.&quot;);
+				return;
+			} else {
+				try {
+					PreparedStatement ps = Database.getConnection().prepareStatement(&quot;SELECT * FROM votes WHERE username = ? AND used = &#39;1&#39; LIMIT 1&quot;);
+					ps.setString(1, c.playerName);
+					ResultSet results = ps.executeQuery();
+					if(results.next()) {
+						c.sendMessage(&quot;You have already voted once today.&quot;);
+					} else {
+						ps.close();
+						ps = Database.getConnection().prepareStatement(&quot;SELECT * FROM votes WHERE authcode = ? AND used = &#39;0&#39; LIMIT 1&quot;);
+						ps.setString(1, playerCommand.substring(5));
+						results = ps.executeQuery();
+						if(results.next()) {
+							ps.close();
+							ps = Database.getConnection().prepareStatement(&quot;UPDATE votes SET used = &#39;1&#39; WHERE authcode = ?&quot;);
+							ps.setString(1, playerCommand.substring(5));
+							ps.executeUpdate();
+							c.getItems().addItem(995, 10000000);	
+							c.sendMessage(&quot;Thank you for voting.&quot;);
+						} else {
+							c.sendMessage(&quot;The auth code is not valid!&quot;);
+						}
+					}
+					ps.close();
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+			return;[/CODE]
+
+Declare this in Config.java:
+
+[CODE]public static final boolean MYSQL_ACTIVE = true;[/CODE]
+
+Credits:
+100% - [url=http://www.rune-server.org/members/stuart/]Stuart[/url]
+
+
+Post any errors that you may get with this and I&#39;ll try my best to be of assistance. ^^
+
+
+[B]FIXES:[/B]
+
+
+[QUOTE=Revil;3605026]Sorry I forgot to mention this step in the thread, you should see option named &quot;Remote SQL&quot; under the database header.  
+
+[IMG]http://img832.imageshack.us/img832/3033/ecb1920d7b8d446fbf7402b.png[/img]
+
+Now under &quot;Add Access Host&quot; type in your server IP and add it as a host.
+
+[IMG]http://img35.imageshack.us/img35/8751/cd1eb20a6b7841878abfd02.png[/img][/QUOTE]</description>
+    
+    <lastBuildDate>Thu, 15 May 2014 21:53:00 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@WHATBLOOD WHATBLOOD]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/whatblood">@WHATBLOOD</a> wrote:</p>
+          <blockquote>
+              <p>i have somenoe who is abusing the vote page, theyre getting auths over nd over.<br>
+How do i change this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/18</link>
+        <pubDate>Thu, 15 May 2014 21:53:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-18</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@insinity insinity]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/insinity">@insinity</a> wrote:</p>
+          <blockquote>
+              <p>erm yeah erm my errors java.lang.Exception: connection is null<br>
+at server.Database.getConnection(Database.java:48)<br>
+at server.model.players.packets.Commands.playerCommands(Commands.java:662)<br>
+at server.model.players.packets.Commands.processPacket(Commands.java:32)<br>
+at server.model.players.PacketHandler.processPacket(PacketHandler.java:136)<br>
+at server.model.players.Client.processQueuedPackets(Client.java:1047)<br>
+at server.core.PlayerHandler.process(PlayerHandler.java:191)<br>
+at server.Server$2.execute(Server.java:148)<br>
+at server.core.GameEngine$1.run(GameEngine.java:103)<br>
+at server.core.GameEngine$5.run(GameEngine.java:176)<br>
+at java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)<br>
+at java.util.concurrent.FutureTask.run(Unknown Source)<br>
+at java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.access$201(Unknown Source)<br>
+at java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(Unknown Source)<br>
+at java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)<br>
+at java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)<br>
+at java.lang.Thread.run(Unknown Source)</p>
+<p>when doing ::auth random code etc</p>
+<p>i havent got that remote sql thingy im using 000webhost whats a better one to use for free?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/17</link>
+        <pubDate>Sun, 30 Mar 2014 14:19:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-17</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@zachtucker zachtucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zachtucker">@zachtucker</a> wrote:</p>
+          <blockquote>
+              <p>ive got this setup but… the entrys dont delete after a day</p>
+<pre><code class="lang-auto"></code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/16</link>
+        <pubDate>Sun, 30 Sep 2012 00:25:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-16</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Special_Air_Service Special Air Service]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/special_air_service">@Special_Air_Service</a> wrote:</p>
+          <blockquote>
+              <p>good job wont use thought</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/15</link>
+        <pubDate>Tue, 25 Sep 2012 15:23:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-15</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@cderty cderty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cderty">@cderty</a> wrote:</p>
+          <blockquote>
+              <p>this seriously isnt working, what am i doing wrong?</p>
+<p>I’ve imported the sql+made a database etc, put my vps ip in the remotesql, my ‘database.xml’ looks likes</p>
+<p>[code]&lt;?xml version="1.0" encoding="UTF-8"?&gt;</p>
+
+
+        Database connection settings
+        www.serenex.org
+        3306
+        mydatabase
+        mydatabaseuser
+        mypassword
+[/code]
+<p>the database.java remains unmodified, and all the imports are correct as there is NO errors compiling, what could be the problem? other vote mods have connected correctly.</p>
+<p>i could pay if someone sorts this out <img src="https://forum.moparisthebest.com/images/emoji/twitter/open_mouth.png?v=5" title=":open_mouth:" class="emoji" alt=":open_mouth:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/14</link>
+        <pubDate>Mon, 24 Sep 2012 15:31:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-14</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@RelicFX RelicFX]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/relicfx">@RelicFX</a> wrote:</p>
+          <blockquote>
+              <p>Good Job Revil</p>
+<p>-Violent</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/13</link>
+        <pubDate>Sat, 22 Sep 2012 14:59:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-13</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@cderty cderty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cderty">@cderty</a> wrote:</p>
+          <blockquote>
+              <p>well thats not working, maybe you could take a look? add my skype nikki.auroea, i could pay you a little if its all good <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/12</link>
+        <pubDate>Wed, 19 Sep 2012 17:59:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-12</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Rameez Rameez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rameez">@Rameez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“cderty, post:10, topic:459690”]in the database xml? im using a vps, and put the vps ip there and on the remotesql</p>
+<p>my database xml looks like this:</p>
+<p>[code]&lt;?xml version="1.0" encoding="UTF-8"?&gt;</p>
+
+
+        Database connection settings
+        webhost server ip or my vps ip? or localhost?
+        43594/ or webhost port??
+        serenexo_voting- db
+        serenexo_voting-db
+        voting123-db?
+[/code][/quote]
+&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+
+
+        Database connection settings
+        www.your-website-address.com
+        3306
+        voting_database
+        databse_username
+        database_password
+
+<p>Make sure to have linked your database with the database user.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/11</link>
+        <pubDate>Wed, 19 Sep 2012 10:27:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-11</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@cderty cderty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cderty">@cderty</a> wrote:</p>
+          <blockquote>
+              <p>in the database xml? im using a vps, and put the vps ip there and on the remotesql</p>
+<p>my database xml looks like this:</p>
+<p>[code]&lt;?xml version="1.0" encoding="UTF-8"?&gt;</p>
+
+
+        Database connection settings
+        webhost server ip or my vps ip? or localhost?
+        43594/ or webhost port??
+        serenexo_voting- db
+        serenexo_voting-db
+        voting123-db?
+[/code]
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/10</link>
+        <pubDate>Mon, 17 Sep 2012 17:46:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-10</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Ddragonimp Ddragonimp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ddragonimp">@Ddragonimp</a> wrote:</p>
+          <blockquote>
+              <p>If your not connecting remotely, you put “localhost” for the ip.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/9</link>
+        <pubDate>Mon, 17 Sep 2012 15:10:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-9</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@cderty cderty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cderty">@cderty</a> wrote:</p>
+          <blockquote>
+              <p>thank you, that’s worked, it just has the error of ‘loading database properties’ now, i have put the server ip into remotesql etc, in database.xml, is the port number the server number? and the host the webhost server?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/8</link>
+        <pubDate>Mon, 17 Sep 2012 09:03:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-8</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Rameez Rameez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rameez">@Rameez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“cderty, post:6, topic:459690”]<code>                                        PreparedStatement ps = Database.getConnection().prepareStatement("SELECT * FROM votes WHERE username = ? AND used = '1' LIMIT 1");
+                                        ps.setString(1, c.playerName);
+                                        ResultSet results = ps.executeQuery();</code></p>
+<p>cant find that^[/quote]</p>
+<p>Add the following imports in your commands class:</p>
+<p><code>import java.sql.PreparedStatement;
+import java.sql.ResultSet;</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/7</link>
+        <pubDate>Mon, 17 Sep 2012 04:31:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-7</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@cderty cderty]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cderty">@cderty</a> wrote:</p>
+          <blockquote>
+              <p><code>                                        PreparedStatement ps = Database.getConnection().prepareStatement("SELECT * FROM votes WHERE username = ? AND used = '1' LIMIT 1");
+                                        ps.setString(1, c.playerName);
+                                        ResultSet results = ps.executeQuery();</code></p>
+<p>cant find that^</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/6</link>
+        <pubDate>Sun, 16 Sep 2012 19:33:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-6</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Rameez Rameez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rameez">@Rameez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ruby, post:2, topic:459690”]Thanks for the release Revil.</p>
+<p>However, you must explain your code otherwise it’s only a bunch of snippets.[/quote]</p>
+<p>Eh, I’ll comment on it sometime later, or a moderator can feel free to move this to the snippet section or however they see fit.</p>
+<p>Anyway’s to those that do not know where to add those sql tables, you’re meant to create a new sql database for voting on your webhost. Edit the voting database using phpMyAdmin to import those tables in that voting database to store all the voting data.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/5</link>
+        <pubDate>Sat, 15 Sep 2012 15:49:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-5</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@eclipse_rsps eclipse rsps]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eclipse_rsps">@eclipse_rsps</a> wrote:</p>
+          <blockquote>
+              <p>Look’s good.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/4</link>
+        <pubDate>Sat, 15 Sep 2012 15:34:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-4</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@dwarfs222 dwarfs222]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dwarfs222">@dwarfs222</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ruby, post:2, topic:459690”]Thanks for the release Revil.</p>
+<p>However, you must explain your code otherwise it’s only a bunch of snippets.[/quote]<br>
+yup ;/</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/3</link>
+        <pubDate>Sat, 15 Sep 2012 12:08:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-3</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for the release Revil.</p>
+<p>However, you must explain your code otherwise it’s only a bunch of snippets.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/2</link>
+        <pubDate>Fri, 14 Sep 2012 07:46:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-2</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+      <item>
+        <title>Auth Voting System</title>
+        <dc:creator><![CDATA[@Rameez Rameez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rameez">@Rameez</a> wrote:</p>
+          <blockquote>
+              <p>Seeing as several people are now selling work they do not own nor created on their own, I do not see a logical reason for why they should be able to make money out of it.</p>
+<p>Download and upload these files onto your webhost: <a href="http://www.mediafire.com/?x254hekj80p6oys" data-bbcode="true" rel="nofollow noopener">Files.zip</a></p>
+<p>Import this SQL:</p>
+<p>[CODE]CREATE TABLE <code>tempvotes</code> (<br>
+<code>id</code> int(5) NOT NULL,<br>
+<code>time</code> int(9) NOT NULL,<br>
+<code>ipaddress</code> varchar(15) NOT NULL,<br>
+<code>voted</code> int(1) NOT NULL default ‘0’<br>
+) ENGINE=MyISAM;</p>
+<p>CREATE TABLE <code>votes</code> (<br>
+<code>id</code> int(11) NOT NULL auto_increment,<br>
+<code>time</code> int(9) NOT NULL,<br>
+<code>ipaddress</code> varchar(15) NOT NULL,<br>
+<code>authcode</code> varchar(6) NOT NULL,<br>
+<code>used</code> int(1) NOT NULL default ‘0’,<br>
+<code>username</code> varchar(14) NOT NULL,<br>
+<code>guid</code> varchar(45) NOT NULL,<br>
+PRIMARY KEY  (<code>id</code>)<br>
+) ENGINE=MyISAM[/CODE]</p>
+<p>Create a new file titled “<span class="bbcode-b">database.xml</span>” in your server’s main folder.</p>
+<p>[CODE]&lt;?xml version="1.0" encoding="UTF-8"?&gt;</p>
+
+
+	Database connection settings
+	www.google.com
+	3306
+	database
+	username
+	password
+
+<p>[/CODE]</p>
+<p><span class="bbcode-b">Example: </span><br>
+<img src="http://img268.imageshack.us/img268/8175/f84956e424c7423bb8c689c.png" alt width="" height=""></p>
+<p>Add this in the server.java processes</p>
+<p><code>try {
+	Database.init();
+} catch (Exception e) {
+	e.printStackTrace();
+	return;
+}</code></p>
+<p>Import this in server.java</p>
+<pre><code class="lang-auto"></code></pre>
+<p>Create a new class “Database.java” in the same directory where your server.java is located.</p>
+<p>[CODE]package server;</p>
+<p>import java.io.FileInputStream;<br>
+import java.sql.Connection;<br>
+import java.sql.DriverManager;<br>
+import java.util.Properties;<br>
+import java.util.logging.Level;<br>
+import java.util.logging.Logger;</p>
+<p>public class Database {</p>
+<pre><code>private static final Logger LOG = Logger.getLogger(Database.class.getName());
+private static Properties props = new Properties();
+private static Connection conn = null;
+private static long lastUsed = System.currentTimeMillis();
+
+public static void init() throws Exception {
+	try {
+		FileInputStream fis = new FileInputStream("database.xml");
+		props.loadFromXML(fis);
+	} catch (Exception e) {
+		throw new Exception("error loading database properties");
+	}
+	connect();
+}
+
+private static void connect() throws Exception {
+	try {
+		Class.forName("com.mysql.jdbc.Driver").newInstance();
+	} catch (Exception e) {
+		throw new Exception("error loading mysql driver");
+	}
+	try {
+		conn = DriverManager.getConnection(
+				"jdbc:mysql://" + props.getProperty("host") + ":"
+						+ props.getProperty("port") + "/"
+						+ props.getProperty("name"),
+				props.getProperty("username"),
+				props.getProperty("password"));
+	} catch (Exception e) {
+		throw new Exception("error connecting to database "
+				+ e.getMessage());
+	}
+}
+
+public static Connection getConnection() throws Exception {
+	if (conn == null) {
+		throw new Exception("connection is null");
+	}
+	if (System.currentTimeMillis() - lastUsed &gt; 300000) {
+		try {
+			lastUsed = System.currentTimeMillis();
+			conn.close();
+			connect();
+		} catch (Exception e) {
+			throw new Exception("error refreshing database connection");
+		}
+	}
+	return conn;
+}
+
+public static void close() throws Exception {
+	if (conn == null) {
+		throw new Exception("connection is null");
+	}
+	conn.close();
+}
+</code></pre>
+<p>}[/CODE]</p>
+<p>Add this command in your commands class which should be located in server packets.</p>
+<p><code>if (playerCommand.startsWith("auth") &amp;&amp; playerCommand.length() &gt; 5) {
+			if (!Config.MYSQL_ACTIVE) {
+				c.sendMessage("Sorry this is currently disabled.");
+				return;
+			} else {
+				try {
+					PreparedStatement ps = Database.getConnection().prepareStatement("SELECT * FROM votes WHERE username = ? AND used = '1' LIMIT 1");
+					ps.setString(1, c.playerName);
+					ResultSet results = ps.executeQuery();
+					if(results.next()) {
+						c.sendMessage("You have already voted once today.");
+					} else {
+						ps.close();
+						ps = Database.getConnection().prepareStatement("SELECT * FROM votes WHERE authcode = ? AND used = '0' LIMIT 1");
+						ps.setString(1, playerCommand.substring(5));
+						results = ps.executeQuery();
+						if(results.next()) {
+							ps.close();
+							ps = Database.getConnection().prepareStatement("UPDATE votes SET used = '1' WHERE authcode = ?");
+							ps.setString(1, playerCommand.substring(5));
+							ps.executeUpdate();
+							c.getItems().addItem(995, 10000000);	
+							c.sendMessage("Thank you for voting.");
+						} else {
+							c.sendMessage("The auth code is not valid!");
+						}
+					}
+					ps.close();
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+			return;</code></p>
+<p>Declare this in Config.java:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>Credits:<br>
+100% - <a href="http://www.rune-server.org/members/stuart/" data-bbcode="true" rel="nofollow noopener">Stuart</a></p>
+<p>Post any errors that you may get with this and I’ll try my best to be of assistance. ^^</p>
+<p><span class="bbcode-b">FIXES:</span></p>
+<p>[QUOTE=Revil;3605026]Sorry I forgot to mention this step in the thread, you should see option named “Remote SQL” under the database header.</p>
+<p><img src="http://img832.imageshack.us/img832/3033/ecb1920d7b8d446fbf7402b.png" alt width="" height=""></p>
+<p>Now under “Add Access Host” type in your server IP and add it as a host.</p>
+<p><img src="http://img35.imageshack.us/img35/8751/cd1eb20a6b7841878abfd02.png" alt width="" height="">[/QUOTE]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/auth-voting-system/459690/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/auth-voting-system/459690/1</link>
+        <pubDate>Fri, 14 Sep 2012 01:49:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-459690-1</guid>
+        <source url="https://forum.moparisthebest.com/t/auth-voting-system/459690.rss">Auth Voting System</source>
+      </item>
+  </channel>
+</rss>

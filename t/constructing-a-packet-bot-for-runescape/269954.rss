@@ -1,0 +1,698 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Constructing a packet bot for Runescape</title>
+    <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954</link>
+    <description>[i][b]Constructing a packet bot for Runescape.[/b][/i]
+
+This topic has been brought up quite a few times, but I&#39;m going to bring it up again because I believe that a structured conversation on it with more detailed information will lead to advances in the field.
+
+So that we&#39;re all on the same page, I&#39;ll describe cryptography in general, and then deduce how those concepts apply to the actual Runescape client. I do not profess to be a cryptography expert, but I&#39;ll try my best to explain everything with as much clarity as possible. Errors may be present in my description, so feel free to berate me until I fix them.
+
+DISCLAIMER: I haven&#39;t done shit with shit, so this is purely educational. I don&#39;t care enough to implement any of this for Runescape. My hands are tied with certain flash games at the moment ;)
+
+
+[b]Simple definitions to commonly used terms:[/b]
+
+[u]Cipher[/u] - A cipher is an operation that, when applied to an understandable sequence of characters, will obfuscate its meaning.
+
+[u]Decipher[/u] - The process of taking an obfuscated text, and producing its original meaning.
+
+[u]Plaintext[/u] - Plaintext is a sequence of characters that can be understood by humans.
+
+[u]Ciphertext[/u] - Ciphertext is a sequence of characters that cannot be understood by humans.
+
+[u]Keystream[/u] - A keystream is combined with plaintext in order to obfuscate the meaning of the plaintext. In turn, the same keystream applied to ciphertext can bring the ciphertext back to its original (understandable) plaintext sequence.
+
+[u]Exclusive Or (XOR)[/u] - XOR is a mathematical operation performed on individual bits. The caret (^) character is used to represent XOR in mathematical operations. The semantic meaning of XOR is &quot;one or the other, but not both.&quot; Ex: 1 ^ 0 = 1 neither operands are the same, so this statement evaluates to true. 1 ^ 1 = 0 both operands are the same, so this statement evaluates to false.
+
+[b]Conceptual Overview[/b]
+Software metaphors are a ubiquitous and powerful concept used throughout the industry. This paper will be no exception. The following metaphor describes cryptography in the context of the Runescape client using you as the server, and a crush named Patty as the client.
+
+    Your name is Charlie Brown. You have a crush on Patty, but you don&#39;t want your current girlfriend Peggy Jean to discover your feelings for her. You like the thrill of having an affair, so you decide to turn up the heat by having Patty, your girlfriend, deliver a love letter to Peggy Jean right out in the open. The potential problem is that Patty could read the love letter and dump you.
+
+    It just so happens that your best pal Snoopy likes cryptography, so you decide to ask him for help on the problem. Snoopy agrees to this deal.
+
+   The next day, Snoopy hands you two letters, both of which are filled with an unintelligible string of characters. &quot;Ok Charlie Brown, here&#39;s the deal. The first letter I gave you is a key. I want you to XOR the key with the love letter you want to send to Peggy Jean.&quot; Oddly enough, you learned how to XOR the other day in class, so you have no trouble XOR&#39;ing the love letter with Snoopy&#39;s key. &quot;Ok Charlie Brown, next I&#39;ll have you notice that the second letter I gave you is the same as the first letter. I want you to give the second letter to Peggy Jean along with the letter you just XOR&#39;d, and tell her to XOR the two unintelligible pieces together.&quot;
+
+   The next morning, you ask Patty to deliver two unintelligible messages to Peggy Jean. Wanda eventually delivers the message and Peggy Jean XOR&#39;s both messages together (she remembered she learned how to do this in class the other day). She discovers that, by doing so, she can see the original love letter.
+
+In this case study we saw that Charlie Brown was acting as a server and Peggy Jean as a client. Charlie Brown took his plaintext and XOR&#39;d it with a key. He then delivered the result of that operation, along with the key, to Peggy Jean. Peggy Jean then XOR&#39;d the ciphertext with the key to produce the original plaintext.
+
+Let&#39;s look at one more example:
+
+[code]1011 (plaintext) ^ 0100 (keystream) = 1111 (ciphertext) 
+1111 (ciphertext) ^ 0100 (keystream) = 1011 (plaintext)[/code]
+
+See how we are able to deduce either the plaintext or the ciphertext by combining the opposite form of text with the key? That concept underpins the cryptographical innerworkings of the Runescape client.
+
+[b]Generating Pseudo Random Numbers[/b]
+Before continuing with our discussion, we have to make a few basic assumptions.
+
+1.) Generating random numbers is an extremely slow process.
+2.) There is no such things as a digitally generated random number.
+
+When the Runescape developers were deciding how to encrypt communication between the client and the server so people couldn&#39;t understand what commands the server and client were sending eachother, they needed to find a very fast and secure method of doing this. Since generating truly random numbers would require outside assistance in the form of analog data, the Runescape developers decided upon ISAAC to accomplish this instead. ISAAC is a cryptographically secure pseudo random number generator. Statistically speaking, the numbers that the ISAAC algorithm produces are so random, that it&#39;s virtually impossible to predict the next number to be outputted in the sequence given a set of randomly generated data generated by the algorithm. In fact, if the output of ISAAC is plotted, the points on the graph would be uniformly distributed throughout the plane. The problem with choosing ISAAC is that the stream of random digits generated isn&#39;t truly random. If we know the seeds that the algorithm started with, we are able to predict each and every random number that is generated. But, without the seeds, we are unable to predict anything about the output of ISAAC.
+
+Take a look at the following C implementation of ISAAC:
+[code]/*
+------------------------------------------------------------------------------
+readable.c: My random number generator, ISAAC.
+(c) Bob Jenkins, March 1996, Public Domain
+You may use this code in any way you wish, and it is free.  No warrantee.
+* May 2008 -- made it not depend on standard.h
+------------------------------------------------------------------------------
+*/
+#include &lt;stdio.h&gt;
+#include &lt;stddef.h&gt;
+
+/* a ub4 is an unsigned 4-byte quantity */
+typedef  unsigned long int  ub4;
+
+/* external results */
+ub4 randrsl[256], randcnt;
+
+/* internal state */
+static    ub4 mm[256];
+static    ub4 aa=0, bb=0, cc=0;
+
+
+void isaac()
+{
+   register ub4 i,x,y;
+
+   cc = cc + 1;    /* cc just gets incremented once per 256 results */
+   bb = bb + cc;   /* then combined with bb */
+
+   for (i=0; i&lt;256; ++i)
+   {
+     x = mm[i];
+     switch (i%4)
+     {
+     case 0: aa = aa^(aa&lt;&lt;13); break;
+     case 1: aa = aa^(aa&gt;&gt;6); break;
+     case 2: aa = aa^(aa&lt;&lt;2); break;
+     case 3: aa = aa^(aa&gt;&gt;16); break;
+     }
+     aa              = mm[(i+128)%256] + aa;
+     mm[i]      = y  = mm[(x&gt;&gt;2)%256] + aa + bb;
+     randrsl[i] = bb = mm[(y&gt;&gt;10)%256] + x;
+
+     /* Note that bits 2..9 are chosen from x but 10..17 are chosen
+        from y.  The only important thing here is that 2..9 and 10..17
+        don&#39;t overlap.  2..9 and 10..17 were then chosen for speed in
+        the optimized version (rand.c) */
+     /* See http://burtleburtle.net/bob/rand/isaac.html
+        for further explanations and analysis. */
+   }
+}
+
+
+/* if (flag!=0), then use the contents of randrsl[] to initialize mm[]. */
+#define mix(a,b,c,d,e,f,g,h) \
+{ \
+   a^=b&lt;&lt;11; d+=a; b+=c; \
+   b^=c&gt;&gt;2;  e+=b; c+=d; \
+   c^=d&lt;&lt;8;  f+=c; d+=e; \
+   d^=e&gt;&gt;16; g+=d; e+=f; \
+   e^=f&lt;&lt;10; h+=e; f+=g; \
+   f^=g&gt;&gt;4;  a+=f; g+=h; \
+   g^=h&lt;&lt;8;  b+=g; h+=a; \
+   h^=a&gt;&gt;9;  c+=h; a+=b; \
+}
+
+void randinit(flag)
+int flag;
+{
+   int i;
+   ub4 a,b,c,d,e,f,g,h;
+   aa=bb=cc=0;
+   a=b=c=d=e=f=g=h=0x9e3779b9;  /* the golden ratio */
+
+   for (i=0; i&lt;4; ++i)          /* scramble it */
+   {
+     mix(a,b,c,d,e,f,g,h);
+   }
+
+   for (i=0; i&lt;256; i+=8)   /* fill in mm[] with messy stuff */
+   {
+     if (flag)                  /* use all the information in the seed */
+     {
+       a+=randrsl[i  ]; b+=randrsl[i+1]; c+=randrsl[i+2]; d+=randrsl[i+3];
+       e+=randrsl[i+4]; f+=randrsl[i+5]; g+=randrsl[i+6]; h+=randrsl[i+7];
+     }
+     mix(a,b,c,d,e,f,g,h);
+     mm[i  ]=a; mm[i+1]=b; mm[i+2]=c; mm[i+3]=d;
+     mm[i+4]=e; mm[i+5]=f; mm[i+6]=g; mm[i+7]=h;
+   }
+
+   if (flag)
+   {        /* do a second pass to make all of the seed affect all of mm */
+     for (i=0; i&lt;256; i+=8)
+     {
+       a+=mm[i  ]; b+=mm[i+1]; c+=mm[i+2]; d+=mm[i+3];
+       e+=mm[i+4]; f+=mm[i+5]; g+=mm[i+6]; h+=mm[i+7];
+       mix(a,b,c,d,e,f,g,h);
+       mm[i  ]=a; mm[i+1]=b; mm[i+2]=c; mm[i+3]=d;
+       mm[i+4]=e; mm[i+5]=f; mm[i+6]=g; mm[i+7]=h;
+     }
+   }
+
+   isaac();            /* fill in the first set of results */
+   randcnt=256;        /* prepare to use the first set of results */
+}
+
+
+int main()
+{
+  ub4 i,j;
+  aa=bb=cc=(ub4)0;
+  for (i=0; i&lt;256; ++i) mm[i]=randrsl[i]=(ub4)0;
+  randinit(1);
+  for (i=0; i&lt;2; ++i)
+  {
+    isaac();
+    for (j=0; j&lt;256; ++j)
+    {
+      printf(&quot;%.8lx&quot;,randrsl[j]);
+      if ((j&amp;7)==7) printf(&quot;\n&quot;);
+    }
+  }
+}[/code]
+
+We can see that the array randrsl starts out as an array of seeds. Each seed is 32 bits in length. The seeds are then used to affect the internal state, array mm, of the algorithm. It just so happens that if we know the seeds beforehand, we can deduce the internal state of the algorithm. This is where the &quot;pseudo&quot; property of this algorithm comes into play. We start with 256 seeds which will produce 256 random integers. Together, these 256 integers represent a keystream. The keystream is used to encrypt up to 1024 bytes of data. In a moment, we will look at a live example of the ISAAC implementation in the Runescape client and confirm that the maximum length of a packet is indeed 1kb. In order to narrow down where the class that implements ISAAC in the client is, I searched for the golden ratio (0x9e3779b9). I haven&#39;t analyzed ISAAC enough to know what it is mathematically, but I&#39;ll be damned if it isn&#39;t golden. Searching for the golden ratio yields two classes. It becomes obvious which one is ISAAC. The following is an example of ISAAC found in a relatively recent decompiled client:</description>
+    
+    <lastBuildDate>Fri, 03 Apr 2009 11:16:26 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@Mopman Mopman]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mopman">@Mopman</a> wrote:</p>
+          <blockquote>
+              <p>Stfu already</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/47">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/47</link>
+        <pubDate>Fri, 03 Apr 2009 11:16:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-47</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:38, topic:269954”][quote author=unlimitedorb link=topic=356325.msg2731307#msg2731307 date=1238733251]<br>
+This thread can be locked. I now know enough about the client to make a standalone packet bot, and I’ll release it if I do.<br>
+[/quote]<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha[/quote]<br>
+<img src="http://static.ak.fbcdn.net/images/like/like_on.gif" alt width="" height=""> You like this.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/46">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/46</link>
+        <pubDate>Fri, 03 Apr 2009 08:48:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-46</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:44, topic:269954”]it makes sense, for fucks sake you are dumb</p>
+<p>i think you are more stupid than a moparscaper, but in reality you arent even that intelligent[/quote]</p>
+<p>Now that you’ve clarified it by example, it makes sense in that context. Without that clarification, it makes absolutely no sense.</p>
+<p>You’re slowly getting better at “guru” statement conversion. It’s a nasty habit to break especially when you have moparisthebest flunkies willing to overlook it for your approval. I’m almost proud of you.</p>
+<p>EDIT:<br>
+If you don’t hang onto that moparscaper meme tightly enough, it will get away from you. I just thought I’d let you know in case you were thinking about using it less.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/45</link>
+        <pubDate>Fri, 03 Apr 2009 07:50:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-45</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>it makes sense, for fucks sake you are dumb</p>
+<p>i think you are more stupid than a moparscaper, but in reality you arent even that intelligent</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/44</link>
+        <pubDate>Fri, 03 Apr 2009 07:27:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-44</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>To who frank_? To you? To me?</p>
+<p>That would be an example of a “guru” statement. It can lead anywhere. You made some progress combating that ignorant mindset with a recent post on Taharok’s Bezier Spline thread, but judging by the frequency you make semi content rich posts, I wouldn’t be surprised if this thread had something to do with it.</p>
+<p>I make “guru” statements too, though. When I said I knew enough to make a standalone packet bot, I didn’t indicate any features. That statement could lead anywhere. To be more specific, I meant I have analyzed the client enough to make a character login.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/43</link>
+        <pubDate>Fri, 03 Apr 2009 07:04:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-43</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>i makes perfect sense</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/42</link>
+        <pubDate>Fri, 03 Apr 2009 06:50:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-42</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:40, topic:269954”]you arent as smart as i think you are, either</p>
+<p>ps: i have never claimed to be intelligent</p>
+<p>edit: are you in bed with psb again? i can only assume it would be something such as that to prompt your outburst of ignorance[/quote]</p>
+<p>First comment makes absolutely no sense, but that doesn’t surprise me. You probably derive some sort of pleasure writing horribly thought out one liners - plenty of examples to support that.</p>
+<p>You don’t have to claim to be intelligent</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/41</link>
+        <pubDate>Fri, 03 Apr 2009 06:48:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-41</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>you arent as smart as i think you are, either</p>
+<p>ps: i have never claimed to be intelligent</p>
+<p>edit: are you in bed with psb again? i can only assume it would be something such as that to prompt your outburst of ignorance</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/40</link>
+        <pubDate>Fri, 03 Apr 2009 06:41:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-40</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>You’re not as smart as you think you are frank_ <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=6" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/39</link>
+        <pubDate>Fri, 03 Apr 2009 06:31:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-39</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="37" data-topic="269954">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/unlimitedorb/40/5_6bca9977b612b7aeef77ba1ec1cd67b3.png" class="avatar"> unlimitedorb:</div>
+<blockquote>
+<p>This thread can be locked. I now know enough about the client to make a standalone packet bot, and I’ll release it if I do.</p>
+</blockquote>
+</aside>
+<p>hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha<br>
+hahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/38</link>
+        <pubDate>Fri, 03 Apr 2009 06:12:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-38</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>This thread can be locked. I now know enough about the client to make a standalone packet bot, and I’ll release it if I do.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/37</link>
+        <pubDate>Fri, 03 Apr 2009 04:34:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-37</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@Greg_the_Xeno Greg the Xeno]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/greg_the_xeno">@Greg_the_Xeno</a> wrote:</p>
+          <blockquote>
+              <p>how do you get that backwards d?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/36</link>
+        <pubDate>Fri, 03 Apr 2009 03:31:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-36</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <p>i &lt;3 /b/.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/35</link>
+        <pubDate>Wed, 01 Apr 2009 12:56:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-35</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Yz85Racer, post:33, topic:269954”]What’s sad about that photo, is he typed it - <span class="bbcode-b">d</span>o, backwar<span class="bbcode-b">d</span>s.[/quote]its a misquote, 4chan are fucking idiots, even moreso than unlimitedorb</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/34</link>
+        <pubDate>Wed, 01 Apr 2009 09:52:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-34</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@Yz85Racer Yz85Racer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yz85racer">@Yz85Racer</a> wrote:</p>
+          <blockquote>
+              <p>What’s sad about that photo, is he typed it - <span class="bbcode-b">d</span>o, backwar<span class="bbcode-b">d</span>s.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/33</link>
+        <pubDate>Wed, 01 Apr 2009 09:23:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-33</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@Ollie Ollie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ollie">@Ollie</a> wrote:</p>
+          <blockquote>
+              <p><img src="http://img441.imageshack.us/img441/4908/1193806836852.jpg" alt width="" height=""></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/32</link>
+        <pubDate>Wed, 01 Apr 2009 08:30:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-32</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>Hi BAsh,</p>
+<p>I agree with you on the majority of those points, which is why I said I was starting to believe that this would be better as an extension to modern bytecode bots.</p>
+<p>A mere extension is not what I had in mind when I started this thread, so I’m thinking the best path to take would be a completely standalone packet bot. At least you’d be able to run quite a few bots before getting banned.</p>
+<p>I guess it basically comes down to sticking with the true strength of a packet bot: minimizing resource consumption. Bots like RSBot make it kind of pointless to do anything otherwise.</p>
+<p>[quote=“frank_, post:30, topic:269954”][quote author=unlimitedorb link=topic=356325.msg2728952#msg2728952 date=1238556026]<br>
+Puh-leeze.</p>
+<p>It wouldn’t matter when those posts were dated. You’d still make a fuss. It just so happens that there’s a very recent thread in which you accused him of rep sharing.<br>
+[/quote]i also accused rictoo of rep sharing after i had +repped him, big whoop</p>
+<p>[quote author=unlimitedorb link=topic=356325.msg2728952#msg2728952 date=1238556026]<br>
+I wouldn’t approach the problem like that.</p>
+<p>Stop trying to back frank_ up.<br>
+[/quote]because you are an idiot.</p>
+<p>lawl isnt backing me up, hes just pointing out flaws that you seem to think do not exist[/quote]</p>
+<p>That wasn’t a flaw. That was a badly stated problem in which he gave me very little room to provide a solution.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/31</link>
+        <pubDate>Wed, 01 Apr 2009 05:35:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-31</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“unlimitedorb, post:28, topic:269954”]Puh-leeze.</p>
+<p>It wouldn’t matter when those posts were dated. You’d still make a fuss. It just so happens that there’s a very recent thread in which you accused him of rep sharing.[/quote]i also accused rictoo of rep sharing after i had +repped him, big whoop</p>
+<p>[quote=“unlimitedorb, post:28, topic:269954”]I wouldn’t approach the problem like that.</p>
+<p>Stop trying to back frank_ up.[/quote]because you are an idiot.</p>
+<p>lawl isnt backing me up, hes just pointing out flaws that you seem to think do not exist</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/30</link>
+        <pubDate>Wed, 01 Apr 2009 03:25:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-30</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@BAsh BAsh]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bash">@BAsh</a> wrote:</p>
+          <blockquote>
+              <blockquote>At this point, I think a packet based proxy bot is well within reach. I've given it some thought, and I came up with a few benefits:
+1.) Client footprint would be minimal (very little bytecode engineering... if any).
+2.) Random event detection would be flawless.
+3.) Easier to maintain in the long run.
+4.) Can be designed to be absolutely undetectable, since we're operating at the packet level.
+That's all I can really think of off the top of my head, but there are probably a ton more benefits.</blockquote>
+1.) You still have to load and run the client and that takes up resources.
+2.) You can already write flawless anti-randoms with the right hooks. The reason why they aren't flawless in RSBot is because people are too lazy to write them properly. (Not sure if this is still relevant but we now have 'client script' running. The states of which weren't hooked before and needs to be for perfect anti-randoms). What you are proposing to do is exactly the same but on the byte level before the client has a chance to unpack it and store it in its internal structures. That requires you to understand the communication to the client while an easier way would be to simply rip it out of the client's memory.
+3.) See 2. I would like to add that if jagex changes the protocol even slightly then it would break everything. If you simply read the client's variables some hooks will break but the majority will still work.
+4.) It can't be designed to be undetectable. The only exception to this is if you build a packet bot as opposed to a packet proxy bot. Either option is infeasible. If you use a proxy bot there will be information that won't match up. To be honest while I've deobbed a client and mucked around with it a bit I've never actually understood how it runs but what little knowledge I do have should be sufficient. Assume you send a packet to the server saying you clicked on a specific object. Everything is fine. Then the server asks the client for some information. Lets say the number of times the mouse has been clicked or if the object is on screen or the number of actions taken place or a large number of other things. Sure you could modify the responses as well but then you start making a packet bot as opposed to a packet proxy bot and that is much harder.
+<p>Regardless of what form this packet based bot takes… it would require an incredible amount of effort and every revision that jagex released would require effort as well. Much simpler to follow rsbot and actually run the client. Let it do the donkey work which you know for a fact is undetectable in terms of internal state and packet parsing and then just rip the information out of its fields however you wish to go about that.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/29</link>
+        <pubDate>Wed, 01 Apr 2009 03:23:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-29</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:26, topic:269954”][quote author=unlimitedorb link=topic=356325.msg2728931#msg2728931 date=1238554753]<br>
+I’ll give you this… when you want a thread derailed, you know how to get the job done.<br>
+[/quote]its your useless thread, i dont care</p>
+<p>look at the dates of those quotes, retard. is there seriously something wrong with you? when i ported the winterlove rs2 server to rsc i didnt understand binary arithmetic or networking or threads. you can learn a hell of a lot in 2 years[/quote]</p>
+<p>Puh-leeze.</p>
+<p>It wouldn’t matter when those posts were dated. You’d still make a fuss. It just so happens that there’s a very recent thread in which you accused him of rep sharing.</p>
+<p>“you can learn a hell of a lot in 2 years”<br>
+…including bad habits.</p>
+<p>[quote=“la­wl, post:27, topic:269954”]i love how you mentioned that it will be easier to maintain in the long run even though you would need to manually update the packets every week</p>
+<p>dont even suggest making something to find out the new packet ids based on structure because its too unreliable and the packets change pretty often in structure as well[/quote]<br>
+I wouldn’t approach the problem like that.</p>
+<p>Stop trying to back frank_ up.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/28</link>
+        <pubDate>Wed, 01 Apr 2009 03:20:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-28</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@lawl lawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lawl">@lawl</a> wrote:</p>
+          <blockquote>
+              <p>i love how you mentioned that it will be easier to maintain in the long run even though you would need to manually update the packets every week</p>
+<p>dont even suggest making something to find out the new packet ids based on structure because its too unreliable and the packets change pretty often in structure as well</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/27</link>
+        <pubDate>Wed, 01 Apr 2009 03:10:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-27</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“unlimitedorb, post:25, topic:269954”]I’ll give you this… when you want a thread derailed, you know how to get the job done.[/quote]its your useless thread, i dont care</p>
+<p>look at the dates of those quotes, retard. is there seriously something wrong with you? when i ported the winterlove rs2 server to rsc i didnt understand binary arithmetic or networking or threads. you can learn a hell of a lot in 2 years</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/26</link>
+        <pubDate>Wed, 01 Apr 2009 03:04:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-26</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:24, topic:269954”]what is wrong with io9?</p>
+<p>“just use ms word and spam shift+f7” - unlimitedorb on creating posts</p>
+<p>ps:</p>
+<aside class="quote no-group">
+<blockquote>
+<p>You presumably know more about the rs client than I ever will because you believe you have spent more time with it. Simple as that. The fact of the matter is, you really have spent more time with it. That being said, who’s the real idiot in the grand scheme of things?[/quote]judging from the failure to convey any sort of point, you would appear to be the real idiot</p>
+</blockquote>
+</aside>
+<p>What’s wrong with io9? It just so happens that you’ve taken the liberty to explain that for me:</p>
+<p>[quote=“io9, post:1, topic:58229”]How do you guys get all the information on like what array is what and shit in the RS client. Like how do you find out whether aa.r is the NPC index, or whether the bb.ca array is your STats?</p>
+<p>Thank’s in advance gais.<br>
+~io9[/quote]</p>
+<p>[quote=“frank_, post:10, topic:58229”][quote author=ilyaostr9 link=topic=83445.msg901278#msg901278 date=1171511365]<br>
+Could you guys go a bit more specific on this, like, isn’t there a program you can run your client thorugh and It’ll strip it out.<br>
+[/quote]yes, we write our own, thats one of the good things about thise phase of cheating, everyone is being selfish and not sharing any information, so you have to learn by yourself[/quote]</p>
+<aside class="quote no-group" data-post="11" data-topic="58229">
+<div class="title">
+<div class="quote-controls"></div>
+<a href="https://forum.moparisthebest.com/t/how-do-you-figure-out/58229/11">How do you figure out?</a>
+</div>
+<blockquote>
+<p>^^ ILL GIV U FREE ROONSCPE GEEPEES IF YOU SHR</p>
+</blockquote>
+</aside>
+<p>I’ll give you this… when you want a thread derailed, you know how to get the job done.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/25</link>
+        <pubDate>Wed, 01 Apr 2009 02:59:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-25</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>what is wrong with io9?</p>
+<p>“just use ms word and spam shift+f7” - unlimitedorb on creating posts</p>
+<p>ps:</p>
+<blockquote>You presumably know more about the rs client than I ever will because you believe you have spent more time with it. Simple as that. The fact of the matter is, you really have spent more time with it. That being said, who's the real idiot in the grand scheme of things?</blockquote>judging from the failure to convey any sort of point, you would appear to be the real idiot
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/24</link>
+        <pubDate>Wed, 01 Apr 2009 02:36:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-24</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+      <item>
+        <title>Constructing a packet bot for Runescape</title>
+        <dc:creator><![CDATA[@unlimitedorb unlimitedorb]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/unlimitedorb">@unlimitedorb</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“frank_, post:21, topic:269954”]because i communicate concisely doesnt mean that my english skills are sub-par (your use of a thesaurus makes you a fucking idiot btw)</p>
+<p>i know more about the rs client than you ever will, that said, some of my knowledge is likely to be dated because i have little interest any more given the current attitudes of people. you being the perfect example, get a clue before you go and write a wall of text that does not provide any information</p>
+<p>i would go get a list of quotes of you out of context but it would be a complete waste of space because all of your posts are pointless and contain at least 200 words of useless waffle[/quote]</p>
+<p>To be honest, I didn’t use a Thesaurus for any of these posts. Your even suggesting that gives me a bit more insight into what you know.</p>
+<p>There is a distinction between communicating “concisely” and effectively. I don’t think you understand that concept.</p>
+<p>You presumably know more about the rs client than I ever will because you believe you have spent more time with it. Simple as that. The fact of the matter is, you really have spent more time with it. That being said, who’s the real idiot in the grand scheme of things?</p>
+<p>You brought up a very interesting point, though. Why would I write a “wall of text” full of fluff? I think that’s a fundamental difference between us. When I look at a “long” post, I don’t see it as a “wall”. I see it as someone who is trying as hard as possible to make certain nobody has to go through the same process that compelled them to write it in the first place. It’s also a good gauge of how much time a person is willing to invest.</p>
+<aside class="quote no-group" data-post="22" data-topic="269954">
+<div class="title">
+<div class="quote-controls"></div>
+ io9:</div>
+<blockquote>
+<p>I agree with the above post wholeheartedly <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>Seriously though… if you have something like that agreeing with you? You need to take a moment to examine your position.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954/23</link>
+        <pubDate>Wed, 01 Apr 2009 02:32:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-269954-23</guid>
+        <source url="https://forum.moparisthebest.com/t/constructing-a-packet-bot-for-runescape/269954.rss">Constructing a packet bot for Runescape</source>
+      </item>
+  </channel>
+</rss>

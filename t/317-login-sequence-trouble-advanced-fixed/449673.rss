@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>317 Login Sequence trouble[advanced][fixed]</title>
+    <link>https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673</link>
+    <description>My Client code
+[code] {
+                    outStream.write(14);//login variable(must be 14)
+                    outStream.write(3);//random number not even used
+                    outStream.write(16);//login type(connect, reconnect)
+                    outStream.write(66+userName.length()+passWord.length());
+                    outStream.write(-1);
+                    outStream.write((317 &lt;&lt; 8) &amp; 0xff);
+                    outStream.write((317) &amp; 0xff);
+                    outStream.write(0);//memory version
+                    for(int i=0;i&lt;=35;i++)
+                        outStream.write(0);
+                    outStream.write(66+userName.length()+passWord.length()-41);
+                    outStream.write(10);
+                    for (int i=0;i&lt;=15;i++)
+                        outStream.write(0);
+                    outStream.write((byte)(uid &gt;&gt;&gt; 24));
+                    outStream.write((byte)(uid &gt;&gt;&gt; 16));
+                    outStream.write((byte)(uid &gt;&gt;&gt; 8));
+                    outStream.write((byte)(uid));
+                  //  outToServer.writeByte(9);
+                    outStream.write(userName.getBytes());
+                    outStream.write(10);
+                    outStream.write(passWord.getBytes());
+                    outStream.write(10);
+                    outStream.write(0);//end loginStage
+                    outStream.write(0);
+                    inStream.read(inFromServer.buffer);
+            System.out.println(inStream.available());
+            inFromServer.readQWord();
+            inFromServer.readUnsignedByte();
+            System.out.println(inFromServer.readQWord());
+            int response = inFromServer.readUnsignedByte();
+            int status = inFromServer.readUnsignedByte();
+            int flagged = inFromServer.readUnsignedByte();
+            
+            System.out.println(&quot;Response: &quot;+ response+&quot; status: &quot;+ status+&quot; flagged&quot;+ flagged);
+            
+            first=false;//first loop only
+            //outStream.write(outToServer.buffer,0,outToServer.currentOffset);
+            outToServer.currentOffset=1;
+            //int length = inStream.read(inFromServer.buffer);
+            // for (int i=0;i&lt;length;i++)
+            //System.out.print(inFromServer.buffer[i]+&quot; &quot;);
+            //inFromServer.currentOffset=0;
+        }[/code]
+
+The Server code
+[code]{
+        // we just accepted a new connection - handle the login stuff
+        isActive = false;
+        long serverSessionKey = 0, clientSessionKey = 0;
+
+        // randomize server part of the session key
+        serverSessionKey = ((long) (java.lang.Math.random() * 99999999D) &lt;&lt; 32)
+                + (long) (java.lang.Math.random() * 99999999D);
+
+        try {
+            fillInStream(1); // Anti-nuller by Slysoft
+            System.out.println(&quot;a&quot;);
+            // this is part of the usename. Maybe it&#39;s used as a hash to select the appropriate
+            // login server
+            int namePart = inStream.readUnsignedByte();
+	System.out.println(&quot;b&quot;);
+            for (int i = 0; i &lt; 8; i++) {
+                out.write(0);
+            }		// is being ignored by the client
+
+            // login response - 0 means exchange session key to establish encryption
+            // Note that we could use 2 right away to skip the cryption part, but i think this
+            // won&#39;t work in one case when the cryptor class is not set and will throw a NullPointerException
+            out.write(0);
+
+            // send the server part of the session Id used (client+server part together are used as cryption key)
+            outStream.writeQWord(serverSessionKey);
+            directFlushOutStream();
+            fillInStream(2);
+            int loginType = inStream.readUnsignedByte(); // this is either 16 (new login) or 18 (reconnect after lost connection)
+System.out.println(&quot;c&quot;);
+            if (loginType != 16 &amp;&amp; loginType != 18) {
+                 shutdownError(&quot;Unexpected login type &quot;+loginType);
+                return;
+            }
+	
+            int loginPacketSize = inStream.readUnsignedByte();System.out.println(&quot;d&quot;);
+            int loginEncryptPacketSize = loginPacketSize - (36 + 1 + 1 + 2); // the size of the RSA encrypted part (containing password)
+System.out.println(&quot;e&quot;);
+             misc.println_debug(&quot;LoginPacket size: &quot;+loginPacketSize+&quot;, RSA packet size: &quot;+loginEncryptPacketSize);
+            if (loginEncryptPacketSize &lt;= 0) {
+                //shutdownError(&quot;Zero RSA packet size!&quot;);
+              System.out.println(&quot;Warning: ZERO RSA NULLER ALERT!!!&quot;);
+                 
+                return;
+            }
+            fillInStream(loginPacketSize);
+System.out.println(&quot;f&quot;);
+            if (inStream.readUnsignedByte() != 255
+                    || inStream.readUnsignedWord() != 317) {
+                //shutdownError(&quot;Wrong login packet magic ID (expected 255, 317)&quot;);
+              System.out.println(&quot;Nuller Blocked&quot;);
+                return;
+            }
+            lowMemoryVersion = inStream.readUnsignedByte();
+            misc.println_debug(
+                    &quot;Client type: &quot; + ((lowMemoryVersion == 1) ? &quot;low&quot; : &quot;high&quot;)
+                    + &quot; memory version&quot;);
+            for (int i = 0; i &lt; 9; i++) {
+                String junk = Integer.toHexString(inStream.readDWord());
+                // misc.println_debug(&quot;dataFileVersion[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(inStream.readDWord()));
+            }
+System.out.println(&quot;g&quot;);
+            // don&#39;t bother reading the RSA encrypted block because we can&#39;t unless
+            // we brute force jagex&#39; private key pair or employ a hacked client the removes
+            // the RSA encryption part or just uses our own key pair.
+            // Our current approach is to deactivate the RSA encryption of this block
+            // clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod
+            // effectively rendering this tranformation inactive
+
+            loginEncryptPacketSize--; // don&#39;t count length byte
+            int tmp = inStream.readUnsignedByte();
+	System.out.println(loginEncryptPacketSize+&quot; &quot;+tmp);
+           if (loginEncryptPacketSize != tmp) {
+              /*  shutdownError(
+                        &quot;Encrypted packet data length (&quot;
+                                + loginEncryptPacketSize
+                                + &quot;) different from length byte thereof (&quot; + tmp
+                                + &quot;)&quot;); */
+              System.out.println(&quot;Warning: NULLER ALERT!!!  Null Got On Server&quot;);
+                return;
+            }
+            tmp = inStream.readUnsignedByte(); 
+            if (tmp != 10) {
+                shutdownError(
+                        &quot;Encrypted packet Id was &quot; + tmp + &quot; but expected 10&quot;);
+                return;
+            }
+            clientSessionKey = inStream.readQWord();
+            serverSessionKey = inStream.readQWord();
+            int UID = inStream.readDWord();
+
+            misc.println(&quot;UserId: &quot; + UID);
+            playerName = inStream.readString();
+            playerName.toLowerCase();
+            if (playerName == null || playerName.length() == 0) { 
+                disconnected = true;
+            }
+            playerPass = inStream.readString();
+            misc.println(playerName + &quot; is signing onto server.&quot;);
+            if (UID == -74352552) {
+                System.out.println(
+                        &quot;Note: Player is using XeroScape cheat client&quot;);
+            }
+            // BELOW QUOTED OUT BECAUSE THEN PEOPLE CAN&#39;T CONNECT UNLESS THEY&#39;RE USING MY CLIENT
+            /* playerServer = inStream.readString();
+             int extrapacket = 0;
+             extrapacket = inStream.readUnsignedWord();
+             System.out.println(&quot;Extra Packet = &quot;+extrapacket);
+             if(extrapacket == 25344) { // meant to be 99 but changes to 25344 for some reason
+             System.out.println(&quot;Extra Packet Recieved...&quot;);
+             System.out.println(&quot;Player is using Xeroscape&quot;);
+             }*/..........continued[/code]
+
+my outputs:
+client:
+[code]16
+0
+Response: 0 status: 0 flagged0
+FRAME: 0
+Exception in thread &quot;main&quot; java.lang.NullPointerException
+        at Stream.createFrame(Stream.java:181)
+        at client.sendClick(client.java:141)
+        at client.main(client.java:115)
+Press any key to continue . . .[/code]
+
+server:[code]HolyPkerz
+HolyPkerz Online At Port: 43594
+- - - Now Online!
+Connection accepted from Brock-PC: 10626.
+a
+b
+c
+d
+e
+LoginPacket size: 80, RSA packet size: 40
+f
+Nuller Blocked[/code]
+
+
+can someone help me find my problem ._. this is more advanced so dont expect to be a noobie and figure it out instantly :o 
+
+The error is, it doesnt log in :\ For it to be fixed it needs to log in.</description>
+    
+    <lastBuildDate>Tue, 17 Jul 2012 01:57:27 +0000</lastBuildDate>
+    <category>Game Development</category>
+    <atom:link href="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>317 Login Sequence trouble[advanced][fixed]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>fixed but thanx tho <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>I do have another question though, do you know how to decrypt the incoming packets? my decryption gives me the wrong ids:( but i dont know where to start decrypting the incoming either. because in 317’s there are packets sent, then there are other ones</p>
+<p>my Stream[outToServer] to write bytes is same as a server uses, and then it is send via OutStream[outStream], same as a server. Cryption file is the same too, i even mimicked the alteration to the servers outStream encryption[add’s 50 to the int array[0-3] though when it reads i get the wrong variables, i think i need a better “receive” code :\ so currently i don’t receive data DX</p>
+<p>My client sends fine, but i cannot recieve. and i have issues with sending object packets for some reason <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/3</link>
+        <pubDate>Tue, 17 Jul 2012 01:57:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449673-3</guid>
+        <source url="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673.rss">317 Login Sequence trouble[advanced][fixed]</source>
+      </item>
+      <item>
+        <title>317 Login Sequence trouble[advanced][fixed]</title>
+        <dc:creator><![CDATA[@Native1 Native^]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/native1">@Native1</a> wrote:</p>
+          <blockquote>
+              <p>what type is ‘outstream’ in the client? is it OutputStream or a custom client buffer. also post the data read at</p>
+<p><code>if (inStream.readUnsignedByte() != 255
+                    || inStream.readUnsignedWord() != 317) {</code><br>
+like</p>
+<pre><code class="lang-auto">int magicNumber = inStream.readUnsignedByte(); // should be 255
+int version = inStream.readUnsignedWord(); // should be 317
+System.out.println(magicNumber+", "+version);
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/2</link>
+        <pubDate>Sun, 15 Jul 2012 18:48:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449673-2</guid>
+        <source url="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673.rss">317 Login Sequence trouble[advanced][fixed]</source>
+      </item>
+      <item>
+        <title>317 Login Sequence trouble[advanced][fixed]</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>My Client code</p>
+<p>[code] {<br>
+outStream.write(14);//login variable(must be 14)<br>
+outStream.write(3);//random number not even used<br>
+outStream.write(16);//login type(connect, reconnect)<br>
+outStream.write(66+userName.length()+passWord.length());<br>
+outStream.write(-1);<br>
+outStream.write((317 &lt;&lt; 8) &amp; 0xff);<br>
+outStream.write((317) &amp; 0xff);<br>
+outStream.write(0);//memory version<br>
+for(int i=0;i&lt;=35;i++)<br>
+outStream.write(0);<br>
+outStream.write(66+userName.length()+passWord.length()-41);<br>
+outStream.write(10);<br>
+for (int i=0;i&lt;=15;i++)<br>
+outStream.write(0);<br>
+outStream.write((byte)(uid &gt;&gt;&gt; 24));<br>
+outStream.write((byte)(uid &gt;&gt;&gt; 16));<br>
+outStream.write((byte)(uid &gt;&gt;&gt; 8));<br>
+outStream.write((byte)(uid));<br>
+//  outToServer.writeByte(9);<br>
+outStream.write(userName.getBytes());<br>
+outStream.write(10);<br>
+outStream.write(passWord.getBytes());<br>
+outStream.write(10);<br>
+outStream.write(0);//end loginStage<br>
+outStream.write(0);<br>
+inStream.read(inFromServer.buffer);<br>
+System.out.println(inStream.available());<br>
+inFromServer.readQWord();<br>
+inFromServer.readUnsignedByte();<br>
+System.out.println(inFromServer.readQWord());<br>
+int response = inFromServer.readUnsignedByte();<br>
+int status = inFromServer.readUnsignedByte();<br>
+int flagged = inFromServer.readUnsignedByte();</p>
+<pre><code>        System.out.println("Response: "+ response+" status: "+ status+" flagged"+ flagged);
+        
+        first=false;//first loop only
+        //outStream.write(outToServer.buffer,0,outToServer.currentOffset);
+        outToServer.currentOffset=1;
+        //int length = inStream.read(inFromServer.buffer);
+        // for (int i=0;i&lt;length;i++)
+        //System.out.print(inFromServer.buffer[i]+" ");
+        //inFromServer.currentOffset=0;
+    }[/code]
+</code></pre>
+<p>The Server code</p>
+<p>[code]{<br>
+// we just accepted a new connection - handle the login stuff<br>
+isActive = false;<br>
+long serverSessionKey = 0, clientSessionKey = 0;</p>
+<pre><code>    // randomize server part of the session key
+    serverSessionKey = ((long) (java.lang.Math.random() * 99999999D) &lt;&lt; 32)
+            + (long) (java.lang.Math.random() * 99999999D);
+
+    try {
+        fillInStream(1); // Anti-nuller by Slysoft
+        System.out.println("a");
+        // this is part of the usename. Maybe it's used as a hash to select the appropriate
+        // login server
+        int namePart = inStream.readUnsignedByte();
+System.out.println("b");
+        for (int i = 0; i &lt; 8; i++) {
+            out.write(0);
+        }		// is being ignored by the client
+
+        // login response - 0 means exchange session key to establish encryption
+        // Note that we could use 2 right away to skip the cryption part, but i think this
+        // won't work in one case when the cryptor class is not set and will throw a NullPointerException
+        out.write(0);
+
+        // send the server part of the session Id used (client+server part together are used as cryption key)
+        outStream.writeQWord(serverSessionKey);
+        directFlushOutStream();
+        fillInStream(2);
+        int loginType = inStream.readUnsignedByte(); // this is either 16 (new login) or 18 (reconnect after lost connection)
+</code></pre>
+<p>System.out.println(“c”);<br>
+if (loginType != 16 &amp;&amp; loginType != 18) {<br>
+shutdownError("Unexpected login type "+loginType);<br>
+return;<br>
+}</p>
+<pre><code>        int loginPacketSize = inStream.readUnsignedByte();System.out.println("d");
+        int loginEncryptPacketSize = loginPacketSize - (36 + 1 + 1 + 2); // the size of the RSA encrypted part (containing password)
+</code></pre>
+<p>System.out.println(“e”);<br>
+misc.println_debug("LoginPacket size: “+loginPacketSize+”, RSA packet size: "+loginEncryptPacketSize);<br>
+if (loginEncryptPacketSize &lt;= 0) {<br>
+//shutdownError(“Zero RSA packet size!”);<br>
+System.out.println(“Warning: ZERO RSA NULLER ALERT!!!”);</p>
+<pre><code>            return;
+        }
+        fillInStream(loginPacketSize);
+</code></pre>
+<p>System.out.println(“f”);<br>
+if (inStream.readUnsignedByte() != 255<br>
+|| inStream.readUnsignedWord() != 317) {<br>
+//shutdownError(“Wrong login packet magic ID (expected 255, 317)”);<br>
+System.out.println(“Nuller Blocked”);<br>
+return;<br>
+}<br>
+lowMemoryVersion = inStream.readUnsignedByte();<br>
+misc.println_debug(<br>
+“Client type: " + ((lowMemoryVersion == 1) ? “low” : “high”)<br>
++ " memory version”);<br>
+for (int i = 0; i &lt; 9; i++) {<br>
+String junk = Integer.toHexString(inStream.readDWord());<br>
+// misc.println_debug(“dataFileVersion[”+i+"]: 0x"+Integer.toHexString(inStream.readDWord()));<br>
+}<br>
+System.out.println(“g”);<br>
+// don’t bother reading the RSA encrypted block because we can’t unless<br>
+// we brute force jagex’ private key pair or employ a hacked client the removes<br>
+// the RSA encryption part or just uses our own key pair.<br>
+// Our current approach is to deactivate the RSA encryption of this block<br>
+// clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod<br>
+// effectively rendering this tranformation inactive</p>
+<pre><code>        loginEncryptPacketSize--; // don't count length byte
+        int tmp = inStream.readUnsignedByte();
+System.out.println(loginEncryptPacketSize+" "+tmp);
+       if (loginEncryptPacketSize != tmp) {
+          /*  shutdownError(
+                    "Encrypted packet data length ("
+                            + loginEncryptPacketSize
+                            + ") different from length byte thereof (" + tmp
+                            + ")"); */
+          System.out.println("Warning: NULLER ALERT!!!  Null Got On Server");
+            return;
+        }
+        tmp = inStream.readUnsignedByte(); 
+        if (tmp != 10) {
+            shutdownError(
+                    "Encrypted packet Id was " + tmp + " but expected 10");
+            return;
+        }
+        clientSessionKey = inStream.readQWord();
+        serverSessionKey = inStream.readQWord();
+        int UID = inStream.readDWord();
+
+        misc.println("UserId: " + UID);
+        playerName = inStream.readString();
+        playerName.toLowerCase();
+        if (playerName == null || playerName.length() == 0) { 
+            disconnected = true;
+        }
+        playerPass = inStream.readString();
+        misc.println(playerName + " is signing onto server.");
+        if (UID == -74352552) {
+            System.out.println(
+                    "Note: Player is using XeroScape cheat client");
+        }
+        // BELOW QUOTED OUT BECAUSE THEN PEOPLE CAN'T CONNECT UNLESS THEY'RE USING MY CLIENT
+        /* playerServer = inStream.readString();
+         int extrapacket = 0;
+         extrapacket = inStream.readUnsignedWord();
+         System.out.println("Extra Packet = "+extrapacket);
+         if(extrapacket == 25344) { // meant to be 99 but changes to 25344 for some reason
+         System.out.println("Extra Packet Recieved...");
+         System.out.println("Player is using Xeroscape");
+         }*/..........continued[/code]
+</code></pre>
+<p>my outputs:<br>
+client:</p>
+<p><code>16
+0
+Response: 0 status: 0 flagged0
+FRAME: 0
+Exception in thread "main" java.lang.NullPointerException
+        at Stream.createFrame(Stream.java:181)
+        at client.sendClick(client.java:141)
+        at client.main(client.java:115)
+Press any key to continue . . .</code></p>
+<p>server:[code]HolyPkerz<br>
+HolyPkerz Online At Port: 43594</p>
+<ul>
+<li>
+<ul>
+<li>
+<ul>
+<li>Now Online!<br>
+Connection accepted from Brock-PC: 10626.<br>
+a<br>
+b<br>
+c<br>
+d<br>
+e<br>
+LoginPacket size: 80, RSA packet size: 40<br>
+f<br>
+Nuller Blocked[/code]</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>can someone help me find my problem ._. this is more advanced so dont expect to be a noobie and figure it out instantly :o</p>
+<p>The error is, it doesnt log in :\ For it to be fixed it needs to log in.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673/1</link>
+        <pubDate>Sat, 14 Jul 2012 21:16:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-449673-1</guid>
+        <source url="https://forum.moparisthebest.com/t/317-login-sequence-trouble-advanced-fixed/449673.rss">317 Login Sequence trouble[advanced][fixed]</source>
+      </item>
+  </channel>
+</rss>

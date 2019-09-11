@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Introduction to C++ Metaprogramming: Dimensional Analysis</title>
+    <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594</link>
+    <description>Part 3 of the introduction to C++11 metaprogramming series will involve dimensional analysis, a practical application to what has been taught in the last two parts. This example of template metaprogramming comes from the [i]C++ Template Metaprogramming[/i] book by Abrahams and Gurtovoy (a highly recommended read).
+
+[size=12pt][b]What is dimensional analysis?[/b][/size]
+
+To directly quote from Wikipedia:
+&lt;blockquote&gt;In engineering and science, dimensional analysis is the analysis of the relationships between different physical quantities by identifying their fundamental dimensions (such as length, mass, time, and electric charge) and units of measure (such as miles vs. kilometers, or pounds vs. kilograms vs. grams) and tracking these dimensions as calculations or comparisons are performed.&lt;/blockquote&gt;
+One technique used to keep track of dimension is by setting a list of integers depending on if the value has a dimension associated with it. We will use the `list_c` construct designed in part 2 to keep track of the dimensions associated with a value. Why is it useful to use C++&#39;s type system to solve this problem? Here are a few reasons:
+
+[ul][li]It utilizes the strengths of C++&#39;s type system which can provide flexibility for how you write your code.[/li]
+[li]Errors in calculations can be caught at compile-time as opposed to run-time; this also eliminates the danger of having your program continue evaluating potentially incorrect intermediate steps.[/li]
+[li]More efficient than a naive array implementation.[/li][/ul]
+
+This post will use length and time to calculate velocity as an example.
+
+[size=12pt][b]`transform` and `equal`[/b][/size]
+
+Before we continue any further, we will define two important metafunctions for dealing with lists. The first one is `transform`, which takes two lists and a metafunction as parameters, and iterates through both lists calling `fn` on the car of each list. The definition of `transform` and `transform_f` are as follows:
+[code=cpp]struct transform_f {
+  template &lt;typename list1, typename list2, typename fn&gt;
+  struct apply : cons&lt;
+    typename fn::template apply&lt;typename car&lt;list1&gt;::type, typename car&lt;list2&gt;::type&gt;::type,
+    typename transform_f::template apply&lt;
+      typename cdr&lt;list1&gt;::type,
+      typename cdr&lt;list2&gt;::type,
+      fn
+    &gt;::type
+  &gt; {};
+
+  template &lt;typename list1, typename fn&gt;
+  struct apply&lt;list1, empty, fn&gt; : cons&lt;
+    typename fn::template apply&lt;typename car&lt;list1&gt;::type, empty&gt;,
+    typename transform_f::template apply&lt;
+      typename cdr&lt;list1&gt;::type,
+      empty,
+      fn
+    &gt;::type
+  &gt; {};
+
+  template &lt;typename list2, typename fn&gt;
+  struct apply&lt;empty, list2, fn&gt; : cons&lt;
+    typename fn::template apply&lt;empty, typename car&lt;list2&gt;::type&gt;::type,
+    typename transform_f::template apply&lt;
+      empty,
+      typename cdr&lt;list2&gt;::type,
+      fn
+    &gt;::type
+  &gt; {};
+
+  template &lt;typename fn&gt;
+  struct apply&lt;empty, empty, fn&gt; : empty {};
+};
+
+template &lt;typename list1, typename list2, typename fn&gt;
+struct transform : transform_f::template apply&lt;list1, list2, fn&gt; {};[/code]
+A couple examples of using `transform`:
+[code=cpp]using l1 = list_c&lt;int, 1, 2, 3&gt;;
+using l2 = list_c&lt;int, 3, 2, 1&gt;;
+transform&lt;l1, l2, lambda&lt;minus&gt;&gt;::type // == list_c&lt;int, -2, 0, 2&gt;
+transform&lt;l1, l2, lambda&lt;plus&gt;&gt;::type // == list_c&lt;int, 4, 4, 4&gt;[/code]
+
+The second list function we will need is `equal`:
+[code=cpp]struct equal_f {
+  template &lt;typename list1, typename list2, typename pred = lambda&lt;std::is_same&gt;&gt;
+  struct apply : std::conditional&lt;
+    !pred::template apply&lt;
+      typename car&lt;list1&gt;::type,
+      typename car&lt;list2&gt;::type
+    &gt;::type::value,
+    bool_&lt;false&gt;,
+    typename equal_f::template apply&lt;
+      typename cdr&lt;list1&gt;::type,
+      typename cdr&lt;list2&gt;::type,
+      pred
+    &gt;::type
+  &gt; {};
+
+  template &lt;typename list, typename pred&gt;
+  struct apply&lt;empty, list, pred&gt; : bool_&lt;false&gt; {};
+
+  template &lt;typename list, typename pred&gt;
+  struct apply&lt;list, empty, pred&gt; : bool_&lt;false&gt; {};
+
+  template &lt;typename pred&gt;
+  struct apply&lt;empty, empty, pred&gt; : bool_&lt;true&gt; {};
+};
+
+template &lt;typename list1, typename list2, typename pred = lambda&lt;std::is_same&gt;&gt;
+struct equal : equal_f::template apply&lt;list1, list2, pred&gt; {};[/code]
+As the name of this metafunction might suggest, it checks if two lists are equal by comparing each element using the given `pred` predicate metafunction. By default, the predicate metafunction is C++11&#39;s `std::is_same` which checks if two types are the same.
+
+Now that we have defined the requisite metafunctions, we can start defining a class to maintain a magnitude and dimension.
+
+[size=12pt][b]Notation[/b][/size]
+
+We will use `list_c` to keep track of the associated properties attached to a magnitude. In this post, we will be calculating velocities from distances over time. If you know basic physics, this translates to the following equation: v = d/t, where `d` is a distance, and `t` is time. The seven [url=https://en.wikipedia.org/wiki/SI_base_unit]base SI units[/url] are: length, mass, time, electric current, temperature, luminous intensity, and amount of substance. These are the properties we will be keeping track and calculating on.
+
+By utilizing the `list_c` metafunction, we can define a type which keeps track of these properties like so:
+[code=cpp]// type T, length, mass, time, etc...
+list_c&lt;T, 1, 0, 0, ...&gt;[/code]
+For example, we can define length, time, and velocity types like so:
+[code=cpp]using Length = list_c&lt;int,0,1,0,0,0,0,0&gt;;
+using Time = list_c&lt;int,0,0,1,0,0,0,0&gt;;
+using Velocity = list_c&lt;int,0,1,-1,0,0,0,0&gt;;[/code]
+Each index (except index 0 which designates a type to the value) is designates the dimension associated with the value. So for example, the `Time` type has a 1 at index 3, since that index designates one unit of time in our notation. Note that these lists don&#39;t contain just 1&#39;s or 0&#39;s. Velocity is calculated as distance over time, we set the length index 1 because it has a distance in the numerator, and a -1 at the time index since the time variable is in the denominator. This correlates to the fact that 1/t &lt;=&gt; t^-1.
+
+Now when we calculate addition or subtraction, we just need to make sure the dimensions are the same. We need to do this to ensure that adding a time value to a mass value is a calculation error; it wouldn&#39;t make sense to allow this, while making sure adding or subtracting time values from each other does work.
+
+Multiplication and division become slightly more difficult, since a distance divided a time yields a velocity, we need a way to perform operations on our type&#39;s list elements so we can transform a `list_c` for a length and a `list_c` for a time, into a `list_c` for a velocity. That is:
+[code=cpp]transform&lt;distance, time, ?&gt;::type == Velocity[/code]
+This is why we need a `transform` metafunction, because multiplication is simply transforming the distance and time dimensions by adding their indices together, and subtraction subtracts their indices. Here&#39;s an exercise for you: which transform operation produces a type that is equivalent to the `Velocity` type we defined earlier?
+[code=cpp]// This one?
+transform&lt;list_c&lt;int,0,1,0,0,0,0,0&gt;, list_c&lt;int,0,0,1,0,0,0,0&gt;, lambda&lt;plus&gt;&gt;::type == list_c&lt;int,0,1,1,0,0,0,0&gt;
+// Or this one?
+transform&lt;list_c&lt;int,0,1,0,0,0,0,0&gt;, list_c&lt;int,0,0,1,0,0,0,0&gt;, lambda&lt;minus&gt;&gt;::type == list_c&lt;int,0,1,-1,0,0,0,0&gt;[/code]
+[spoiler]The second one is the correct answer since v = d/t, not v = d*t.[/spoiler]
+
+[size=12pt][b]Writing the code[/b][/size]
+
+Now that we have the concept down, let&#39;s start digging in! Since we will be keeping track of the dimension and magnitude, we can define a class which does the job:
+[code=cpp]template &lt;typename Dim, typename T&gt;
+class Value {
+  T magnitude;
+public:
+  Value(T magnitude) : magnitude(magnitude) {}
+
+  template &lt;typename T2&gt;
+  Value&amp; operator=(const Value&lt;Dim, T2&gt;&amp; rhs) {
+    return *this;
+  }
+
+  T constexpr getMagnitude() const {
+    return magnitude;
+  }
+};[/code]
+
+Now if we want to perform basic addition and subtraction on values with the same magnitude, we can overload the appropriate operators:
+[code=cpp]template &lt;
+  typename T1, typename T2,
+  typename Dim, typename T = typename std::common_type&lt;T1, T2&gt;::type
+&gt;
+Value&lt;Dim, T&gt; operator+(const Value&lt;Dim, T1&gt; a, const Value&lt;Dim, T2&gt; b) {
+  return Value&lt;Dim, T&gt;(a.getMagnitude() + b.getMagnitude());
+}
+
+template &lt;
+  typename T1, typename T2,
+  typename Dim, typename T = typename std::common_type&lt;T1, T2&gt;::type
+&gt;
+Value&lt;Dim, T&gt; operator-(const Value&lt;Dim, T1&gt; a, const Value&lt;Dim, T2&gt; b) {
+  return Value&lt;Dim, T&gt;(a.getMagnitude() - b.getMagnitude());
+}[/code]
+This code should be pretty straightforward but I think it&#39;s worth pointing out that T is the return type between T1 and T2 because we may want to perform calculations on different types such as adding a float to an int. You can read about the semantics of `std::common_type` [url=http://www.cplusplus.com/reference/type_traits/common_type/]here[/url]. Multiplication and division look like:
+[code=cpp]template &lt;
+  typename T1, typename T2,
+  typename Dim1, typename Dim2,
+  typename T = typename std::common_type&lt;T1, T2&gt;::type
+&gt;
+Value&lt;typename transform&lt;Dim1, Dim2, lambda&lt;plus&gt;&gt;::type, T&gt;
+operator*(const Value&lt;Dim1, T&gt; a, const Value&lt;Dim2, T&gt; b) {
+  using Dim = typename transform&lt;Dim1, Dim2, lambda&lt;plus&gt;&gt;::type;
+  return Value&lt;Dim, T&gt;(a.getMagnitude() * b.getMagnitude());
+}
+
+template &lt;
+  typename T1, typename T2,
+  typename Dim1, typename Dim2,
+  typename T = typename std::common_type&lt;T1, T2&gt;::type
+&gt;
+Value&lt;typename transform&lt;Dim1, Dim2, lambda&lt;minus&gt;&gt;::type, T&gt;
+operator/(const Value&lt;Dim1, T1&gt; a, const Value&lt;Dim2, T2&gt; b) {
+  using Dim = typename transform&lt;Dim1, Dim2, lambda&lt;minus&gt;&gt;::type;
+  return Value&lt;Dim, T&gt;(a.getMagnitude() / b.getMagnitude());
+}[/code]
+(If you are using C++14, you can trim those ugly functions by replacing the really long return type in the function signature with the `auto` keyword, which will tell the compiler to deduce the type for you.) 
+
+Wow, that was quite a lot of work! Now let&#39;s give this a try:
+[code=cpp]int main() {
+  Value&lt;Time, int&gt; time_hr = 2;
+  Value&lt;Length, int&gt; displacement_km = 100 + 100;
+  std::cout &lt;&lt; displacement_km.getMagnitude() &lt;&lt; std::endl; // 200
+  return 0;
+}[/code]
+If you compile and run the above code, you should get &#39;200&#39; as output. So that&#39;s nice, now what happens if we try and calculate velocity?
+&lt;blockquote&gt;$ clang++ -std=c++11 test.cc
+test.cc:78:24: error: no viable conversion from &#39;Value&lt;typename
+      transform&lt;list_c&lt;int, 0, 1, 0, 0, 0, 0, 0&gt;, list_c&lt;int, 0, 0, 1, 0, 0, 0,
+      0&gt;, lambda&lt;minus&gt; &gt;::type, [...]&gt;&#39; to &#39;Value&lt;Velocity, [...]&gt;&#39;
+  Value&lt;Velocity, int&gt; velocity = displacement_km / time_hr;&lt;/blockquote&gt;
+If you perform the calculation above (or remember the exercise I left to you a while ago) you should notice that the type returned by the transform should be equivalent to the `Velocity` type! What happened was although they have the list elements, they are different types. What we can do to resolve this is by writing a copy constructor in our Value class which takes a different dimension, and checks if they are equal. This is the reason we needed an `equal` metafunction. So our Value class now becomes:
+[code=cpp]template &lt;typename Dim, typename T&gt;
+class Value {
+  T magnitude;
+public:
+  Value(T magnitude) : magnitude(magnitude) {}
+
+  // Copy constructor added here.
+  template &lt;typename OtherDim&gt;
+  Value(const Value&lt;OtherDim, T&gt;&amp; rhs) : magnitude(rhs.getMagnitude()) {
+    static_assert(equal&lt;Dim, OtherDim&gt;::type::value, &quot;Assignment from incompatible dimensions.&quot;);
+  }
+
+  template &lt;typename T2&gt;
+  Value&amp; operator=(const Value&lt;Dim, T2&gt;&amp; rhs) {
+    return *this;
+  }
+
+  T constexpr getMagnitude() const {
+    return magnitude;
+  }
+};[/code]
+We use C++11&#39;s `static_assert` function here to ensure that `OtherDim` is the same as `Dim`, the dimension we attached to our magnitude. If we didn&#39;t have this check, we could calculate whatever nonsense we like, such as dividing a distance and a time and yielding a distance -- defeating the entire purpose of this post! Giving this a try, we finally have implemented working dimensional analysis:
+[code=cpp]int main() {
+  Value&lt;Time, int&gt; time_hr = 2;
+  Value&lt;Length, int&gt; displacement_km = 100 + 100;
+  Value&lt;Velocity, int&gt; velocity = displacement_km / time_hr;
+  std::cout &lt;&lt; velocity.getMagnitude() &lt;&lt; std::endl; // 100
+  return 0;
+}[/code]</description>
+    
+    <lastBuildDate>Sat, 31 Oct 2015 23:39:25 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Introduction to C++ Metaprogramming: Dimensional Analysis</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="553594">
+<div class="title">
+<div class="quote-controls"></div>
+ s1gma:</div>
+<blockquote>
+<p>this isnt biology’;??</p>
+</blockquote>
+</aside>
+<p>wtf is biology???</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/3</link>
+        <pubDate>Sat, 31 Oct 2015 23:39:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553594-3</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594.rss">Introduction to C++ Metaprogramming: Dimensional Analysis</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Dimensional Analysis</title>
+        <dc:creator><![CDATA[@_s11 s1gma]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/_s11">@_s11</a> wrote:</p>
+          <blockquote>
+              <p>this isnt biology’;??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/2</link>
+        <pubDate>Sat, 31 Oct 2015 23:26:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553594-2</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594.rss">Introduction to C++ Metaprogramming: Dimensional Analysis</source>
+      </item>
+      <item>
+        <title>Introduction to C++ Metaprogramming: Dimensional Analysis</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>Part 3 of the introduction to C++11 metaprogramming series will involve dimensional analysis, a practical application to what has been taught in the last two parts. This example of template metaprogramming comes from the <span class="bbcode-i">C++ Template Metaprogramming</span> book by Abrahams and Gurtovoy (a highly recommended read).</p>
+<p>[size=12pt]<span class="bbcode-b">What is dimensional analysis?</span>[/size]</p>
+<p>To directly quote from Wikipedia:</p>
+<blockquote>In engineering and science, dimensional analysis is the analysis of the relationships between different physical quantities by identifying their fundamental dimensions (such as length, mass, time, and electric charge) and units of measure (such as miles vs. kilometers, or pounds vs. kilograms vs. grams) and tracking these dimensions as calculations or comparisons are performed.</blockquote>
+One technique used to keep track of dimension is by setting a list of integers depending on if the value has a dimension associated with it. We will use the `list_c` construct designed in part 2 to keep track of the dimensions associated with a value. Why is it useful to use C++'s type system to solve this problem? Here are a few reasons:
+<p>[ul][li]It utilizes the strengths of C++'s type system which can provide flexibility for how you write your code.[/li]<br>
+[li]Errors in calculations can be caught at compile-time as opposed to run-time; this also eliminates the danger of having your program continue evaluating potentially incorrect intermediate steps.[/li]<br>
+[li]More efficient than a naive array implementation.[/li][/ul]</p>
+<p>This post will use length and time to calculate velocity as an example.</p>
+<p>[size=12pt]<span class="bbcode-b"><code>transform</code> and <code>equal</code></span>[/size]</p>
+<p>Before we continue any further, we will define two important metafunctions for dealing with lists. The first one is <code>transform</code>, which takes two lists and a metafunction as parameters, and iterates through both lists calling <code>fn</code> on the car of each list. The definition of <code>transform</code> and <code>transform_f</code> are as follows:</p>
+<p>[code=cpp]struct transform_f {<br>
+template &lt;typename list1, typename list2, typename fn&gt;<br>
+struct apply : cons&lt;<br>
+typename fn::template apply&lt;typename car::type, typename car::type&gt;::type,<br>
+typename transform_f::template apply&lt;<br>
+typename cdr::type,<br>
+typename cdr::type,<br>
+fn<br>
+&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename list1, typename fn&gt;<br>
+struct apply&lt;list1, empty, fn&gt; : cons&lt;<br>
+typename fn::template apply&lt;typename car::type, empty&gt;,<br>
+typename transform_f::template apply&lt;<br>
+typename cdr::type,<br>
+empty,<br>
+fn<br>
+&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename list2, typename fn&gt;<br>
+struct apply&lt;empty, list2, fn&gt; : cons&lt;<br>
+typename fn::template apply&lt;empty, typename car::type&gt;::type,<br>
+typename transform_f::template apply&lt;<br>
+empty,<br>
+typename cdr::type,<br>
+fn<br>
+&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template <br>
+struct apply&lt;empty, empty, fn&gt; : empty {};<br>
+};</p>
+<p>template &lt;typename list1, typename list2, typename fn&gt;<br>
+struct transform : transform_f::template apply&lt;list1, list2, fn&gt; {};[/code]<br>
+A couple examples of using <code>transform</code>:</p>
+<p><code>using l1 = list_c&lt;int, 1, 2, 3&gt;;
+using l2 = list_c&lt;int, 3, 2, 1&gt;;
+transform&lt;l1, l2, lambda&lt;minus&gt;&gt;::type // == list_c&lt;int, -2, 0, 2&gt;
+transform&lt;l1, l2, lambda&lt;plus&gt;&gt;::type // == list_c&lt;int, 4, 4, 4&gt;</code></p>
+<p>The second list function we will need is <code>equal</code>:</p>
+<p>[code=cpp]struct equal_f {<br>
+template &lt;typename list1, typename list2, typename pred = lambda<a>std::is_same</a>&gt;<br>
+struct apply : std::conditional&lt;<br>
+!pred::template apply&lt;<br>
+typename car::type,<br>
+typename car::type<br>
+&gt;::type::value,<br>
+bool_,<br>
+typename equal_f::template apply&lt;<br>
+typename cdr::type,<br>
+typename cdr::type,<br>
+pred<br>
+&gt;::type</p>
+<blockquote>
+<p>{};</p>
+</blockquote>
+<p>template &lt;typename list, typename pred&gt;<br>
+struct apply&lt;empty, list, pred&gt; : bool_ {};</p>
+<p>template &lt;typename list, typename pred&gt;<br>
+struct apply&lt;list, empty, pred&gt; : bool_ {};</p>
+<p>template <br>
+struct apply&lt;empty, empty, pred&gt; : bool_ {};<br>
+};</p>
+<p>template &lt;typename list1, typename list2, typename pred = lambda<a>std::is_same</a>&gt;<br>
+struct equal : equal_f::template apply&lt;list1, list2, pred&gt; {};[/code]<br>
+As the name of this metafunction might suggest, it checks if two lists are equal by comparing each element using the given <code>pred</code> predicate metafunction. By default, the predicate metafunction is C++11’s <code>std::is_same</code> which checks if two types are the same.</p>
+<p>Now that we have defined the requisite metafunctions, we can start defining a class to maintain a magnitude and dimension.</p>
+<p>[size=12pt]<span class="bbcode-b">Notation</span>[/size]</p>
+<p>We will use <code>list_c</code> to keep track of the associated properties attached to a magnitude. In this post, we will be calculating velocities from distances over time. If you know basic physics, this translates to the following equation: v = d/t, where <code>d</code> is a distance, and <code>t</code> is time. The seven <a href="https://en.wikipedia.org/wiki/SI_base_unit" data-bbcode="true" rel="nofollow noopener">base SI units</a> are: length, mass, time, electric current, temperature, luminous intensity, and amount of substance. These are the properties we will be keeping track and calculating on.</p>
+<p>By utilizing the <code>list_c</code> metafunction, we can define a type which keeps track of these properties like so:</p>
+<p><code>// type T, length, mass, time, etc...
+list_c&lt;T, 1, 0, 0, ...&gt;</code><br>
+For example, we can define length, time, and velocity types like so:</p>
+<p><code>using Length = list_c&lt;int,0,1,0,0,0,0,0&gt;;
+using Time = list_c&lt;int,0,0,1,0,0,0,0&gt;;
+using Velocity = list_c&lt;int,0,1,-1,0,0,0,0&gt;;</code><br>
+Each index (except index 0 which designates a type to the value) is designates the dimension associated with the value. So for example, the <code>Time</code> type has a 1 at index 3, since that index designates one unit of time in our notation. Note that these lists don’t contain just 1’s or 0’s. Velocity is calculated as distance over time, we set the length index 1 because it has a distance in the numerator, and a -1 at the time index since the time variable is in the denominator. This correlates to the fact that 1/t &lt;=&gt; t^-1.</p>
+<p>Now when we calculate addition or subtraction, we just need to make sure the dimensions are the same. We need to do this to ensure that adding a time value to a mass value is a calculation error; it wouldn’t make sense to allow this, while making sure adding or subtracting time values from each other does work.</p>
+<p>Multiplication and division become slightly more difficult, since a distance divided a time yields a velocity, we need a way to perform operations on our type’s list elements so we can transform a <code>list_c</code> for a length and a <code>list_c</code> for a time, into a <code>list_c</code> for a velocity. That is:</p>
+<pre><code class="lang-auto"></code></pre>
+<p>This is why we need a <code>transform</code> metafunction, because multiplication is simply transforming the distance and time dimensions by adding their indices together, and subtraction subtracts their indices. Here’s an exercise for you: which transform operation produces a type that is equivalent to the <code>Velocity</code> type we defined earlier?</p>
+<p><code>// This one?
+transform&lt;list_c&lt;int,0,1,0,0,0,0,0&gt;, list_c&lt;int,0,0,1,0,0,0,0&gt;, lambda&lt;plus&gt;&gt;::type == list_c&lt;int,0,1,1,0,0,0,0&gt;
+// Or this one?
+transform&lt;list_c&lt;int,0,1,0,0,0,0,0&gt;, list_c&lt;int,0,0,1,0,0,0,0&gt;, lambda&lt;minus&gt;&gt;::type == list_c&lt;int,0,1,-1,0,0,0,0&gt;</code><br>
+[spoiler]The second one is the correct answer since v = d/t, not v = d*t.[/spoiler]</p>
+<p>[size=12pt]<span class="bbcode-b">Writing the code</span>[/size]</p>
+<p>Now that we have the concept down, let’s start digging in! Since we will be keeping track of the dimension and magnitude, we can define a class which does the job:</p>
+<p>[code=cpp]template &lt;typename Dim, typename T&gt;<br>
+class Value {<br>
+T magnitude;<br>
+public:<br>
+Value(T magnitude) : magnitude(magnitude) {}</p>
+<p>template <br>
+Value&amp; operator=(const Value&lt;Dim, T2&gt;&amp; rhs) {<br>
+return *this;<br>
+}</p>
+<p>T constexpr getMagnitude() const {<br>
+return magnitude;<br>
+}<br>
+};[/code]</p>
+<p>Now if we want to perform basic addition and subtraction on values with the same magnitude, we can overload the appropriate operators:</p>
+<p>[code=cpp]template &lt;<br>
+typename T1, typename T2,<br>
+typename Dim, typename T = typename std::common_type&lt;T1, T2&gt;::type</p>
+<blockquote></blockquote>
+<p>Value&lt;Dim, T&gt; operator+(const Value&lt;Dim, T1&gt; a, const Value&lt;Dim, T2&gt; b) {<br>
+return Value&lt;Dim, T&gt;(a.getMagnitude() + b.getMagnitude());<br>
+}</p>
+<p>template &lt;<br>
+typename T1, typename T2,<br>
+typename Dim, typename T = typename std::common_type&lt;T1, T2&gt;::type</p>
+<blockquote></blockquote>
+<p>Value&lt;Dim, T&gt; operator-(const Value&lt;Dim, T1&gt; a, const Value&lt;Dim, T2&gt; b) {<br>
+return Value&lt;Dim, T&gt;(a.getMagnitude() - b.getMagnitude());<br>
+}[/code]<br>
+This code should be pretty straightforward but I think it’s worth pointing out that T is the return type between T1 and T2 because we may want to perform calculations on different types such as adding a float to an int. You can read about the semantics of <code>std::common_type</code> <a href="http://www.cplusplus.com/reference/type_traits/common_type/" data-bbcode="true" rel="nofollow noopener">here</a>. Multiplication and division look like:</p>
+<p>[code=cpp]template &lt;<br>
+typename T1, typename T2,<br>
+typename Dim1, typename Dim2,<br>
+typename T = typename std::common_type&lt;T1, T2&gt;::type</p>
+<blockquote></blockquote>
+<p>Value&lt;typename transform&lt;Dim1, Dim2, lambda&gt;::type, T&gt;<br>
+operator*(const Value&lt;Dim1, T&gt; a, const Value&lt;Dim2, T&gt; b) {<br>
+using Dim = typename transform&lt;Dim1, Dim2, lambda&gt;::type;<br>
+return Value&lt;Dim, T&gt;(a.getMagnitude() * b.getMagnitude());<br>
+}</p>
+<p>template &lt;<br>
+typename T1, typename T2,<br>
+typename Dim1, typename Dim2,<br>
+typename T = typename std::common_type&lt;T1, T2&gt;::type</p>
+<blockquote></blockquote>
+<p>Value&lt;typename transform&lt;Dim1, Dim2, lambda&gt;::type, T&gt;<br>
+operator/(const Value&lt;Dim1, T1&gt; a, const Value&lt;Dim2, T2&gt; b) {<br>
+using Dim = typename transform&lt;Dim1, Dim2, lambda&gt;::type;<br>
+return Value&lt;Dim, T&gt;(a.getMagnitude() / b.getMagnitude());<br>
+}[/code]<br>
+(If you are using C++14, you can trim those ugly functions by replacing the really long return type in the function signature with the <code>auto</code> keyword, which will tell the compiler to deduce the type for you.)</p>
+<p>Wow, that was quite a lot of work! Now let’s give this a try:</p>
+<p><code>int main() {
+  Value&lt;Time, int&gt; time_hr = 2;
+  Value&lt;Length, int&gt; displacement_km = 100 + 100;
+  std::cout &lt;&lt; displacement_km.getMagnitude() &lt;&lt; std::endl; // 200
+  return 0;
+}</code><br>
+If you compile and run the above code, you should get ‘200’ as output. So that’s nice, now what happens if we try and calculate velocity?</p>
+<blockquote>$ clang++ -std=c++11 test.cc
+test.cc:78:24: error: no viable conversion from 'Value&lt;typename
+      transform&lt;list_c, list_c, lambda &gt;::type, [...]&gt;' to 'Value'
+  Value velocity = displacement_km / time_hr;</blockquote>
+If you perform the calculation above (or remember the exercise I left to you a while ago) you should notice that the type returned by the transform should be equivalent to the `Velocity` type! What happened was although they have the list elements, they are different types. What we can do to resolve this is by writing a copy constructor in our Value class which takes a different dimension, and checks if they are equal. This is the reason we needed an `equal` metafunction. So our Value class now becomes:
+[code=cpp]template 
+class Value {
+  T magnitude;
+public:
+  Value(T magnitude) : magnitude(magnitude) {}
+<p>// Copy constructor added here.<br>
+template <br>
+Value(const Value&lt;OtherDim, T&gt;&amp; rhs) : magnitude(rhs.getMagnitude()) {<br>
+static_assert(equal&lt;Dim, OtherDim&gt;::type::value, “Assignment from incompatible dimensions.”);<br>
+}</p>
+<p>template <br>
+Value&amp; operator=(const Value&lt;Dim, T2&gt;&amp; rhs) {<br>
+return *this;<br>
+}</p>
+<p>T constexpr getMagnitude() const {<br>
+return magnitude;<br>
+}<br>
+};[/code]<br>
+We use C++11’s <code>static_assert</code> function here to ensure that <code>OtherDim</code> is the same as <code>Dim</code>, the dimension we attached to our magnitude. If we didn’t have this check, we could calculate whatever nonsense we like, such as dividing a distance and a time and yielding a distance – defeating the entire purpose of this post! Giving this a try, we finally have implemented working dimensional analysis:</p>
+<p><code>int main() {
+  Value&lt;Time, int&gt; time_hr = 2;
+  Value&lt;Length, int&gt; displacement_km = 100 + 100;
+  Value&lt;Velocity, int&gt; velocity = displacement_km / time_hr;
+  std::cout &lt;&lt; velocity.getMagnitude() &lt;&lt; std::endl; // 100
+  return 0;
+}</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594/1</link>
+        <pubDate>Sun, 18 Oct 2015 19:12:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553594-1</guid>
+        <source url="https://forum.moparisthebest.com/t/introduction-to-c-metaprogramming-dimensional-analysis/553594.rss">Introduction to C++ Metaprogramming: Dimensional Analysis</source>
+      </item>
+  </channel>
+</rss>

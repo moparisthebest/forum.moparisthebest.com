@@ -1,0 +1,466 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>InvokeHandleDecorator</title>
+    <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145</link>
+    <description>I once needed a way to easily search arguments of invoke instructions for expressions and constant values. This is something I wrote to fill that need.
+
+It&#39;s skeletal and has been stripped of most of the verbose helper functions but the basics are still there. I only say this because I&#39;m trying to avoid the inevitable &quot;zomg you don&#39;t have a way to find &lt;insert thing here&gt;!!!111ONE1!ONE&quot;
+
+(I&#39;m sure most of you would find it quite simple to modify it to your needs)
+
+[code]
+package like.the.package.name.matters.you.are.just.going.to.change.it.anyway;
+
+import org.apache.bcel.classfile.Constant;
+import org.apache.bcel.classfile.ConstantString;
+import org.apache.bcel.classfile.ConstantUtf8;
+import org.apache.bcel.generic.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Decorates an invokeinstruction(handle) with access to its argument list(s). Allows random access to the argument lists
+ * passed to an invokeinstruction. The usefulness of this decorator rests in the ability to validate the presence
+ * of certain constant values or expressions passed to invokeinstruction(handle)s; something unavailable in any publicly
+ * available version of BCEL.
+ * &lt;p/&gt;
+ * @since bcel v5.1
+ * @author semaphore
+ */
+public class InvokeHandleDecorator {
+    private static final InstructionHandle[] EMPTY_ARG = new InstructionHandle[0];
+    private MethodGen mg;
+    private InstructionHandle invokeHandle;
+    private InstructionHandle[][] args;
+//    private MethodId imid, cmid;//@TODO: Uncomment this if you have a MethodId-esque class
+
+    /**
+     * Creation of the InvokeHandleDecorator is all that is needed to make the argument lists available
+     * @param invokeHandle the handle containing the invokeinstruction (usually found as an array result from InstructionFinder)
+     * @param containingMg the method containing the invokeinstruction call
+     */
+    public InvokeHandleDecorator(InstructionHandle invokeHandle, MethodGen containingMg) {
+        if(containingMg.isAbstract())
+            throw new IllegalArgumentException(&quot;Containing Method cannot be abstract&quot;);
+        this.invokeHandle = invokeHandle;
+        this.mg = containingMg;
+        InvokeInstruction ii = (InvokeInstruction)invokeHandle.getInstruction();
+        args = new InstructionHandle[ii.getArgumentTypes(containingMg.getConstantPool()).length][];
+//        imid = new MethodId(ii, containingMg.getConstantPool());//@TODO: Uncomment this if you have a MethodId-esque class
+//        cmid = new MethodId(containingMg);//@TODO: Uncomment this if you have a MethodId-esque class
+        processArgs();
+    }
+
+    /**
+     * Builds the argument list. Is there a faster way? I don&#39;t care.
+     */
+    private void processArgs() {
+        int argc = args.length;
+        if(invokeHandle == null)
+            return;
+        InstructionHandle currHandle = invokeHandle.getPrev();
+        int initialStack = invokeHandle.getInstruction().consumeStack(mg.getConstantPool());
+        int currStack = initialStack;
+        for(int i = 1; i &lt;= argc; i++) {
+            List&lt;InstructionHandle&gt; list = new ArrayList&lt;InstructionHandle&gt;();
+            while(currStack &gt; initialStack - i) {
+                currStack -= currHandle.getInstruction().produceStack(mg.getConstantPool());
+                currStack += currHandle.getInstruction().consumeStack(mg.getConstantPool());
+                list.add(0, currHandle);
+                currHandle = currHandle.getPrev();
+                if(currHandle == null)
+                    break;
+            }
+            args[argc - i] = list.toArray(new InstructionHandle[]{});
+            if(currHandle == null)
+                break;
+        }
+    }
+
+    /**
+     * Gets the args passed to this invokeinstruction. Note that each index in this array represents an array
+     * of instructionhandles which in-turn represents each argument expression
+     * 
+     * @return
+     */
+    public InstructionHandle[][] getArgs() {
+        return args;
+    }
+
+    public int getArgCount() {
+        return args == null ? -1 : args.length;
+    }
+
+    public InstructionHandle[] getArg(int index) {
+        if(args == null || args.length &lt; index - 1)
+            return EMPTY_ARG;
+        return args[index];
+    }
+
+    /*//@TODO: Uncomment this if you have a MethodId-esque class
+    public MethodId getInvokedMethodId() {
+        return imid;
+    }
+
+    public MethodId getContainingMethodId() {
+        return cmid;
+    }
+    */
+
+    /**
+     * Simple check for an int value argument to this decorated invokehandle
+     * @param val int value to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(int val) {
+        for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof ConstantPushInstruction) {
+                    ConstantPushInstruction cpi = (ConstantPushInstruction)arg.getInstruction();
+                    if(arglist.length == 1 &amp;&amp; cpi.getValue().intValue() == val)
+                        return true;
+                    if(arglist.length == 3) {
+                        if(arglist[0] instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)arglist[0]).getValue().intValue() == -1) {
+                            if(arglist[1].getInstruction() instanceof IXOR) {
+                                if(~cpi.getValue().intValue() == val)
+                                    return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Simple check for a long value argument to this decorated invokehandle
+     * @param val long value to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(long val) {
+       for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof ConstantPushInstruction) {
+                    ConstantPushInstruction cpi = (ConstantPushInstruction)arg.getInstruction();
+                    if(arglist.length == 1 &amp;&amp; cpi.getValue().longValue() == val)
+                        return true;
+                    if(arglist.length == 3) {
+                        if(arglist[0] instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)arglist[0]).getValue().intValue() == -1) {
+                            if(arglist[1].getInstruction() instanceof IXOR) {
+                                if(~cpi.getValue().longValue() == val)
+                                    return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Simple check for a string value argument to this decorated invokehandle
+     * @param regex regular expression string to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(String regex) {
+        ConstantPoolGen cpg = mg.getConstantPool();
+        for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof CPInstruction) {
+                    CPInstruction cpi = (CPInstruction)arg.getInstruction();
+                    Constant c = cpg.getConstant(cpi.getIndex());
+                    if(c instanceof ConstantUtf8) {
+                        ConstantUtf8 str = (ConstantUtf8)c;
+                        if(str.getBytes().matches(regex))
+                            return true;
+                    } else if(c instanceof ConstantString) {
+                        ConstantString str = (ConstantString)c;
+                        if(str.getBytes(cpg.getConstantPool()).matches(regex))
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+}
+
+[/code]
+
+EDIT: For those of you that noticed, this class no longer strictly follows the decorator pattern because of the modifications I made to simplify it down to a single class that uses dependencies that all of you have access to. I may eventually release the rest of the code that went along with this class.</description>
+    
+    <lastBuildDate>Fri, 28 Aug 2009 23:12:40 +0000</lastBuildDate>
+    <category>Community Inside Talk</category>
+    <atom:link href="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>InvokeHandleDecorator</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="4" data-topic="151145">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/peterbjornx/40/2671_1.png" class="avatar"> peterbjornx:</div>
+<blockquote>
+<p>Good job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>Do you know what this does?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/invokehandledecorator/151145/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145/5</link>
+        <pubDate>Fri, 28 Aug 2009 23:12:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-151145-5</guid>
+        <source url="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss">InvokeHandleDecorator</source>
+      </item>
+      <item>
+        <title>InvokeHandleDecorator</title>
+        <dc:creator><![CDATA[@peterbjornx peterbjornx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/peterbjornx">@peterbjornx</a> wrote:</p>
+          <blockquote>
+              <p>Good job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/invokehandledecorator/151145/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145/4</link>
+        <pubDate>Fri, 28 Aug 2009 20:30:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-151145-4</guid>
+        <source url="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss">InvokeHandleDecorator</source>
+      </item>
+      <item>
+        <title>InvokeHandleDecorator</title>
+        <dc:creator><![CDATA[@Jython super_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jython">@Jython</a> wrote:</p>
+          <blockquote>
+              <p>This went (mostly) unnoticed, so I decided to throw in a good job. This will help me whenever I’ll need to write an AST parser <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/invokehandledecorator/151145/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145/3</link>
+        <pubDate>Mon, 17 Aug 2009 16:38:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-151145-3</guid>
+        <source url="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss">InvokeHandleDecorator</source>
+      </item>
+      <item>
+        <title>InvokeHandleDecorator</title>
+        <dc:creator><![CDATA[@frank frank_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frank">@frank</a> wrote:</p>
+          <blockquote>
+              <p>that’s nice, i considered writing something that might achieve the same outcome, though i ditched bcel for asm, then asm for bcel, then bcel for nothing!</p>
+<p>i will be sure to look apon this again in the future when i need it <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/invokehandledecorator/151145/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145/2</link>
+        <pubDate>Fri, 12 Oct 2007 18:16:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-151145-2</guid>
+        <source url="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss">InvokeHandleDecorator</source>
+      </item>
+      <item>
+        <title>InvokeHandleDecorator</title>
+        <dc:creator><![CDATA[@semaphore semaphore]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/semaphore">@semaphore</a> wrote:</p>
+          <blockquote>
+              <p>I once needed a way to easily search arguments of invoke instructions for expressions and constant values. This is something I wrote to fill that need.</p>
+<p>It’s skeletal and has been stripped of most of the verbose helper functions but the basics are still there. I only say this because I’m trying to avoid the inevitable “zomg you don’t have a way to find !!!111ONE1!ONE”</p>
+<p>(I’m sure most of you would find it quite simple to modify it to your needs)</p>
+<pre><code class="lang-auto">package like.the.package.name.matters.you.are.just.going.to.change.it.anyway;
+
+import org.apache.bcel.classfile.Constant;
+import org.apache.bcel.classfile.ConstantString;
+import org.apache.bcel.classfile.ConstantUtf8;
+import org.apache.bcel.generic.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Decorates an invokeinstruction(handle) with access to its argument list(s). Allows random access to the argument lists
+ * passed to an invokeinstruction. The usefulness of this decorator rests in the ability to validate the presence
+ * of certain constant values or expressions passed to invokeinstruction(handle)s; something unavailable in any publicly
+ * available version of BCEL.
+ * &lt;p/&gt;
+ * @since bcel v5.1
+ * @author semaphore
+ */
+public class InvokeHandleDecorator {
+    private static final InstructionHandle[] EMPTY_ARG = new InstructionHandle[0];
+    private MethodGen mg;
+    private InstructionHandle invokeHandle;
+    private InstructionHandle[][] args;
+//    private MethodId imid, cmid;//@TODO: Uncomment this if you have a MethodId-esque class
+
+    /**
+     * Creation of the InvokeHandleDecorator is all that is needed to make the argument lists available
+     * @param invokeHandle the handle containing the invokeinstruction (usually found as an array result from InstructionFinder)
+     * @param containingMg the method containing the invokeinstruction call
+     */
+    public InvokeHandleDecorator(InstructionHandle invokeHandle, MethodGen containingMg) {
+        if(containingMg.isAbstract())
+            throw new IllegalArgumentException("Containing Method cannot be abstract");
+        this.invokeHandle = invokeHandle;
+        this.mg = containingMg;
+        InvokeInstruction ii = (InvokeInstruction)invokeHandle.getInstruction();
+        args = new InstructionHandle[ii.getArgumentTypes(containingMg.getConstantPool()).length][];
+//        imid = new MethodId(ii, containingMg.getConstantPool());//@TODO: Uncomment this if you have a MethodId-esque class
+//        cmid = new MethodId(containingMg);//@TODO: Uncomment this if you have a MethodId-esque class
+        processArgs();
+    }
+
+    /**
+     * Builds the argument list. Is there a faster way? I don't care.
+     */
+    private void processArgs() {
+        int argc = args.length;
+        if(invokeHandle == null)
+            return;
+        InstructionHandle currHandle = invokeHandle.getPrev();
+        int initialStack = invokeHandle.getInstruction().consumeStack(mg.getConstantPool());
+        int currStack = initialStack;
+        for(int i = 1; i &lt;= argc; i++) {
+            List&lt;InstructionHandle&gt; list = new ArrayList&lt;InstructionHandle&gt;();
+            while(currStack &gt; initialStack - i) {
+                currStack -= currHandle.getInstruction().produceStack(mg.getConstantPool());
+                currStack += currHandle.getInstruction().consumeStack(mg.getConstantPool());
+                list.add(0, currHandle);
+                currHandle = currHandle.getPrev();
+                if(currHandle == null)
+                    break;
+            }
+            args[argc - i] = list.toArray(new InstructionHandle[]{});
+            if(currHandle == null)
+                break;
+        }
+    }
+
+    /**
+     * Gets the args passed to this invokeinstruction. Note that each index in this array represents an array
+     * of instructionhandles which in-turn represents each argument expression
+     * 
+     * @return
+     */
+    public InstructionHandle[][] getArgs() {
+        return args;
+    }
+
+    public int getArgCount() {
+        return args == null ? -1 : args.length;
+    }
+
+    public InstructionHandle[] getArg(int index) {
+        if(args == null || args.length &lt; index - 1)
+            return EMPTY_ARG;
+        return args[index];
+    }
+
+    /*//@TODO: Uncomment this if you have a MethodId-esque class
+    public MethodId getInvokedMethodId() {
+        return imid;
+    }
+
+    public MethodId getContainingMethodId() {
+        return cmid;
+    }
+    */
+
+    /**
+     * Simple check for an int value argument to this decorated invokehandle
+     * @param val int value to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(int val) {
+        for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof ConstantPushInstruction) {
+                    ConstantPushInstruction cpi = (ConstantPushInstruction)arg.getInstruction();
+                    if(arglist.length == 1 &amp;&amp; cpi.getValue().intValue() == val)
+                        return true;
+                    if(arglist.length == 3) {
+                        if(arglist[0] instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)arglist[0]).getValue().intValue() == -1) {
+                            if(arglist[1].getInstruction() instanceof IXOR) {
+                                if(~cpi.getValue().intValue() == val)
+                                    return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Simple check for a long value argument to this decorated invokehandle
+     * @param val long value to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(long val) {
+       for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof ConstantPushInstruction) {
+                    ConstantPushInstruction cpi = (ConstantPushInstruction)arg.getInstruction();
+                    if(arglist.length == 1 &amp;&amp; cpi.getValue().longValue() == val)
+                        return true;
+                    if(arglist.length == 3) {
+                        if(arglist[0] instanceof ConstantPushInstruction &amp;&amp; ((ConstantPushInstruction)arglist[0]).getValue().intValue() == -1) {
+                            if(arglist[1].getInstruction() instanceof IXOR) {
+                                if(~cpi.getValue().longValue() == val)
+                                    return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Simple check for a string value argument to this decorated invokehandle
+     * @param regex regular expression string to look for as an argument to this invokehandle
+     * @return whether or not this value is an argument to this invokehandle
+     */
+    public boolean hasArg(String regex) {
+        ConstantPoolGen cpg = mg.getConstantPool();
+        for(InstructionHandle[] arglist : args) {
+            for(InstructionHandle arg : arglist) {
+                if(arg.getInstruction() instanceof CPInstruction) {
+                    CPInstruction cpi = (CPInstruction)arg.getInstruction();
+                    Constant c = cpg.getConstant(cpi.getIndex());
+                    if(c instanceof ConstantUtf8) {
+                        ConstantUtf8 str = (ConstantUtf8)c;
+                        if(str.getBytes().matches(regex))
+                            return true;
+                    } else if(c instanceof ConstantString) {
+                        ConstantString str = (ConstantString)c;
+                        if(str.getBytes(cpg.getConstantPool()).matches(regex))
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+}
+</code></pre>
+<p>EDIT: For those of you that noticed, this class no longer strictly follows the decorator pattern because of the modifications I made to simplify it down to a single class that uses dependencies that all of you have access to. I may eventually release the rest of the code that went along with this class.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/invokehandledecorator/151145/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/invokehandledecorator/151145/1</link>
+        <pubDate>Fri, 12 Oct 2007 17:38:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-151145-1</guid>
+        <source url="https://forum.moparisthebest.com/t/invokehandledecorator/151145.rss">InvokeHandleDecorator</source>
+      </item>
+  </channel>
+</rss>

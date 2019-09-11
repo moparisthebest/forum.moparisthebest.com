@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Update Server</title>
+    <link>https://forum.moparisthebest.com/t/update-server/554188</link>
+    <description>I have recently been attempting to convert an update server I wrote for a #498 client to be compatible with a #414 client. IIRC correctly every revision after and including #414 should share similar update server properties and send the cache files in a similar way. However I am having difficulty sending the #414 files. The client stops receiving files midway and returns an error code (4). Maybe someone else could see what i&#39;m missing?
+
+I&#39;m currently not answering any file requests that aren&#39;t required immediately. The actual cache encoding/decoding is done with Graham&#39;s open-rs.
+
+[code=java5]package com.adamant.net;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ReplayingDecoder;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.logging.Logger;
+
+import com.adamant.Adamant;
+
+/**
+ * @author Dylan Vicchiarelli
+ * Handles the transmission of cache archives to the game client upon request.
+ */
+public class UpdateProtocolDecoder extends ReplayingDecoder&lt;ByteBuf&gt; {
+
+	/**
+	 * Requests an archive to be sent and the transaction is required
+	 * immediately.
+	 */
+	public static final int IMMEDIATE_PRIORITY_OPCODE = 1;
+
+	/**
+	 * Requests an archive to be sent but the transaction isn&#39;t required
+	 * to be immediate.
+	 */
+	public static final int MILD_PRIORITY_OPCODE = 0;
+
+	/**
+	 * Denotes that an error has occurred.
+	 */
+	public static final int ERROR_ENCOUNTERED_OPCODE = 4;
+	
+	/**
+	 * Data is sent in 512 byte blocks, with the magic number being 255.
+	 */
+	public static final int MAGIC_NUMBER = 0xFF;
+
+	@Override
+	protected void decode(ChannelHandlerContext context, ByteBuf buffer, List&lt;Object&gt; collection) throws Exception {
+
+		while (buffer.readableBytes() &gt; 0) {
+
+			/*
+			 * The severity of the demand for an archive.
+			 */
+			final int priority = buffer.readUnsignedByte();
+
+			final int cache = buffer.readUnsignedByte();
+			final int index = buffer.readShort() &amp; 0xFFFF;
+
+			switch (priority) {
+
+			case IMMEDIATE_PRIORITY_OPCODE:
+				serve(context, cache, index);
+				break;
+
+			case ERROR_ENCOUNTERED_OPCODE:
+				Logger.getLogger(UpdateProtocolDecoder.class.getSimpleName()).info(&quot;An error has occured within the Update Server.&quot;);
+				break;
+
+			}
+		}
+	}
+
+	/**
+	 * Serves an archive compression to the game client.
+	 * @param context The channel responsible for forwarding the compression.
+	 * @param index The index identification.
+	 * @param container The container identification.
+	 * @throws IOException The exception thrown if a communication error occurs.
+	 */
+	private final void serve(ChannelHandlerContext context, int index, int container) throws IOException {
+		final ByteBuf buffer = Unpooled.directBuffer();
+		if (index == MAGIC_NUMBER &amp;&amp; container == MAGIC_NUMBER) {
+			final ByteBuffer file = Adamant.getCache().createChecksumTable().encode();
+			buffer.writeByte(MAGIC_NUMBER);
+			buffer.writeShort(MAGIC_NUMBER);
+			buffer.writeByte(0);
+			buffer.writeInt(file.limit());
+			buffer.writeBytes(file);
+			context.writeAndFlush(buffer);
+			return;
+		}
+		final ByteBuffer file = Adamant.getCache().getStore().read(index, container);
+		final int compression = file.get() &amp; 0xFF;
+		final int length = file.getInt();
+		final int attributes = compression;
+		final byte[] payload = new byte[compression != 0 ? length + 4 : length];
+		System.arraycopy(file.array(), 5, payload, 0, payload.length);
+		buffer.writeByte(index);
+		buffer.writeShort(container);
+		buffer.writeByte(attributes);
+		buffer.writeInt(length);
+		int offset = 8;
+		for (byte data : payload) {
+			if (offset == 512) {
+				buffer.writeByte(MAGIC_NUMBER);
+				offset = 1;
+			}
+			buffer.writeByte(data);
+			offset ++;
+		}
+		
+		context.writeAndFlush(buffer);
+	}
+}[/code]
+
+[code=java5]package com.adamant.net;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ReplayingDecoder;
+
+import java.security.SecureRandom;
+import java.util.List;
+import java.util.logging.Logger;
+
+/**
+ * @author Dylan Vicchiarelli
+ * The class responsible for coordinating and exchanging protocol information with the game client.
+ */
+public final class ChannelProtocolDecoder extends ReplayingDecoder&lt;ByteBuf&gt; {
+
+	/**
+	 * Denotes the request for cache archives.
+	 */
+	public static final int UPDATE_SERVER_OPCODE = 15;
+
+	/**
+	 * Denotes the request for a new connection to the game.
+	 */
+	public static final int GAME_SERVER_OPCODE = 14;
+
+	/**
+	 * The protocol revision of the game client.
+	 */
+	public static final int PROTOCOL_REVISION = 414;
+
+	/**
+	 * The status code to kick start the login protocol.
+	 */
+	public static final int STATUS_CODE = 0;
+	
+	@Override
+	protected void decode(ChannelHandlerContext context, ByteBuf buffer, List&lt;Object&gt; collection) throws Exception {
+
+		final int opcode = buffer.readUnsignedByte();
+
+		switch (opcode) {
+
+		case UPDATE_SERVER_OPCODE:
+
+			if (buffer.readableBytes() &gt;= 3 &amp;&amp; context.channel().isOpen()) {
+
+				final int version = buffer.readInt();
+				final ByteBuf response = Unpooled.directBuffer();
+				
+				response.writeByte(version == PROTOCOL_REVISION ? 0 : 6);
+				context.writeAndFlush(response);
+				
+				if (version == PROTOCOL_REVISION) {
+					context.pipeline().replace(&quot;protocol-decoder&quot;, &quot;update-decoder&quot;, new UpdateProtocolDecoder());
+				} else {
+					context.close();
+					Logger.getLogger(ChannelProtocolDecoder.class.getSimpleName()).info(&quot;Mismatch between server and client revisions.&quot;);
+				}
+			}
+
+			break;
+			
+		case GAME_SERVER_OPCODE:
+			
+			/*
+			 * The name hash. Theorized to help determine
+			 * a proper server.
+			 */
+			buffer.readUnsignedByte();
+
+			final ByteBuf response = Unpooled.directBuffer();
+			
+			response.writeLong(STATUS_CODE);
+			response.writeLong(new SecureRandom().nextLong());
+
+			context.writeAndFlush(response);
+			
+			context.pipeline().replace(&quot;protocol-decoder&quot;, &quot;login-decoder&quot;, new LoginProtocolDecoder());
+			break;
+		}
+	}
+}[/code]
+
+Maybe the error is occurring because of something to do with the cache or client? Also ignore my shit code, this is just an echo server right now.</description>
+    
+    <lastBuildDate>Wed, 23 Dec 2015 22:36:37 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/update-server/554188.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Update Server</title>
+        <dc:creator><![CDATA[@Vix Vix]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vix">@Vix</a> wrote:</p>
+          <blockquote>
+              <p>I have recently been attempting to convert an update server I wrote for a <span class="hashtag">#498</span> client to be compatible with a <span class="hashtag">#414</span> client. IIRC correctly every revision after and including <span class="hashtag">#414</span> should share similar update server properties and send the cache files in a similar way. However I am having difficulty sending the <span class="hashtag">#414</span> files. The client stops receiving files midway and returns an error code (4). Maybe someone else could see what i’m missing?</p>
+<p>I’m currently not answering any file requests that aren’t required immediately. The actual cache encoding/decoding is done with Graham’s open-rs.</p>
+<p>[code=java5]package <a href="http://com.adamant.net" rel="nofollow noopener">com.adamant.net</a>;</p>
+<p>import io.netty.buffer.ByteBuf;<br>
+import io.netty.buffer.Unpooled;<br>
+import io.netty.channel.ChannelHandlerContext;<br>
+import io.netty.handler.codec.ReplayingDecoder;</p>
+<p>import java.io.IOException;<br>
+import java.nio.ByteBuffer;<br>
+import java.util.List;<br>
+import java.util.logging.Logger;</p>
+<p>import com.adamant.Adamant;</p>
+<p>/**</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Dylan Vicchiarelli</p>
+</li>
+<li>
+<p>Handles the transmission of cache archives to the game client upon request.<br>
+*/<br>
+public class UpdateProtocolDecoder extends ReplayingDecoder {</p>
+<p>/**</p>
+<ul>
+<li>Requests an archive to be sent and the transaction is required</li>
+<li>immediately.<br>
+*/<br>
+public static final int IMMEDIATE_PRIORITY_OPCODE = 1;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Requests an archive to be sent but the transaction isn’t required</li>
+<li>to be immediate.<br>
+*/<br>
+public static final int MILD_PRIORITY_OPCODE = 0;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Denotes that an error has occurred.<br>
+*/<br>
+public static final int ERROR_ENCOUNTERED_OPCODE = 4;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Data is sent in 512 byte blocks, with the magic number being 255.<br>
+*/<br>
+public static final int MAGIC_NUMBER = 0xFF;</li>
+</ul>
+<p><a class="mention" href="/u/override">@Override</a><br>
+protected void decode(ChannelHandlerContext context, ByteBuf buffer, List collection) throws Exception {</p>
+<pre><code> while (buffer.readableBytes() &gt; 0) {
+
+ 	/*
+ 	 * The severity of the demand for an archive.
+ 	 */
+ 	final int priority = buffer.readUnsignedByte();
+
+ 	final int cache = buffer.readUnsignedByte();
+ 	final int index = buffer.readShort() &amp; 0xFFFF;
+
+ 	switch (priority) {
+
+ 	case IMMEDIATE_PRIORITY_OPCODE:
+ 		serve(context, cache, index);
+ 		break;
+
+ 	case ERROR_ENCOUNTERED_OPCODE:
+ 		Logger.getLogger(UpdateProtocolDecoder.class.getSimpleName()).info("An error has occured within the Update Server.");
+ 		break;
+
+ 	}
+ }
+</code></pre>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Serves an archive compression to the game client.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> context The channel responsible for forwarding the compression.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> index The index identification.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> container The container identification.</p>
+</li>
+<li>
+<p><span class="mention">@throws</span> IOException The exception thrown if a communication error occurs.<br>
+*/<br>
+private final void serve(ChannelHandlerContext context, int index, int container) throws IOException {<br>
+final ByteBuf buffer = Unpooled.directBuffer();<br>
+if (index == MAGIC_NUMBER &amp;&amp; container == MAGIC_NUMBER) {<br>
+final ByteBuffer file = Adamant.getCache().createChecksumTable().encode();<br>
+buffer.writeByte(MAGIC_NUMBER);<br>
+buffer.writeShort(MAGIC_NUMBER);<br>
+buffer.writeByte(0);<br>
+buffer.writeInt(file.limit());<br>
+buffer.writeBytes(file);<br>
+context.writeAndFlush(buffer);<br>
+return;<br>
+}<br>
+final ByteBuffer file = Adamant.getCache().getStore().read(index, container);<br>
+final int compression = file.get() &amp; 0xFF;<br>
+final int length = file.getInt();<br>
+final int attributes = compression;<br>
+final byte[] payload = new byte[compression != 0 ? length + 4 : length];<br>
+System.arraycopy(file.array(), 5, payload, 0, payload.length);<br>
+buffer.writeByte(index);<br>
+buffer.writeShort(container);<br>
+buffer.writeByte(attributes);<br>
+buffer.writeInt(length);<br>
+int offset = 8;<br>
+for (byte data : payload) {<br>
+if (offset == 512) {<br>
+buffer.writeByte(MAGIC_NUMBER);<br>
+offset = 1;<br>
+}<br>
+buffer.writeByte(data);<br>
+offset ++;<br>
+}</p>
+<p>context.writeAndFlush(buffer);<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>[code=java5]package <a href="http://com.adamant.net" rel="nofollow noopener">com.adamant.net</a>;</p>
+<p>import io.netty.buffer.ByteBuf;<br>
+import io.netty.buffer.Unpooled;<br>
+import io.netty.channel.ChannelHandlerContext;<br>
+import io.netty.handler.codec.ReplayingDecoder;</p>
+<p>import java.security.SecureRandom;<br>
+import java.util.List;<br>
+import java.util.logging.Logger;</p>
+<p>/**</p>
+<ul>
+<li>
+<p><span class="mention">@author</span> Dylan Vicchiarelli</p>
+</li>
+<li>
+<p>The class responsible for coordinating and exchanging protocol information with the game client.<br>
+*/<br>
+public final class ChannelProtocolDecoder extends ReplayingDecoder {</p>
+<p>/**</p>
+<ul>
+<li>Denotes the request for cache archives.<br>
+*/<br>
+public static final int UPDATE_SERVER_OPCODE = 15;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Denotes the request for a new connection to the game.<br>
+*/<br>
+public static final int GAME_SERVER_OPCODE = 14;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The protocol revision of the game client.<br>
+*/<br>
+public static final int PROTOCOL_REVISION = 414;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The status code to kick start the login protocol.<br>
+*/<br>
+public static final int STATUS_CODE = 0;</li>
+</ul>
+<p><a class="mention" href="/u/override">@Override</a><br>
+protected void decode(ChannelHandlerContext context, ByteBuf buffer, List collection) throws Exception {</p>
+<pre><code> final int opcode = buffer.readUnsignedByte();
+
+ switch (opcode) {
+
+ case UPDATE_SERVER_OPCODE:
+
+ 	if (buffer.readableBytes() &gt;= 3 &amp;&amp; context.channel().isOpen()) {
+
+ 		final int version = buffer.readInt();
+ 		final ByteBuf response = Unpooled.directBuffer();
+ 		
+ 		response.writeByte(version == PROTOCOL_REVISION ? 0 : 6);
+ 		context.writeAndFlush(response);
+ 		
+ 		if (version == PROTOCOL_REVISION) {
+ 			context.pipeline().replace("protocol-decoder", "update-decoder", new UpdateProtocolDecoder());
+ 		} else {
+ 			context.close();
+ 			Logger.getLogger(ChannelProtocolDecoder.class.getSimpleName()).info("Mismatch between server and client revisions.");
+ 		}
+ 	}
+
+ 	break;
+ 	
+ case GAME_SERVER_OPCODE:
+ 	
+ 	/*
+ 	 * The name hash. Theorized to help determine
+ 	 * a proper server.
+ 	 */
+ 	buffer.readUnsignedByte();
+
+ 	final ByteBuf response = Unpooled.directBuffer();
+ 	
+ 	response.writeLong(STATUS_CODE);
+ 	response.writeLong(new SecureRandom().nextLong());
+
+ 	context.writeAndFlush(response);
+ 	
+ 	context.pipeline().replace("protocol-decoder", "login-decoder", new LoginProtocolDecoder());
+ 	break;
+ }
+</code></pre>
+<p>}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>Maybe the error is occurring because of something to do with the cache or client? Also ignore my shit code, this is just an echo server right now.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/update-server/554188/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/update-server/554188/1</link>
+        <pubDate>Wed, 23 Dec 2015 22:36:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554188-1</guid>
+        <source url="https://forum.moparisthebest.com/t/update-server/554188.rss">Update Server</source>
+      </item>
+  </channel>
+</rss>

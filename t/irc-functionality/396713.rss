@@ -1,0 +1,810 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>IRC Functionality</title>
+    <link>https://forum.moparisthebest.com/t/irc-functionality/396713</link>
+    <description>[code=java5]package org.rscemulation.server;
+
+import org.jibble.pircbot.PircBot;
+import org.jibble.pircbot.User;
+import org.jibble.pircbot.Colors;
+
+import org.rscemulation.server.model.Player;
+import org.rscemulation.server.model.World;
+
+public class IRC extends PircBot implements Runnable { 
+	long lastCommand = 0;
+	
+    public void run() {
+    	if (Config.IRC) {
+	    	Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
+	    	Thread.currentThread().setName(&quot;IRC&quot;);
+	    	
+	    	try {
+	    		if (Config.IRC_DEBUG)
+	    			setVerbose(true);
+	    	    setName(Config.IRC_USERNAME);
+	    	    setLogin(Config.IRC_USERNAME);
+	    		connect(Config.IRC_SERVER);
+	    		identify(Config.IRC_PASSWORD);
+	    		setVersion(Config.IRC_USERNAME);
+	    		setFinger(Config.IRC_USERNAME);
+	    		
+	    	    joinChannel(Config.IRC_CHANNEL);
+	    	} catch (Exception e) {
+	    	    e.printStackTrace();
+	    	}
+    	}
+    }
+    
+	public String bold() {
+	    return Colors.BOLD;
+	}   
+    
+	protected void onDisconnect() {
+		run();
+	}
+	
+    public void onMessage(String channel, String sender, String login, String hostname, String message) {
+		if (message.startsWith(&quot;!&quot;))
+		    handleCommand(message, sender);    	
+    }
+    
+    public boolean isOp(String sender) {
+    	User users[] = getUsers(Config.IRC_CHANNEL);
+
+    	for (User user : users) {
+    		if (sender.equals(user.getNick()) &amp;&amp; user.isOp())
+    			return true;
+    	}	
+    	return false;   	
+    }
+    
+    protected void onJoin(String channel, String sender, String login, String hostname)  {
+    	if (isOp(getName()))
+    		voice(Config.IRC_CHANNEL, sender);
+    	
+    	if (Config.IRC_GREET_1 != null)
+    		sendMessage(sender, Config.IRC_GREET_1);
+    	if (Config.IRC_GREET_2 != null)
+    		sendMessage(sender, Config.IRC_GREET_2);
+    	if (Config.IRC_GREET_3 != null)
+    		sendMessage(sender, Config.IRC_GREET_3);   	
+    }
+    
+    public void onPrivateMessage(String sender, String login, String hostname, String message) {
+		if (message.startsWith(&quot;!&quot;))
+		    handlePrivateCommand(message, sender);    	
+    }
+
+	public void sendNotify(String message) {
+		if (Config.IRC_NOTIFY)
+			sendMessage(Config.IRC_CHANNEL, message);
+	}  
+    
+	public void sendMessage(String message) {
+		sendMessage(Config.IRC_CHANNEL, message);
+	}  
+	
+	public boolean isAdmin(String sender) {
+		if ((sender.equalsIgnoreCase(&quot;Kryptix&quot;) || sender.equalsIgnoreCase(&quot;Pyru&quot;)) &amp;&amp; isOp(sender))
+			return true;
+		return false;
+	}
+	
+	public void handleCommand(String message, String sender) {
+		if (System.currentTimeMillis() &lt; lastCommand + 2000)
+			return;
+		lastCommand = System.currentTimeMillis();
+		String[] args = message.split(&quot; &quot;);
+		String command = args[0];
+		message = message.replace(args[0], &quot;&quot;).trim();
+
+    	if (command.equalsIgnoreCase(&quot;!time&quot;) || command.equalsIgnoreCase(&quot;!date&quot;)) {
+    		sendMessage(Config.IRC_CHANNEL, sender + &quot;: RSCEmulation&#39;s time/date is: &quot; + new java.util.Date().toString());
+    	} else if (command.equalsIgnoreCase(&quot;!toggle&quot;)) {
+			Config.IRC_NOTIFY = !Config.IRC_NOTIFY;
+    		sendMessage(sender + &quot;: Notify messages have been &quot; + (Config.IRC_NOTIFY ? &quot;enabled&quot; : &quot;disabled&quot;)); 
+    	} else if (command.equalsIgnoreCase(&quot;!debug&quot;)) {
+    		if (isAdmin(sender)) {
+				Config.IRC_DEBUG = !Config.IRC_DEBUG;
+	    		sendMessage(sender + &quot;: Live debugging has been &quot; + (Config.IRC_DEBUG ? &quot;enabled&quot; : &quot;disabled&quot;));
+	    		setVerbose(Config.IRC_DEBUG);
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!online&quot;)) {
+    		int online = World.getPlayers().count();
+    		if (online &gt; 0)
+    			sendMessage(Config.IRC_CHANNEL, sender + &quot;: There&#39;s currently &quot; + bold() + online + bold() + &quot; player&quot; + (online &gt; 1 ? &quot;s&quot; : &quot;&quot;) + &quot; online RSCEmulation&quot;);    		
+    	} else if (command.equalsIgnoreCase(&quot;!say&quot;) || command.equalsIgnoreCase(&quot;!s&quot;)) {
+    		if (isAdmin(sender)) {
+				synchronized (World.getPlayers()) {
+					for (Player p : World.getPlayers())
+						p.sendNotification(&quot;#adm#@yel@&quot; + sender + &quot; (IRC):@whi@ &quot; + message);
+				}
+				sendMessage(bold() + sender + &quot;:&quot; + bold() + &quot; &quot; + message);
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!disconnect&quot;)) {
+    		if (isAdmin(sender)) {
+				disconnect();
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!nick&quot;)) {
+    		if (isAdmin(sender)) {
+				if (message.length() &gt; 2)
+					changeNick(message);
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!deop&quot;)) {
+    		if (isAdmin(sender)) {
+				if (message.length() &gt; 2)
+					deOp(Config.IRC_CHANNEL, message);
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!devoice&quot;)) {
+    		if (isAdmin(sender)) {
+				if (message.length() &gt; 2)
+					deVoice(Config.IRC_CHANNEL, message);
+    		}
+    	} else if (command.equalsIgnoreCase(&quot;!kick&quot;)) {
+    		if (isAdmin(sender)) {
+				if (message.length() &gt; 2)
+					kick(Config.IRC_CHANNEL, message);
+    		}
+    	}
+	}	
+	
+	public void handlePrivateCommand(String message, String sender) {
+		if (System.currentTimeMillis() &lt; lastCommand + 2000)
+			return;
+		lastCommand = System.currentTimeMillis();		
+		if (isAdmin(sender)) {
+			String[] args = message.split(&quot; &quot;);
+			String command = args[0];
+			message = message.replace(args[0], &quot;&quot;).trim();
+	
+	    	if (command.equalsIgnoreCase(&quot;!shutdown&quot;))
+	    		World.startShutdown(message);
+		}
+	}
+}[/code]</description>
+    
+    <lastBuildDate>Wed, 08 Jun 2011 06:07:22 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/irc-functionality/396713.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“KO9, post:40, topic:396713”][quote author=CodeForFame link=topic=493882.msg3615191#msg3615191 date=1306898655]</p>
+<aside class="quote">
+<blockquote>
+<p>You need to be identified to Nickserv before Chanserv knows you’re genuine, otherwise you would need to type a password to be the owner, and I’ve never seen an IRC network where every Owner, OP, HOP, Voice (etc) needs their own password… That would suck.</p>
+</blockquote>
+</aside>
+<p>That’s just not true at all, see Quakenet, EFnet, EnterTheGame, etc.<br>
+[/quote]</p>
+<p>You already stated QN and EFNet don’t use nickserv… EFNet doesn’t even have any services at all.[/quote]</p>
+<p>I know…  Read more carefully.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/41</link>
+        <pubDate>Wed, 08 Jun 2011 06:07:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-41</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@KO9 KO9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ko9">@KO9</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“CodeForFame, post:31, topic:396713”][quote author=Kryptix link=topic=493882.msg3615170#msg3615170 date=1306896925]<br>
+You need to be identified to Nickserv before Chanserv knows you’re genuine, otherwise you would need to type a password to be the owner, and I’ve never seen an IRC network where every Owner, OP, HOP, Voice (etc) needs their own password… That would suck.<br>
+[/quote]</p>
+<p>That’s just not true at all, see Quakenet, EFnet, EnterTheGame, etc.[/quote]</p>
+<p>You already stated QN and EFNet don’t use nickserv… EFNet doesn’t even have any services at all.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/40</link>
+        <pubDate>Tue, 07 Jun 2011 12:04:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-40</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ecko, post:38, topic:396713”][quote author=CodeForFame link=topic=493882.msg3616568#msg3616568 date=1307036238]<br>
+No good networks, are you kidding me?  The biggest networks are like that.[/quote]<br>
+LOL. Name a big network with it turned on. Doubt you will even answer this request.</p>
+<aside class="quote">
+<blockquote>
+<p>No, the feature isn’t turned off, it’s not implemented at all, which is why it’s outdated.  You really are mentally retarded if you think that it’s fully implemented, but just turned off…</p>
+</blockquote>
+</aside>
+<p>And you would know this… because you saw the the configuration for the services package all the IRC networks use. Yeah, that makes more fucking sense than it being turned off. Stick to flaming people and leave the logic to those who haven’t had their brains addled by God knows what.[/quote]</p>
+<p>Off the top of my head, Freenode has the optional parameter to identify, and it’s runing an outdated version of Nickserv.  Again, it’s not ‘turned off’ it’s not implemented, because it’s an old version.  OpenJoke, DarkSin, SwiftIRC and Mibbit all support it.  Those are just a few, and I’m sure I could find quite a few more…  The only reason the top 5 or so aren’t listed, is because they don’t have Nickserv (gee I wonder how they function without Nickserv…).</p>
+<p>I’ve never claim to have seen he configuration files…  You’re making random ass statements again.  Most IRC daemons are open source, and you can see what options they have.  For example, Freenode does not have the option to enable/disable immediate killing, all you can do is set the delay before the nick is changed.  Some flavors do have the option to turn it off, but why the hell would you disable sole purpose of Nickserv?</p>
+<p>So, how about you actually start bringing substance to the debate rather than outright making things up, and just saying ‘nuh-uh’.  Go find some big networks that have actually specifically turned it off, then try arguing some more.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/39</link>
+        <pubDate>Thu, 02 Jun 2011 22:16:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-39</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Ecko Ecko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ecko">@Ecko</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="37" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>No good networks, are you kidding me?  The biggest networks are like that.</p>
+</blockquote>
+</aside>
+<p>LOL. Name a big network with it turned on. Doubt you will even answer this request.</p>
+<aside class="quote quote-modified" data-post="37" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>No, the feature isn’t turned off, it’s not implemented at all, which is why it’s outdated.  You really are mentally retarded if you think that it’s fully implemented, but just turned off…</p>
+</blockquote>
+</aside>
+<p>And you would know this… because you saw the the configuration for the services package all the IRC networks use. Yeah, that makes more fucking sense than it being turned off. Stick to flaming people and leave the logic to those who haven’t had their brains addled by God knows what.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/38</link>
+        <pubDate>Thu, 02 Jun 2011 20:52:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-38</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ecko, post:36, topic:396713”][quote author=CodeForFame link=topic=493882.msg3614739#msg3614739 date=1306876749]<br>
+You identify before you change your nick…  The nickname is an optional parameter, which you’re forced to use when you have it instantly kill the person.[/quote]<br>
+… So then you would have to connect with either a different nick, or use a client that allows you to identify to NickServ. This is why no good networks even have the optional parameters for NickServ.</p>
+<aside class="quote">
+<blockquote>
+<p>You’re right, because ‘/nickserv set kill on’ is the default option.  You would either use ‘/nickserv set kill immed’ or ‘/nickserv set protect kill’.  Nickserv’s that don’t have one of those two (or the equivalent) are outdated, and pretty pointless, because anyone can use your nick for some time.  People using your nick at all completely defeats the purpose of having Nickserv.</p>
+</blockquote>
+</aside>
+<p>What great logic. If a feature is turned off, then that means it is outdated. You really are the epitome of all that is genius.[/quote]</p>
+<p>No good networks, are you kidding me?  The biggest networks are like that.</p>
+<p>No, the feature isn’t turned off, it’s not implemented at all, which is why it’s outdated.  You really are mentally retarded if you think that it’s fully implemented, but just turned off…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/37</link>
+        <pubDate>Thu, 02 Jun 2011 17:37:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-37</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Ecko Ecko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ecko">@Ecko</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="28" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>You identify before you change your nick…  The nickname is an optional parameter, which you’re forced to use when you have it instantly kill the person.</p>
+</blockquote>
+</aside>
+<p>… So then you would have to connect with either a different nick, or use a client that allows you to identify to NickServ. This is why no good networks even have the optional parameters for NickServ.</p>
+<aside class="quote quote-modified" data-post="28" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>You’re right, because ‘/nickserv set kill on’ is the default option.  You would either use ‘/nickserv set kill immed’ or ‘/nickserv set protect kill’.  Nickserv’s that don’t have one of those two (or the equivalent) are outdated, and pretty pointless, because anyone can use your nick for some time.  People using your nick at all completely defeats the purpose of having Nickserv.</p>
+</blockquote>
+</aside>
+<p>What great logic. If a feature is turned off, then that means it is outdated. You really are the epitome of all that is genius.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/36</link>
+        <pubDate>Thu, 02 Jun 2011 14:39:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-36</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Kryptix, post:8, topic:396762”][quote author=mhp link=topic=493882.msg3615511#msg3615511 date=1306932107]<br>
+Might as well make a new hidden, protected channel for admins only…<br>
+[/quote]<br>
+Probably the best idea so far TBH.[/quote]</p>
+<p>Implying creating a channel, registering it with Chanserv, making it hidden, etc. is easier than typing a single command…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/35</link>
+        <pubDate>Wed, 01 Jun 2011 18:49:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-35</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@mhp mhp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mhp">@mhp</a> wrote:</p>
+          <blockquote>
+              <p>Might as well make a new hidden, protected channel for admins only…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/34</link>
+        <pubDate>Wed, 01 Jun 2011 12:41:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-34</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“vortex, post:32, topic:396713”]OR you could just check the hostname of the user, assuming your network doesn’t allow custom vhosts[/quote]so dynamic… bad idea</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/33</link>
+        <pubDate>Wed, 01 Jun 2011 03:42:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-33</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@vortex vortex]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vortex">@vortex</a> wrote:</p>
+          <blockquote>
+              <p>OR you could just check the hostname of the user, assuming your network doesn’t allow custom vhosts</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/32</link>
+        <pubDate>Wed, 01 Jun 2011 03:41:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-32</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="7" data-topic="396762">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/kryptix/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar">
+</div>
+<blockquote>
+<p>You need to be identified to Nickserv before Chanserv knows you’re genuine, otherwise you would need to type a password to be the owner, and I’ve never seen an IRC network where every Owner, OP, HOP, Voice (etc) needs their own password… That would suck.</p>
+</blockquote>
+</aside>
+<p>That’s just not true at all, see Quakenet, EFnet, EnterTheGame, etc.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/31</link>
+        <pubDate>Wed, 01 Jun 2011 03:24:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-31</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>pssssssssssssssssssssssst</p>
+<p>PRIVMSG NickServ STATUS </p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/30</link>
+        <pubDate>Wed, 01 Jun 2011 03:08:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-30</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="6" data-topic="396762">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/kryptix/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar">
+</div>
+<blockquote>
+<p>[quote author=CodeForFame link=topic=493882.msg3614739#msg3614739 date=1306876749]People using your nick at all completely defeats the purpose of having Nickserv.</p>
+</blockquote>
+</aside>
+<p>No it doesn’t, it’s used for channel privileges and so on…[/quote]</p>
+<p>That’s what Chanserv is for…</p>
+<p>How do you think networks without Nickserv have channel privileges and such?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/29</link>
+        <pubDate>Wed, 01 Jun 2011 02:51:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-29</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ecko, post:27, topic:396713”][quote author=CodeForFame link=topic=493882.msg3614416#msg3614416 date=1306861830]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Because that means he can never set it up…</p>
+</blockquote>
+</aside>
+<p>You’d have at least 20 seconds before it kills…<br>
+Give up…</p>
+</blockquote>
+</aside>
+<p>Maybe on the MoparScape network…  Most networks let you set it so that you need to identify before you set that as your nick, otherwise you’re killed instantly.  Also, I don’t see the network that’s being used anywhere in the code that was posted.</p>
+</blockquote>
+</aside>
+<p>… That is not how most networks work (EnterTheGame, Quakenet, rizon, freenode, EFnet, Gamesurge). If you have nick protection on, then there’s 20 seconds to identify to NickServ before having the name changed automatically. Otherwise anyone can stay on a nick until the owner uses the ghost command to kick them off. The proper way of doing this is checking if the user is identified (<a href="http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589</a>).</p>
+</blockquote>
+</aside>
+<p>Yes, with the default settings, I’m saying change the default settings, and set protection to kill.  Furthermore, EnterTheGame, Quakenet, Gamesurge, and EFnet do not use Nickserv, so take your bullshit elsewhere.<br>
+[/quote]<br>
+Well I haven’t used any of those networks for almost 4 years, so you can take your asshole attitude and fuck off.</p>
+<aside class="quote">
+<blockquote>
+<p>That leaves Rizon, and Freenode.  Both are using extremely outdated/custom nick services.</p>
+</blockquote>
+</aside>
+<p>Outdated? What IRC service package are they using then, since I doubt you even know.</p>
+<aside class="quote">
+<blockquote>
+<p>Most networks (from what I’ve seen) that have Nickserv allow you to set kill to immed (immediate), or protect to kill; both of those kill the person as soon as they set their nick and aren’t registered with Nickserv.  Not having that functionality completely defeats the purpose of having any form of nick protection.</p>
+</blockquote>
+</aside>
+<p>… So once someone sets their nick to one with protection, they will never be able to identify because NickServ will kill/force name change immediately. That makes complete and total sense. Most networks with NickServ give a certain amount of time before killing an unidentified protected nick. ‘/ns set kill on’ does not “kill the person as soon as they set their nick and aren’t registered with NickServ”.[/quote]</p>
+<p>If you don’t know what you’re talking about then fuck off.  You clearly made shit up just to sound like you know what you’re talking about, and I knew you were wrong; get over it.</p>
+<p>The entire package they use is completely irrelevant.  The only relevant part is Nickserv, and it’s easy to tell that it’s outdated/custom because they are lacking functionality, and have entirely unique ‘commands’.</p>
+<p>You identify before you change your nick…  The nickname is an optional parameter, which you’re forced to use when you have it instantly kill the person.</p>
+<p>You’re right, because ‘/nickserv set kill on’ is the default option.  You would either use ‘/nickserv set kill immed’ or ‘/nickserv set protect kill’.  Nickserv’s that don’t have one of those two (or the equivalent) are outdated, and pretty pointless, because anyone can use your nick for some time.  People using your nick at all completely defeats the purpose of having Nickserv.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/28</link>
+        <pubDate>Tue, 31 May 2011 21:19:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-28</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Ecko Ecko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ecko">@Ecko</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“CodeForFame, post:26, topic:396713”][quote author=Ecko link=topic=493882.msg3613485#msg3613485 date=1306792592]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Because that means he can never set it up…</p>
+</blockquote>
+</aside>
+<p>You’d have at least 20 seconds before it kills…<br>
+Give up…</p>
+</blockquote>
+</aside>
+<p>Maybe on the MoparScape network…  Most networks let you set it so that you need to identify before you set that as your nick, otherwise you’re killed instantly.  Also, I don’t see the network that’s being used anywhere in the code that was posted.</p>
+</blockquote>
+</aside>
+<p>… That is not how most networks work (EnterTheGame, Quakenet, rizon, freenode, EFnet, Gamesurge). If you have nick protection on, then there’s 20 seconds to identify to NickServ before having the name changed automatically. Otherwise anyone can stay on a nick until the owner uses the ghost command to kick them off. The proper way of doing this is checking if the user is identified (<a href="http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589</a>).<br>
+[/quote]</p>
+<p>Yes, with the default settings, I’m saying change the default settings, and set protection to kill.  Furthermore, EnterTheGame, Quakenet, Gamesurge, and EFnet do not use Nickserv, so take your bullshit elsewhere.[/quote]<br>
+Well I haven’t used any of those networks for almost 4 years, so you can take your asshole attitude and fuck off.</p>
+<aside class="quote" data-post="26" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>That leaves Rizon, and Freenode.  Both are using extremely outdated/custom nick services.</p>
+</blockquote>
+</aside>
+<p>Outdated? What IRC service package are they using then, since I doubt you even know.</p>
+<aside class="quote quote-modified" data-post="26" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>Most networks (from what I’ve seen) that have Nickserv allow you to set kill to immed (immediate), or protect to kill; both of those kill the person as soon as they set their nick and aren’t registered with Nickserv.  Not having that functionality completely defeats the purpose of having any form of nick protection.</p>
+</blockquote>
+</aside>
+<p>… So once someone sets their nick to one with protection, they will never be able to identify because NickServ will kill/force name change immediately. That makes complete and total sense. Most networks with NickServ give a certain amount of time before killing an unidentified protected nick. ‘/ns set kill on’ does not “kill the person as soon as they set their nick and aren’t registered with NickServ”.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/27</link>
+        <pubDate>Tue, 31 May 2011 20:21:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-27</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Ecko, post:24, topic:396713”][quote author=CodeForFame link=topic=493882.msg3613392#msg3613392 date=1306786815]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>Because that means he can never set it up…</p>
+</blockquote>
+</aside>
+<p>You’d have at least 20 seconds before it kills…<br>
+Give up…</p>
+</blockquote>
+</aside>
+<p>Maybe on the MoparScape network…  Most networks let you set it so that you need to identify before you set that as your nick, otherwise you’re killed instantly.  Also, I don’t see the network that’s being used anywhere in the code that was posted.<br>
+[/quote]<br>
+… That is not how most networks work (EnterTheGame, Quakenet, rizon, freenode, EFnet, Gamesurge). If you have nick protection on, then there’s 20 seconds to identify to NickServ before having the name changed automatically. Otherwise anyone can stay on a nick until the owner uses the ghost command to kick them off. The proper way of doing this is checking if the user is identified (<a href="http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589</a>).[/quote]</p>
+<p>Yes, with the default settings, I’m saying change the default settings, and set protection to kill.  Furthermore, EnterTheGame, Quakenet, Gamesurge, and EFnet do not use Nickserv, so take your bullshit elsewhere.</p>
+<p>That leaves Rizon, and Freenode.  Both are using extremely outdated/custom nick services.</p>
+<p>So, you’ve listed two networks that don’t have it…  Congrats.</p>
+<p>Most networks (from what I’ve seen) that have Nickserv allow you to set kill to immed (immediate), or protect to kill; both of those kill the person as soon as they set their nick and aren’t registered with Nickserv.  Not having that functionality completely defeats the purpose of having any form of nick protection.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/26</link>
+        <pubDate>Tue, 31 May 2011 17:10:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-26</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Ecko Ecko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ecko">@Ecko</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Kryptix, post:4, topic:396762”]I don’t think PircBot has a way to see their identified mode.</p>
+<p><a href="http://www.jibble.org/javadocs/pircbot/index.html%5B/quote%5D" class="onebox" target="_blank" rel="nofollow noopener">http://www.jibble.org/javadocs/pircbot/index.html[/quote]</a><br>
+<a href="http://ppf.sourceforge.net/" class="onebox" target="_blank" rel="nofollow noopener">http://ppf.sourceforge.net/</a><br>
+<a href="http://www.deaded.com/forum/viewtopic.php?showtopic=1620" class="onebox" target="_blank" rel="nofollow noopener">http://www.deaded.com/forum/viewtopic.php?showtopic=1620</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/25</link>
+        <pubDate>Mon, 30 May 2011 23:55:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-25</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Ecko Ecko]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ecko">@Ecko</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“CodeForFame, post:23, topic:396713”][quote author=mhp link=topic=493882.msg3613356#msg3613356 date=1306783108]</p>
+<aside class="quote">
+<blockquote>
+<p>Because that means he can never set it up…</p>
+</blockquote>
+</aside>
+<p>You’d have at least 20 seconds before it kills…<br>
+Give up…<br>
+[/quote]</p>
+<p>Maybe on the MoparScape network…  Most networks let you set it so that you need to identify before you set that as your nick, otherwise you’re killed instantly.  Also, I don’t see the network that’s being used anywhere in the code that was posted.[/quote]<br>
+… That is not how most networks work (EnterTheGame, Quakenet, rizon, freenode, EFnet, Gamesurge). If you have nick protection on, then there’s 20 seconds to identify to NickServ before having the name changed automatically. Otherwise anyone can stay on a nick until the owner uses the ghost command to kick them off. The proper way of doing this is checking if the user is identified (<a href="http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,493882.msg3611589.html#msg3611589</a>).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/24</link>
+        <pubDate>Mon, 30 May 2011 21:56:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-24</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“mhp, post:22, topic:396713”][quote author=CodeForFame link=topic=493882.msg3613141#msg3613141 date=1306771424]<br>
+Because that means he can never set it up…<br>
+[/quote]<br>
+You’d have at least 20 seconds before it kills…<br>
+Give up…[/quote]</p>
+<p>Maybe on the MoparScape network…  Most networks let you set it so that you need to identify before you set that as your nick, otherwise you’re killed instantly.  Also, I don’t see the network that’s being used anywhere in the code that was posted.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/23</link>
+        <pubDate>Mon, 30 May 2011 20:20:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-23</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@mhp mhp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mhp">@mhp</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="21" data-topic="396713">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/codeforfame/40/3743_1.png" class="avatar"> CodeForFame:</div>
+<blockquote>
+<p>Because that means he can never set it up…</p>
+</blockquote>
+</aside>
+<p>You’d have at least 20 seconds before it kills…<br>
+Give up…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/22</link>
+        <pubDate>Mon, 30 May 2011 19:18:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-22</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@CodeForFame CodeForFame]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/codeforfame">@CodeForFame</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“mhp, post:20, topic:396713”][quote author=CodeForFame link=topic=493882.msg3611431#msg3611431 date=1306625627]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>[quote]public boolean isAdmin(String sender) {<br>
+if ((sender.equalsIgnoreCase(“Kryptix”) || sender.equalsIgnoreCase(“Pyru”)) &amp;&amp; isOp(sender))<br>
+return true;<br>
+return false;<br>
+}[/quote]<br>
+Really? Anyone of the other ops could shut the server down because of this</p>
+</blockquote>
+</aside>
+<p>Are you retarded?</p>
+<p>The senders name needs to be Kryptix or Pyru (case doesn’t matter), <span class="bbcode-b">and</span> be opped.</p>
+<p>Also, this looks extremely similar to the IRC class that was in the RSCA source…</p>
+</blockquote>
+</aside>
+<p>Inb4 an op does /nick Pyru or Kryptix, retard…</p>
+</blockquote>
+</aside>
+<p>Learn how to use Nickserv properly…  Set protect to high or kill…<br>
+[/quote]<br>
+Pyru has no nick protection at all… Good fight…[/quote]</p>
+<p>Because that means he can never set it up…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/21</link>
+        <pubDate>Mon, 30 May 2011 16:03:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-21</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@mhp mhp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mhp">@mhp</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“CodeForFame, post:16, topic:396713”][quote author=mhp link=topic=493882.msg3611226#msg3611226 date=1306606099]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>[quote]public boolean isAdmin(String sender) {<br>
+if ((sender.equalsIgnoreCase(“Kryptix”) || sender.equalsIgnoreCase(“Pyru”)) &amp;&amp; isOp(sender))<br>
+return true;<br>
+return false;<br>
+}[/quote]<br>
+Really? Anyone of the other ops could shut the server down because of this</p>
+</blockquote>
+</aside>
+<p>Are you retarded?</p>
+<p>The senders name needs to be Kryptix or Pyru (case doesn’t matter), <span class="bbcode-b">and</span> be opped.</p>
+<p>Also, this looks extremely similar to the IRC class that was in the RSCA source…</p>
+</blockquote>
+</aside>
+<p>Inb4 an op does /nick Pyru or Kryptix, retard…<br>
+[/quote]</p>
+<p>Learn how to use Nickserv properly…  Set protect to high or kill…[/quote]<br>
+Pyru has no nick protection at all… Good fight…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/20</link>
+        <pubDate>Mon, 30 May 2011 09:00:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-20</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@Nothing1 -Nothing]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/nothing1">@Nothing1</a> wrote:</p>
+          <blockquote>
+              <p>Without seeing the code, you would never guess how it’s done. So no worries.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/19</link>
+        <pubDate>Sun, 29 May 2011 10:04:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-19</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>orrrrrr check for the identified mode??</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/18</link>
+        <pubDate>Sun, 29 May 2011 01:29:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-18</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+      <item>
+        <title>IRC Functionality</title>
+        <dc:creator><![CDATA[@The_AFKer The_AFKer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_afker">@The_AFKer</a> wrote:</p>
+          <blockquote>
+              <p>Use a password auth sent by privmsg with the existing rules that identifies as admin instead…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/irc-functionality/396713/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/irc-functionality/396713/17</link>
+        <pubDate>Sun, 29 May 2011 00:34:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-396713-17</guid>
+        <source url="https://forum.moparisthebest.com/t/irc-functionality/396713.rss">IRC Functionality</source>
+      </item>
+  </channel>
+</rss>

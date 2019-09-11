@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>X86 ASM To C++ Code emulator</title>
+    <link>https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037</link>
+    <description>Do any of these exist? I&#39;m not talking about ASM to C Code decompilers. like hexrays.
+
+I&#39;m trying to emulate the actual instructions in C code for a bigger project.
+
+Some assembly CALL&#39;s are relative which gives me a problem.. If i try to rip some serial generation/packet encryption/decryption functions. They often have something like this.
+
+[code]
+004346CA   . C745 F8 DB5325&gt;MOV DWORD PTR SS:[EBP-8],862553DB                    ;&lt;-This is start
+004346D1   . C745 FC CEE6DC&gt;MOV DWORD PTR SS:[EBP-4],0EDCE6CE
+004346D8   . 8B45 F8            MOV EAX,DWORD PTR SS:[EBP-8]                              ;&lt;- Then here
+004346DB   . BA BD15696F        MOV EDX,6F6915BD
+004346E0   . 8BCE                  MOV ECX,ESI
+004346E2   . 05 859A1E7A        ADD EAX,7A1E9A85                                                                ;&lt;- This finally this
+004346E7   . FFD0                  CALL EAX                                                                              ;&lt;- Any automatic way for CodeRipper to find this function
+ 
+004346E9   . 2945 FC            SUB DWORD PTR SS:[EBP-4],EAX ;&lt;- Answer from CALL EAX.. make next call
+004346EC   . C745 F8 E599B8&gt;MOV DWORD PTR SS:[EBP-8],25B899E5
+004346F3   . BA 9A6ED45D        MOV EDX,5DD46E9A
+004346F8   . 8BCE                  MOV ECX,ESI
+004346FA   . FF55 FC            CALL DWORD PTR SS:[EBP-4]       ;&lt;-- Call from previous answer
+[/code]
+
+I couldn&#39;t find any ollydbg script or ida pro plugin which is able to transform relative address to absolute address..
+
+Relative -&gt; Absolute.
+[code]
+CALL DWORD PTR SS:[EBP-4] -&gt; CALL 493881
+[/code]
+
+As you can see in the snippet above. First call
+CALL EAX which is relative.. is actually generated.. from 4 instructions above which makes it absolute then.
+
+Then the next call  CALL DWORD PTR SS:[EBP-4] is also relative.. but is generated to absolute by the result of the previous call.
+
+I asked in a reversing forum.. they said nothing like this exists.. They say just breakpoint every call and get the absolute addresses.. This would mean to me removing the protection or gameguard from the game for example. Just to be able to attach a debugger.. or assemble a JMP to some area.. rewrite the code there to call the function I want to step just to get the absolute function addresses.
+
+I figured i&#39;d make a assembly emulator which would emulate a piece of asm code running in C code.. then collect all the absolute addresses.. replace the previous relative ones. Then finally remove any unused assembly code.. to make it as minimal as possible.
+
+I Found a few open source dissemblers. All were a overkill for what I wanted to do.. but I managed to strip one down to it&#39;s bare workings.
+
+Here is one it produced something like this.
+
+[code]
+401000	PUSH ESI
+401001	MOV ESI,DWORD PTR [ESP+8]
+401005	MOV EDX,ECX
+401007	PUSH EDI
+401008	MOV EDI,ESI
+40100A	OR ECX,FFFFFFFF
+40100D	XOR EAX,EAX
+40100F	REPNE SCAS BYTE PTR [EDI]
+401011	NOT ECX
+401013	DEC ECX
+401014	MOV EAX,ECX
+401016	DEC ECX
+401017	TEST EAX,EAX
+401019	JE 401035
+40101B	PUSH EBX
+40101C	LEA EAX,[ECX+1]
+40101F	XOR ECX,ECX
+401021	XOR EBX,EBX
+401023	MOV CL,BYTE PTR [ESI]
+401025	MOV BL,BYTE PTR [EDX]
+401027	XOR ECX,EBX
+401029	DEC EAX
+40102A	MOV CL,BYTE PTR [ECX+45FA1C]
+401030	MOV BYTE PTR [EDX],CL
+401032	JNE 40101F
+401034	POP EBX
+401035	POP EDI
+401036	POP ESI
+401037	RET 4
+[/code]
+
+So I started writing a second parser that runs each instruction line by line and give a C code equivalent.
+
+ATM when ran against the top snippet it would generate this.. still not runnable, but getting there.
+
+[code]
+regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.esi;
+regs.d.esi = *(unsigned int *)(regs.d.esp+0x00000008);
+regs.d.edx = regs.d.ecx;
+regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.edi;
+regs.d.edi = regs.d.esi;
+regs.d.ecx |= 0xFFFFFFFF;
+regs.d.eax ^= regs.d.eax;
+REPNE SCAS BYTE PTR [EDI]
+regs.d.ecx ~= regs.d.ecx;
+regs.d.ecx--;
+regs.d.eax = regs.d.ecx;
+regs.d.ecx--;
+if(regs.d.eax == 0)
+    goto label_401035;
+regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.ebx;
+regs.d.eax = (regs.d.ecx+0x00000001);
+regs.d.ecx ^= regs.d.ecx;
+regs.d.ebx ^= regs.d.ebx;
+regs.x.cl = *(unsigned char *)(regs.d.esi);
+regs.x.bl = *(unsigned char *)(regs.d.edx);
+regs.d.ecx ^= regs.d.ebx;
+regs.d.eax--;
+regs.x.cl = *(unsigned char *)(regs.d.ecx+0x0045FA1C);
+*(unsigned char *)(regs.d.edx) = regs.x.cl;
+JNE 40101F
+regs.d.ebx = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+label_401035:
+regs.d.edi = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+regs.d.esi = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+return 0x4;
+[/code]
+
+I got the most basic if(statements) working..
+
+some like that 
+JNE 40101F
+without a CMP or TEST above it.. most likely a loop, I cannot yet do.
+
+
+Anyways what I am asking if anyone knows of any software that does something like what I am trying to do, could save me alot of time.
+
+Thanks.. well if nothing like this exists maybe someone can help me out.
+
+Thanks again.</description>
+    
+    <lastBuildDate>Tue, 03 Jan 2012 19:41:25 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>X86 ASM To C++ Code emulator</title>
+        <dc:creator><![CDATA[@sspoke sspoke]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sspoke">@sspoke</a> wrote:</p>
+          <blockquote>
+              <p>The purpose i was doing this for is to fix, static addresses in assembly so it can easily be ripped and keygenned. For me this just was going to be used for decryption/encryption of a 2d shooting game’s protocol.</p>
+<p>Rumors say the encryption/decryption was written by hand in assembly… but then again could be just some unknown ASM obfuscation/optimization process.</p>
+<p>What i mean by static addresses, if I copy/paste the assembly code using OllyDBG’s CodeRipper into C++ ASM interpreter and fix other simple errors, it still wouldn’t run, since some ASM code is calculated by mathematical equation.</p>
+<p>As you can see from the code posted above.</p>
+<pre><code class="lang-auto">4346CA   . C745 F8 DB5325&gt;MOV DWORD PTR SS:[EBP-8],862553DB                    ;&lt;-This is start
+004346D1   . C745 FC CEE6DC&gt;MOV DWORD PTR SS:[EBP-4],0EDCE6CE
+004346D8   . 8B45 F8            MOV EAX,DWORD PTR SS:[EBP-8]                              ;&lt;- Then here
+004346DB   . BA BD15696F        MOV EDX,6F6915BD
+004346E0   . 8BCE                  MOV ECX,ESI
+004346E2   . 05 859A1E7A        ADD EAX,7A1E9A85                                                                ;&lt;- This finally this
+004346E7   . FFD0                  CALL EAX                                                                              ;&lt;- Any automatic way for CodeRipper to find this function</code></pre>
+<p>EBP-8 becomes 0x862553DB          ;C745 F8 DB5325&gt;MOV DWORD PTR SS:[EBP-8],862553DB<br>
+EAX now becomes 0x862553DB      ;MOV EAX,DWORD PTR SS:[EBP-8]<br>
+EAX += 7A1E9A85;                      ;ADD EAX,7A1E9A85<br>
+CALL [Calculated math of 0x862553DB + 7A1E9A85] ;CALL EAX</p>
+<p>I solved the problem of changing all CALL EAX’s into CALL ######'s by writing a little script in OLLYDBG which set breakpoints to all CALL EAX/CALL EDX… etc… and once a breakpoint was triggered it would write a comment of the evaluated math equations… some CALL EAX’s are for regular API calls so the address it may calculate may be out of the scope of the game’s code base, I just ignored those.</p>
+<p>Here is the screenshot of the Script in progress<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/YJQbe.png" title="YJQbe.png" rel="nofollow noopener"><img src="http://i.imgur.com/YJQbe.png" alt width="562" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">YJQbe.png</span><span class="informations">747×664</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>Yeah I pretty much managed to make my own Code Ripper which follows all CALL [Calculated Values] and rips those out too until a RETN is detected… then it does a second pass to find out if any JMPS pass the first RETN… if extending is needed to the next RETN…</p>
+<p>I got pretty far… I managed to get the packet encryption work half the time…</p>
+<p>One of the other obfuscations the game had was inserted Try/Catch Exceptions which would stop OllyDBG as each of the Exceptions would get triggered… the Exceptions really make no sense… and should just be removed… in OllyDBG options you can set option to ignore all exceptions and thats how I stepped the encryption.</p>
+<p>Here is how it used to be</p>
+<pre><code class="lang-auto">00419F50  PUSH EBP
+00419F51  MOV EBP,ESP
+00419F53  PUSH ECX
+00419F54  MOV EAX,0EBB58D5
+00419F59  PUSH ESI
+00419F5A  MOV ESI,DWORD PTR DS:[ECX+24]
+00419F5D  SUB EAX,EDX
+00419F5F  ADD ESI,EAX
+00419F61  MOV DWORD PTR DS:[ECX+24],ESI
+00419F64  MOV ECX,ESI
+00419F66  AND ECX,1
+00419F69  POP ESI
+00419F6A  CMP CL,1  ;&lt;--- the compare okay, could this be injected? or coded by app maker himself?
+00419F6D  JNZ SHORT Unmodifi.00419F86 ;&lt;--- must trigger this, to go to good side.
+00419F6F  ADD EDX,0B4408B
+00419F75  PUSH Unmodifi.004B2338
+00419F7A  MOV DWORD PTR SS:[EBP-4],EDX
+00419F7D  LEA EDX,DWORD PTR SS:[EBP-4]
+00419F80  PUSH EDX
+00419F81  CALL Unmodifi.0046CA73 ;&lt;--- Exception fail, on purpose wtf?
+00419F86  TEST EAX,EAX
+00419F88  JNB SHORT Unmodifi.00419F8D    ;&lt;-- This solves the HMM below, already know this one
+00419F8A  MOV DWORD PTR DS:[EDI+EAX*8+FFC2828D],CE354613 ;&lt;--- from JNB mess
+00419F95  PUSH EDX
+00419F96  PUSH EAX
+00419F97  SBB CL,BYTE PTR DS:[EBX+90C35DE5]</code></pre>
+<p>And the decompiled version</p>
+<pre><code class="lang-auto">int __fastcall sub_419F50(int a1, int a2)
+{
+  int v2; // esi@1
+  int v4; // [sp+4h] [bp-4h]@2
+
+  v2 = 247158997 - a2 + *(_DWORD *)(a1 + 36);  //&lt;- Good perfect.
+  *(_DWORD *)(a1 + 36) = v2; //&lt;- Good sets the array
+  if ( (v2 &amp; 1) == 1 ) //&lt;-- no needed
+  {
+        v4 = a2 + 11813003; //&lt;- not needed
+        _CxxThrowException(&amp;v4, &amp;unk_4B2338); //&lt;- not needed
+  }
+  return (a2 + 1175715778) ^ 0x1A5052CE; //&lt;- excellent
+}</code></pre>
+<p>There is another obfuscation in the ASM code which I couldn’t defeat, this is where I pretty much gave up, from talking on reversing forums they said this part of obfuscation is called Obsidium.</p>
+<p>pretty much it looks like this</p>
+<pre><code class="lang-auto">0041C8DA   . 7B 02        JPO SHORT Unmodifi.0041C8DE              &lt;- NOP (jump not taken)
+0041C8DC         B8                DB B8                          &lt;- reassemble
+0041C8DD         00                      DB 00                    &lt;- reassemble
+0041C8DE   . 8BC7                MOV EAX,EDI   &lt;-reassemble
+0041C8E0   ? F7                  ???                              ;  Unknown command  &lt;- reassemble</code></pre>
+<p>DB’s shouldn’t be in any ASM Code base, being here that makes the code kinda re-write itself… say the JPO above isn’t taken… it would re-assemble  B8 00 [8B C7] into a new assembly command, well it’s not re-writing itself… it’s just making ollydbg parse the ASM improperly. Also that command 0xF7 probably is a dummy byte which does no purpose just ignored I guess.</p>
+<p>Here is the script I attempted to remove this kind of Obfuscations.<br>
+<a href="http://pastebin.com/SxnwVN2Y" class="onebox" target="_blank" rel="nofollow noopener">http://pastebin.com/SxnwVN2Y</a></p>
+<p>the script was a big fail… because it ran by pattern matching rather then following the results of JPO’s etc… so I didn’t know whether the jump was taken or not… I just regarded some patterns like the above never is taken and others always taken… this didn’t work well, this is probably where I realized the idea I was going for is only for simple programs with no obfuscation/packers… if I work on something like this, it has to be done by hand no automation tools.</p>
+<p>There was another obfuscation which wasn’t too bad… it’s in the script above too.</p>
+<pre><code class="lang-auto">0041D20B   . C745 FC 00000000              MOV DWORD PTR SS:[EBP-4],0
+0041D212   . [E8 01 00 00 00]                    CALL Unmodifi.0041D218    &lt;- NOP CALL
+0041D217         [8B]                                                     DB 8B          &lt;- NOP Trash
+0041D218   . [58]                                                         POP EAX       &lt;- NOP for CALL
+0041D219   . 8B46 48                                             MOV EAX,DWORD PTR DS:[ESI+48]</code></pre>
+<p>pretty much as you can see it does a CALL method into the same function it’s already into… instead of going into a new function… it splits the current function into a sub-function. pretty much to get rid of this obfuscation you just remove the CALL which has bytes [01 00 00 00] which means CALL +1 byte and also get rid of the POP EAX which is holding the return address for the CALL, not sure anymore, it jumps over the DB 8B which is just garbage added to add more manual work with assembly hackers pretty much.</p>
+<p>Other then that I pretty much gave up on this game.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/4</link>
+        <pubDate>Tue, 03 Jan 2012 19:41:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418037-4</guid>
+        <source url="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037.rss">X86 ASM To C++ Code emulator</source>
+      </item>
+      <item>
+        <title>X86 ASM To C++ Code emulator</title>
+        <dc:creator><![CDATA[@ownagesbot ownagesbot]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ownagesbot">@ownagesbot</a> wrote:</p>
+          <blockquote>
+              <p>Did you manage to find a solution?</p>
+<p>Your thread isn’t entirely clear but I doubt you’ll find anything much to help you, I think you might also be thinking about this incorrectly, but your original post is a bit hard to interpret.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/3</link>
+        <pubDate>Mon, 02 Jan 2012 00:45:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418037-3</guid>
+        <source url="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037.rss">X86 ASM To C++ Code emulator</source>
+      </item>
+      <item>
+        <title>X86 ASM To C++ Code emulator</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>Without reading the entire thread, it sounds like you are talking about an x86 CPU emulator written in C or C++, in which case there are many.  The one I would start with would be qemu.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/2</link>
+        <pubDate>Thu, 13 Oct 2011 03:24:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418037-2</guid>
+        <source url="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037.rss">X86 ASM To C++ Code emulator</source>
+      </item>
+      <item>
+        <title>X86 ASM To C++ Code emulator</title>
+        <dc:creator><![CDATA[@sspoke sspoke]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sspoke">@sspoke</a> wrote:</p>
+          <blockquote>
+              <p>Do any of these exist? I’m not talking about ASM to C Code decompilers. like hexrays.</p>
+<p>I’m trying to emulate the actual instructions in C code for a bigger project.</p>
+<p>Some assembly CALL’s are relative which gives me a problem… If i try to rip some serial generation/packet encryption/decryption functions. They often have something like this.</p>
+<pre><code class="lang-auto">004346CA   . C745 F8 DB5325&gt;MOV DWORD PTR SS:[EBP-8],862553DB                    ;&lt;-This is start
+004346D1   . C745 FC CEE6DC&gt;MOV DWORD PTR SS:[EBP-4],0EDCE6CE
+004346D8   . 8B45 F8            MOV EAX,DWORD PTR SS:[EBP-8]                              ;&lt;- Then here
+004346DB   . BA BD15696F        MOV EDX,6F6915BD
+004346E0   . 8BCE                  MOV ECX,ESI
+004346E2   . 05 859A1E7A        ADD EAX,7A1E9A85                                                                ;&lt;- This finally this
+004346E7   . FFD0                  CALL EAX                                                                              ;&lt;- Any automatic way for CodeRipper to find this function
+ 
+004346E9   . 2945 FC            SUB DWORD PTR SS:[EBP-4],EAX ;&lt;- Answer from CALL EAX.. make next call
+004346EC   . C745 F8 E599B8&gt;MOV DWORD PTR SS:[EBP-8],25B899E5
+004346F3   . BA 9A6ED45D        MOV EDX,5DD46E9A
+004346F8   . 8BCE                  MOV ECX,ESI
+004346FA   . FF55 FC            CALL DWORD PTR SS:[EBP-4]       ;&lt;-- Call from previous answer</code></pre>
+<p>I couldn’t find any ollydbg script or ida pro plugin which is able to transform relative address to absolute address…</p>
+<p>Relative -&gt; Absolute.</p>
+<pre><code class="lang-auto">CALL DWORD PTR SS:[EBP-4] -&gt; CALL 493881</code></pre>
+<p>As you can see in the snippet above. First call<br>
+CALL EAX which is relative… is actually generated… from 4 instructions above which makes it absolute then.</p>
+<p>Then the next call  CALL DWORD PTR SS:[EBP-4] is also relative… but is generated to absolute by the result of the previous call.</p>
+<p>I asked in a reversing forum… they said nothing like this exists… They say just breakpoint every call and get the absolute addresses… This would mean to me removing the protection or gameguard from the game for example. Just to be able to attach a debugger… or assemble a JMP to some area… rewrite the code there to call the function I want to step just to get the absolute function addresses.</p>
+<p>I figured i’d make a assembly emulator which would emulate a piece of asm code running in C code… then collect all the absolute addresses… replace the previous relative ones. Then finally remove any unused assembly code… to make it as minimal as possible.</p>
+<p>I Found a few open source dissemblers. All were a overkill for what I wanted to do… but I managed to strip one down to it’s bare workings.</p>
+<p>Here is one it produced something like this.</p>
+<pre><code class="lang-auto">401000	PUSH ESI
+401001	MOV ESI,DWORD PTR [ESP+8]
+401005	MOV EDX,ECX
+401007	PUSH EDI
+401008	MOV EDI,ESI
+40100A	OR ECX,FFFFFFFF
+40100D	XOR EAX,EAX
+40100F	REPNE SCAS BYTE PTR [EDI]
+401011	NOT ECX
+401013	DEC ECX
+401014	MOV EAX,ECX
+401016	DEC ECX
+401017	TEST EAX,EAX
+401019	JE 401035
+40101B	PUSH EBX
+40101C	LEA EAX,[ECX+1]
+40101F	XOR ECX,ECX
+401021	XOR EBX,EBX
+401023	MOV CL,BYTE PTR [ESI]
+401025	MOV BL,BYTE PTR [EDX]
+401027	XOR ECX,EBX
+401029	DEC EAX
+40102A	MOV CL,BYTE PTR [ECX+45FA1C]
+401030	MOV BYTE PTR [EDX],CL
+401032	JNE 40101F
+401034	POP EBX
+401035	POP EDI
+401036	POP ESI
+401037	RET 4</code></pre>
+<p>So I started writing a second parser that runs each instruction line by line and give a C code equivalent.</p>
+<p>ATM when ran against the top snippet it would generate this… still not runnable, but getting there.</p>
+<pre><code class="lang-auto">regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.esi;
+regs.d.esi = *(unsigned int *)(regs.d.esp+0x00000008);
+regs.d.edx = regs.d.ecx;
+regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.edi;
+regs.d.edi = regs.d.esi;
+regs.d.ecx |= 0xFFFFFFFF;
+regs.d.eax ^= regs.d.eax;
+REPNE SCAS BYTE PTR [EDI]
+regs.d.ecx ~= regs.d.ecx;
+regs.d.ecx--;
+regs.d.eax = regs.d.ecx;
+regs.d.ecx--;
+if(regs.d.eax == 0)
+    goto label_401035;
+regs.d.esp -= 4;
+*(unsigned int *)(regs.d.esp) = regs.d.ebx;
+regs.d.eax = (regs.d.ecx+0x00000001);
+regs.d.ecx ^= regs.d.ecx;
+regs.d.ebx ^= regs.d.ebx;
+regs.x.cl = *(unsigned char *)(regs.d.esi);
+regs.x.bl = *(unsigned char *)(regs.d.edx);
+regs.d.ecx ^= regs.d.ebx;
+regs.d.eax--;
+regs.x.cl = *(unsigned char *)(regs.d.ecx+0x0045FA1C);
+*(unsigned char *)(regs.d.edx) = regs.x.cl;
+JNE 40101F
+regs.d.ebx = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+label_401035:
+regs.d.edi = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+regs.d.esi = *(unsigned int *)(regs.d.esp);
+regs.d.esp += 4;
+return 0x4;</code></pre>
+<p>I got the most basic if(statements) working…</p>
+<p>some like that<br>
+JNE 40101F<br>
+without a CMP or TEST above it… most likely a loop, I cannot yet do.</p>
+<p>Anyways what I am asking if anyone knows of any software that does something like what I am trying to do, could save me alot of time.</p>
+<p>Thanks… well if nothing like this exists maybe someone can help me out.</p>
+<p>Thanks again.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037/1</link>
+        <pubDate>Thu, 13 Oct 2011 02:27:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-418037-1</guid>
+        <source url="https://forum.moparisthebest.com/t/x86-asm-to-c-code-emulator/418037.rss">X86 ASM To C++ Code emulator</source>
+      </item>
+  </channel>
+</rss>

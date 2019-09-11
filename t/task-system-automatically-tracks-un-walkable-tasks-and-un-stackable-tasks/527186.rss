@@ -1,0 +1,586 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</title>
+    <link>https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186</link>
+    <description>This is the latest build of my Task system. Using this allows for easier implementation of tasks without adding any checks along the way. You must generate a taskId for separate tasks that cannot stack.
+
+Your going to have to adapt this.
+
+Let me know if you find it useful.
+
+NOTE: If you do not use multiple threads that add tasks, change the ConnecurrentLinkedQueue to:
+[CODE]
+private static final Deque&lt;Task&gt; adding = new LinkedList&lt;Task&gt;();
+[/CODE]
+
+[CODE]
+public class TaskQueue {
+
+    private static final Queue&lt;Task&gt; adding = new ConcurrentLinkedQueue&lt;Task&gt;();
+    private static final List&lt;Task&gt; tasks = new LinkedList&lt;Task&gt;();
+    
+    /**
+     * A map of every entities tasks.
+     */
+    private static final Map&lt;Entity, List&lt;Task&gt;&gt; map = new HashMap&lt;Entity, List&lt;Task&gt;&gt;();
+
+    /**
+     * Adds new tasks and then processes all tasks.
+     */
+    public static void process() {
+        Task t;
+        
+        while ((t = adding.poll()) != null) {
+        	tasks.add(t);
+        }
+
+        for (Iterator&lt;Task&gt; i = tasks.iterator(); i.hasNext();) {
+            Task task = i.next();
+
+            if (task.stopped()) {
+            	if (task.isAssociated()) {
+            		if (!task.isAssociateActive()) {
+            			map.put(task.getEntity(), null);
+            		} else {
+            			map.get(task.getEntity()).remove(task);
+            		}
+            	}
+                i.remove();
+                continue;
+            }
+
+            task.run();
+        }
+        
+      System.out.println(&quot;Active tasks: &quot; + tasks.size());
+    }
+
+    /**
+     * Queues a task.
+     *
+     * @param task the task
+     */
+    public static void queue(Task task) {
+        if (task.isAssociated() 
+        		&amp;&amp; task.getStackType() == StackType.NEVER_STACK) {
+        	List&lt;Task&gt; active = map.get(task.getEntity());
+        	if (active != null) {
+        		for (Iterator&lt;Task&gt; i = tasks.iterator(); i.hasNext();) {
+        			if (i.next().equals(task)) {
+        				i.remove();
+        			}
+        		}
+        		
+        		map.get(task.getEntity()).add(task);
+        	} else {
+        		List&lt;Task&gt; t = new LinkedList&lt;Task&gt;();
+        		t.add(task);
+        		map.put(task.getEntity(), t);
+        	}
+        }
+    	
+    	if (task.immediate()) {
+            task.execute();
+        }
+    	
+        adding.add(task);
+    }
+    
+}
+[/CODE]
+
+[CODE]
+public abstract class Task {
+
+	/**
+	 * The delay between executions.
+	 */
+	private final int delay;
+	/**
+	 * The ticks until an execution
+	 */
+	private int position = 0;
+	/**
+	 * The id that will differentiate this task from others
+	 */
+	private final int taskId;
+	/**
+	 * Execute immediately
+	 */
+	private boolean immediate;
+	/**
+	 * Has the task been stopped
+	 */
+	private boolean stopped = false;
+	/**
+	 * The (@Entity) associated with this task
+	 */
+	private final Entity entity;
+	/**
+	 * The (@StackType)
+	 */
+	private final StackType stackType;
+	/**
+	 * The (@BreakType)
+	 */
+	private final BreakType breakType;
+
+	/**
+	 * The stacking type, applies to (@Entity)
+	 */
+	public enum StackType {
+		/**
+		 * Always duplicates
+		 */
+		STACK,
+		/**
+		 * Never allow duplicates
+		 */
+		NEVER_STACK
+	}
+
+	/**
+	 * The break type, applies to (@Task)
+	 */
+	public enum BreakType {
+		/**
+		 * Never stop this task
+		 */
+		NEVER,
+		/**
+		 * Stop this task on movement
+		 */
+		ON_MOVE
+	}
+
+	public Task(int delay, boolean immediate, Entity entity, 
+			StackType stackType, BreakType breakType, int taskId) {
+		this.delay = delay;
+		this.immediate = immediate;
+		this.entity = entity;
+		this.breakType = breakType;
+		this.stackType = stackType;
+		this.taskId = taskId;
+	}
+	
+	/**
+	 * Execute this task
+	 */
+	public abstract void execute();
+	
+	public boolean equals(Task t) {
+		return t.getTaskId() == taskId;
+	}
+	
+	/**
+	 * Ticks the task
+	 */
+	public void run() {
+		position++;
+		if (position &gt;= delay) {
+			execute();
+			reset();
+		}
+	}
+	
+	/**
+	 * Stops the (@Task)
+	 */
+	public void stop() {
+		stopped = true;
+	}
+
+	/**
+	 * Resets the position of this (@Task)
+	 */
+	public void reset() {
+		position = 0;
+	}
+
+	/**
+	 * @return
+	 * 			if this task has been stopped
+	 */
+	public boolean stopped() {
+		return stopped || entity != null &amp;&amp; !entity.isActive()
+				|| breakType == BreakType.ON_MOVE
+						&amp;&amp; entity.getMovementHandler().moving()
+							&amp;&amp; !entity.getMovementHandler().isForced();
+	}
+	
+	/**
+	 * @return
+	 * 			if the task is immediate
+	 */
+	public boolean immediate() {
+		return immediate;
+	}
+
+	public int getPosition() {
+		return position;
+	}
+	
+	public StackType getStackType() {
+		return stackType;
+	}
+
+	public int getTaskId() {
+		return taskId;
+	}
+	
+	public Entity getEntity() {
+		return entity;
+	}
+	
+	public boolean isAssociateActive() {
+		return entity.isActive();
+	}
+	
+	public boolean isAssociated() {
+		return entity != null;
+	}
+}
+[/CODE]
+
+[CODE]
+public class TaskConstants {
+	
+	public static final int CURRENT_ACTION = 0;
+	public static final int SKULL = 1;
+	public static final int SKILL_RESTORE = 2;
+	public static final int SPECIAL_RESTORE = 3;
+	public static final int RUN_ENERGY = 4;
+	public static final int NONE = 5;
+
+}
+
+}
+[/CODE]</description>
+    
+    <lastBuildDate>Thu, 17 Oct 2013 11:47:46 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>Thinking of the best possible to do something like this and I was thinking maybe you could have a function that handles all worldy actions kind of like:</p>
+<p>[code=java]private WorldAction action;</p>
+<p>public enum WorldAction {</p>
+<pre><code>WALKING,
+
+TALKING,
+
+CLICKING_OBJECT,
+
+// ... etc.
+</code></pre>
+<p>}</p>
+<p>// getter n setter for the ‘actions’ field[/code]</p>
+<p>and every time you did an action it would look something like this</p>
+<pre><code class="lang-auto"></code></pre>
+<p>and you could instantiate a new task like this, and use varargs to be able to stop the task on as many actions as you want. <span class="bbcode-i">stopOn</span> would return an instance of the task so you can schedule it.</p>
+<p>[code=java]schedule(new PlayerTask(…) {<br>
+// task here</p>
+<p>}.stopOn(WorldAction.WALKING, WorldAction.CLICKING_OBJECT, …));[/code]</p>
+<p>But now even just thinking it over I can think of many flaws that this would have. So I’ll probably just stick to what I have now.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/4</link>
+        <pubDate>Thu, 17 Oct 2013 11:47:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527186-4</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186.rss">Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</source>
+      </item>
+      <item>
+        <title>Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:2, topic:527186”]i know this is kind of a gravedig, and i like this idea, but i can see many design flaws</p>
+<p>goob job though[/quote]</p>
+<p>also, the constants should only have 1 bracket</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/3</link>
+        <pubDate>Wed, 16 Oct 2013 20:56:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527186-3</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186.rss">Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</source>
+      </item>
+      <item>
+        <title>Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>i know this is kind of a gravedig, and i like this idea, but i can see many design flaws</p>
+<p>goob job though</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/2</link>
+        <pubDate>Fri, 11 Oct 2013 22:45:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527186-2</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186.rss">Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</source>
+      </item>
+      <item>
+        <title>Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</title>
+        <dc:creator><![CDATA[@Mikey_Sasse Mikey Sasse]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mikey_sasse">@Mikey_Sasse</a> wrote:</p>
+          <blockquote>
+              <p>This is the latest build of my Task system. Using this allows for easier implementation of tasks without adding any checks along the way. You must generate a taskId for separate tasks that cannot stack.</p>
+<p>Your going to have to adapt this.</p>
+<p>Let me know if you find it useful.</p>
+<p>NOTE: If you do not use multiple threads that add tasks, change the ConnecurrentLinkedQueue to:</p>
+<pre><code class="lang-auto">private static final Deque&lt;Task&gt; adding = new LinkedList&lt;Task&gt;();</code></pre>
+<pre><code class="lang-auto">public class TaskQueue {
+
+    private static final Queue&lt;Task&gt; adding = new ConcurrentLinkedQueue&lt;Task&gt;();
+    private static final List&lt;Task&gt; tasks = new LinkedList&lt;Task&gt;();
+    
+    /**
+     * A map of every entities tasks.
+     */
+    private static final Map&lt;Entity, List&lt;Task&gt;&gt; map = new HashMap&lt;Entity, List&lt;Task&gt;&gt;();
+
+    /**
+     * Adds new tasks and then processes all tasks.
+     */
+    public static void process() {
+        Task t;
+        
+        while ((t = adding.poll()) != null) {
+        	tasks.add(t);
+        }
+
+        for (Iterator&lt;Task&gt; i = tasks.iterator(); i.hasNext();) {
+            Task task = i.next();
+
+            if (task.stopped()) {
+            	if (task.isAssociated()) {
+            		if (!task.isAssociateActive()) {
+            			map.put(task.getEntity(), null);
+            		} else {
+            			map.get(task.getEntity()).remove(task);
+            		}
+            	}
+                i.remove();
+                continue;
+            }
+
+            task.run();
+        }
+        
+      System.out.println("Active tasks: " + tasks.size());
+    }
+
+    /**
+     * Queues a task.
+     *
+     * @param task the task
+     */
+    public static void queue(Task task) {
+        if (task.isAssociated() 
+        		&amp;&amp; task.getStackType() == StackType.NEVER_STACK) {
+        	List&lt;Task&gt; active = map.get(task.getEntity());
+        	if (active != null) {
+        		for (Iterator&lt;Task&gt; i = tasks.iterator(); i.hasNext();) {
+        			if (i.next().equals(task)) {
+        				i.remove();
+        			}
+        		}
+        		
+        		map.get(task.getEntity()).add(task);
+        	} else {
+        		List&lt;Task&gt; t = new LinkedList&lt;Task&gt;();
+        		t.add(task);
+        		map.put(task.getEntity(), t);
+        	}
+        }
+    	
+    	if (task.immediate()) {
+            task.execute();
+        }
+    	
+        adding.add(task);
+    }
+    
+}</code></pre>
+<pre><code class="lang-auto">public abstract class Task {
+
+	/**
+	 * The delay between executions.
+	 */
+	private final int delay;
+	/**
+	 * The ticks until an execution
+	 */
+	private int position = 0;
+	/**
+	 * The id that will differentiate this task from others
+	 */
+	private final int taskId;
+	/**
+	 * Execute immediately
+	 */
+	private boolean immediate;
+	/**
+	 * Has the task been stopped
+	 */
+	private boolean stopped = false;
+	/**
+	 * The (@Entity) associated with this task
+	 */
+	private final Entity entity;
+	/**
+	 * The (@StackType)
+	 */
+	private final StackType stackType;
+	/**
+	 * The (@BreakType)
+	 */
+	private final BreakType breakType;
+
+	/**
+	 * The stacking type, applies to (@Entity)
+	 */
+	public enum StackType {
+		/**
+		 * Always duplicates
+		 */
+		STACK,
+		/**
+		 * Never allow duplicates
+		 */
+		NEVER_STACK
+	}
+
+	/**
+	 * The break type, applies to (@Task)
+	 */
+	public enum BreakType {
+		/**
+		 * Never stop this task
+		 */
+		NEVER,
+		/**
+		 * Stop this task on movement
+		 */
+		ON_MOVE
+	}
+
+	public Task(int delay, boolean immediate, Entity entity, 
+			StackType stackType, BreakType breakType, int taskId) {
+		this.delay = delay;
+		this.immediate = immediate;
+		this.entity = entity;
+		this.breakType = breakType;
+		this.stackType = stackType;
+		this.taskId = taskId;
+	}
+	
+	/**
+	 * Execute this task
+	 */
+	public abstract void execute();
+	
+	public boolean equals(Task t) {
+		return t.getTaskId() == taskId;
+	}
+	
+	/**
+	 * Ticks the task
+	 */
+	public void run() {
+		position++;
+		if (position &gt;= delay) {
+			execute();
+			reset();
+		}
+	}
+	
+	/**
+	 * Stops the (@Task)
+	 */
+	public void stop() {
+		stopped = true;
+	}
+
+	/**
+	 * Resets the position of this (@Task)
+	 */
+	public void reset() {
+		position = 0;
+	}
+
+	/**
+	 * @return
+	 * 			if this task has been stopped
+	 */
+	public boolean stopped() {
+		return stopped || entity != null &amp;&amp; !entity.isActive()
+				|| breakType == BreakType.ON_MOVE
+						&amp;&amp; entity.getMovementHandler().moving()
+							&amp;&amp; !entity.getMovementHandler().isForced();
+	}
+	
+	/**
+	 * @return
+	 * 			if the task is immediate
+	 */
+	public boolean immediate() {
+		return immediate;
+	}
+
+	public int getPosition() {
+		return position;
+	}
+	
+	public StackType getStackType() {
+		return stackType;
+	}
+
+	public int getTaskId() {
+		return taskId;
+	}
+	
+	public Entity getEntity() {
+		return entity;
+	}
+	
+	public boolean isAssociateActive() {
+		return entity.isActive();
+	}
+	
+	public boolean isAssociated() {
+		return entity != null;
+	}
+}</code></pre>
+<pre><code class="lang-auto">public class TaskConstants {
+	
+	public static final int CURRENT_ACTION = 0;
+	public static final int SKULL = 1;
+	public static final int SKILL_RESTORE = 2;
+	public static final int SPECIAL_RESTORE = 3;
+	public static final int RUN_ENERGY = 4;
+	public static final int NONE = 5;
+
+}
+
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186/1</link>
+        <pubDate>Sun, 04 Aug 2013 07:16:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-527186-1</guid>
+        <source url="https://forum.moparisthebest.com/t/task-system-automatically-tracks-un-walkable-tasks-and-un-stackable-tasks/527186.rss">Task System - Automatically tracks un-walkable tasks, and un-stackable tasks</source>
+      </item>
+  </channel>
+</rss>

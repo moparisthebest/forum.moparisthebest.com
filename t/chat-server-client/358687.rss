@@ -1,0 +1,1044 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Chat Server / Client</title>
+    <link>https://forum.moparisthebest.com/t/chat-server-client/358687</link>
+    <description>Got bored, created a simple chat-server and client. Still has lots of room for improvement, but here is how it looks currently:
+
+
+
+[b]Server - [/b]
+
+[code]import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+
+public class server {
+	static final int port = 1234;
+	static ArrayList&lt;Socket&gt; clients = new ArrayList&lt;Socket&gt;();
+	static ArrayList&lt;PrintWriter&gt; out = new ArrayList&lt;PrintWriter&gt;();
+	static ArrayList&lt;BufferedReader&gt; in = new ArrayList&lt;BufferedReader&gt;();
+	static ArrayList&lt;String&gt; names = new ArrayList&lt;String&gt;();
+	static boolean _run = false;
+	int id = 0;
+	String name = &quot;unknown&quot;;
+	HashMap&lt;String, Integer&gt; Rights = new HashMap&lt;String, Integer&gt;();
+	ExecutorService threadPool =
+        Executors.newCachedThreadPool();
+	
+	public server(ServerSocket s) throws IOException {
+		Rights.put(&quot;john&quot;, 2);//better system in future ofc
+		Rights.put(&quot;bob&quot;, 2); //sql database probably
+		id = clients.size();
+		clients.add(id, s.accept());
+		in.add(new BufferedReader(new InputStreamReader(clients.get(id).getInputStream())));
+		out.add(new PrintWriter(clients.get(id).getOutputStream(), true));
+		System.out.println(&quot;Client has connected with id &quot; + id);
+		msgSender(&quot;You are connected&quot;);
+		loop l = new loop(id);
+		this.threadPool.execute(l);
+	}
+	
+	public static void main(String[] args) throws IOException {
+		ServerSocket ss = new ServerSocket(port);
+		System.out.println(&quot;Waiting for clients&quot;);
+		while(true) {
+			new server(ss);
+		}
+	}
+	
+	public int rights(String n) {
+		if (Rights.containsKey(n))
+				return Rights.get(n);
+		return -1;
+	}
+	
+	public void msgSender(String s) {
+		out.get(id).println(s);
+	}
+	
+	public static void msgAll(String s) {
+		for (PrintWriter o : out)
+			o.println(s);
+	}
+	
+	class loop extends Thread {
+		int id;
+		public loop(int id) {
+			this.id = id;
+		}
+		
+		public void handleInput(String input) {
+			if(input.startsWith(&quot;toall:&quot;))
+				msgAll(input);
+			if (input.startsWith(&quot;name:&quot;)) {
+				name = input.substring(5);
+				if (!names.contains(name.toLowerCase())) {
+					msgAll(&quot;newcon:&quot;+name + &quot; has connected&quot;);
+					names.add(name.toLowerCase());
+					for (int i = 0; i &lt; names.size(); i++) {
+						String name = names.get(i);
+						name.substring(1).toUpperCase();
+						msgAll(&quot;addname:&quot;+name);
+						msgAll(&quot;rights:&quot; + name + &quot; &quot; + rights(name));
+					}
+				} else {
+					msgSender(&quot;nexists:&quot;+name);
+				}
+			}
+			if(input.startsWith(&quot;nname:&quot;)) {
+				String newname = input.substring(6);
+				if (!names.contains(newname.toLowerCase())) {
+					msgAll(&quot;replace:&quot;+name+&quot; &quot;+newname);
+					names.remove(name.toLowerCase());
+					names.add(newname.toLowerCase());
+					name = newname;
+				} else {
+					msgSender(&quot;replacefalse&quot;);
+				}
+			}
+		}
+		
+		public void run() {
+			while(clients.get(id).isBound()) {	
+				String input;
+				try {
+					if ((input = in.get(id).readLine()) != null) {
+						System.out.println(&quot;client &quot; + input);
+						handleInput(input);
+					}
+				} catch (IOException e) {
+					//e.printStackTrace();
+					break;
+				}
+				try {
+					Thread.sleep(20);
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+			System.out.println(&quot;Client &quot; + id + &quot; disconnected&quot;);
+			msgAll(&quot;discon:&quot;+name + &quot; has disconnected&quot;);
+			names.remove(name.toLowerCase());
+		}
+	}
+}[/code]
+
+
+
+[b]Client - [/b]
+
+[code]mport java.awt.BorderLayout;
+import java.awt.Container;
+import java.awt.FlowLayout;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Timer;
+import java.util.TimerTask;
+
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+
+
+public class Cli extends JFrame implements ActionListener, KeyListener {
+	
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	private JTextArea jtaMesgs;  // output text area
+	private JTextField jtfMsg;
+	private JTextArea userList;
+	private JButton b, bu;
+	public String name = &quot;&quot;;
+	Client c;
+	ArrayList&lt;String&gt; names = new ArrayList&lt;String&gt;();
+	ArrayList&lt;String&gt; typed = new ArrayList&lt;String&gt;();
+	HashMap&lt;String, Integer&gt; rights = new HashMap&lt;String, Integer&gt;();
+	String[] titles = {&quot;%&quot;, &quot;$&quot;, &quot;@&quot;};
+	Timer t = new Timer();
+	Timer time = new Timer();
+	int count = 0;
+	int warnings = 0;
+	int num = 0;
+	boolean hasWarned = false;
+	boolean scheduled = false;
+	
+	public Cli() throws UnknownHostException, IOException {
+		super(&quot;Client&quot;);
+		createGraphics();
+		addWindowListener( new WindowAdapter() {
+		public void windowClosing(WindowEvent e)
+		{ System.exit(0); }
+		});
+
+		setSize(400,450);
+		while (name.length() &lt; 1 || name.length() &gt; 15 || name.contains(&quot; &quot;))
+			name = JOptionPane.showInputDialog(&quot;Enter a username&quot;);
+		c = new Client();
+		c.start();
+	}
+	
+	class done extends TimerTask {
+		@Override
+		public void run() {
+			hasWarned = false;
+			count = 0;
+		}
+	}
+	
+	class removeWarning extends TimerTask {
+		@Override
+		public void run() {
+			scheduled = false;
+			warnings = 0;
+		}
+	}
+	
+	public static void main(String[] args) throws UnknownHostException, IOException {
+		new Cli();
+	}
+	
+	public void createGraphics() {
+		Container c = getContentPane();
+	    c.setLayout( new BorderLayout() );
+	    jtaMesgs = new JTextArea(7, 7);
+	    jtaMesgs.setEditable(false);
+	    userList = new JTextArea(7, 8);
+	    userList.setEditable(false);
+	    JScrollPane jsp = new JScrollPane( jtaMesgs);
+	    c.add( jsp, &quot;Center&quot;);
+	    JScrollPane users = new JScrollPane(userList);
+	    c.add(users, &quot;East&quot;);
+	    JLabel jlMsg = new JLabel(&quot;Message: &quot;);
+	    jtfMsg = new JTextField(15);
+	    jtfMsg.addKeyListener(this);
+	    jtfMsg.addActionListener(this);
+	    b = new JButton();
+	    b.addActionListener(this);
+	    b.setText(&quot;Name&quot;);
+	    bu = new JButton();
+	    bu.addActionListener(this);
+	    bu.setText(&quot;Clear&quot;);
+	    JPanel p1 = new JPanel( new FlowLayout() );
+	    p1.add(jlMsg); p1.add(jtfMsg); p1.add(b); p1.add(bu);
+
+	    JPanel p = new JPanel();
+	    p.setLayout( new BoxLayout(p, BoxLayout.Y_AXIS));
+	    p.add(p1);
+
+	    c.add(p, &quot;South&quot;);
+	}
+	
+	public void updateList(ArrayList&lt;String&gt; users) {
+		final String[] usrs = new String[users.size()];
+		users.toArray(usrs);
+		Runnable updateMsgsText = new Runnable() {
+		      public void run() 
+		      { 
+		    	userList.setText(&quot;&quot;);
+		        for (int i = 0; i &lt; usrs.length; i++) {
+		        	String title = showTitle(usrs[i])+usrs[i];
+		        	userList.append(title + &quot;\n&quot;);
+		        	userList.setCaretPosition( userList.getText().length() );
+		        }
+		      }
+		    };
+		    SwingUtilities.invokeLater( updateMsgsText );
+	}
+
+	@Override
+	public void actionPerformed(ActionEvent e) {
+		if (e.getSource() == jtfMsg) {
+	    	String msg = jtfMsg.getText().trim();
+	    	num = 0;
+	    	if (!msg.startsWith(&quot;/&quot;)) {
+	    		if (count &lt; 5) {	
+	    			if (count == 0)
+	    				t.schedule(new done(), 5000);
+	    			c.msgServ(&quot;toall:&quot;+name + &quot; &quot; + msg);
+	    			typed.add(msg);
+	    			count++;
+	    		} else {
+	    			displayMSG(&quot;Flood limit is 5 lines per 5secs.&quot;);
+	    			if (!hasWarned) {
+	    				hasWarned = true;
+	    				warnings++;
+	    				if (!scheduled) {
+	    					scheduled = true;
+	    					time.schedule(new removeWarning(), 50000);
+	    				}
+	    			}
+	    			if (warnings &gt;= 5) {
+	    				System.exit(0);
+	    			}
+	    		}
+	    	} else {
+	    		c.msgServ(&quot;cmd:&quot;+msg.substring(1));//working on commads
+	    	}
+			jtfMsg.setText(&quot;&quot;);
+	     }
+		if (e.getSource() == b) {
+			newName(&quot;Enter a new username&quot;);
+		}
+		if (e.getSource() == bu) {
+			jtaMesgs.setText(&quot;&quot;);
+			displayMSG(&quot;Chatbox Cleared.&quot;);
+		}
+	}
+
+	@Override
+	public void keyPressed(KeyEvent e) {
+		// TODO Auto-generated method stub
+		//System.out.println(e.getKeyCode());
+		switch(e.getKeyCode()) {
+			case 38:
+				if(num &lt; typed.size()) {
+					jtfMsg.setText(typed.get(typed.size()-(num+1)));
+					num++;
+				}
+			break;
+		}
+		/*if (e.getKeyCode()) {
+			jtfMsg.setText(typed.get(num));
+			num++;
+		}*/
+	}
+
+	@Override
+	public void keyReleased(KeyEvent e) {
+		// TODO Auto-generated method stub
+		
+	}
+
+	@Override
+	public void keyTyped(KeyEvent e) {
+		// TODO Auto-generated method stub
+		
+	}
+	
+	public String showTitle(String name) {
+		if(rights.containsKey(name) &amp;&amp; rights.get(name) &gt;= 0) {
+			return titles[rights.get(name)];
+		}
+		return &quot;&quot;;
+	}
+	
+	public void displayMSG(final String msg) { 
+	    Runnable updateMsgsText = new Runnable() {
+	      public void run() 
+	      { 
+	    	jtaMesgs.append(msg + &quot;\n&quot;);  // append message to text area
+	        jtaMesgs.setCaretPosition( jtaMesgs.getText().length() );
+	            // move insertion point to the end of the text
+	      }
+	    };
+	    SwingUtilities.invokeLater( updateMsgsText );
+	  } // end of showMsg()
+	
+	public void newName(String text) {
+		String name = JOptionPane.showInputDialog(text);
+		c.msgServ(&quot;nname:&quot; +name);
+	}
+	
+	class Client extends Thread {
+		PrintWriter out;
+		BufferedReader in;
+		Socket s;
+		
+		public Client() throws UnknownHostException, IOException {
+			s = new Socket(&quot;localhost&quot;, 1234);
+			in = new BufferedReader(new InputStreamReader(s.getInputStream()));
+			out = new PrintWriter(s.getOutputStream(), true);
+			msgServ(&quot;name:&quot; + name);
+		}
+		
+		public void msgServ(String msg) {
+			out.println(msg);
+		}
+		
+		public void handleInput(String s) {
+			if (s.startsWith(&quot;toall:&quot;)) {
+				String[] data = s.substring(6).split(&quot; &quot;);
+				String msg = &quot;&lt;&quot;+data[0]+&quot;&gt;: &quot; + s.substring(6+data[0].length());
+				displayMSG(msg);
+			}
+			if (s.startsWith(&quot;newcon:&quot;)) {
+				setVisible(true);
+				displayMSG(s.substring(7));
+			}
+			if(s.startsWith(&quot;addname:&quot;)) {
+				String name = s.substring(8);
+				if (!names.contains(name)) {
+					names.add(name);
+				}
+				updateList(names);
+			}
+			if(s.startsWith(&quot;discon:&quot;)) {
+				String[] n = s.substring(7).split(&quot; &quot;);
+				names.remove(n[0].toLowerCase());
+				updateList(names);
+				displayMSG(s.substring(7));
+			}
+			if (s.startsWith(&quot;nexists:&quot;)) {
+				name = &quot;&quot;;
+				if (name.length() &lt; 1 || name.length() &gt; 15) {
+					name = JOptionPane.showInputDialog(&quot;Username already exists&quot;);
+					msgServ(&quot;name:&quot; + name);
+				}
+			}
+			if (s.startsWith(&quot;rights:&quot;)) {
+				String[] data = s.substring(7).split(&quot; &quot;);
+				rights.put(data[0], Integer.parseInt(data[1]));
+				updateList(names);
+			}
+			if (s.startsWith(&quot;replace:&quot;)) {
+				String[] data = s.substring(8).split(&quot; &quot;);
+				data[0] = data[0].toLowerCase();
+				if(!data[1].equals(&quot;null&quot;) &amp;&amp; data[1] != null) {	
+					names.remove(data[0]);
+					names.add(data[1]);
+					if(rights.containsKey(data[0])) {	
+						int right = rights.get(data[0]);
+						rights.remove(data[0]);
+						rights.put(data[1], right);
+					}
+					displayMSG(data[0]+&quot; is now known as &quot;+data[1]);
+					if (name.toLowerCase().equals(data[0])) {
+						name = data[1];
+					}
+					updateList(names);
+				}
+			}
+			if (s.equals(&quot;replacefalse&quot;)) {
+				newName(&quot;Username already exists&quot;);
+			}
+		}
+		
+		public void run() {
+			while (s.isBound()) {
+				String s;
+				try {
+					if ((s = in.readLine()) != null) {
+						System.out.println(s);
+						handleInput(s);
+					}
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			}
+			System.out.println(&quot;We have disconnected&quot;);
+		}
+	}
+}[/code]
+
+
+
+[IMG]http://i55.tinypic.com/2eeykqq.jpg[/img]</description>
+    
+    <lastBuildDate>Sun, 05 Sep 2010 03:32:02 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/chat-server-client/358687.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@John459 John459]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/john459">@John459</a> wrote:</p>
+          <blockquote>
+              <p>abraham2119, did this quickly while bored. Ignore any possible mistakes as I was using no brain power to make it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/8</link>
+        <pubDate>Sun, 05 Sep 2010 03:32:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-8</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@abraham2119 abraham2119]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/abraham2119">@abraham2119</a> wrote:</p>
+          <blockquote>
+              <p>…wow</p>
+<p>and i thought you were one of the few people on these forums who’s intelligence level was just above nil</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/7</link>
+        <pubDate>Sun, 05 Sep 2010 01:27:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-7</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@Muroth Muroth]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/muroth">@Muroth</a> wrote:</p>
+          <blockquote>
+              <p>Haha sure. I’ll add just basic stuff, working on the client atm first.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/6</link>
+        <pubDate>Sat, 04 Sep 2010 23:47:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-6</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@John459 John459]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/john459">@John459</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Muroth, post:4, topic:358687”]Pretty basic <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Good job haha.<br>
+I might work on this a little.[/quote]</p>
+<p>Yeah I know it’s basic, as I said above I just got bored lol.</p>
+<p>Good luck to you if you work on it. Shouldn’t be too hard to turn it into something better.</p>
+<p>Edit: When your done mind showing me what you did with it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/5</link>
+        <pubDate>Sat, 04 Sep 2010 23:43:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-5</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@Muroth Muroth]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/muroth">@Muroth</a> wrote:</p>
+          <blockquote>
+              <p>Pretty basic <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Good job haha.<br>
+I might work on this a little.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/4</link>
+        <pubDate>Sat, 04 Sep 2010 22:48:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-4</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>Looks nice, Didn’t browser through the coding much through <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/3</link>
+        <pubDate>Sat, 04 Sep 2010 22:45:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-3</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@n10si_t n10si t]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/n10si_t">@n10si_t</a> wrote:</p>
+          <blockquote>
+              <p>Would you mind as I used this as a chat room sort of thing, for my Server community?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/2</link>
+        <pubDate>Sat, 04 Sep 2010 22:37:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-2</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+      <item>
+        <title>Chat Server / Client</title>
+        <dc:creator><![CDATA[@John459 John459]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/john459">@John459</a> wrote:</p>
+          <blockquote>
+              <p>Got bored, created a simple chat-server and client. Still has lots of room for improvement, but here is how it looks currently:</p>
+<p><span class="bbcode-b">Server - </span></p>
+<p>[code]import java.io.BufferedReader;<br>
+import java.io.IOException;<br>
+import java.io.InputStreamReader;<br>
+import java.io.PrintWriter;<br>
+import java.net.ServerSocket;<br>
+import java.net.Socket;<br>
+import java.util.ArrayList;<br>
+import java.util.HashMap;<br>
+import java.util.concurrent.ExecutorService;<br>
+import java.util.concurrent.Executors;</p>
+<p>public class server {<br>
+static final int port = 1234;<br>
+static ArrayList clients = new ArrayList();<br>
+static ArrayList out = new ArrayList();<br>
+static ArrayList in = new ArrayList();<br>
+static ArrayList names = new ArrayList();<br>
+static boolean _run = false;<br>
+int id = 0;<br>
+String name = “unknown”;<br>
+HashMap&lt;String, Integer&gt; Rights = new HashMap&lt;String, Integer&gt;();<br>
+ExecutorService threadPool =<br>
+Executors.newCachedThreadPool();</p>
+<pre><code>public server(ServerSocket s) throws IOException {
+	Rights.put("john", 2);//better system in future ofc
+	Rights.put("bob", 2); //sql database probably
+	id = clients.size();
+	clients.add(id, s.accept());
+	in.add(new BufferedReader(new InputStreamReader(clients.get(id).getInputStream())));
+	out.add(new PrintWriter(clients.get(id).getOutputStream(), true));
+	System.out.println("Client has connected with id " + id);
+	msgSender("You are connected");
+	loop l = new loop(id);
+	this.threadPool.execute(l);
+}
+
+public static void main(String[] args) throws IOException {
+	ServerSocket ss = new ServerSocket(port);
+	System.out.println("Waiting for clients");
+	while(true) {
+		new server(ss);
+	}
+}
+
+public int rights(String n) {
+	if (Rights.containsKey(n))
+			return Rights.get(n);
+	return -1;
+}
+
+public void msgSender(String s) {
+	out.get(id).println(s);
+}
+
+public static void msgAll(String s) {
+	for (PrintWriter o : out)
+		o.println(s);
+}
+
+class loop extends Thread {
+	int id;
+	public loop(int id) {
+		this.id = id;
+	}
+	
+	public void handleInput(String input) {
+		if(input.startsWith("toall:"))
+			msgAll(input);
+		if (input.startsWith("name:")) {
+			name = input.substring(5);
+			if (!names.contains(name.toLowerCase())) {
+				msgAll("newcon:"+name + " has connected");
+				names.add(name.toLowerCase());
+				for (int i = 0; i &lt; names.size(); i++) {
+					String name = names.get(i);
+					name.substring(1).toUpperCase();
+					msgAll("addname:"+name);
+					msgAll("rights:" + name + " " + rights(name));
+				}
+			} else {
+				msgSender("nexists:"+name);
+			}
+		}
+		if(input.startsWith("nname:")) {
+			String newname = input.substring(6);
+			if (!names.contains(newname.toLowerCase())) {
+				msgAll("replace:"+name+" "+newname);
+				names.remove(name.toLowerCase());
+				names.add(newname.toLowerCase());
+				name = newname;
+			} else {
+				msgSender("replacefalse");
+			}
+		}
+	}
+	
+	public void run() {
+		while(clients.get(id).isBound()) {	
+			String input;
+			try {
+				if ((input = in.get(id).readLine()) != null) {
+					System.out.println("client " + input);
+					handleInput(input);
+				}
+			} catch (IOException e) {
+				//e.printStackTrace();
+				break;
+			}
+			try {
+				Thread.sleep(20);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		System.out.println("Client " + id + " disconnected");
+		msgAll("discon:"+name + " has disconnected");
+		names.remove(name.toLowerCase());
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p><span class="bbcode-b">Client - </span></p>
+<p>[code]mport java.awt.BorderLayout;<br>
+import java.awt.Container;<br>
+import java.awt.FlowLayout;<br>
+import java.awt.event.ActionEvent;<br>
+import java.awt.event.ActionListener;<br>
+import java.awt.event.KeyEvent;<br>
+import java.awt.event.KeyListener;<br>
+import java.awt.event.WindowAdapter;<br>
+import java.awt.event.WindowEvent;<br>
+import java.io.BufferedReader;<br>
+import java.io.IOException;<br>
+import java.io.InputStreamReader;<br>
+import java.io.PrintWriter;<br>
+import java.net.Socket;<br>
+import java.net.UnknownHostException;<br>
+import java.util.ArrayList;<br>
+import java.util.HashMap;<br>
+import java.util.Timer;<br>
+import java.util.TimerTask;</p>
+<p>import javax.swing.BoxLayout;<br>
+import javax.swing.JButton;<br>
+import javax.swing.JFrame;<br>
+import javax.swing.JLabel;<br>
+import javax.swing.JOptionPane;<br>
+import javax.swing.JPanel;<br>
+import javax.swing.JScrollPane;<br>
+import javax.swing.JTextArea;<br>
+import javax.swing.JTextField;<br>
+import javax.swing.SwingUtilities;</p>
+<p>public class Cli extends JFrame implements ActionListener, KeyListener {</p>
+<pre><code>/**
+ * 
+ */
+private static final long serialVersionUID = 1L;
+private JTextArea jtaMesgs;  // output text area
+private JTextField jtfMsg;
+private JTextArea userList;
+private JButton b, bu;
+public String name = "";
+Client c;
+ArrayList&lt;String&gt; names = new ArrayList&lt;String&gt;();
+ArrayList&lt;String&gt; typed = new ArrayList&lt;String&gt;();
+HashMap&lt;String, Integer&gt; rights = new HashMap&lt;String, Integer&gt;();
+String[] titles = {"%", "$", "@"};
+Timer t = new Timer();
+Timer time = new Timer();
+int count = 0;
+int warnings = 0;
+int num = 0;
+boolean hasWarned = false;
+boolean scheduled = false;
+
+public Cli() throws UnknownHostException, IOException {
+	super("Client");
+	createGraphics();
+	addWindowListener( new WindowAdapter() {
+	public void windowClosing(WindowEvent e)
+	{ System.exit(0); }
+	});
+
+	setSize(400,450);
+	while (name.length() &lt; 1 || name.length() &gt; 15 || name.contains(" "))
+		name = JOptionPane.showInputDialog("Enter a username");
+	c = new Client();
+	c.start();
+}
+
+class done extends TimerTask {
+	@Override
+	public void run() {
+		hasWarned = false;
+		count = 0;
+	}
+}
+
+class removeWarning extends TimerTask {
+	@Override
+	public void run() {
+		scheduled = false;
+		warnings = 0;
+	}
+}
+
+public static void main(String[] args) throws UnknownHostException, IOException {
+	new Cli();
+}
+
+public void createGraphics() {
+	Container c = getContentPane();
+    c.setLayout( new BorderLayout() );
+    jtaMesgs = new JTextArea(7, 7);
+    jtaMesgs.setEditable(false);
+    userList = new JTextArea(7, 8);
+    userList.setEditable(false);
+    JScrollPane jsp = new JScrollPane( jtaMesgs);
+    c.add( jsp, "Center");
+    JScrollPane users = new JScrollPane(userList);
+    c.add(users, "East");
+    JLabel jlMsg = new JLabel("Message: ");
+    jtfMsg = new JTextField(15);
+    jtfMsg.addKeyListener(this);
+    jtfMsg.addActionListener(this);
+    b = new JButton();
+    b.addActionListener(this);
+    b.setText("Name");
+    bu = new JButton();
+    bu.addActionListener(this);
+    bu.setText("Clear");
+    JPanel p1 = new JPanel( new FlowLayout() );
+    p1.add(jlMsg); p1.add(jtfMsg); p1.add(b); p1.add(bu);
+
+    JPanel p = new JPanel();
+    p.setLayout( new BoxLayout(p, BoxLayout.Y_AXIS));
+    p.add(p1);
+
+    c.add(p, "South");
+}
+
+public void updateList(ArrayList&lt;String&gt; users) {
+	final String[] usrs = new String[users.size()];
+	users.toArray(usrs);
+	Runnable updateMsgsText = new Runnable() {
+	      public void run() 
+	      { 
+	    	userList.setText("");
+	        for (int i = 0; i &lt; usrs.length; i++) {
+	        	String title = showTitle(usrs[i])+usrs[i];
+	        	userList.append(title + "\n");
+	        	userList.setCaretPosition( userList.getText().length() );
+	        }
+	      }
+	    };
+	    SwingUtilities.invokeLater( updateMsgsText );
+}
+
+@Override
+public void actionPerformed(ActionEvent e) {
+	if (e.getSource() == jtfMsg) {
+    	String msg = jtfMsg.getText().trim();
+    	num = 0;
+    	if (!msg.startsWith("/")) {
+    		if (count &lt; 5) {	
+    			if (count == 0)
+    				t.schedule(new done(), 5000);
+    			c.msgServ("toall:"+name + " " + msg);
+    			typed.add(msg);
+    			count++;
+    		} else {
+    			displayMSG("Flood limit is 5 lines per 5secs.");
+    			if (!hasWarned) {
+    				hasWarned = true;
+    				warnings++;
+    				if (!scheduled) {
+    					scheduled = true;
+    					time.schedule(new removeWarning(), 50000);
+    				}
+    			}
+    			if (warnings &gt;= 5) {
+    				System.exit(0);
+    			}
+    		}
+    	} else {
+    		c.msgServ("cmd:"+msg.substring(1));//working on commads
+    	}
+		jtfMsg.setText("");
+     }
+	if (e.getSource() == b) {
+		newName("Enter a new username");
+	}
+	if (e.getSource() == bu) {
+		jtaMesgs.setText("");
+		displayMSG("Chatbox Cleared.");
+	}
+}
+
+@Override
+public void keyPressed(KeyEvent e) {
+	// TODO Auto-generated method stub
+	//System.out.println(e.getKeyCode());
+	switch(e.getKeyCode()) {
+		case 38:
+			if(num &lt; typed.size()) {
+				jtfMsg.setText(typed.get(typed.size()-(num+1)));
+				num++;
+			}
+		break;
+	}
+	/*if (e.getKeyCode()) {
+		jtfMsg.setText(typed.get(num));
+		num++;
+	}*/
+}
+
+@Override
+public void keyReleased(KeyEvent e) {
+	// TODO Auto-generated method stub
+	
+}
+
+@Override
+public void keyTyped(KeyEvent e) {
+	// TODO Auto-generated method stub
+	
+}
+
+public String showTitle(String name) {
+	if(rights.containsKey(name) &amp;&amp; rights.get(name) &gt;= 0) {
+		return titles[rights.get(name)];
+	}
+	return "";
+}
+
+public void displayMSG(final String msg) { 
+    Runnable updateMsgsText = new Runnable() {
+      public void run() 
+      { 
+    	jtaMesgs.append(msg + "\n");  // append message to text area
+        jtaMesgs.setCaretPosition( jtaMesgs.getText().length() );
+            // move insertion point to the end of the text
+      }
+    };
+    SwingUtilities.invokeLater( updateMsgsText );
+  } // end of showMsg()
+
+public void newName(String text) {
+	String name = JOptionPane.showInputDialog(text);
+	c.msgServ("nname:" +name);
+}
+
+class Client extends Thread {
+	PrintWriter out;
+	BufferedReader in;
+	Socket s;
+	
+	public Client() throws UnknownHostException, IOException {
+		s = new Socket("localhost", 1234);
+		in = new BufferedReader(new InputStreamReader(s.getInputStream()));
+		out = new PrintWriter(s.getOutputStream(), true);
+		msgServ("name:" + name);
+	}
+	
+	public void msgServ(String msg) {
+		out.println(msg);
+	}
+	
+	public void handleInput(String s) {
+		if (s.startsWith("toall:")) {
+			String[] data = s.substring(6).split(" ");
+			String msg = "&lt;"+data[0]+"&gt;: " + s.substring(6+data[0].length());
+			displayMSG(msg);
+		}
+		if (s.startsWith("newcon:")) {
+			setVisible(true);
+			displayMSG(s.substring(7));
+		}
+		if(s.startsWith("addname:")) {
+			String name = s.substring(8);
+			if (!names.contains(name)) {
+				names.add(name);
+			}
+			updateList(names);
+		}
+		if(s.startsWith("discon:")) {
+			String[] n = s.substring(7).split(" ");
+			names.remove(n[0].toLowerCase());
+			updateList(names);
+			displayMSG(s.substring(7));
+		}
+		if (s.startsWith("nexists:")) {
+			name = "";
+			if (name.length() &lt; 1 || name.length() &gt; 15) {
+				name = JOptionPane.showInputDialog("Username already exists");
+				msgServ("name:" + name);
+			}
+		}
+		if (s.startsWith("rights:")) {
+			String[] data = s.substring(7).split(" ");
+			rights.put(data[0], Integer.parseInt(data[1]));
+			updateList(names);
+		}
+		if (s.startsWith("replace:")) {
+			String[] data = s.substring(8).split(" ");
+			data[0] = data[0].toLowerCase();
+			if(!data[1].equals("null") &amp;&amp; data[1] != null) {	
+				names.remove(data[0]);
+				names.add(data[1]);
+				if(rights.containsKey(data[0])) {	
+					int right = rights.get(data[0]);
+					rights.remove(data[0]);
+					rights.put(data[1], right);
+				}
+				displayMSG(data[0]+" is now known as "+data[1]);
+				if (name.toLowerCase().equals(data[0])) {
+					name = data[1];
+				}
+				updateList(names);
+			}
+		}
+		if (s.equals("replacefalse")) {
+			newName("Username already exists");
+		}
+	}
+	
+	public void run() {
+		while (s.isBound()) {
+			String s;
+			try {
+				if ((s = in.readLine()) != null) {
+					System.out.println(s);
+					handleInput(s);
+				}
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		System.out.println("We have disconnected");
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p><img src="http://i55.tinypic.com/2eeykqq.jpg" alt width="399" height="451"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/chat-server-client/358687/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/chat-server-client/358687/1</link>
+        <pubDate>Sat, 04 Sep 2010 22:22:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-358687-1</guid>
+        <source url="https://forum.moparisthebest.com/t/chat-server-client/358687.rss">Chat Server / Client</source>
+      </item>
+  </channel>
+</rss>

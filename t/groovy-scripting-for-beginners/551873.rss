@@ -1,0 +1,1031 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Groovy Scripting for Beginners</title>
+    <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873</link>
+    <description>[size=18pt]Groovy Scripting[/size]
+
+In recent years the use of scripting languages in RSPS projects has blown up. The scene has typically prefered Jython or JRuby, but recently Groovy has also been explored.
+The use of scripting in our projects hasn&#39;t typically been to create plugins though, but rather to migrate code away from the core of a server, i.e. modules. I will explore both avenues with this &#39;tutorial&#39;.
+You may notice that some of my naming/code is influenced by RuneSource, this is by design.
+
+[size=16pt]Requirements[/size]
+
+[ul][li]JDK 1.6[/li]
+[li]Some prior java knowledge (as long as you know the basics about OOP you should be fine - i.e. classes, packaging, dependencies)[/li]
+[li]An IDE (try Netbeans, Eclipse or IntelliJ IDEA)[/li]
+[li]An RSPS (with source)[/li]
+[li]Download and add the [url=http://dl.bintray.com/groovy/maven/groovy-binary-2.4.3.zip]Groovy[/url] binaries to your list of dependencies[/li][/ul]
+
+
+[size=16pt]Core Entities[/size]
+
+[ul][li]Plugin - a base class which plugins will inherit[/li]
+[li]PluginHandler - the plugin handler (for standard processing, loading, unloading, etc)[/li]
+[li]PluginBridge - a bridge between the server and invokable plugins (for non-standard processing)[/li][/ul]
+
+
+[size=16pt]Part I: Server Setup[/size]
+The first things we will need to do is prepare our project for the implementation of scripting. Firstly you should add some folders to your server&#39;s root.  
+
+My setup looks like the following:  
+root  
+|--- plugins/  
+    |--- bindings/  
+    |--- scripts/  
+
+Now we will add a file which will determine which scripts to load when our server starts, so create a file called &quot;plugins.ini&quot; under the root folder. The format of this file is simple, each line will contain a script&#39;s location relative to the plugin&#39;s base directory (which we will define in the PluginHandler later).
+
+A sample for adding two plugins to the file would be:
+[code=txt]scripts/SamplePlugin
+bindings/CommandHandler[/code]
+
+
+Before you continue, make sure you add the Groovy class library to your project/its classpath/etc if you haven&#39;t done so already.
+
+
+Next we need to add the plugin initialisation logic and on-tick processing. Firstly locate where your server initialises modules, i.e. trace it from your main function (a good place to start may be a class called Server). Then add our plugin loading code there.
+
+[code=java]void Init() {
+    // ...
+    ItemDefs.load();
+    Map.cacheRegions();
+    PluginHandler.loadPlugins(&quot;./plugins.ini&quot;); // our initialisation function
+    // ...
+}[/code]
+
+Finally we must add code to have the plugin tick function called from the server&#39;s processing logic (a good place to start may be a class called PlayerHandler). You should be able to add this anywhere in there but pick somewhere sensible, i.e. at the end.
+
+[code=java]void Tick() {
+  // ...
+  PlayerHandler.process()
+  NpcHandler.process();
+  PluginHandler.tick();
+  // ...
+}[/code]
+
+[size=16pt]Part II: Writing the PluginHandler and Plugin classes[/size]
+[size=14pt]Plugin[/size]
+We will now continue with writing a base class for plugins. Implementations of this class will need to be able to handle the loading and unloading of the plugin, have a general processing function called tick (for scripts) and an instance of the Groovy object of the script. This all leads to something like the following:
+
+[code=java]import groovy.lang.GroovyObject;
+
+/**
+ * Plugin base class.
+ */
+public abstract class Plugin {
+	/**
+	 * An instance of this script as a Groovy object.
+	 */
+	private GroovyObject instance;
+
+	/**
+	 * Called every time the server performs a tick.
+	 * @throws Exception If the plugin throws any form of exception
+	 */
+	public abstract void tick() throws Exception;
+
+	/**
+	 * Called when the plugin is enabled.
+	 * @param pluginName The name of this plugin from the plugins list file
+	 * @throws Exception If the plugin throws any form of exception
+	 */
+	public abstract void onEnable(String pluginName) throws Exception;
+
+	/**
+	 * Called when the plugin is disabled.
+	 * @throws Exception If the plugin is disabled
+	 */
+	public abstract void onDisable() throws Exception;
+
+	/**
+	 * Get the groovy object instance of the plugin.
+	 * @return Groovy instance of plugin instance
+	 */
+	public GroovyObject getInstance() {
+		return instance;
+	}
+
+	/**
+	 * Set the groovy object instance of this plugin
+	 * @param instance Groovy instance of plugin instance
+	 */
+	public void setInstance(GroovyObject instance) {
+		if (this.instance != null) {
+			throw new IllegalStateException(&quot;Plugin already loaded.&quot;);
+		}
+		this.instance = instance;
+	}
+}[/code]
+
+[size=14pt]PluginHandler[/size]
+Now we will need to assemble the core of our system, the plugin handler. We need to declare the location of the plugins, alternatively you could pass this through the class constructor. We also need a function to load the script instances and initialise them using Groovy.
+
+[code=java]import groovy.lang.GroovyClassLoader;
+import groovy.lang.GroovyObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * The plugin handler, used for managing plugins and their execution.
+ */
+public final class PluginHandler {
+
+	/**
+	 * The base directory of all plugins.
+	 */
+	private static final String PLUGIN_DIRECTORY = &quot;./plugins/&quot;;
+
+	/**
+	 * The Groovy class loader.
+	 */
+	private static final GroovyClassLoader classLoader = new GroovyClassLoader();
+	
+	/**
+	 * A collection of all registered plugins.
+	 */
+	private static HashMap&lt;String, Plugin&gt; plugins = new HashMap&lt;String, Plugin&gt;();
+
+	/**
+	 * Processes on-tick execution for all registered plugins.
+	 */
+	public static void tick() throws Exception {
+		synchronized (plugins) {
+			for (Plugin plugin : plugins.values()) { // looping through all registered plugins
+				plugin.tick(); // calling the tick function
+			}
+		}
+	}
+
+	/**
+	 * Invokes a method from the given plugin.
+	 * @param pluginName plugin name
+	 * @param method     method name
+	 * @param args       arguments
+	 */
+	public static void invokeMethod(String pluginName, String method, Object... args) {
+		// Attempting to fetch the plugin
+		Plugin plugin = plugins.get(pluginName);
+
+		if (plugin == null) {
+			return;
+		}
+
+		// Invoking the method
+		plugin.getInstance().invokeMethod(method, args);
+	}
+
+	/**
+	 * Loads all plugins.
+	 *
+	 * @param pluginsFile a text file containing a list of plugins to load
+	 * @throws Exception
+	 */
+	public static void loadPlugins(String pluginsFile) throws Exception {
+		File file = new File(pluginsFile); // loading the plugins file
+		BufferedReader reader = new BufferedReader(new FileReader(file)); // preparing a reader, so that we can traverse it
+		String pluginName; // the current plugins name
+
+		while ((pluginName = reader.readLine()) != null) { // each line we read has the pluginName set to it
+			if (pluginName.trim().length() == 0) // skipping empty lines
+				continue;
+
+			// Loading the plugin instance
+			Class cls = classLoader.parseClass(new File(PLUGIN_DIRECTORY + pluginName + &quot;.groovy&quot;)); // parsing the current class
+			GroovyObject obj = (GroovyObject) cls.newInstance(); // initialising a new groovy instance
+			Plugin plugin = (Plugin) obj; // casting the object to a plugin, as per our interface
+			plugin.setInstance(obj); // setting the instance of this plugin to the one we created earlier so that we do more than just call the plugin base functionality
+			register(pluginName.replace(&#39;/&#39;, &#39;.&#39;), plugin); // we clean up the plugin name from containing slashes to dots to separate namespaces, this gives it a java feel when invoking
+		}
+	}
+
+	/**
+	 * Registers a plugin and calls the plugin&#39;s onEnable method.
+	 * @param name   The plugin name
+	 * @param plugin The plugin to register
+	 */
+	public static void register(String name, Plugin plugin) {
+		try {
+			plugin.onEnable(name); // performing on load tasks
+
+			synchronized (plugins) {
+				plugins.put(name, plugin); // adding the plugin to the plugins list
+			}
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	/**
+	 * Unregisters a plugin and calls the plugin&#39;s onDisable method.
+	 * @param plugin The plugin to unregister
+	 */
+	public static void unregister(Plugin plugin) {
+		for (Map.Entry&lt;String, Plugin&gt; entry : plugins.entrySet()) {
+			if (entry.getValue().equals(plugin)) {
+				unregister(entry.getKey()); // unregistering all instances of the plugin, regardless of key
+			}
+		}
+	}
+
+	/**
+	 * Unregisters a plugin and calls the plugin&#39;s onDisable method.
+	 * @param name The plugin name to unregister
+	 */
+	public static void unregister(String name) {
+		try {
+			plugins.get(name).onDisable(); // performing on unload tasks
+
+			synchronized (plugins) {
+				plugins.remove(name); // removing the plugin from the plugins list
+			}
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
+	}
+}[/code]
+
+[size=16pt]Part III: PluginBridge[/size]
+The purpose of the plugin bridge is to allow us to do more than just call functions defined in the Plugin base class. It must literally as a bridge between our server&#39;s core and bindings which need to be accessed directly from it.
+
+[code=java]import ...
+
+/**
+ * A bridge between invokable plugins and the core of the server.
+ */
+public final class PluginBridge {
+
+	/**
+	 * A list of currently registered bindings.
+	 */
+	private static HashMap&lt;String, String&gt; bindings = new HashMap&lt;String, String&gt;();
+	
+	/**
+	 * A key for the command handler binding (to be used with the bindings map), so that we can easily invoke it from the core.
+	 */
+	public static final String COMMAND_HANDLER_BINDING_KEY = &quot;bindings.packets.CommandHandler&quot;; // slashes replaced with dots as we did before
+
+	/**
+	 * Registers a binding.
+	 *
+	 * @param binding binding internal name
+	 * @param pluginName plugin name
+	 */
+	public static void registerBinding(String binding, String pluginName) { // this will be called from the onEnable function of binding scripts
+		bindings.put(binding, pluginName); // putting the binding mapping, binding_name -&gt; plugin_name
+	}
+
+	/**
+	 * An implementation of the handle command function.
+	 * @returns execution could occur or not
+	 */
+	public static boolean handleCommand(Player player, String keyword, String[] args) {
+		if (!bindings.containsKey(COMMAND_HANDLER_BINDING_KEY)) { // checking if the key is binded to a script
+			return false;
+		}
+		PluginHandler.invokeMethod(bindings.get(COMMAND_HANDLER_BINDING_KEY), &quot;handle&quot;, player, keyword, args); // calling it with our arguments
+		return true;
+	}
+}[/code]
+
+[size=16pt]Part IV: Plugin Examples[/size]
+Now we can create some plugins. We had split our plugins directory into two directories, bindings and scripts. I will give examples of each. The point of a binding is to extend the core functionality of the server directly whereas plugins themselves should typically perform other tasks, i.e. http server serving of data.
+
+[size=14pt]Binding: Command Handler (plugins/bindings/CommandHandler.groovy)[/size]
+You will need to make sure the PluginBridge definition for this binding is called from the server&#39;s core upon receiving a command packet, for it to work obviously.
+
+[code=groovy]import ...
+
+class CommandHandler extends Plugin { // our class must extend Plugin
+
+	// this is the entry-point into this plugin, we will call this from the plugin bridge whenever necessary
+	void handle(Player player, String keyword, String[] args) {
+		PlayerAttributes attributes = player.getAttributes();
+
+		if (keyword.equals(&quot;master&quot;)) {
+			for (int i = 0; i &lt; attributes.getSkills().length; i++) {
+				attributes.getSkills()[i] = 99;
+				attributes.getExperience()[i] = 200000000;
+			}
+			player.sendSkills();
+		}
+
+		if (keyword.equals(&quot;pickup&quot;)) {
+			int id = Integer.parseInt(args[0]);
+			int amount = 1;
+			if (args.length &gt; 1) {
+				amount = Integer.parseInt(args[1]);
+			}
+			attributes.addInventoryItem(id, amount, this);
+			player.sendInventory();
+		}
+
+		if (keyword.equals(&quot;tele&quot;)) {
+			int x = Integer.parseInt(args[0]);
+			int y = Integer.parseInt(args[1]);
+			player.teleport(new Position(x, y, player.getPosition().getZ()));
+		}
+
+		// ...
+	}
+
+	@Override
+	void tick() throws Exception {
+		// not necessary, this is a binding
+	}
+
+	@Override
+	void onEnable(String pluginName) throws Exception {
+		// when the script is enabled we must bind it to the plugin bridge, so that it is defined and can be called from the core
+		PluginBridge.registerBinding(PluginBridge.COMMAND_HANDLER_BINDING_KEY, pluginName);
+	}
+
+	@Override
+	void onDisable() throws Exception {
+		// not necessary, since this script isnt particularly intensive
+	}
+}[/code]
+
+[size=14pt]Script: Sample Plugin (plugins/scripts/SamplePlugin.groovy)[/size]
+A suitable purpose of a script may be to respond to HTTP API requests or perform backups. I don&#39;t have a ready example for this so just imagine something useful is below :-)
+
+[code=groovy]import ...
+
+class SamplePlugin extends Plugin {
+
+	@Override
+	void tick() throws Exception {
+		// Code to execute on tick
+	}
+
+	@Override
+	void onEnable(String pluginName) throws Exception {
+		// Code to execute when plugin is enabled
+	}
+
+	@Override
+	void onDisable() throws Exception {
+		// Code to execute when plugin is disabled
+	}
+}[/code]
+
+[size=16pt]Possible improvements[/size]
+
+[ul][li]Delete tick functionality if unused.[/li]
+[li]Rename the loading/binding to be more pretty.[/li]
+[li]Multi-threaded loading of scripts.[/li][/ul]
+
+
+[size=16pt]Final words[/size]
+You might find that the tick function is useless for your purpose, I kept it due to how I found the server I was working on (i.e. it had such functionality). Most people will want to only use the binding capabilities of these so called plugins.
+
+The logic found in this tutorial is applicable to any other scripting language implementation and feel free to discuss design improvements below alongside any errors you find in my post.</description>
+    
+    <lastBuildDate>Sat, 27 Jun 2015 23:07:45 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“drubrkletern, post:13, topic:551873”]groovy scripting is all people did back in the 80s  <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:">[/quote]i told u guys this is legit -.-.-.-.-</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/14</link>
+        <pubDate>Sat, 27 Jun 2015 23:07:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-14</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>groovy scripting is all people did back in the 80s  <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"> <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/13</link>
+        <pubDate>Sat, 27 Jun 2015 22:57:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-13</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Eyeownyew, post:11, topic:551873”]So this is a good tutorial, but I fail to see the advantages of implementing groovy plugin handling in a server.[/quote]This tutorial is meant to be a rough outline which will work with literally any scripting language you choose to use, provided you can change some little bits of code.</p>
+<blockquote>It seems like all you're doing with it is [b]relocating code away from the server's core packaging[/b]. Does groovy have any advantages in certain aspects over java?</blockquote>Correct, that is one method of plugin popularly utilized in RSPS (Apollo, Sinisoul's servers, etc.).
+<blockquote>I understand why python/ruby/lua/etc could be used, but why groovy if it's literally just java classes that are loaded "off-site"?</blockquote>The same argument can be applied to any of those languages. There is no specific advantage of using Groovy over Python/Ruby/etc or vice-versa. Refer to point #1.
+<p>Thank you for contributing to the discussion!  <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/12</link>
+        <pubDate>Sat, 27 Jun 2015 22:37:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-12</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <p>So this is a good tutorial, but I fail to see the advantages of implementing groovy plugin handling in a server. It seems like all you’re doing with it is relocating code away from the server’s core packaging. Does groovy have any advantages in certain aspects over java?</p>
+<p>I understand why python/ruby/lua/etc could be used, but why groovy if it’s literally just java classes that are loaded “off-site”?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/11</link>
+        <pubDate>Sat, 27 Jun 2015 22:26:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-11</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>the speed trade is pretty negligible when designed correctly</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/10</link>
+        <pubDate>Sat, 27 Jun 2015 21:50:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-10</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“matzie, post:8, topic:551873”]The only problem I see with scripting languages is that they are interpreted. If you are using an interpreted language, you are giving up performance for simplicity. If you have a machine that can make up for this offset, it is not a bad choice. Although if you have a slow computer that you host on, I would suggest sticking to java, or switching to another compiled language.<br>
+Really amazing tutorial though!![/quote]I agree with you and I have found that it can sometimes be the case. I’m thinking of trying out some form of compiled bytecode from these scripting languages, that would speed it up while allowing them to be “pluginable” (since you can dynamically compile and reload them etc.).</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/9</link>
+        <pubDate>Thu, 25 Jun 2015 23:51:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-9</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@matzie matzie]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/matzie">@matzie</a> wrote:</p>
+          <blockquote>
+              <p>The only problem I see with scripting languages is that they are interpreted. If you are using an interpreted language, you are giving up performance for simplicity. If you have a machine that can make up for this offset, it is not a bad choice. Although if you have a slow computer that you host on, I would suggest sticking to java, or switching to another compiled language.<br>
+Really amazing tutorial though!!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/8</link>
+        <pubDate>Thu, 25 Jun 2015 23:45:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-8</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@FoHammer FoHammer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fohammer">@FoHammer</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“x Albi x, post:6, topic:551873”][quote author=FoHammer link=topic=670791.msg4485489#msg4485489 date=1433747146]</p>
+<aside class="quote">
+<blockquote>
+<p>Like I told you on IRC I’d just slightly tweak it and remove the tick method then have another module for periodic tasks.</p>
+</blockquote>
+</aside>
+<p>[/quote]</p>
+<p>I have just messaged Tom the administrator in order to get your <span class="bbcode-b">rude</span> comment removed about the author of this tutorial, Pure_.[/quote]</p>
+<p>How was this rude lol?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/7</link>
+        <pubDate>Tue, 09 Jun 2015 01:19:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-7</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@xdeathstarsx x Albi x]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xdeathstarsx">@xdeathstarsx</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“FoHammer, post:5, topic:551873”][quote author=sini link=topic=670791.msg4485478#msg4485478 date=1433735804]<br>
+Like I told you on IRC I’d just slightly tweak it and remove the tick method then have another module for periodic tasks.<br>
+[/quote][/quote]</p>
+<p>I have just messaged Tom the administrator in order to get your <span class="bbcode-b">rude</span> comment removed about the author of this tutorial, Pure_.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/6</link>
+        <pubDate>Tue, 09 Jun 2015 00:47:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-6</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@FoHammer FoHammer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fohammer">@FoHammer</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="551873">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sini/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sini:</div>
+<blockquote>
+<p>Like I told you on IRC I’d just slightly tweak it and remove the tick method then have another module for periodic tasks.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/5</link>
+        <pubDate>Mon, 08 Jun 2015 07:05:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-5</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Like I told you on IRC I’d just slightly tweak it and remove the tick method then have another module for periodic tasks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/4</link>
+        <pubDate>Mon, 08 Jun 2015 03:56:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-4</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@wavemaker wavemaker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wavemaker">@wavemaker</a> wrote:</p>
+          <blockquote>
+              <p>Thanks for posting this Pure_. I feel like a simple to implement, scripting system is essential with server content creation these days. It would be interesting to see if someone creates a DSL using Groovy.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/3</link>
+        <pubDate>Mon, 08 Jun 2015 02:42:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-3</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>This is a well-written tutorial, good job!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/2</link>
+        <pubDate>Sun, 07 Jun 2015 23:26:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-2</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+      <item>
+        <title>Groovy Scripting for Beginners</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>[size=18pt]Groovy Scripting[/size]</p>
+<p>In recent years the use of scripting languages in RSPS projects has blown up. The scene has typically prefered Jython or JRuby, but recently Groovy has also been explored.<br>
+The use of scripting in our projects hasn’t typically been to create plugins though, but rather to migrate code away from the core of a server, i.e. modules. I will explore both avenues with this ‘tutorial’.<br>
+You may notice that some of my naming/code is influenced by RuneSource, this is by design.</p>
+<p>[size=16pt]Requirements[/size]</p>
+<p>[ul][li]JDK 1.6[/li]<br>
+[li]Some prior java knowledge (as long as you know the basics about OOP you should be fine - i.e. classes, packaging, dependencies)[/li]<br>
+[li]An IDE (try Netbeans, Eclipse or IntelliJ IDEA)[/li]<br>
+[li]An RSPS (with source)[/li]<br>
+[li]Download and add the <a href="http://dl.bintray.com/groovy/maven/groovy-binary-2.4.3.zip" data-bbcode="true" rel="nofollow noopener">Groovy</a> binaries to your list of dependencies[/li][/ul]</p>
+<p>[size=16pt]Core Entities[/size]</p>
+<p>[ul][li]Plugin - a base class which plugins will inherit[/li]<br>
+[li]PluginHandler - the plugin handler (for standard processing, loading, unloading, etc)[/li]<br>
+[li]PluginBridge - a bridge between the server and invokable plugins (for non-standard processing)[/li][/ul]</p>
+<p>[size=16pt]Part I: Server Setup[/size]<br>
+The first things we will need to do is prepare our project for the implementation of scripting. Firstly you should add some folders to your server’s root.</p>
+<p>My setup looks like the following:<br>
+root<br>
+|— plugins/<br>
+|— bindings/<br>
+|— scripts/</p>
+<p>Now we will add a file which will determine which scripts to load when our server starts, so create a file called “plugins.ini” under the root folder. The format of this file is simple, each line will contain a script’s location relative to the plugin’s base directory (which we will define in the PluginHandler later).</p>
+<p>A sample for adding two plugins to the file would be:</p>
+<p><code>scripts/SamplePlugin
+bindings/CommandHandler</code></p>
+<p>Before you continue, make sure you add the Groovy class library to your project/its classpath/etc if you haven’t done so already.</p>
+<p>Next we need to add the plugin initialisation logic and on-tick processing. Firstly locate where your server initialises modules, i.e. trace it from your main function (a good place to start may be a class called Server). Then add our plugin loading code there.</p>
+<p><code>void Init() {
+    // ...
+    ItemDefs.load();
+    Map.cacheRegions();
+    PluginHandler.loadPlugins("./plugins.ini"); // our initialisation function
+    // ...
+}</code></p>
+<p>Finally we must add code to have the plugin tick function called from the server’s processing logic (a good place to start may be a class called PlayerHandler). You should be able to add this anywhere in there but pick somewhere sensible, i.e. at the end.</p>
+<p><code>void Tick() {
+  // ...
+  PlayerHandler.process()
+  NpcHandler.process();
+  PluginHandler.tick();
+  // ...
+}</code></p>
+<p>[size=16pt]Part II: Writing the PluginHandler and Plugin classes[/size]<br>
+[size=14pt]Plugin[/size]<br>
+We will now continue with writing a base class for plugins. Implementations of this class will need to be able to handle the loading and unloading of the plugin, have a general processing function called tick (for scripts) and an instance of the Groovy object of the script. This all leads to something like the following:</p>
+<p>[code=java]import groovy.lang.GroovyObject;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Plugin base class.<br>
+<em>/<br>
+public abstract class Plugin {<br>
+/</em>*</p>
+<ul>
+<li>An instance of this script as a Groovy object.<br>
+*/<br>
+private GroovyObject instance;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Called every time the server performs a tick.</li>
+<li>
+<span class="mention">@throws</span> Exception If the plugin throws any form of exception<br>
+*/<br>
+public abstract void tick() throws Exception;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Called when the plugin is enabled.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> pluginName The name of this plugin from the plugins list file</li>
+<li>
+<span class="mention">@throws</span> Exception If the plugin throws any form of exception<br>
+*/<br>
+public abstract void onEnable(String pluginName) throws Exception;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Called when the plugin is disabled.</li>
+<li>
+<span class="mention">@throws</span> Exception If the plugin is disabled<br>
+*/<br>
+public abstract void onDisable() throws Exception;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Get the groovy object instance of the plugin.</li>
+<li>
+<a class="mention" href="/u/return">@return</a> Groovy instance of plugin instance<br>
+*/<br>
+public GroovyObject getInstance() {<br>
+return instance;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Set the groovy object instance of this plugin</li>
+<li>
+<a class="mention" href="/u/param">@param</a> instance Groovy instance of plugin instance<br>
+*/<br>
+public void setInstance(GroovyObject instance) {<br>
+if (this.instance != null) {<br>
+throw new IllegalStateException(“Plugin already loaded.”);<br>
+}<br>
+this.instance = instance;<br>
+}<br>
+}[/code]</li>
+</ul>
+</li>
+</ul>
+<p>[size=14pt]PluginHandler[/size]<br>
+Now we will need to assemble the core of our system, the plugin handler. We need to declare the location of the plugins, alternatively you could pass this through the class constructor. We also need a function to load the script instances and initialise them using Groovy.</p>
+<p>[code=java]import groovy.lang.GroovyClassLoader;<br>
+import groovy.lang.GroovyObject;</p>
+<p>import java.io.BufferedReader;<br>
+import java.io.File;<br>
+import java.io.FileReader;<br>
+import java.util.HashMap;<br>
+import java.util.Map;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>The plugin handler, used for managing plugins and their execution.<br>
+*/<br>
+public final class PluginHandler {</p>
+<p>/**</p>
+<ul>
+<li>The base directory of all plugins.<br>
+*/<br>
+private static final String PLUGIN_DIRECTORY = “./plugins/”;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The Groovy class loader.<br>
+*/<br>
+private static final GroovyClassLoader classLoader = new GroovyClassLoader();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>A collection of all registered plugins.<br>
+*/<br>
+private static HashMap&lt;String, Plugin&gt; plugins = new HashMap&lt;String, Plugin&gt;();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Processes on-tick execution for all registered plugins.<br>
+*/<br>
+public static void tick() throws Exception {<br>
+synchronized (plugins) {<br>
+for (Plugin plugin : plugins.values()) { // looping through all registered plugins<br>
+plugin.tick(); // calling the tick function<br>
+}<br>
+}<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Invokes a method from the given plugin.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> pluginName plugin name</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> method     method name</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> args       arguments<br>
+*/<br>
+public static void invokeMethod(String pluginName, String method, Object… args) {<br>
+// Attempting to fetch the plugin<br>
+Plugin plugin = plugins.get(pluginName);</p>
+<p>if (plugin == null) {<br>
+return;<br>
+}</p>
+<p>// Invoking the method<br>
+plugin.getInstance().invokeMethod(method, args);<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Loads all plugins.</p>
+</li>
+<li>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> pluginsFile a text file containing a list of plugins to load</p>
+</li>
+<li>
+<p><span class="mention">@throws</span> Exception<br>
+*/<br>
+public static void loadPlugins(String pluginsFile) throws Exception {<br>
+File file = new File(pluginsFile); // loading the plugins file<br>
+BufferedReader reader = new BufferedReader(new FileReader(file)); // preparing a reader, so that we can traverse it<br>
+String pluginName; // the current plugins name</p>
+<p>while ((pluginName = reader.readLine()) != null) { // each line we read has the pluginName set to it<br>
+if (pluginName.trim().length() == 0) // skipping empty lines<br>
+continue;</p>
+<pre><code> // Loading the plugin instance
+ Class cls = classLoader.parseClass(new File(PLUGIN_DIRECTORY + pluginName + ".groovy")); // parsing the current class
+ GroovyObject obj = (GroovyObject) cls.newInstance(); // initialising a new groovy instance
+ Plugin plugin = (Plugin) obj; // casting the object to a plugin, as per our interface
+ plugin.setInstance(obj); // setting the instance of this plugin to the one we created earlier so that we do more than just call the plugin base functionality
+ register(pluginName.replace('/', '.'), plugin); // we clean up the plugin name from containing slashes to dots to separate namespaces, this gives it a java feel when invoking
+</code></pre>
+<p>}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Registers a plugin and calls the plugin’s onEnable method.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> name   The plugin name</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> plugin The plugin to register<br>
+*/<br>
+public static void register(String name, Plugin plugin) {<br>
+try {<br>
+plugin.onEnable(name); // performing on load tasks</p>
+<pre><code> synchronized (plugins) {
+ 	plugins.put(name, plugin); // adding the plugin to the plugins list
+ }
+</code></pre>
+<p>} catch (Exception ex) {<br>
+ex.printStackTrace();<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Unregisters a plugin and calls the plugin’s onDisable method.</li>
+<li>
+<a class="mention" href="/u/param">@param</a> plugin The plugin to unregister<br>
+*/<br>
+public static void unregister(Plugin plugin) {<br>
+for (Map.Entry&lt;String, Plugin&gt; entry : plugins.entrySet()) {<br>
+if (entry.getValue().equals(plugin)) {<br>
+unregister(entry.getKey()); // unregistering all instances of the plugin, regardless of key<br>
+}<br>
+}<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Unregisters a plugin and calls the plugin’s onDisable method.</p>
+</li>
+<li>
+<p><a class="mention" href="/u/param">@param</a> name The plugin name to unregister<br>
+*/<br>
+public static void unregister(String name) {<br>
+try {<br>
+plugins.get(name).onDisable(); // performing on unload tasks</p>
+<pre><code> synchronized (plugins) {
+ 	plugins.remove(name); // removing the plugin from the plugins list
+ }
+</code></pre>
+<p>} catch (Exception ex) {<br>
+ex.printStackTrace();<br>
+}<br>
+}<br>
+}[/code]</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>[size=16pt]Part III: PluginBridge[/size]<br>
+The purpose of the plugin bridge is to allow us to do more than just call functions defined in the Plugin base class. It must literally as a bridge between our server’s core and bindings which need to be accessed directly from it.</p>
+<p>[code=java]import …</p>
+<p>/**</p>
+<ul>
+<li>
+<p>A bridge between invokable plugins and the core of the server.<br>
+*/<br>
+public final class PluginBridge {</p>
+<p>/**</p>
+<ul>
+<li>A list of currently registered bindings.<br>
+*/<br>
+private static HashMap&lt;String, String&gt; bindings = new HashMap&lt;String, String&gt;();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>A key for the command handler binding (to be used with the bindings map), so that we can easily invoke it from the core.<br>
+*/<br>
+public static final String COMMAND_HANDLER_BINDING_KEY = “bindings.packets.CommandHandler”; // slashes replaced with dots as we did before</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Registers a binding.</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> binding binding internal name</li>
+<li>
+<a class="mention" href="/u/param">@param</a> pluginName plugin name<br>
+*/<br>
+public static void registerBinding(String binding, String pluginName) { // this will be called from the onEnable function of binding scripts<br>
+bindings.put(binding, pluginName); // putting the binding mapping, binding_name -&gt; plugin_name<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>An implementation of the handle command function.</li>
+<li>
+<span class="mention">@returns</span> execution could occur or not<br>
+*/<br>
+public static boolean handleCommand(Player player, String keyword, String[] args) {<br>
+if (!bindings.containsKey(COMMAND_HANDLER_BINDING_KEY)) { // checking if the key is binded to a script<br>
+return false;<br>
+}<br>
+PluginHandler.invokeMethod(bindings.get(COMMAND_HANDLER_BINDING_KEY), “handle”, player, keyword, args); // calling it with our arguments<br>
+return true;<br>
+}<br>
+}[/code]</li>
+</ul>
+</li>
+</ul>
+<p>[size=16pt]Part IV: Plugin Examples[/size]<br>
+Now we can create some plugins. We had split our plugins directory into two directories, bindings and scripts. I will give examples of each. The point of a binding is to extend the core functionality of the server directly whereas plugins themselves should typically perform other tasks, i.e. http server serving of data.</p>
+<p>[size=14pt]Binding: Command Handler (plugins/bindings/CommandHandler.groovy)[/size]<br>
+You will need to make sure the PluginBridge definition for this binding is called from the server’s core upon receiving a command packet, for it to work obviously.</p>
+<p>[code=groovy]import …</p>
+<p>class CommandHandler extends Plugin { // our class must extend Plugin</p>
+<pre><code>// this is the entry-point into this plugin, we will call this from the plugin bridge whenever necessary
+void handle(Player player, String keyword, String[] args) {
+	PlayerAttributes attributes = player.getAttributes();
+
+	if (keyword.equals("master")) {
+		for (int i = 0; i &lt; attributes.getSkills().length; i++) {
+			attributes.getSkills()[i] = 99;
+			attributes.getExperience()[i] = 200000000;
+		}
+		player.sendSkills();
+	}
+
+	if (keyword.equals("pickup")) {
+		int id = Integer.parseInt(args[0]);
+		int amount = 1;
+		if (args.length &gt; 1) {
+			amount = Integer.parseInt(args[1]);
+		}
+		attributes.addInventoryItem(id, amount, this);
+		player.sendInventory();
+	}
+
+	if (keyword.equals("tele")) {
+		int x = Integer.parseInt(args[0]);
+		int y = Integer.parseInt(args[1]);
+		player.teleport(new Position(x, y, player.getPosition().getZ()));
+	}
+
+	// ...
+}
+
+@Override
+void tick() throws Exception {
+	// not necessary, this is a binding
+}
+
+@Override
+void onEnable(String pluginName) throws Exception {
+	// when the script is enabled we must bind it to the plugin bridge, so that it is defined and can be called from the core
+	PluginBridge.registerBinding(PluginBridge.COMMAND_HANDLER_BINDING_KEY, pluginName);
+}
+
+@Override
+void onDisable() throws Exception {
+	// not necessary, since this script isnt particularly intensive
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[size=14pt]Script: Sample Plugin (plugins/scripts/SamplePlugin.groovy)[/size]<br>
+A suitable purpose of a script may be to respond to HTTP API requests or perform backups. I don’t have a ready example for this so just imagine something useful is below <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>[code=groovy]import …</p>
+<p>class SamplePlugin extends Plugin {</p>
+<pre><code>@Override
+void tick() throws Exception {
+	// Code to execute on tick
+}
+
+@Override
+void onEnable(String pluginName) throws Exception {
+	// Code to execute when plugin is enabled
+}
+
+@Override
+void onDisable() throws Exception {
+	// Code to execute when plugin is disabled
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[size=16pt]Possible improvements[/size]</p>
+<p>[ul][li]Delete tick functionality if unused.[/li]<br>
+[li]Rename the loading/binding to be more pretty.[/li]<br>
+[li]Multi-threaded loading of scripts.[/li][/ul]</p>
+<p>[size=16pt]Final words[/size]<br>
+You might find that the tick function is useless for your purpose, I kept it due to how I found the server I was working on (i.e. it had such functionality). Most people will want to only use the binding capabilities of these so called plugins.</p>
+<p>The logic found in this tutorial is applicable to any other scripting language implementation and feel free to discuss design improvements below alongside any errors you find in my post.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873/1</link>
+        <pubDate>Sun, 07 Jun 2015 23:12:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-551873-1</guid>
+        <source url="https://forum.moparisthebest.com/t/groovy-scripting-for-beginners/551873.rss">Groovy Scripting for Beginners</source>
+      </item>
+  </channel>
+</rss>

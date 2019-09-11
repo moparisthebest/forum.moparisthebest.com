@@ -1,0 +1,1150 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+    <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645</link>
+    <description>[b]Description[/b]: Adds an accurate, fast and stable event manager, an alternative to process().
+
+[b]Assumed Knowledge[/b]: How to read, adding new classes, how to modify existing classes, common sense.
+
+[b]Tested Server[/b]: Winterlove, should work in all.
+
+[b]Files/Classes modified[/b]: server, client
+
+[b]Files/Classes added[/b]: EventManager, EventContainer, Event
+
+[b]Difficulty[/b]: If you can read and have common sense - easy.
+
+Welcome to my second large tutorial, which is going to teach you why process is a failure for timing-critical code, and how to create a fast and stable EventManager, which is a great alternative to using process().
+
+This tutorial is going to be split into two parts: the first part is going to explain why process() is an unreliable method for timing, and why it causes so much lag. The second part is going to explain how to add an accurate, lag-free and stable alternative to using process() timers.
+
+As usual, please backup your server before making such a big and complicated change.
+
+Now I got that over with, we can begin with the real stuff:
+
+PART 1: WHY PROCESS IS UNRELIABLE FOR TIMING
+
+You may be wondering why I say process() is unreliable for timing. Process() is called every 500ms. The main server loop ensures this. If you have a look at the code, you even see it takes into account the previous processing time.
+
+For instance on a large server, a situation like this happens:
+
+1. Players are being processed, there are hundreds so it takes a long time. (E.g. 200 ms).
+
+2. Server sleeps for 300 ms
+
+That means the total execution time of the loop would have been 500ms, meaning a stable call to the player processing every 500 ms.
+
+Now we are going to step through your server and see what actually happens when the players are processed.
+
+In the server class, you will see this call in the main server loop:
+
+
+[code]playerHandler.process();[/code]
+
+That&#39;s being called every 500ms and runs in a stable loop.
+
+So lets go to the PlayerHandler class, and see what the process() there is actually doing.
+
+It is pretty complicated and scary, but we are looking for this part:
+
+
+[code]for(int i = 0; i &lt; MAXIMUM_PLAYERS; i++) {
+			if(players[i] == null) continue;
+
+			players[i].actionAmount--;
+
+			players[i].preProcessing();
+			while(players[i].process());
+			players[i].postProcessing();[/code]
+
+If you can see, players[i].process is being called in a while loop. That means it could be called multiple times. So our process() method in the client class, which some people use for timing could actually be run more than once every 500ms, making unreliable timers! Your timers could be running twice, three times or four times as fast!
+
+Now, we are going to look at the process() method in the client class. Specifically, the end of it.
+
+The part we are looking at is this:
+
+
+[code]
+if(disconnected) return false;
+		try {
+			parseOutgoingPackets();
+			if(timeOutCounter++ &gt; 20) {
+				Misc.println(&quot;Client lost connection: timeout&quot;);
+				disconnected = true;
+				return false;
+			}
+			if(in == null) return false;
+
+			int avail = in.available();
+			if(avail == 0) return false;
+
+			if(packetType == -1) {
+				packetType = in.read() &amp; 0xff;
+				if(inStreamDecryption != null)
+					packetType = packetType - inStreamDecryption.getNextKey() &amp; 0xff;
+				packetSize = packetSizes[packetType];
+				avail--;
+            }
+			if(packetSize == -1) {
+				if(avail &gt; 0) {
+					// this is a variable size packet, the next byte containing the length of said
+					packetSize = in.read() &amp; 0xff;
+					avail--;
+				}
+				else return false;
+			}
+			if(avail &lt; packetSize) return false;	// packet not completely arrived here yet
+
+			fillInStream(packetSize);
+            timeOutCounter = 0;			// reset
+
+			parseIncomingPackets();		// method that does actually interprete these packets
+
+			packetType = -1;
+		} catch(java.lang.Exception __ex) {
+			Misc.println(&quot;BlakeScape Server: Exception!&quot;);
+			__ex.printStackTrace(); 
+			disconnected = true;
+		}
+		return true;[/code]
+
+As it runs on a while loop, whenever true is returned, it runs a second time. If you see, true is returned whenever a whole packet is read.
+
+That means, a clever bot (or player), could send a huge amount of packets in 500 ms. Maybe 10. Maybe 20. And then that would cause process() to be called 10 or 20 times a second. Maybe every 30, 40 or 50!
+
+In fact, you don&#39;t even need a bot to do this. Mass clicking will do. So that means, your process() timers could be running anywhere from 10x - 50x faster than they should with a clever player!
+
+That is why process() is a complete failure for putting timers. In fact, in my opinion, you should only put packet processing code there.
+
+Also, if you put lots of timers (that don&#39;t run often), there is little point. Why have it consuming CPU power when you could put them in a list (array) of events?
+
+And now we move onto the next part, how to use a stable event manager for timers.
+
+This uses some more complicated parts of java, including inner classes, so it may seem confusing at first. However, with practice, this becomes a much easier way than using process timers.
+
+PART 2: ADDING A STABLE AND RELIABLE EVENTMANAGER
+
+I have programmed a stable and reliable event manager. It does not consume CPU when no events are running (through the use of wait), and waits until an event needs to be run.
+
+It runs in its own thread so does not interrupt player processing and this also means you can have timers that run faster than 500ms.
+
+The timers don&#39;t need to run in multiples of 500ms as well, so they could run in 600ms, 700ms, etc!
+
+Note: There is already an event manager in RuneFusion, however this is far superior to it, so you may wish to consider replacing it. There is also already an event manager in RS2D.
+
+Step 1: The Event Manager class
+
+The event manager class is the core of the event system. It runs in its own thread, and it executes events that need to be executed.
+
+Here is the code for it:
+
+
+[code]
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Manages events which will be run in the future.
+ * Has its own thread since some events may need to be ran faster than the cycle time
+ * in the main thread.
+ * 
+ * @author Graham
+ *
+ */
+public class EventManager implements Runnable {
+	
+	/**
+	 * A reference to the singleton;
+	 */
+	private static EventManager singleton = null;
+	
+	/**
+	 * A list of events that are being executed.
+	 */
+	private List&lt;EventContainer&gt; events;
+	
+	/**
+	 * Initialise the event manager.
+	 */
+	private EventManager() {
+		events = new ArrayList&lt;EventContainer&gt;();
+	}
+	
+	/**
+	 * The event manager thread. So we can interrupt it and end it nicely on shutdown.
+	 */
+	private Thread thread;
+	
+	/**
+	 * Gets the event manager singleton. If there is no singleton, the singleton is created.
+	 * @return The event manager singleton.
+	 */
+	public static EventManager getSingleton() {
+		if(singleton == null) {
+			singleton = new EventManager();
+			singleton.thread = new Thread(singleton);
+			singleton.thread.start();
+		}
+		return singleton;
+	}
+	
+	/**
+	 * Initialises the event manager (if it needs to be).
+	 */
+	public static void initialise() {
+		getSingleton();
+	}
+	
+	/**
+	 * The waitFor variable is multiplied by this before the call to wait() is made.
+	 * We do this because other events may be executed after waitFor is set (and take time).
+	 * We may need to modify this depending on event count? Some proper tests need to be done.
+	 */
+	private static final double WAIT_FOR_FACTOR = 0.5;
+
+	@Override
+	/**
+	 * Processes events. Works kinda like newer versions of cron.
+	 */
+	public synchronized void run() {
+		long waitFor = -1;
+		List&lt;EventContainer&gt; remove = new ArrayList&lt;EventContainer&gt;();
+		
+		while(true) {
+			
+			// reset wait time
+			waitFor = -1;
+			
+			// process all events
+			for(EventContainer container : events) {
+				if(container.isRunning()) {
+					if((System.currentTimeMillis() - container.getLastRun()) &gt;= container.getTick()) {
+						container.execute();
+					}
+					if(container.getTick() &lt; waitFor || waitFor == -1) {
+						waitFor = container.getTick();
+					}
+				} else {
+					// add to remove list
+					remove.add(container);
+				}
+			}
+			
+			// remove events that have completed
+			for(EventContainer container : remove) {
+				events.remove(container);
+			}
+			remove.clear();
+			
+			// no events running
+			try {
+				if(waitFor == -1) {
+					wait(); // wait with no timeout
+				} else {
+					// an event is running, wait for that time or until a new event is added
+					int decimalWaitFor = (int)(Math.ceil(waitFor*WAIT_FOR_FACTOR));
+					wait(decimalWaitFor);
+				}
+			} catch(InterruptedException e) {
+				break; // stop running
+			}
+		}
+	}
+	
+	/**
+	 * Adds an event.
+	 * @param event The event to add.
+	 * @param tick The tick time.
+	 */
+	public synchronized void addEvent(Event event, int tick) {
+		events.add(new EventContainer(event,tick));
+		notify();
+	}
+	
+	/**
+	 * Shuts the event manager down.
+	 */
+	public void shutdown() {
+		this.thread.interrupt();
+	}
+
+}
+[/code]
+Now I will explain what each part does:
+
+
+[code]
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Manages events which will be run in the future.
+ * Has its own thread since some events may need to be ran faster than the cycle time
+ * in the main thread.
+ * 
+ * @author Graham
+ *
+ */
+public class EventManager implements Runnable {[/code]
+
+All the standard stuff.
+
+
+[code]	/**
+	 * A reference to the singleton;
+	 */
+	private static EventManager singleton = null;
+[/code]
+We have one event manager for the whole server, so use the singleton design pattern, instead of making it all static. It basically means, to access the event manager, you can do this:
+
+
+[code]EventManager.getSingleton().doSomething();[/code]
+
+Instead of (the bad):
+
+
+
+[code]server.eventManager.doSomething();[/code]
+
+Next:
+
+
+
+	[code]/**
+	 * A list of events that are being executed.
+	 */
+	private List&lt;EventContainer&gt; events;[/code]
+
+We need a list of events that are still be executed, so the definition for that list is there.
+
+
+
+	[code]/**
+	 * Initialise the event manager.
+	 */
+	private EventManager() {
+		events = new ArrayList&lt;EventContainer&gt;();
+	}[/code]
+
+That is the constructor, it just sets up the event list. It is set to private because it needs to be created through the getSingleton() method.
+
+
+
+	[code]/**
+	 * The event manager thread. So we can interrupt it and end it nicely on shutdown.
+	 */
+	private Thread thread;[/code]
+
+Because it runs in a thread we need to be able to stop it on server shutdown by interrupting it, so we store the reference to its thread here.
+
+
+	[code]/**
+	 * Gets the event manager singleton. If there is no singleton, the singleton is created.
+	 * @return The event manager singleton.
+	 */
+	public static EventManager getSingleton() {
+		if(singleton == null) {
+			singleton = new EventManager();
+			singleton.thread = new Thread(singleton);
+			singleton.thread.start();
+		}
+		return singleton;
+	}[/code]
+
+This function gets the singleton (explained above). If the singleton has not been created, it is created and the thread is started.
+
+
+
+[code]	/**
+	 * Initialises the event manager (if it needs to be).
+	 */
+	public static void initialise() {
+		getSingleton();
+	}[/code]
+
+This code can be used to initialise the event manager without getting a reference back to the singleton.
+
+
+	[code]/**
+	 * The waitFor variable is multiplied by this before the call to wait() is made.
+	 * We do this because other events may be executed after waitFor is set (and take time).
+	 * We may need to modify this depending on event count? Some proper tests need to be done.
+	 */
+	private static final double WAIT_FOR_FACTOR = 0.5;[/code]
+
+The wait for factor is kinda complicated to explain, I will explain it later. You may need to tweak this if you have a lot of events running simultaneously, but 0.5 seems a good value.
+
+Now we get onto the juicy stuff:
+
+	[code]@Override
+	/**
+	 * Processes events. Works kinda like newer versions of cron.
+	 */
+	public synchronized void run() {
+		long waitFor = -1;
+		List&lt;EventContainer&gt; remove = new ArrayList&lt;EventContainer&gt;();[/code]
+
+This is the run() method of the thread.
+
+The waitFor variable is used to store how long the thread should wait for while it is not executing events. It is set to -1 by default so it is actually calculated.
+
+The remove list is a list where we put old events (you cannot remove items from a list while you are iterating through it).
+
+Now onto the loop:
+
+
+
+		[code]while(true) {
+			
+			// reset wait time
+			waitFor = -1;
+[/code]
+The wait time needs to be reset since it needs to be calculated every loop.
+
+
+
+			
+			[code]// process all events
+			for(EventContainer container : events) {
+[/code]
+That code will iterate through running events.
+
+
+
+				[code]if(container.isRunning()) {
+					if((System.currentTimeMillis() - container.getLastRun()) &gt;= container.getTick()) {
+						container.execute();
+					}[/code]
+
+This is where it gets complicated. This calculates when the event was last ran, and if it needs to be executed, it is executed.
+
+
+
+					[code]if(container.getTick() &lt; waitFor || waitFor == -1) {
+						waitFor = container.getTick();
+					}[/code]
+
+Then it sets the waitFor variable if we need to wait() for a shorter time, or if it has not been calculated yet.
+
+
+
+				[code]} else {
+					// add to remove list
+					remove.add(container);
+				}
+			}[/code]
+
+If the event is not running, it is added to the remove list.
+
+
+[code]
+			// remove events that have completed
+			for(EventContainer container : remove) {
+				events.remove(container);
+			}
+			remove.clear();[/code]
+
+Now we finished iterating through the list we can remove elements from it.
+
+
+
+			[code]// no events running
+			try {
+				if(waitFor == -1) {
+					wait(); // wait with no timeout[/code]
+
+If wait was not set, no events are running, so we wait with no timeout.
+
+
+
+				[code]} else {
+					// an event is running, wait for that time or until a new event is added
+					int decimalWaitFor = (int)(Math.ceil(waitFor*WAIT_FOR_FACTOR));
+					wait(decimalWaitFor);
+				}
+[/code]
+Otherwise we wait for the specified amount of time.
+
+
+			[code]} catch(InterruptedException e) {
+				break; // stop running
+			}[/code]
+
+This piece of code checks if we were interrupted. When a thread is interrupted, it is basically a request for it to exit. So we nicely break the loop which will stop the thread.
+
+
+[code]
+		}
+	}[/code]
+
+Need I say?
+
+
+
+	[code]/**
+	 * Adds an event.
+	 * @param event The event to add.
+	 * @param tick The tick time.
+	 */
+	public synchronized void addEvent(Event event, int tick) {
+		events.add(new EventContainer(event,tick));
+		notify();
+	}
+[/code]
+This part of the code adds an event to the events list, and then calls notify() to make wait() end early. This will then make it recalculate all the timing etc etc.
+
+DUE TO THE NATURE OF THE CODE, YOU CANNOT CALL ADDEVENT INSIDE AN EVENT.
+
+
+
+	[code]/**
+	 * Shuts the event manager down.
+	 */
+	public void shutdown() {
+		this.thread.interrupt();
+	}
+
+}
+[/code]
+The last method is used to shut the event manager down nicely.
+
+Step 2: Adding the Event interface
+
+Here is the code for the Event interface:
+
+
+
+[code]/**
+ * A simple interface for an event.
+ * @author Graham
+ *
+ */
+public interface Event {
+	
+	/**
+	 * Called when the event is executed.
+	 * @param container The event container, so the event can dynamically change the tick time etc.
+	 */
+	public void execute(EventContainer container);
+
+}[/code]
+
+Pretty simple, isn&#39;t it?
+
+An interface cannot be created. We can&#39;t do Event e = new Event();. But we can implement an interface. One interface you probably know about is the Runnable interface, used for making threads.
+
+If a class implements an interface, it can be used where that interface is used. Which is why you can do new Thread(whatever). Because, the constructor to the Thread class looks like this:
+
+
+[code]Thread(Runnable r)[/code]
+
+It&#39;s a very useful concept, so I suggest you read more (this is not vital).
+
+However, an interface cannot hold data (such as the event timing code), so we have a container class:
+
+
+[code]
+/**
+ * Holds extra data for an event (for example the tick time etc).
+ * @author Graham
+ *
+ */
+public class EventContainer {
+	
+	/**
+	 * The tick time in milliseconds.
+	 */
+	private int tick;
+	
+	/**
+	 * The actual event.
+	 */
+	private Event event;
+	
+	/**
+	 * A flag which specifies if the event is running;
+	 */
+	private boolean isRunning;
+	
+	/**
+	 * When this event was last run.
+	 */
+	private long lastRun;
+	
+	/**
+	 * The event container.
+	 * @param evt
+	 * @param tick
+	 */
+	protected EventContainer(Event evt, int tick) {
+		this.tick = tick;
+		this.event = evt;
+		this.isRunning = true;
+		this.lastRun = System.currentTimeMillis();
+		// can be changed to 0 if you want events to run straight away
+	}
+	
+	/**
+	 * Stops this event.
+	 */
+	public void stop() {
+		this.isRunning = false;
+	}
+	
+	/**
+	 * Returns the is running flag.
+	 * @return
+	 */
+	public boolean isRunning() {
+		return this.isRunning;
+	}
+	
+	/**
+	 * Returns the tick time.
+	 * @return
+	 */
+	public int getTick() {
+		return this.tick;
+	}
+	
+	/**
+	 * Executes the event!
+	 */
+	public void execute() {
+		this.lastRun = System.currentTimeMillis();
+		this.event.execute(this);
+	}
+	
+	/**
+	 * Gets the last run time.
+	 * @return
+	 */
+	public long getLastRun() {
+		return this.lastRun;
+	}
+
+}[/code]
+
+This code is all fairly simple, and you should understand it.
+
+Finally, we need to integrate the code with the server class!
+
+This is really simple! Under your main method (should look like this):
+
+
+
+[code]public static void main(java.lang.String args[]) {[/code]
+
+Add the following snippet of code:
+
+
+
+		[code]EventManager.initialise();[/code]
+
+And then under:
+
+
+
+		[code]// shut down the server
+		playerHandler.destruct();
+		clientHandler.killServer();
+[/code]
+We need to shutdown the event manager:
+
+
+
+		[code]EventManager.getSingleton().shutdown();[/code]
+
+Now, the event manager is integrated, and I will show you how to use it!
+
+PART 3: HOW TO USE THE EVENT MANAGER
+
+This is very easy, all the other difficult code there was behind the scenes stuff.
+
+To add a new event, (for example hitting a dummy), add it under the appropriate case in the switch statement.
+
+
+[code]
+EventManager.getSingleton().addEvent(
+    new Event() {
+        public void execute(EventContainer c) {
+            sendMessage(&quot;You hit the dummy.&quot;);
+            // you could add animations here, addSkillXP, whatever you want
+            c.stop(); // stops the event from running
+        }
+    }, 2000); // executes after 2,000 ms = 2 seconds
+};[/code]
+
+You can also add events that repeat, perhaps you want a global messages every 60 seconds?
+
+In that case, add this to your server startup code:
+
+
+[code]
+EventManager.getSingleton().addEvent(
+    new Event() {
+        public void execute(EventContainer c) {
+            PlayerHandler.messageToAll = &quot;Visit our forums at www.blahblah.com!&quot;;
+            // c.stop(); commented out as not needed
+        }
+    }, 60000); // executes every 60,000 ms = 60 seconds
+};
+[/code]
+That&#39;s the end of the tutorial!
+
+[b]Credits[/b]: 100% Me.
+
+I [b]would[/b] appreciate it if you gave some mention to me in your server credits, since this took a long time to write.</description>
+    
+    <lastBuildDate>Mon, 07 Dec 2009 20:43:49 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Infinity_Zr Infinity Zr]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/infinity_zr">@Infinity_Zr</a> wrote:</p>
+          <blockquote>
+              <p>Wow that is some long ass tut anyways good job.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/42</link>
+        <pubDate>Mon, 07 Dec 2009 20:43:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-42</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@djdoyle1 djdoyle1]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/djdoyle1">@djdoyle1</a> wrote:</p>
+          <blockquote>
+              <p>@</p>
+<pre><code class="lang-auto">You may be wondering why I say process() is unreliable for timing. Process() is called every 500ms. The main server loop ensures this. If you have a look at the code, you even see it takes into account the previous processing time.</code></pre>
+<p>Put the cycleTime to 1000 lol</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/41</link>
+        <pubDate>Mon, 07 Dec 2009 17:09:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-41</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@runefreak10 runefreak10]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/runefreak10">@runefreak10</a> wrote:</p>
+          <blockquote>
+              <p>Umm… This kind of sucks ass. Let’s say I set my timer for every 10 seconds on a thieving stall. If they click the thieving stall 5 times within that 10 seconds, when it finally hits that 10 seconds, 5 clicks to that stall are executed. So what the hell’s the point of this?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/40</link>
+        <pubDate>Wed, 03 Jun 2009 23:14:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-40</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Kalvin Kalvin]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kalvin">@Kalvin</a> wrote:</p>
+          <blockquote>
+              <p>can anyone tell me where to put</p>
+<p>[code]public static void main(java.lang.String args[]) {</p>
+<p>Add the following snippet of code:</p>
+<p>Code:</p>
+<p>EventManager.initialise();</p>
+<p>And then under:</p>
+<p>Code:</p>
+<p>// shut down the server<br>
+playerHandler.destruct();<br>
+clientHandler.killServer();</p>
+<p>We need to shutdown the event manager:</p>
+<p>Code:</p>
+<p>EventManager.getSingleton().shutdown();[/code]</p>
+<p>As i added it and i get t his error</p>
+<p><code>server.java:183: cannot find symbol
+symbol  : variable EventManager
+location: class server
+EventManager.initialise();
+^
+1 error
+Press any key to continue . . .</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/39</link>
+        <pubDate>Wed, 03 Jun 2009 18:52:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-39</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Graham Graham]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/graham">@Graham</a> wrote:</p>
+          <blockquote>
+              <p>Nice bumping Mosh_On.</p>
+<p>Btw, this ‘Shard Revolutions’ guy is an impersonator and not me.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/38</link>
+        <pubDate>Tue, 26 May 2009 19:42:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-38</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Mosh_On Mosh_On]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mosh_on">@Mosh_On</a> wrote:</p>
+          <blockquote>
+              <p>Where would you put the event interface?</p>
+<p>I can’t seem to find a correct place for it…</p>
+<p>EDIT: Nvm got it, compiler actually helped in fixing an error :PP</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/37</link>
+        <pubDate>Tue, 26 May 2009 18:42:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-37</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@KillinXxSMile KillinXxSMile]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/killinxxsmile">@KillinXxSMile</a> wrote:</p>
+          <blockquote>
+              <p>nice work graham</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/36</link>
+        <pubDate>Tue, 24 Mar 2009 10:20:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-36</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Yz85Racer Yz85Racer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yz85racer">@Yz85Racer</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“surfer25, post:33, topic:244645”][quote author=Yz85Racer link=topic=321015.msg2562464#msg2562464 date=1228210908]<br>
+Managing events yourself is so completely redundant, and a waste of CPU cycles. Use java.util.Timer and java.util.TimerTask.<br>
+[/quote]</p>
+<p>Wouldn’t you waste resources with the Threads created?<br>
+Unless you have a technique for one TimerTask for all Times[/quote]<br>
+Thread’s are relatively cheap, so I wouldn’t worry about them.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/35</link>
+        <pubDate>Wed, 18 Mar 2009 21:01:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-35</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@xEnt xEnt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xent">@xEnt</a> wrote:</p>
+          <blockquote>
+              <p>Or you could create an Abstract Delayed Event to use custom timers on the same thread.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/34</link>
+        <pubDate>Wed, 18 Mar 2009 10:22:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-34</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@surfer25 surfer25]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/surfer25">@surfer25</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group" data-post="30" data-topic="244645">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/yz85racer/40/5_6bca9977b612b7aeef77ba1ec1cd67b3.png" class="avatar"> Yz85Racer:</div>
+<blockquote>
+<p>Managing events yourself is so completely redundant, and a waste of CPU cycles. Use java.util.Timer and java.util.TimerTask.</p>
+</blockquote>
+</aside>
+<p>Wouldn’t you waste resources with the Threads created?<br>
+Unless you have a technique for one TimerTask for all Times</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/33</link>
+        <pubDate>Wed, 18 Mar 2009 09:10:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-33</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@ZZZpk ZZZpk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zzzpk">@ZZZpk</a> wrote:</p>
+          <blockquote>
+              <p>lol, He is graham…?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/32</link>
+        <pubDate>Thu, 12 Feb 2009 11:26:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-32</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@bryan_m bryan m]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bryan_m">@bryan_m</a> wrote:</p>
+          <blockquote>
+              <p>ty i needed this</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/31</link>
+        <pubDate>Mon, 12 Jan 2009 00:02:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-31</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Yz85Racer Yz85Racer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yz85racer">@Yz85Racer</a> wrote:</p>
+          <blockquote>
+              <p>Managing events yourself is so completely redundant, and a waste of CPU cycles. Use java.util.Timer and java.util.TimerTask.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/30</link>
+        <pubDate>Tue, 02 Dec 2008 09:41:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-30</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Creazy_pk3r Creazy pk3r]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/creazy_pk3r">@Creazy_pk3r</a> wrote:</p>
+          <blockquote>
+              <p>Wow nice leech man!!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/29</link>
+        <pubDate>Mon, 01 Dec 2008 21:24:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-29</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Sonis Sonis]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sonis">@Sonis</a> wrote:</p>
+          <blockquote>
+              <p>Regardless of who made what and who did what, If you even want to question the authenticity of this… Don’t REP++</p>
+<p>The actual author doesn’t matter if there are no complaints from the author …<br>
+There are plenty of inciting to where the tutorial came from …</p>
+<p>And just because someone doesn’t go on MSN messenger doesn’t mean they are not who they say they are…</p>
+<p>Oh and everyone who is posting “nice leech” or “this isn’t a leech” … That is considered SPAM probably …<br>
+Not the SPAM you put on bread … The stuff no one wants … So lets stop talking non-sence.</p>
+<p>Oh and; good tutorial. ^<em>^ Hope you can ignore the munchkins of the <span class="bbcode-u">“‘OFFICIAL’ Mopar SPAM club”</span> … &gt;</em>&gt; U=++</p>
+<p>P.S. If you notice, people who have lots of rep are mostly saying similar things to me …<br>
+[size=1pt]TO THE SPAMMERS: … what do you have to say for your self? I’m not going to reply to anything else in this thread … Hence the small text…[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/28</link>
+        <pubDate>Thu, 20 Nov 2008 04:21:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-28</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Prima Prima]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/prima">@Prima</a> wrote:</p>
+          <blockquote>
+              <p>This isn’t leeched.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/27</link>
+        <pubDate>Wed, 19 Nov 2008 21:32:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-27</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Creazy_pk3r Creazy pk3r]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/creazy_pk3r">@Creazy_pk3r</a> wrote:</p>
+          <blockquote>
+              <p>Hmm nice leeach!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/26</link>
+        <pubDate>Wed, 19 Nov 2008 21:17:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-26</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@si_force Si Force]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/si_force">@si_force</a> wrote:</p>
+          <blockquote>
+              <p>Good job Graham,</p>
+<p>I first read this topic, And thought you were another ‘Wanne-be graham’,<br>
+But i read on and saw that you were actually him.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/25</link>
+        <pubDate>Wed, 19 Nov 2008 17:18:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-25</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Gimmeyoshoez Gimmeyoshoez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/gimmeyoshoez">@Gimmeyoshoez</a> wrote:</p>
+          <blockquote>
+              <p>Good job <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"> Should help alot of poeple.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/24</link>
+        <pubDate>Wed, 19 Nov 2008 04:15:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-24</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Zach_93 Zach 93]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zach_93">@Zach_93</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="3" data-topic="244645">
+<div class="title">
+<div class="quote-controls"></div>
+ Shard Revolutions:</div>
+<blockquote>
+<p>I’m Graham from google.</p>
+</blockquote>
+</aside>
+<p>That explains everything.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/23</link>
+        <pubDate>Tue, 18 Nov 2008 22:22:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-23</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Prima Prima]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/prima">@Prima</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“legend-scape, post:21, topic:244645”][quote author=Prima link=topic=321015.msg2541890#msg2541890 date=1227043984]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>This is why im sick and tired of these forums.</p>
+</blockquote>
+</aside>
+<p>Leave then.<br>
+[/quote]</p>
+<p>why say that? mopar needs more memebers lol =],[/quote]</p>
+<p>It has plenty members, and If he is sick and tired of this community, then Whats the point in staying?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/22</link>
+        <pubDate>Tue, 18 Nov 2008 21:40:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-22</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@legend-scape legend-scape]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/legend-scape">@legend-scape</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Prima, post:20, topic:244645”][quote author=Shard Revolutions link=topic=321015.msg2541880#msg2541880 date=1227043787]<br>
+This is why im sick and tired of these forums.<br>
+[/quote]</p>
+<p>Leave then.[/quote]</p>
+<p>why say that? mopar needs more memebers lol =],</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/21</link>
+        <pubDate>Tue, 18 Nov 2008 21:39:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-21</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Prima Prima]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/prima">@Prima</a> wrote:</p>
+          <blockquote>
+              <p>Leave then.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/20</link>
+        <pubDate>Tue, 18 Nov 2008 21:33:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-20</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Shard_Revolutions Shard Revolutions]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/shard_revolutions">@Shard_Revolutions</a> wrote:</p>
+          <blockquote>
+              <p>This is why im sick and tired of these forums.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/19</link>
+        <pubDate>Tue, 18 Nov 2008 21:29:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-19</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+      <item>
+        <title>Accurate EventManager, a fast and accurate to stop unreliable process timers</title>
+        <dc:creator><![CDATA[@Lord_of_Dragovians Lord of Dragovians]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lord_of_dragovians">@Lord_of_Dragovians</a> wrote:</p>
+          <blockquote>
+              <p>Just because he doesn’t has the same name on EVERY other forum, doesn’t mean he didn’t make this.</p>
+<p>Y’all are jealous.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645/18</link>
+        <pubDate>Tue, 18 Nov 2008 17:34:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-244645-18</guid>
+        <source url="https://forum.moparisthebest.com/t/accurate-eventmanager-a-fast-and-accurate-to-stop-unreliable-process-timers/244645.rss">Accurate EventManager, a fast and accurate to stop unreliable process timers</source>
+      </item>
+  </channel>
+</rss>

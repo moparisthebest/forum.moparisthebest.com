@@ -1,0 +1,509 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How To Secure Web Applications</title>
+    <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537</link>
+    <description>Throughout the RSPS community, security seems to be a significant issue to tackle. This is especially the case in web applications where the risks can even apply to total strangers visiting your site. This guide will attempt to help tackle that problem by providing various of the most common attacks and how to mitigate or completely avoid them for [i]any[/i] web application, not just those built for RSPS.
+
+The examples provided are in PHP but every problem and solution apply to all web applications unless noted! Anyone else interested in providing information or applying solutions in other languages/frameworks (such as Node.js, ASP, etc.) please let me know.
+
+
+[b][size=12pt]Securing Passwords[/size][/b]
+[hr]
+[b]Problem:[/b] Passwords stored in plaintext or with an insecure algorithm may allow hackers who have accessed the database to compromise users&#39; accounts on the website or possibly on other websites if they use the same passwords.
+
+[b]Solution:[/b] I have already written a guide on securing passwords using Blowfish. You can find that guide [url=http://www.moparisthebest.com/smf/index.php/topic,562366.0.html]here[/url].
+
+For anyone not using Blowfish, there are some points you should follow:
+
+[ul][li]Force users to have long, unique passwords - Relatively simple passwords are easier to break or guess.[/li]
+[li]Have a long, random salt generated - This helps against bruteforces and rainbow tables.[/li]
+[li]Use a slow algorithm - This will slow hackers down when trying to bruteforce the passwords. Blowfish is good for this, but you could also use the popular SHA-family functions with several rounds.[/li][/ul]
+
+
+[b][size=12pt]SQL Injection[/size][/b]
+[hr]
+[b]Problem:[/b] Allowing unescaped query data to be inserted into an SQL query can allow a hacker to exploit the database. Take the following code for example:
+[code=php]$query = &quot;SELECT * FROM members_table WHERE username = &#39;$username&#39;&quot;;
+$result = mysql_query($query);
+// ...[/code]
+Now let&#39;s say a user intending to exploit this weakness puts [b]&#39; OR 1=1;\x00[/b] for the form&#39;s data. This transforms the query into:
+[code]SELECT * FROM members_table WHERE username = &#39;&#39; OR 1=1;[/code]
+Since 1=1 will always evaluate to true, the WHERE clause becomes useless and all users in the members_table are selected and returned, including moderators or administrators. But this is only the basics of what users can do to manipulate the query; other attacks can include executing other SQL commands such as: DROP, UPDATE, INSERT INTO, etc.
+
+[b]Solution:[/b] The problem with the form earlier is that it didn&#39;t properly escape the data being sent to the query. The culprit was the lone single-quote (&#39;) which, when embedded in the query, ended the username string and allowed a valid SQL condition to be placed. Note that the single-quote isn&#39;t the only dangerous character which needs to be escaped, different database systems require certain characters to be escaped otherwise they can compromise the query like the single-quote did. Additionally, prepared statements can aso be used validate the data.
+
+A solution to the problem is to use the [i]*_real_escape_string()[/i] functions provided by the database drivers in the PHP library. For example, when using the MySQL driver you should use the [i]mysql_real_escape_string()[/i] function before passing user-submitted data to be embedded in a query. When using SQLite, you would use [i]sqlite_escape_string()[/i]. These functions should be used instead of a function such as [i]addslashes()[/i] because these driver-specific functions protect against all characters that are considered dangerous for the database system. For instance, mysql_real_escape_string() protects against: \x00, \n, \r, \, &#39;, &quot; and \x1a (NUL, new lines, backslash, quotes, and EOF marker). The following updated code would protect the query from SQL injection:
+[code=php]$username = mysql_real_escape_string($username);
+$query = &quot;SELECT * FROM members_table WHERE username = &#39;$username&#39;&quot;;
+$result = mysql_query($query);
+// ...[/code]
+Trying to use the same input in the form earlier would execute the following query:
+[code]SELECT * FROM members_table WHERE username = &#39;\&#39; OR 1=1; \0&#39;[/code]
+As you can see, this creates no danger to the database and the data is evaluated as a string.
+
+The other solution is a more modern approach and uses prepared statements. Prepared statements are pre-compiled queries that are more efficient for databases to execute when a query is being used multiple times. They also provide placeholders so the data being embedded can be properly escaped. This can be accomplished using an abstraction-layer such as PDO:
+[code=php]$query = &quot;SELECT * FROM members_table WHERE username = :user&quot;;
+$stmt = $dbh-&gt;prepare($query);
+$stmt-&gt;bindValue(&#39;:user&#39;, $username, PDO::PARAM_STR);
+$stmt-&gt;execute();
+// ...[/code]
+Using placeholders and binding a value to the placeholder allows the data in the $username variable to be properly escaped. Also, PDO adds the quotes to the query since the placeholder is a string. 
+
+Other abstraction-layers and newer database drivers such as MySQLi provide prepared statements.
+
+Also, sppt brought up a good point about injecting a datatype that wasn&#39;t expected as input (such as a string in place of an integer), you can read his reply [url=http://www.moparisthebest.com/smf/index.php/topic,644280.msg4336221.html#msg4336221]here[/url] and my response [url=http://www.moparisthebest.com/smf/index.php/topic,644280.msg4336263.html#msg4336263]here[/url].
+
+[b][size=12pt]Session Fixation[/size][/b]
+[hr]
+[b]Problem:[/b] Session fixation is a form of [i]session hijacking[/i] where a malicious user learns the session ID of another user and attempts to use it to gain access as that user. For example, this occurs if a victim user sends a link containing their session ID to a malicious user like so:
+&lt;blockquote&gt;Hey dude! I just read this really cool article about turtles here at http://turtlez.com/about.php?PHPSESSID=1234&lt;/blockquote&gt;
+Usually you will see these sort of links generated for guests viewing the webpage of a site which generates a session for the guest viewing their website. But what happens if the victim logs in and their session isn&#39;t changed? This means when the malicious user visits the site again with the same session ID as the victim who logged in, the server assumes this is the same person. The same could happen if the malicious user sent the link with a defined session ID to a victim. Take for example the following scenario:
+&lt;blockquote&gt;Evil Anthony: hey, check out this site that you&#39;re an administrator on http://mysite.com/index.php?PHPSESSID=lol123
+Good Anthony: Oh, hey thanks!
+Evil Anthony: don&#39;t forget to login so I can fixate your session and eventually login as you because the software is vulnerable.. MUAHAHAHAHA!! Uh, I mean I have to go!! uh cya.
+Good Anthony: sounds like a plan! cya later m8. brb logging in.&lt;/blockquote&gt;
+Once the good Anthony logged in to this website he has special permissions in, evil Anthony decides to visit the same site with the same session ID impersonating the good Anthony wrecking havoc on the website.
+
+This same process can be done with cookie-based sessions where the malicious user uses a technique such as XSS to get the cookie data of the user and subsequently modifies his/her cookie to reflect the session ID of the victim.
+
+[b]Solution:[/b] A solution to this problem is very simple and can be done during login. When the victim user logs in, you can regenerate a session ID so that the ID they had as a guest no longer exists and the malicious user who has the victim&#39;s guest ID can not use it to impersonate the victim. An example of a login system vulnerable to a session fixation attack looks like:
+[code=php]session_start();
+
+function doLogin() {
+    // Do other stuff...
+    $_SESSION[&#39;loggedIn&#39;] = true;
+}
+
+if ($_SESSION[&#39;loggedIn&#39;]) {
+    echo &#39;Welcome user!&#39;;
+} else {
+    echo &#39;Welcome guest.&#39;;
+    // Pretend they automatically login.
+    doLogin();
+}[/code]
+You can use the [i]session_regenerate_id();[/i] function to regenerate a session ID and optionally destroy all session data associated with it:
+[code=php]session_start();
+
+function doLogin() {
+    // Do other stuff...
+
+    // Set a new session ID for the user.
+    session_regenerate_id();
+    $_SESSION[&#39;loggedIn&#39;] = true;
+}
+
+if ($_SESSION[&#39;loggedIn&#39;]) {
+    echo &#39;Welcome user!&#39;;
+} else {
+    echo &#39;Welcome guest.&#39;;
+    // Pretend they automatically login.
+    doLogin();
+}[/code]
+
+What happens when a malicious user gets a hold of the session ID while the victim is already logged in? There are a number of ways to combat this problem:
+
+[ul][li]Check the User-Agent, Referrer, or IP of the user before loading the page to be sure it is the same user.[/li]
+[li]Used timed sessions which expire after a certain amount of time.[/li]
+[li]Regenerate a session ID on each new page load for a logged in user (with guests this isn&#39;t necessary).[/li][/ul]
+
+
+[b][size=12pt]Cross-Site Request Forgery (CSRF/XSRF)[/size][/b]
+[hr]
+[b]Problem:[/b] A CSRF attack is an attack where a malicious user makes a request to a website on behalf of a user with the permission to make the request. For example, a CSRF attack can be used on a victim where they log themselves out. It is possible for this attack to occur without the victim even knowing it did by taking advantage of some HTML code. Say for instance the victim is viewing a website badsite.com which contains an image tag in the body that looks like this:
+[code]&lt;img src=&quot;http://mysite.com/index.php?action=logout&quot; /&gt;[/code]
+Because the user is (assumed) to be logged in on mysite.com, his/her browser makes a request to that website assuming an image will be read, but instead there is no image and the request has been made. Because this request is valid and the user has permission on that website to log out, the victim is logged out. This method applies to any element which can make a request to another server or even using some Javascript. This attack has been used to buy products from online stores without the user even knowing about it!
+
+[b]Solution:[/b] Require the user to provide a [i]security token[/i] on actions where it can be processed with a link. For example, if the logout function required the victim to go to an intermediary page to logout, the original link wouldn&#39;t work. However, for an action where it is as simple as clicking a link, force the user to provide a security token the attacker cannot know about to make sure the action is legitimate.
+
+For forms, you can start by providing a hidden input field containing the token:
+[code]&lt;form action=&quot;http://mysite.com/buy.php&quot; method=&quot;get&quot;&gt;
+   &lt;input type=&quot;text&quot; name=&quot;product&quot; /&gt;
+   &lt;input type=&quot;text&quot; name=&quot;quantity&quot; /&gt;
+   &lt;input type=&quot;hidden&quot; name=&quot;csrf_token&quot; value=&quot;fdsu9r2023h9fsgg0j&quot; /&gt;
+&lt;/form&gt;[/code]
+The security token used in the form is generated server-sided. A common method is to make this randomized. SMF uses the session ID along with a pseudo-random number generator such as mt_rand() to provide a unique, random token. All that needs to be checked when logging out is the valid security token:
+[code=php]function doLogout() {
+   // The token they sent was not send or it did not match the global security token.
+   // Do not logout.
+   if (!isset($_REQUEST[&#39;csrf_token&#39;]) || strcmp($_REQUEST[&#39;csrf_token&#39;], $global_csrf_token) !== 0)
+      return false;
+
+   // Else, logout... destroy session... etc.
+   return true;
+}[/code]
+
+To illustrate this example further, try logging out of Moparscape with this link,
+http://moparisthebest.com/smf/index.php?action=logout
+
+Since the security token wasn&#39;t provided, you will get a &quot;session verification&quot; error.
+
+[b][size=12pt]Cross-Site Scripting (XSS)[/size][/b]
+[hr]
+[b]Problem:[/b] Cross-site scripting is a method malicious users use to take sensitive information such as cookie data. This sort of method involves embedding Javascript in the webpage. This is common in web applications where users can submit a form which shows data on the webpage, such as a forum where users post topics or replies to them. A vulnerable form takes the input given to it and outputs the data directly without escaping it or converting the character entities.
+
+[b]Solution:[/b] The solution is very simple and only requires that you convert the raw data into [i]character entities[/i]. Character entities are representations of the characters themselves that can be safely viewed on a webpage. For example, say a malicious user entered the following Javascript in a form:
+[code=javascript]&lt;script type=&quot;text/javascript&quot;&gt;alert(&quot;Vulnerable.&quot;);&lt;/script&gt;[/code]
+In a vulnerable script, this data will be embedded in the webpage as a typical comment (or whatever the app is intended to do to display the data). All users viewing the webpage will get a Javascript popup because the script is executed by the browser.
+
+In PHP, you can use the [i]htmlspecialchars()[/i] or [i]htmlentities()[/i] functions to safely convert any special characters into their entity equivalents. Be sure to pass the ENT_QUOTES to the flags parameter for each function to convert quotes as well. Therefore, any data which can contain HTML data should be passed through one of these functions, such as comments.
+[code=php]$message = &#39;&lt;script type=&quot;text/javascript&quot;&gt;alert(&quot;Vulnerable.&quot;);&lt;/script&gt;&#39;;
+echo htmlspecialchars($message, ENT_QUOTES);[/code]
+This will print:
+&lt;blockquote&gt;&amp;lt;script type=&amp;quot;text/javascript&amp;quot;&amp;gt;alert(&amp;quot;Vulnerable.&amp;quot;);&amp;lt;/script&amp;gt;&lt;/blockquote&gt;
+Which is safe to view and looks perfectly fine once rendered by the browser.
+
+*Note: Don&#39;t forget to escape the data if it goes into a database!
+
+
+Thanks for reading!</description>
+    
+    <lastBuildDate>Tue, 31 Dec 2013 22:47:50 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@RevengePK RevengePK]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/revengepk">@RevengePK</a> wrote:</p>
+          <blockquote>
+              <p>bump. Reading now. &lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/12</link>
+        <pubDate>Tue, 31 Dec 2013 22:47:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-12</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>Good read, and well explained. Props, I like it very much.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/11</link>
+        <pubDate>Sun, 21 Jul 2013 23:35:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-11</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sppt, post:9, topic:525537”][quote author=justaguy link=topic=644280.msg4336263#msg4336263 date=1374425065]</p>
+<aside class="quote">
+<blockquote>
+<p><a href="http://johnroach.info/2011/02/17/why-mysql_real_escape_string-isnt-enough-to-stop-sql-injection-attacks/" data-bbcode="true" rel="nofollow noopener">mysql_real_escape_string is horrible ‘fix’ for SQL injection and should not be used at all, use prepared statements everywhere if you’ve got half a brain</a></p>
+</blockquote>
+</aside>
+<p>Anyone mindful of security will make sure that is actually an int before directly placing it in a query. The escape functions are supposed to escape <span class="bbcode-i">strings</span>. But you have a point sppt, and I should include an explanation in the OP.</p>
+<p>And to anyone who thinks using prepared statements <span class="bbcode-b">to escape strings</span> are better than using the real escape functions provided by the legacy database drivers are wrong because all the object-oriented drivers (such as MySQLi) and PDO use the real escape functions.<br>
+[/quote]<br>
+The thing about prepared statements that gives it a huge preference is the fact that all languages have support for this, so if you learn to apply it in possibly one of the worst languages, you can do it in all of em :)[/quote]</p>
+<p>Oh don’t worry, prepared statements are definitely what I would recommend more than a real escape function anyway. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/10</link>
+        <pubDate>Sun, 21 Jul 2013 22:55:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-10</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@sppt sppt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sppt">@sppt</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“justaguy, post:8, topic:525537”][quote author=sppt link=topic=644280.msg4336221#msg4336221 date=1374418451]<br>
+<a href="http://johnroach.info/2011/02/17/why-mysql_real_escape_string-isnt-enough-to-stop-sql-injection-attacks/" data-bbcode="true">mysql_real_escape_string is horrible ‘fix’ for SQL injection and should not be used at all, use prepared statements everywhere if you’ve got half a brain</a><br>
+[/quote]</p>
+<p>Anyone mindful of security will make sure that is actually an int before directly placing it in a query. The escape functions are supposed to escape <span class="bbcode-i">strings</span>. But you have a point sppt, and I should include an explanation in the OP.</p>
+<p>And to anyone who thinks using prepared statements <span class="bbcode-b">to escape strings</span> are better than using the real escape functions provided by the legacy database drivers are wrong because all the object-oriented drivers (such as MySQLi) and PDO use the real escape functions.[/quote]<br>
+The thing about prepared statements that gives it a huge preference is the fact that all languages have support for this, so if you learn to apply it in possibly one of the worst languages, you can do it in all of em <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/9</link>
+        <pubDate>Sun, 21 Jul 2013 22:09:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-9</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="6" data-topic="525537">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/sppt/40/44_1.png" class="avatar"> sppt:</div>
+<blockquote>
+<p><a href="http://johnroach.info/2011/02/17/why-mysql_real_escape_string-isnt-enough-to-stop-sql-injection-attacks/" data-bbcode="true" rel="nofollow noopener">mysql_real_escape_string is horrible ‘fix’ for SQL injection and should not be used at all, use prepared statements everywhere if you’ve got half a brain</a></p>
+</blockquote>
+</aside>
+<p>Anyone mindful of security will make sure that is actually an int before directly placing it in a query. The escape functions are supposed to escape <span class="bbcode-i">strings</span>. But you have a point sppt, and I should include an explanation in the OP.</p>
+<p>And to anyone who thinks using prepared statements <span class="bbcode-b">to escape strings</span> are better than using the real escape functions provided by the legacy database drivers are wrong because all the object-oriented drivers (such as MySQLi) and PDO use the real escape functions.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/8</link>
+        <pubDate>Sun, 21 Jul 2013 16:44:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-8</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@Teem_Rocket Teem_Rocket]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/teem_rocket">@Teem_Rocket</a> wrote:</p>
+          <blockquote>
+              <ul>
+<li>Rep for joo.</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/7</link>
+        <pubDate>Sun, 21 Jul 2013 14:58:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-7</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@sppt sppt]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sppt">@sppt</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://johnroach.info/2011/02/17/why-mysql_real_escape_string-isnt-enough-to-stop-sql-injection-attacks/" data-bbcode="true">mysql_real_escape_string is horrible ‘fix’ for SQL injection and should not be used at all, use prepared statements everywhere if you’ve got half a brain</a></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/6</link>
+        <pubDate>Sun, 21 Jul 2013 14:54:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-6</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@Ruby_Forums_Coder Ruby]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ruby_forums_coder">@Ruby_Forums_Coder</a> wrote:</p>
+          <blockquote>
+              <p>Good read and will definitely come in handy for the typical php developer. Good work, Anthony.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/5</link>
+        <pubDate>Sun, 21 Jul 2013 14:00:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-5</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@RSCShadow RSCShadow]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rscshadow">@RSCShadow</a> wrote:</p>
+          <blockquote>
+              <p>I’d also look into Clickjacking, pretty interesting stuff.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/4</link>
+        <pubDate>Sat, 20 Jul 2013 09:14:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-4</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@Vain1 Vain_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vain1">@Vain1</a> wrote:</p>
+          <blockquote>
+              <p>+1 webguy</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/3</link>
+        <pubDate>Sat, 20 Jul 2013 02:59:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-3</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Good read and some very helpful information in this, thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/2</link>
+        <pubDate>Sat, 20 Jul 2013 00:40:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-2</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+      <item>
+        <title>How To Secure Web Applications</title>
+        <dc:creator><![CDATA[@justaguy justaguy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/justaguy">@justaguy</a> wrote:</p>
+          <blockquote>
+              <p>Throughout the RSPS community, security seems to be a significant issue to tackle. This is especially the case in web applications where the risks can even apply to total strangers visiting your site. This guide will attempt to help tackle that problem by providing various of the most common attacks and how to mitigate or completely avoid them for <span class="bbcode-i">any</span> web application, not just those built for RSPS.</p>
+<p>The examples provided are in PHP but every problem and solution apply to all web applications unless noted! Anyone else interested in providing information or applying solutions in other languages/frameworks (such as Node.js, ASP, etc.) please let me know.</p>
+<p><span class="bbcode-b">[size=12pt]Securing Passwords[/size]</span><br>
+[hr]<br>
+<span class="bbcode-b">Problem:</span> Passwords stored in plaintext or with an insecure algorithm may allow hackers who have accessed the database to compromise users’ accounts on the website or possibly on other websites if they use the same passwords.</p>
+<p><span class="bbcode-b">Solution:</span> I have already written a guide on securing passwords using Blowfish. You can find that guide <a href="http://www.moparisthebest.com/smf/index.php/topic,562366.0.html" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+<p>For anyone not using Blowfish, there are some points you should follow:</p>
+<p>[ul][li]Force users to have long, unique passwords - Relatively simple passwords are easier to break or guess.[/li]<br>
+[li]Have a long, random salt generated - This helps against bruteforces and rainbow tables.[/li]<br>
+[li]Use a slow algorithm - This will slow hackers down when trying to bruteforce the passwords. Blowfish is good for this, but you could also use the popular SHA-family functions with several rounds.[/li][/ul]</p>
+<p><span class="bbcode-b">[size=12pt]SQL Injection[/size]</span><br>
+[hr]<br>
+<span class="bbcode-b">Problem:</span> Allowing unescaped query data to be inserted into an SQL query can allow a hacker to exploit the database. Take the following code for example:</p>
+<p><code>$query = "SELECT * FROM members_table WHERE username = '$username'";
+$result = mysql_query($query);
+// ...</code><br>
+Now let’s say a user intending to exploit this weakness puts <span class="bbcode-b">’ OR 1=1;\x00</span> for the form’s data. This transforms the query into:</p>
+<pre><code class="lang-auto">SELECT * FROM members_table WHERE username = '' OR 1=1;</code></pre>
+<p>Since 1=1 will always evaluate to true, the WHERE clause becomes useless and all users in the members_table are selected and returned, including moderators or administrators. But this is only the basics of what users can do to manipulate the query; other attacks can include executing other SQL commands such as: DROP, UPDATE, INSERT INTO, etc.</p>
+<p><span class="bbcode-b">Solution:</span> The problem with the form earlier is that it didn’t properly escape the data being sent to the query. The culprit was the lone single-quote (’) which, when embedded in the query, ended the username string and allowed a valid SQL condition to be placed. Note that the single-quote isn’t the only dangerous character which needs to be escaped, different database systems require certain characters to be escaped otherwise they can compromise the query like the single-quote did. Additionally, prepared statements can aso be used validate the data.</p>
+<p>A solution to the problem is to use the <span class="bbcode-i">*_real_escape_string()</span> functions provided by the database drivers in the PHP library. For example, when using the MySQL driver you should use the <span class="bbcode-i">mysql_real_escape_string()</span> function before passing user-submitted data to be embedded in a query. When using SQLite, you would use <span class="bbcode-i">sqlite_escape_string()</span>. These functions should be used instead of a function such as <span class="bbcode-i">addslashes()</span> because these driver-specific functions protect against all characters that are considered dangerous for the database system. For instance, mysql_real_escape_string() protects against: \x00, \n, \r, , ', " and \x1a (NUL, new lines, backslash, quotes, and EOF marker). The following updated code would protect the query from SQL injection:</p>
+<p><code>$username = mysql_real_escape_string($username);
+$query = "SELECT * FROM members_table WHERE username = '$username'";
+$result = mysql_query($query);
+// ...</code><br>
+Trying to use the same input in the form earlier would execute the following query:</p>
+<pre><code class="lang-auto">SELECT * FROM members_table WHERE username = '\' OR 1=1; \0'</code></pre>
+<p>As you can see, this creates no danger to the database and the data is evaluated as a string.</p>
+<p>The other solution is a more modern approach and uses prepared statements. Prepared statements are pre-compiled queries that are more efficient for databases to execute when a query is being used multiple times. They also provide placeholders so the data being embedded can be properly escaped. This can be accomplished using an abstraction-layer such as PDO:</p>
+<p><code>$query = "SELECT * FROM members_table WHERE username = :user";
+$stmt = $dbh-&gt;prepare($query);
+$stmt-&gt;bindValue(':user', $username, PDO::PARAM_STR);
+$stmt-&gt;execute();
+// ...</code><br>
+Using placeholders and binding a value to the placeholder allows the data in the $username variable to be properly escaped. Also, PDO adds the quotes to the query since the placeholder is a string.</p>
+<p>Other abstraction-layers and newer database drivers such as MySQLi provide prepared statements.</p>
+<p>Also, sppt brought up a good point about injecting a datatype that wasn’t expected as input (such as a string in place of an integer), you can read his reply <a href="http://www.moparisthebest.com/smf/index.php/topic,644280.msg4336221.html#msg4336221" data-bbcode="true" rel="nofollow noopener">here</a> and my response <a href="http://www.moparisthebest.com/smf/index.php/topic,644280.msg4336263.html#msg4336263" data-bbcode="true" rel="nofollow noopener">here</a>.</p>
+<p><span class="bbcode-b">[size=12pt]Session Fixation[/size]</span><br>
+[hr]<br>
+<span class="bbcode-b">Problem:</span> Session fixation is a form of <span class="bbcode-i">session hijacking</span> where a malicious user learns the session ID of another user and attempts to use it to gain access as that user. For example, this occurs if a victim user sends a link containing their session ID to a malicious user like so:</p>
+<blockquote>Hey dude! I just read this really cool article about turtles here at http://turtlez.com/about.php?PHPSESSID=1234</blockquote>
+Usually you will see these sort of links generated for guests viewing the webpage of a site which generates a session for the guest viewing their website. But what happens if the victim logs in and their session isn't changed? This means when the malicious user visits the site again with the same session ID as the victim who logged in, the server assumes this is the same person. The same could happen if the malicious user sent the link with a defined session ID to a victim. Take for example the following scenario:
+<blockquote>Evil Anthony: hey, check out this site that you're an administrator on http://mysite.com/index.php?PHPSESSID=lol123
+Good Anthony: Oh, hey thanks!
+Evil Anthony: don't forget to login so I can fixate your session and eventually login as you because the software is vulnerable.. MUAHAHAHAHA!! Uh, I mean I have to go!! uh cya.
+Good Anthony: sounds like a plan! cya later m8. brb logging in.</blockquote>
+Once the good Anthony logged in to this website he has special permissions in, evil Anthony decides to visit the same site with the same session ID impersonating the good Anthony wrecking havoc on the website.
+<p>This same process can be done with cookie-based sessions where the malicious user uses a technique such as XSS to get the cookie data of the user and subsequently modifies his/her cookie to reflect the session ID of the victim.</p>
+<p><span class="bbcode-b">Solution:</span> A solution to this problem is very simple and can be done during login. When the victim user logs in, you can regenerate a session ID so that the ID they had as a guest no longer exists and the malicious user who has the victim’s guest ID can not use it to impersonate the victim. An example of a login system vulnerable to a session fixation attack looks like:</p>
+<p>[code=php]session_start();</p>
+<p>function doLogin() {<br>
+// Do other stuff…<br>
+$_SESSION[‘loggedIn’] = true;<br>
+}</p>
+<p>if ($_SESSION[‘loggedIn’]) {<br>
+echo ‘Welcome user!’;<br>
+} else {<br>
+echo ‘Welcome guest.’;<br>
+// Pretend they automatically login.<br>
+doLogin();<br>
+}[/code]<br>
+You can use the <span class="bbcode-i">session_regenerate_id();</span> function to regenerate a session ID and optionally destroy all session data associated with it:</p>
+<p>[code=php]session_start();</p>
+<p>function doLogin() {<br>
+// Do other stuff…</p>
+<pre><code>// Set a new session ID for the user.
+session_regenerate_id();
+$_SESSION['loggedIn'] = true;
+</code></pre>
+<p>}</p>
+<p>if ($_SESSION[‘loggedIn’]) {<br>
+echo ‘Welcome user!’;<br>
+} else {<br>
+echo ‘Welcome guest.’;<br>
+// Pretend they automatically login.<br>
+doLogin();<br>
+}[/code]</p>
+<p>What happens when a malicious user gets a hold of the session ID while the victim is already logged in? There are a number of ways to combat this problem:</p>
+<p>[ul][li]Check the User-Agent, Referrer, or IP of the user before loading the page to be sure it is the same user.[/li]<br>
+[li]Used timed sessions which expire after a certain amount of time.[/li]<br>
+[li]Regenerate a session ID on each new page load for a logged in user (with guests this isn’t necessary).[/li][/ul]</p>
+<p><span class="bbcode-b">[size=12pt]Cross-Site Request Forgery (CSRF/XSRF)[/size]</span><br>
+[hr]<br>
+<span class="bbcode-b">Problem:</span> A CSRF attack is an attack where a malicious user makes a request to a website on behalf of a user with the permission to make the request. For example, a CSRF attack can be used on a victim where they log themselves out. It is possible for this attack to occur without the victim even knowing it did by taking advantage of some HTML code. Say for instance the victim is viewing a website <a href="http://badsite.com" rel="nofollow noopener">badsite.com</a> which contains an image tag in the body that looks like this:</p>
+<pre><code class="lang-auto">&lt;img src="http://mysite.com/index.php?action=logout" /&gt;</code></pre>
+<p>Because the user is (assumed) to be logged in on <a href="http://mysite.com" rel="nofollow noopener">mysite.com</a>, his/her browser makes a request to that website assuming an image will be read, but instead there is no image and the request has been made. Because this request is valid and the user has permission on that website to log out, the victim is logged out. This method applies to any element which can make a request to another server or even using some Javascript. This attack has been used to buy products from online stores without the user even knowing about it!</p>
+<p><span class="bbcode-b">Solution:</span> Require the user to provide a <span class="bbcode-i">security token</span> on actions where it can be processed with a link. For example, if the logout function required the victim to go to an intermediary page to logout, the original link wouldn’t work. However, for an action where it is as simple as clicking a link, force the user to provide a security token the attacker cannot know about to make sure the action is legitimate.</p>
+<p>For forms, you can start by providing a hidden input field containing the token:</p>
+<p>[code]<br>
+<br>
+<br>
+</p>
+[/code]
+The security token used in the form is generated server-sided. A common method is to make this randomized. SMF uses the session ID along with a pseudo-random number generator such as mt_rand() to provide a unique, random token. All that needs to be checked when logging out is the valid security token:
+[code=php]function doLogout() {
+   // The token they sent was not send or it did not match the global security token.
+   // Do not logout.
+   if (!isset($_REQUEST['csrf_token']) || strcmp($_REQUEST['csrf_token'], $global_csrf_token) !== 0)
+      return false;
+<p>// Else, logout… destroy session… etc.<br>
+return true;<br>
+}[/code]</p>
+<p>To illustrate this example further, try logging out of Moparscape with this link,<br>
+<aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://forum.moparisthebest.com/uploads/default/original/2X/1/1f0dc167bcf798bdbd70b03bf0fd1bc836e54e1a.png" class="site-icon" width="32" height="32">
+      <a href="https://forum.moparisthebest.com/?action=logout?action=logout" target="_blank">moparisthebest.com</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://forum.moparisthebest.com/images/default-apple-touch-icon.png" class="thumbnail onebox-avatar" width="144" height="144">
+
+<h3><a href="https://forum.moparisthebest.com/?action=logout?action=logout" target="_blank">moparisthebest.com</a></h3>
+
+<p>programming, irc, cars</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+</p>
+<p>Since the security token wasn’t provided, you will get a “session verification” error.</p>
+<p><span class="bbcode-b">[size=12pt]Cross-Site Scripting (XSS)[/size]</span><br>
+[hr]<br>
+<span class="bbcode-b">Problem:</span> Cross-site scripting is a method malicious users use to take sensitive information such as cookie data. This sort of method involves embedding Javascript in the webpage. This is common in web applications where users can submit a form which shows data on the webpage, such as a forum where users post topics or replies to them. A vulnerable form takes the input given to it and outputs the data directly without escaping it or converting the character entities.</p>
+<p><span class="bbcode-b">Solution:</span> The solution is very simple and only requires that you convert the raw data into <span class="bbcode-i">character entities</span>. Character entities are representations of the characters themselves that can be safely viewed on a webpage. For example, say a malicious user entered the following Javascript in a form:</p>
+<pre><code class="lang-auto">&lt;script type="text/javascript"&gt;alert("Vulnerable.");&lt;/script&gt;</code></pre>
+<p>In a vulnerable script, this data will be embedded in the webpage as a typical comment (or whatever the app is intended to do to display the data). All users viewing the webpage will get a Javascript popup because the script is executed by the browser.</p>
+<p>In PHP, you can use the <span class="bbcode-i">htmlspecialchars()</span> or <span class="bbcode-i">htmlentities()</span> functions to safely convert any special characters into their entity equivalents. Be sure to pass the ENT_QUOTES to the flags parameter for each function to convert quotes as well. Therefore, any data which can contain HTML data should be passed through one of these functions, such as comments.</p>
+<p><code>$message = '&lt;script type="text/javascript"&gt;alert("Vulnerable.");&lt;/script&gt;';
+echo htmlspecialchars($message, ENT_QUOTES);</code><br>
+This will print:</p>
+<blockquote>&lt;script type="text/javascript"&gt;alert("Vulnerable.");&lt;/script&gt;</blockquote>
+Which is safe to view and looks perfectly fine once rendered by the browser.
+<p>*Note: Don’t forget to escape the data if it goes into a database!</p>
+<p>Thanks for reading!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537/1</link>
+        <pubDate>Fri, 19 Jul 2013 23:58:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-525537-1</guid>
+        <source url="https://forum.moparisthebest.com/t/how-to-secure-web-applications/525537.rss">How To Secure Web Applications</source>
+      </item>
+  </channel>
+</rss>

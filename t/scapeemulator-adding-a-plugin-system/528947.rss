@@ -1,0 +1,1332 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[ScapeEmulator] Adding a Plugin System</title>
+    <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947</link>
+    <description>This tutorial is not easy, I do not hold your hand through all the steps. You need basic java knowledge and to follow ALL the instructions. If I left out anything, leave a comment and let me know.
+
+[U]Personal Note[/U]
+
+ScapeEmulator is beautiful, it really takes into consideration a lot of mechanics you need for a server in order to develop it in a efficient manner. I see it as Apollo 2.0, and takes a lot of the crud out of Apollo that isn&#39;t needed/is dead weight. I suggest if you have a modern emulator project (400+) that you start using this base. 
+
+[U]About[/U]
+
+This plugin system is for the ScapeEmulator base created by Graham and Jonneh. It uses JRuby to handle messages received from the client and currently supports command and button messages. Any other support will have to be done by yourself, I havent done it yet (at the point this was posted) so I cannot help you yet. The plugins are automatically loaded from the plugin data directory of the game module, the JSON file describes the scripts that will be loaded and the plugin dependencies. 
+
+[B]WARNING:[/B] Circular plugin dependencies can be created by user error.
+
+Plugins will be loaded in order of their dependencies, then each script for a plugin will be loaded in their listed order. 
+
+The bootstrap file contains a module and static class that interfaces the scripting to the server. You shouldnt edit this file unless you need to add in a new binding.
+
+[U]Instructions[/U]
+
+[B]Step One:[/B]
+
+Add these dependencies to the game module pom.xml
+
+[code]
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.codehaus.jackson&lt;/groupId&gt;
+      &lt;artifactId&gt;jackson-core-asl&lt;/artifactId&gt;
+      &lt;version&gt;1.9.13&lt;/version&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+        &lt;groupId&gt;org.jruby&lt;/groupId&gt;
+        &lt;artifactId&gt;jruby-core&lt;/artifactId&gt;
+        &lt;version&gt;1.7.0.RC1&lt;/version&gt;
+    &lt;/dependency&gt;
+[/code]
+
+[B]Step Two:[/B]
+
+Create a new package in the game module called &#39;plugin&#39;, put each of these java files in that package
+
+RubyScriptEnvironment.java
+
+[code]
+
+package net.scapeemulator.game.plugin;
+
+import javax.script.*;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class RubyScriptEnvironment {
+
+    /**
+     * The script engine manager for all the script environments.
+     */
+    private static final ScriptEngineManager manager = new ScriptEngineManager();
+
+    /**
+     * The collection of scripts that have been compiled.
+     */
+    private Map&lt;String, CompiledScript&gt; scripts;
+
+    /**
+     * The script engine for this environment.
+     */
+    private ScriptEngine engine;
+
+    /**
+     * Constructs a new {@link RubyScriptEnvironment};
+     */
+    public RubyScriptEnvironment() {
+        scripts = new HashMap&lt;&gt;();
+        engine = manager.getEngineByName(&quot;jruby&quot;);
+        if(engine == null) {
+            throw new NullPointerException();
+        }
+    }
+
+    /**
+     * Sets the context of the script environment.
+     *
+     * @param context   The environment context.
+     */
+    public void setContext(ScriptContext context) {
+        engine.getBindings(javax.script.ScriptContext.GLOBAL_SCOPE).put(&quot;ctx&quot;, context);
+    }
+
+    /**
+     * Evalulates a script, the script must have been previously compiled.
+     *
+     * @param name              The name of the script to evaluate.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void eval(String name) throws ScriptException {
+        CompiledScript compiledScript = scripts.get(name);
+        if(compiledScript == null) {
+            throw new RuntimeException(&quot;script does not exist&quot;);
+        }
+        compiledScript.eval();
+    }
+
+    /**
+     * Loads a script.
+     *
+     * @param script            The script to load.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void load(Script script) throws ScriptException {
+        Compilable compilable = (Compilable) engine;
+        CompiledScript compiledScript = compilable.compile(script.getSource());
+        scripts.put(script.getName(), compiledScript);
+    }
+
+    /**
+     * Evaluates a script.
+     *
+     * @param script            The script to evaluate.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void eval(Script script) throws ScriptException {
+        if(scripts.containsKey(script.getName())) {
+            eval(script.getName());
+        } else {
+            Compilable compilable = (Compilable) engine;
+            CompiledScript compiledScript = compilable.compile(script.getSource());
+            scripts.put(script.getName(), compiledScript);
+            compiledScript.eval();
+        }
+    }
+}
+[/code]
+
+Script.java
+
+[code]
+
+package net.scapeemulator.game.plugin;
+
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class Script {
+
+    /**
+     * The name of the script.
+     */
+    private String name;
+
+    /**
+     * The source of the script.
+     */
+    private Reader source;
+
+    /**
+     * Constructs a new {@link Script};
+     * @param file The file of the script to create.
+     * @throws IOException An I/O exception was thrown while creating the script.
+     */
+    public Script(File file) throws IOException {
+        this(file.getCanonicalPath(), new FileReader(file));
+    }
+
+    /**
+     * Constructs a new {@link Script};
+     * @param name      The name of the script.
+     * @param source    The source of the script.
+     */
+    public Script(String name, Reader source) {
+        this.name = name;
+        this.source = source;
+    }
+
+    /**
+     * Gets the source of the script.
+     *
+     * @return  The source.
+     */
+    public Reader getSource() {
+        return source;
+    }
+
+    /**
+     * Gets the name of the script.
+     *
+     * @return  The name of the script.
+     */
+    public String getName() {
+        return name;
+    }
+}
+[/code]
+
+ScriptContext.java
+[code]
+
+package net.scapeemulator.game.plugin;
+
+import net.scapeemulator.game.button.ButtonDispatcher;
+import net.scapeemulator.game.button.ButtonHandler;
+import net.scapeemulator.game.command.CommandDispatcher;
+import net.scapeemulator.game.command.CommandHandler;
+
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class ScriptContext {
+
+    /**
+     * The list of button handlers.
+     */
+    private List&lt;ButtonHandler&gt; buttonHandlers = new LinkedList&lt;&gt;();
+
+    /**
+     * The list of command handlers.
+      */
+    private List&lt;CommandHandler&gt; commandHandlers = new LinkedList&lt;&gt;();
+
+    /**
+     * Constructs a new {@link ScriptContext};
+     */
+    public ScriptContext() {}
+
+    /**
+     * Adds a button dispatcher decorator to the list of decorators.
+     * @param handler The button handler to add.
+     */
+    public void addButtonHandler(ButtonHandler handler) {
+        buttonHandlers.add(handler);
+    }
+
+    /**
+     * Decorates a button dispatcher with all the button handlers registered to the context.
+     * @param dispatcher The dispatcher to decorate.
+     */
+    public void decorateButtonDispatcher(ButtonDispatcher dispatcher) {
+        for(ButtonHandler handler : buttonHandlers) {
+            dispatcher.bind(handler);
+        }
+    }
+
+    /**
+     * Adds a button dispatcher decorator to the list of decorators.
+     * @param handler The button handler to add.
+     */
+    public void addCommandHandler(CommandHandler handler) {
+        commandHandlers.add(handler);
+    }
+
+    /**
+     * Decorates a button dispatcher with all the button handlers registered to the context.
+     * @param dispatcher The dispatcher to decorate.
+     */
+    public void decorateCommandDispatcher(CommandDispatcher dispatcher) {
+        for(CommandHandler handler : commandHandlers) {
+            dispatcher.bind(handler);
+        }
+    }
+}
+[/code]
+
+PluginLoader.java
+[code]
+
+package net.scapeemulator.game.plugin;
+
+import org.codehaus.jackson.JsonFactory;
+import org.codehaus.jackson.JsonParser;
+import org.codehaus.jackson.JsonToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.script.ScriptException;
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map.Entry;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class PluginLoader {
+
+    /**
+     * The logger for this class.
+     */
+    private static final Logger logger = LoggerFactory.getLogger(PluginLoader.class);
+
+    /**
+     * The JSON factory to create new JSON parsers with.
+     */
+    private final JsonFactory factory = new JsonFactory();
+
+    /**
+     * The ruby script environment for the plugin loader.
+     */
+    private RubyScriptEnvironment scriptEnvironment = new RubyScriptEnvironment();
+
+    /**
+     * The map that contains all the parsed plugin data.
+     */
+    private final Map&lt;String, PluginData&gt; parsedPluginData = new HashMap&lt;&gt;();
+
+    /**
+     * The set of plugins that have had their scripts loaded.
+     */
+    private Set&lt;String&gt; loadedPlugins = new HashSet&lt;&gt;();
+
+    /**
+     * Constructs a new {@link PluginLoader};
+     */
+    public PluginLoader() {}
+
+    /**
+     * Sets the context for the script environment.
+     * @param context The context for the environment.
+     */
+    public void setContext(ScriptContext context) {
+        scriptEnvironment.setContext(context);
+    }
+
+    /**
+     * Loads all the plugins from the specified directory.
+     */
+    public void load(String dir) throws IOException, ScriptException {
+        load(new File(dir));
+    }
+
+    /**
+     * Loads all the plugins from the specified file directory.
+     */
+    public void load(File dir) throws IOException, ScriptException {
+        scriptEnvironment.eval(new Script(new File(dir, &quot;bootstrap.rb&quot;)));
+        for(File file : dir.listFiles()) {
+            
+            /* Skip over non-directory files */
+            if(!file.isDirectory()) {
+                continue;
+            }
+
+            File dataFile = new File(file, &quot;plugin.json&quot;);
+
+            /* Check to see if the json data file exists */
+            if(!dataFile.exists()) {
+                logger.warn(&quot;missing plugin.json file from &#39;&quot; + file.getName() + &quot;&#39; plugin&quot;);
+                return;
+            }
+
+            JsonParser parser = factory.createJsonParser(dataFile);
+
+            /* Check to see if the JSON structure start is correct */
+            if(parser.nextToken() != JsonToken.START_OBJECT) {
+                throw new IOException();
+            }
+
+            /* Load the plugin data from the JSON file */
+            PluginData pluginData = new PluginData();
+            while(parser.nextToken() != JsonToken.END_OBJECT) {
+                String currentName = parser.getCurrentName();
+                switch(currentName.toLowerCase()) {
+                    case &quot;scripts&quot;:
+                        /* Check to see if the next token is valid */
+                        if(parser.nextToken() != JsonToken.START_ARRAY) {
+                            throw new IOException();
+                        }
+                        
+                        while(parser.nextToken() != JsonToken.END_ARRAY) {
+                            pluginData.addScript(parser.getText());
+                        }
+                        break;
+
+                    case &quot;dependencies&quot;:
+                        /* Check to see if the next token is valid */
+                        if(parser.nextToken() != JsonToken.START_ARRAY) {
+                            throw new IOException();
+                        }
+
+                        while(parser.nextToken() != JsonToken.END_ARRAY) {
+                            pluginData.addDependency(parser.getText());
+                        }
+                        break;
+                }
+            }
+            parsedPluginData.put(file.getName(), pluginData);
+        }
+
+        /* Load each of the plugins from its data */
+        for(Entry&lt;String, PluginData&gt; entry : parsedPluginData.entrySet()) {
+
+            /* Check if the plugin has already been loaded */
+            if(loadedPlugins.contains(entry.getKey())) {
+                continue;
+            }
+
+            loadPlugin(dir, entry.getKey(), entry.getValue());
+        }
+
+        logger.info(&quot;PluginLoader loaded &quot; + loadedPlugins.size() + &quot; plugins...&quot;);
+    }
+
+    /**
+     * Loads a plugin from the specified root directory, name, and plugin data.
+     */
+    private void loadPlugin(File dir, String name, PluginData data) throws IOException, ScriptException {
+        /* Check if the plugin has already been loaded */
+        if(loadedPlugins.contains(name)) {
+            return;
+        }
+
+        /* Load all of the dependencies first */
+        for(String pluginName : data.getDependencies()) {
+
+            /* Check if the dependency is valid */
+            if(!parsedPluginData.containsKey(pluginName)) {
+                continue;
+            }
+
+            loadPlugin(dir, pluginName, parsedPluginData.get(pluginName));
+        }
+        
+        File scriptDir = new File(dir, name);
+
+        /* Evaluate each of the scripts */
+        for(String scriptName : data.getScripts()) {
+            scriptEnvironment.eval(new Script(new File(scriptDir, scriptName)));
+        }
+
+        /* Note that the plugin has been loaded */
+        loadedPlugins.add(name);
+    }
+}
+[/code]
+
+PluginData.java
+
+[code]
+
+package net.scapeemulator.game.plugin;
+
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class PluginData {
+
+    /**
+     * The list of scripts for the plugin.
+     */
+    private List&lt;String&gt; scripts = new LinkedList&lt;&gt;();
+
+    /**
+     * The list of dependencies for the plugin.
+     */
+    private List&lt;String&gt; dependencies = new LinkedList&lt;&gt;();
+
+    /**
+     * Constructs a new {@link PluginData};
+     */
+    public PluginData() {}
+
+    /**
+     * Adds a script to the scripts list.
+     * @param file The name of the script.
+     */
+    public void addScript(String file) {
+        scripts.add(file);
+    }
+
+    /**
+     * Adds a dependency to the dependency list.
+     * @param dependency The name of the dependency.
+     */
+    public void addDependency(String dependency) {
+        scripts.add(dependency);
+    }
+
+    /**
+     * Gets the list of scripts.
+     * @return The scripts.
+     */
+    public List&lt;String&gt; getScripts() {
+        return scripts;
+    }
+
+    /**
+     * Gets the list of plugin dependencies.
+     * @return The plugin dependencies.
+     */
+    public List&lt;String&gt; getDependencies() {
+        return dependencies;
+    }
+}
+[/code]
+
+[B]Step Three: [/B]
+
+In the GameServer class in the game module, create a new field for the PluginLoader
+
+In the constructor, add the following code after the MessageDispatcher field is instantiated.
+
+[code]
+        /* load the server pluginLoader */
+        ScriptContext scriptContext = new ScriptContext();
+        pluginLoader = new PluginLoader();
+        pluginLoader.setContext(scriptContext);
+        pluginLoader.load(&quot;./data/plugins/&quot;);
+
+        /* decorate each of the dispatchers */
+        messageDispatcher.decorateDispatchers(scriptContext);
+[/code]
+
+[B]Step Four: [/B]
+
+Add this method to the MessageDispatcher class of the game module:
+
+[code]
+ public void decorateDispatchers(ScriptContext context) {
+        context.decorateButtonDispatcher(buttonDispatcher);
+        context.decorateCommandDispatcher(commandDispatcher);
+    }
+[/code]
+
+Create a CommandDispatcher field in the MessageDispatcher class of the game module, instantiate the field immediately. Name the field &#39;commandDispatcher&#39;.
+
+[B]Step Five: [/B]
+
+In the MessageDispatcher constructor, update the CommandMessageHandler constructor to take the &#39;commandDispatcher&#39; field as a parameter.
+
+Update the CommandMessageHandler to the following code:
+
+CommandMessageHandler.java
+
+[code]
+package net.scapeemulator.game.msg.handler;
+
+import net.scapeemulator.game.command.CommandDispatcher;
+import net.scapeemulator.game.model.Player;
+import net.scapeemulator.game.msg.CommandMessage;
+
+public final class CommandMessageHandler extends MessageHandler&lt;CommandMessage&gt; {
+
+    private final CommandDispatcher dispatcher;
+
+	public CommandMessageHandler(CommandDispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
+
+	@Override
+	public void handle(Player player, CommandMessage message) {
+		dispatcher.handle(player, message.getCommand());
+	}
+
+}
+[/code]
+
+[B]Step Six: [/B]
+
+In the game module data directory, create a new file directory called &#39;plugins&#39;. Put the following ruby file in that directory:
+
+bootstrap.rb
+
+[code]
+require &#39;java&#39;
+
+java_import &#39;net.scapeemulator.game.button.ButtonHandler&#39;
+java_import &#39;net.scapeemulator.game.command.CommandHandler&#39;
+
+module RuneEmulator
+	class Bootstrap
+		class &lt;&lt; self
+			def bind_cmd(name, &amp;block)
+				$ctx.add_command_handler(ProcCommandHandler.new(name, block))
+			end
+
+			def bind_button(id, &amp;block)
+				$ctx.add_button_handler(ProcButtonHandler.new(id, block))
+			end
+		end
+
+		class ProcButtonHandler &lt; ButtonHandler
+			def initialize(id, proc)
+				super(id)
+				@proc = proc
+			end
+
+			def handle(player, slot, parameter)
+				@proc.call player, slot, parameter
+			end
+		end
+
+		class ProcCommandHandler &lt; CommandHandler
+			def initialize(name, proc)
+				super(name)
+				@proc = proc
+			end
+
+			def handle(player, args)
+				@proc.call player, args
+			end
+		end
+	end
+end
+[/code]
+
+[B]Step Seven (Optional): [/B]
+
+Create a new directory in the plugin data directory called test, and place the following files in that directory:
+
+plugin.json
+
+[code]
+{
+	&quot;scripts&quot; : [ &quot;test.rb&quot; ],
+	&quot;dependencies&quot; : []
+}
+[/code]
+
+test.rb
+
+[code]
+RuneEmulator::Bootstrap.bind_button(271) { |player, slot, param|
+	p &quot;Button test&quot;
+}
+
+RuneEmulator::Bootstrap.bind_cmd(&#39;test&#39;) { |player, args|
+	p &quot;Command test&quot;
+}
+[/code]
+
+[B]Finish[/B]
+
+You now have a plugin system that allows you to script out commands and buttons in ruby.
+
+[U]Credits:[/U]
+
+- Graham
+- Jonneh</description>
+    
+    <lastBuildDate>Wed, 28 Aug 2013 02:02:03 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[ScapeEmulator] Adding a Plugin System</title>
+        <dc:creator><![CDATA[@Vain1 Vain_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vain1">@Vain1</a> wrote:</p>
+          <blockquote>
+              <p>I’ve set it up myself just to feel the nostalgia, and the code itself is well written. will probably use it for EzLeech if I ever progress further and just port it to multiple revisions.<br>
+will use this regardless.</p>
+<p>good luck on your project as well.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/5</link>
+        <pubDate>Wed, 28 Aug 2013 02:02:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528947-5</guid>
+        <source url="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss">[ScapeEmulator] Adding a Plugin System</source>
+      </item>
+      <item>
+        <title>[ScapeEmulator] Adding a Plugin System</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Vain_, post:2, topic:528947”]could be explained more thoroughly, but you’ve explained it enough for comprehension.<br>
+kudos on the contribution</p>
+<p>offtopic; are you using scapeemulator for evelus?[/quote]</p>
+<p>Yes. It has been updated a lot though, so it doesnt look like the original scapeemu anymore.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/4</link>
+        <pubDate>Wed, 28 Aug 2013 01:37:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528947-4</guid>
+        <source url="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss">[ScapeEmulator] Adding a Plugin System</source>
+      </item>
+      <item>
+        <title>[ScapeEmulator] Adding a Plugin System</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="528947">
+<div class="title">
+<div class="quote-controls"></div>
+ Vain_:</div>
+<blockquote>
+<p>offtopic; are you using scapeemulator for evelus?</p>
+</blockquote>
+</aside>
+<p>He indeed is sir.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/3</link>
+        <pubDate>Wed, 28 Aug 2013 01:26:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528947-3</guid>
+        <source url="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss">[ScapeEmulator] Adding a Plugin System</source>
+      </item>
+      <item>
+        <title>[ScapeEmulator] Adding a Plugin System</title>
+        <dc:creator><![CDATA[@Vain1 Vain_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vain1">@Vain1</a> wrote:</p>
+          <blockquote>
+              <p>could be explained more thoroughly, but you’ve explained it enough for comprehension.<br>
+kudos on the contribution</p>
+<p>offtopic; are you using scapeemulator for evelus?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/2</link>
+        <pubDate>Wed, 28 Aug 2013 01:07:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528947-2</guid>
+        <source url="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss">[ScapeEmulator] Adding a Plugin System</source>
+      </item>
+      <item>
+        <title>[ScapeEmulator] Adding a Plugin System</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>This tutorial is not easy, I do not hold your hand through all the steps. You need basic java knowledge and to follow ALL the instructions. If I left out anything, leave a comment and let me know.</p>
+<p><span class="bbcode-u">Personal Note</span></p>
+<p>ScapeEmulator is beautiful, it really takes into consideration a lot of mechanics you need for a server in order to develop it in a efficient manner. I see it as Apollo 2.0, and takes a lot of the crud out of Apollo that isn’t needed/is dead weight. I suggest if you have a modern emulator project (400+) that you start using this base.</p>
+<p><span class="bbcode-u">About</span></p>
+<p>This plugin system is for the ScapeEmulator base created by Graham and Jonneh. It uses JRuby to handle messages received from the client and currently supports command and button messages. Any other support will have to be done by yourself, I havent done it yet (at the point this was posted) so I cannot help you yet. The plugins are automatically loaded from the plugin data directory of the game module, the JSON file describes the scripts that will be loaded and the plugin dependencies.</p>
+<p><span class="bbcode-b">WARNING:</span> Circular plugin dependencies can be created by user error.</p>
+<p>Plugins will be loaded in order of their dependencies, then each script for a plugin will be loaded in their listed order.</p>
+<p>The bootstrap file contains a module and static class that interfaces the scripting to the server. You shouldnt edit this file unless you need to add in a new binding.</p>
+<p><span class="bbcode-u">Instructions</span></p>
+<p><span class="bbcode-b">Step One:</span></p>
+<p>Add these dependencies to the game module pom.xml</p>
+<pre><code class="lang-auto">    &lt;dependency&gt;
+      &lt;groupId&gt;org.codehaus.jackson&lt;/groupId&gt;
+      &lt;artifactId&gt;jackson-core-asl&lt;/artifactId&gt;
+      &lt;version&gt;1.9.13&lt;/version&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+        &lt;groupId&gt;org.jruby&lt;/groupId&gt;
+        &lt;artifactId&gt;jruby-core&lt;/artifactId&gt;
+        &lt;version&gt;1.7.0.RC1&lt;/version&gt;
+    &lt;/dependency&gt;</code></pre>
+<p><span class="bbcode-b">Step Two:</span></p>
+<p>Create a new package in the game module called ‘plugin’, put each of these java files in that package</p>
+<p>RubyScriptEnvironment.java</p>
+<pre><code class="lang-auto">
+package net.scapeemulator.game.plugin;
+
+import javax.script.*;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class RubyScriptEnvironment {
+
+    /**
+     * The script engine manager for all the script environments.
+     */
+    private static final ScriptEngineManager manager = new ScriptEngineManager();
+
+    /**
+     * The collection of scripts that have been compiled.
+     */
+    private Map&lt;String, CompiledScript&gt; scripts;
+
+    /**
+     * The script engine for this environment.
+     */
+    private ScriptEngine engine;
+
+    /**
+     * Constructs a new {@link RubyScriptEnvironment};
+     */
+    public RubyScriptEnvironment() {
+        scripts = new HashMap&lt;&gt;();
+        engine = manager.getEngineByName("jruby");
+        if(engine == null) {
+            throw new NullPointerException();
+        }
+    }
+
+    /**
+     * Sets the context of the script environment.
+     *
+     * @param context   The environment context.
+     */
+    public void setContext(ScriptContext context) {
+        engine.getBindings(javax.script.ScriptContext.GLOBAL_SCOPE).put("ctx", context);
+    }
+
+    /**
+     * Evalulates a script, the script must have been previously compiled.
+     *
+     * @param name              The name of the script to evaluate.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void eval(String name) throws ScriptException {
+        CompiledScript compiledScript = scripts.get(name);
+        if(compiledScript == null) {
+            throw new RuntimeException("script does not exist");
+        }
+        compiledScript.eval();
+    }
+
+    /**
+     * Loads a script.
+     *
+     * @param script            The script to load.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void load(Script script) throws ScriptException {
+        Compilable compilable = (Compilable) engine;
+        CompiledScript compiledScript = compilable.compile(script.getSource());
+        scripts.put(script.getName(), compiledScript);
+    }
+
+    /**
+     * Evaluates a script.
+     *
+     * @param script            The script to evaluate.
+     * @throws ScriptException  A script exception was thrown while evaluating the script.
+     */
+    public void eval(Script script) throws ScriptException {
+        if(scripts.containsKey(script.getName())) {
+            eval(script.getName());
+        } else {
+            Compilable compilable = (Compilable) engine;
+            CompiledScript compiledScript = compilable.compile(script.getSource());
+            scripts.put(script.getName(), compiledScript);
+            compiledScript.eval();
+        }
+    }
+}</code></pre>
+<p>Script.java</p>
+<pre><code class="lang-auto">
+package net.scapeemulator.game.plugin;
+
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class Script {
+
+    /**
+     * The name of the script.
+     */
+    private String name;
+
+    /**
+     * The source of the script.
+     */
+    private Reader source;
+
+    /**
+     * Constructs a new {@link Script};
+     * @param file The file of the script to create.
+     * @throws IOException An I/O exception was thrown while creating the script.
+     */
+    public Script(File file) throws IOException {
+        this(file.getCanonicalPath(), new FileReader(file));
+    }
+
+    /**
+     * Constructs a new {@link Script};
+     * @param name      The name of the script.
+     * @param source    The source of the script.
+     */
+    public Script(String name, Reader source) {
+        this.name = name;
+        this.source = source;
+    }
+
+    /**
+     * Gets the source of the script.
+     *
+     * @return  The source.
+     */
+    public Reader getSource() {
+        return source;
+    }
+
+    /**
+     * Gets the name of the script.
+     *
+     * @return  The name of the script.
+     */
+    public String getName() {
+        return name;
+    }
+}</code></pre>
+<p>ScriptContext.java</p>
+<pre><code class="lang-auto">
+package net.scapeemulator.game.plugin;
+
+import net.scapeemulator.game.button.ButtonDispatcher;
+import net.scapeemulator.game.button.ButtonHandler;
+import net.scapeemulator.game.command.CommandDispatcher;
+import net.scapeemulator.game.command.CommandHandler;
+
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class ScriptContext {
+
+    /**
+     * The list of button handlers.
+     */
+    private List&lt;ButtonHandler&gt; buttonHandlers = new LinkedList&lt;&gt;();
+
+    /**
+     * The list of command handlers.
+      */
+    private List&lt;CommandHandler&gt; commandHandlers = new LinkedList&lt;&gt;();
+
+    /**
+     * Constructs a new {@link ScriptContext};
+     */
+    public ScriptContext() {}
+
+    /**
+     * Adds a button dispatcher decorator to the list of decorators.
+     * @param handler The button handler to add.
+     */
+    public void addButtonHandler(ButtonHandler handler) {
+        buttonHandlers.add(handler);
+    }
+
+    /**
+     * Decorates a button dispatcher with all the button handlers registered to the context.
+     * @param dispatcher The dispatcher to decorate.
+     */
+    public void decorateButtonDispatcher(ButtonDispatcher dispatcher) {
+        for(ButtonHandler handler : buttonHandlers) {
+            dispatcher.bind(handler);
+        }
+    }
+
+    /**
+     * Adds a button dispatcher decorator to the list of decorators.
+     * @param handler The button handler to add.
+     */
+    public void addCommandHandler(CommandHandler handler) {
+        commandHandlers.add(handler);
+    }
+
+    /**
+     * Decorates a button dispatcher with all the button handlers registered to the context.
+     * @param dispatcher The dispatcher to decorate.
+     */
+    public void decorateCommandDispatcher(CommandDispatcher dispatcher) {
+        for(CommandHandler handler : commandHandlers) {
+            dispatcher.bind(handler);
+        }
+    }
+}</code></pre>
+<p>PluginLoader.java</p>
+<pre><code class="lang-auto">
+package net.scapeemulator.game.plugin;
+
+import org.codehaus.jackson.JsonFactory;
+import org.codehaus.jackson.JsonParser;
+import org.codehaus.jackson.JsonToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.script.ScriptException;
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map.Entry;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class PluginLoader {
+
+    /**
+     * The logger for this class.
+     */
+    private static final Logger logger = LoggerFactory.getLogger(PluginLoader.class);
+
+    /**
+     * The JSON factory to create new JSON parsers with.
+     */
+    private final JsonFactory factory = new JsonFactory();
+
+    /**
+     * The ruby script environment for the plugin loader.
+     */
+    private RubyScriptEnvironment scriptEnvironment = new RubyScriptEnvironment();
+
+    /**
+     * The map that contains all the parsed plugin data.
+     */
+    private final Map&lt;String, PluginData&gt; parsedPluginData = new HashMap&lt;&gt;();
+
+    /**
+     * The set of plugins that have had their scripts loaded.
+     */
+    private Set&lt;String&gt; loadedPlugins = new HashSet&lt;&gt;();
+
+    /**
+     * Constructs a new {@link PluginLoader};
+     */
+    public PluginLoader() {}
+
+    /**
+     * Sets the context for the script environment.
+     * @param context The context for the environment.
+     */
+    public void setContext(ScriptContext context) {
+        scriptEnvironment.setContext(context);
+    }
+
+    /**
+     * Loads all the plugins from the specified directory.
+     */
+    public void load(String dir) throws IOException, ScriptException {
+        load(new File(dir));
+    }
+
+    /**
+     * Loads all the plugins from the specified file directory.
+     */
+    public void load(File dir) throws IOException, ScriptException {
+        scriptEnvironment.eval(new Script(new File(dir, "bootstrap.rb")));
+        for(File file : dir.listFiles()) {
+            
+            /* Skip over non-directory files */
+            if(!file.isDirectory()) {
+                continue;
+            }
+
+            File dataFile = new File(file, "plugin.json");
+
+            /* Check to see if the json data file exists */
+            if(!dataFile.exists()) {
+                logger.warn("missing plugin.json file from '" + file.getName() + "' plugin");
+                return;
+            }
+
+            JsonParser parser = factory.createJsonParser(dataFile);
+
+            /* Check to see if the JSON structure start is correct */
+            if(parser.nextToken() != JsonToken.START_OBJECT) {
+                throw new IOException();
+            }
+
+            /* Load the plugin data from the JSON file */
+            PluginData pluginData = new PluginData();
+            while(parser.nextToken() != JsonToken.END_OBJECT) {
+                String currentName = parser.getCurrentName();
+                switch(currentName.toLowerCase()) {
+                    case "scripts":
+                        /* Check to see if the next token is valid */
+                        if(parser.nextToken() != JsonToken.START_ARRAY) {
+                            throw new IOException();
+                        }
+                        
+                        while(parser.nextToken() != JsonToken.END_ARRAY) {
+                            pluginData.addScript(parser.getText());
+                        }
+                        break;
+
+                    case "dependencies":
+                        /* Check to see if the next token is valid */
+                        if(parser.nextToken() != JsonToken.START_ARRAY) {
+                            throw new IOException();
+                        }
+
+                        while(parser.nextToken() != JsonToken.END_ARRAY) {
+                            pluginData.addDependency(parser.getText());
+                        }
+                        break;
+                }
+            }
+            parsedPluginData.put(file.getName(), pluginData);
+        }
+
+        /* Load each of the plugins from its data */
+        for(Entry&lt;String, PluginData&gt; entry : parsedPluginData.entrySet()) {
+
+            /* Check if the plugin has already been loaded */
+            if(loadedPlugins.contains(entry.getKey())) {
+                continue;
+            }
+
+            loadPlugin(dir, entry.getKey(), entry.getValue());
+        }
+
+        logger.info("PluginLoader loaded " + loadedPlugins.size() + " plugins...");
+    }
+
+    /**
+     * Loads a plugin from the specified root directory, name, and plugin data.
+     */
+    private void loadPlugin(File dir, String name, PluginData data) throws IOException, ScriptException {
+        /* Check if the plugin has already been loaded */
+        if(loadedPlugins.contains(name)) {
+            return;
+        }
+
+        /* Load all of the dependencies first */
+        for(String pluginName : data.getDependencies()) {
+
+            /* Check if the dependency is valid */
+            if(!parsedPluginData.containsKey(pluginName)) {
+                continue;
+            }
+
+            loadPlugin(dir, pluginName, parsedPluginData.get(pluginName));
+        }
+        
+        File scriptDir = new File(dir, name);
+
+        /* Evaluate each of the scripts */
+        for(String scriptName : data.getScripts()) {
+            scriptEnvironment.eval(new Script(new File(scriptDir, scriptName)));
+        }
+
+        /* Note that the plugin has been loaded */
+        loadedPlugins.add(name);
+    }
+}</code></pre>
+<p>PluginData.java</p>
+<pre><code class="lang-auto">
+package net.scapeemulator.game.plugin;
+
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Created by Hadyn Richard
+ */
+public final class PluginData {
+
+    /**
+     * The list of scripts for the plugin.
+     */
+    private List&lt;String&gt; scripts = new LinkedList&lt;&gt;();
+
+    /**
+     * The list of dependencies for the plugin.
+     */
+    private List&lt;String&gt; dependencies = new LinkedList&lt;&gt;();
+
+    /**
+     * Constructs a new {@link PluginData};
+     */
+    public PluginData() {}
+
+    /**
+     * Adds a script to the scripts list.
+     * @param file The name of the script.
+     */
+    public void addScript(String file) {
+        scripts.add(file);
+    }
+
+    /**
+     * Adds a dependency to the dependency list.
+     * @param dependency The name of the dependency.
+     */
+    public void addDependency(String dependency) {
+        scripts.add(dependency);
+    }
+
+    /**
+     * Gets the list of scripts.
+     * @return The scripts.
+     */
+    public List&lt;String&gt; getScripts() {
+        return scripts;
+    }
+
+    /**
+     * Gets the list of plugin dependencies.
+     * @return The plugin dependencies.
+     */
+    public List&lt;String&gt; getDependencies() {
+        return dependencies;
+    }
+}</code></pre>
+<p><span class="bbcode-b">Step Three: </span></p>
+<p>In the GameServer class in the game module, create a new field for the PluginLoader</p>
+<p>In the constructor, add the following code after the MessageDispatcher field is instantiated.</p>
+<pre><code class="lang-auto">        /* load the server pluginLoader */
+        ScriptContext scriptContext = new ScriptContext();
+        pluginLoader = new PluginLoader();
+        pluginLoader.setContext(scriptContext);
+        pluginLoader.load("./data/plugins/");
+
+        /* decorate each of the dispatchers */
+        messageDispatcher.decorateDispatchers(scriptContext);</code></pre>
+<p><span class="bbcode-b">Step Four: </span></p>
+<p>Add this method to the MessageDispatcher class of the game module:</p>
+<pre><code class="lang-auto"> public void decorateDispatchers(ScriptContext context) {
+        context.decorateButtonDispatcher(buttonDispatcher);
+        context.decorateCommandDispatcher(commandDispatcher);
+    }</code></pre>
+<p>Create a CommandDispatcher field in the MessageDispatcher class of the game module, instantiate the field immediately. Name the field ‘commandDispatcher’.</p>
+<p><span class="bbcode-b">Step Five: </span></p>
+<p>In the MessageDispatcher constructor, update the CommandMessageHandler constructor to take the ‘commandDispatcher’ field as a parameter.</p>
+<p>Update the CommandMessageHandler to the following code:</p>
+<p>CommandMessageHandler.java</p>
+<pre><code class="lang-auto">package net.scapeemulator.game.msg.handler;
+
+import net.scapeemulator.game.command.CommandDispatcher;
+import net.scapeemulator.game.model.Player;
+import net.scapeemulator.game.msg.CommandMessage;
+
+public final class CommandMessageHandler extends MessageHandler&lt;CommandMessage&gt; {
+
+    private final CommandDispatcher dispatcher;
+
+	public CommandMessageHandler(CommandDispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
+
+	@Override
+	public void handle(Player player, CommandMessage message) {
+		dispatcher.handle(player, message.getCommand());
+	}
+
+}</code></pre>
+<p><span class="bbcode-b">Step Six: </span></p>
+<p>In the game module data directory, create a new file directory called ‘plugins’. Put the following ruby file in that directory:</p>
+<p>bootstrap.rb</p>
+<pre><code class="lang-auto">require 'java'
+
+java_import 'net.scapeemulator.game.button.ButtonHandler'
+java_import 'net.scapeemulator.game.command.CommandHandler'
+
+module RuneEmulator
+	class Bootstrap
+		class &lt;&lt; self
+			def bind_cmd(name, &amp;block)
+				$ctx.add_command_handler(ProcCommandHandler.new(name, block))
+			end
+
+			def bind_button(id, &amp;block)
+				$ctx.add_button_handler(ProcButtonHandler.new(id, block))
+			end
+		end
+
+		class ProcButtonHandler &lt; ButtonHandler
+			def initialize(id, proc)
+				super(id)
+				@proc = proc
+			end
+
+			def handle(player, slot, parameter)
+				@proc.call player, slot, parameter
+			end
+		end
+
+		class ProcCommandHandler &lt; CommandHandler
+			def initialize(name, proc)
+				super(name)
+				@proc = proc
+			end
+
+			def handle(player, args)
+				@proc.call player, args
+			end
+		end
+	end
+end</code></pre>
+<p><span class="bbcode-b">Step Seven (Optional): </span></p>
+<p>Create a new directory in the plugin data directory called test, and place the following files in that directory:</p>
+<p>plugin.json</p>
+<pre><code class="lang-auto">{
+	"scripts" : [ "test.rb" ],
+	"dependencies" : []
+}</code></pre>
+<p>test.rb</p>
+<pre><code class="lang-auto">RuneEmulator::Bootstrap.bind_button(271) { |player, slot, param|
+	p "Button test"
+}
+
+RuneEmulator::Bootstrap.bind_cmd('test') { |player, args|
+	p "Command test"
+}</code></pre>
+<p><span class="bbcode-b">Finish</span></p>
+<p>You now have a plugin system that allows you to script out commands and buttons in ruby.</p>
+<p><span class="bbcode-u">Credits:</span></p>
+<ul>
+<li>Graham</li>
+<li>Jonneh</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947/1</link>
+        <pubDate>Wed, 28 Aug 2013 01:02:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528947-1</guid>
+        <source url="https://forum.moparisthebest.com/t/scapeemulator-adding-a-plugin-system/528947.rss">[ScapeEmulator] Adding a Plugin System</source>
+      </item>
+  </channel>
+</rss>

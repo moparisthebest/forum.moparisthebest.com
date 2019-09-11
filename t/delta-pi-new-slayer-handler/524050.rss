@@ -1,0 +1,888 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Delta/PI] New Slayer Handler</title>
+    <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050</link>
+    <description>This was created for a Delta based server. However, you could easily convert it to PI.
+
+*Note: There might be some methods that you don&#39;t have in your source or you might have them, and you just need to import the package. I&#39;m also basically directly c&amp;p it from my own server. I&#39;m also aware that some of the methods are incorrectly named according to official Java conventions/guidelines. This is due to these methods being from either the original Delta base or from past developers working on the source.
+
+[b]What does it do?[/b]
+Instead of giving XP after each kill, it gives a large amount of XP at the end of the task. However, this can be easily changed so that it gives XP after each kill if you want. It also includes a new Slayer Points reward. It also gives donator level and some-what combat level specific slayer tasks. If there are donator only type monsters, they can be assigned as a slayer task for donators only. Since I&#39;m too lazy to explain every single segment of code, I&#39;m lazily commenting notes that I deem are important. 
+
+1. Create a new class file.
+[code=Java]
+package net.projectrainbow.server.content.skills;
+
+import net.projectrainbow.server.model.player.Client;
+import net.projectrainbow.server.model.player.Player;
+import net.projectrainbow.server.util.Misc;
+
+/**
+ * Slayer class to handle all possible tasks, etc.
+ * @author N_A
+ */
+
+public class SlayerHandler {
+
+	private Client c;
+
+	public SlayerHandler(Client client) {
+		this.c = client;
+	}
+
+	/**
+	 * An enum of slayer creatures, their xp, and amount of points given when their task is completed.
+	 */
+	public static enum SlayerCreatures {
+
+		NPC_NAME(id, xp, slayerPoints, slayerPoints2), //Simply use this format to put in more possible slayer task 
+                NPC_NAME(id, xp, slayerPoints, slayerPoints2); // NPCs. 
+
+		private int id, xp, slayerPoints, slayerPoints2; //slayerPoints is how many points non-donators get
+                                                                      //slayerPoints2 is how many points donators receive.
+		private SlayerCreatures(int id, int xp, int slayerPoints, int slayerPoints2) {
+			this.id = id;
+			this.xp = xp;
+			this.slayerPoints = slayerPoints;
+			this.slayerPoints2 = slayerPoints2;
+		} 
+
+		public int slayerId(int id) {
+			return id;
+		}
+
+		public int slayerXp(int id) {
+			return xp;
+		}
+
+		public int slayPts(int id) {
+			return slayerPoints;
+		}
+
+		public int slayPts2(int id) {
+			return slayerPoints2;
+		}
+	}
+
+	/**
+	 * Default task ID and default amount of monsters needed to kill.
+	 */
+	public int slayerNpc = -1;
+	public int slayerAmount = -1;
+
+	/**
+	 * Different levels of possible slayer tasks. 
+	 */
+	public int[] lowTask = { 82, 1610, 3340, 2468, 2025, 2026, 2027, 2028, 2029, 2030, //Change these, these are server
+							1338, 941, 117, 1681, 1183 }; //specific NPC IDs. 
+	public int[] highTask = { 2710, 2714, 3389, 181, 71, 3387, 3391, 1472, 1384, 3494, //They are most likely not the
+							1115, 72, 2783, 50, 1626, 3200 }; //same NPCs that are
+	public int[] lowDonorTasks = { 158, 1813, 1352, 3347, 1614, 3346, 1225, 371, 1633, //used in other servers.
+							3070, 3388 };
+	public int[] highDonorTasks = { 3070, 3386, 1472, 1384, 2783, 50, 1160, 1624, 2881,
+							2882, 2883, 181 };
+	public int[] superTask = { 2705, 418, 1813, 71, 3381, 2714, 2710, 2881, 2882, 2883,
+							1626, 1637, 1160, 50, 3389 };
+	public int[] ultimateTask = { 2705, 418, 1352, 3389, 1566, 3385, 3382, 3381, 181, 1015,
+							897, 1125, 1384 };
+
+	/**
+	 * Assigns random task for each task level.
+	 */
+	public int lowNormalTask() {
+		return lowTask[(int) (Math.random() * lowTask.length)];
+	}
+	public int highNormalTask() {
+		return highTask[(int) (Math.random() * highTask.length)];
+	}
+	public int lowDonatorTask() {
+		return lowDonorTasks[(int) (Math.random() * lowDonorTasks.length)];
+	}
+	public int highDonatorTask() {
+		return highDonorTasks[(int) (Math.random() * highDonorTasks.length)];
+	}
+	public int randomSuperTask() {
+		return superTask[(int) (Math.random() * superTask.length)];
+	}
+	public int randomUltTask() {
+		return ultimateTask[(int) (Math.random() * ultimateTask.length)];
+	}
+
+	/**
+	 * Called to display options when speaking to a Slayer Master. This is from the original base.
+	 */
+	public void slayerTalk() {
+		c.interfaceEffect = 3; //How many options
+		c.clearQuestInterface();
+		c.sendFrame126(&quot;&quot;, 2494);
+		c.sendFrame126(&quot;I need another assignment.&quot;, 2495);
+		c.sendFrame126(&quot;Do you have anything for trade?&quot;, 2496);
+		c.sendFrame126(&quot;Er...nothing...&quot;, 2497);
+		c.sendFrame126(&quot;&quot;, 2498);
+		c.sendQuestSomething(8143);
+		c.sendFrame164(2492);
+		c.flushOutStream();
+	}
+
+	/**
+	 * Used to display options when a Slayer Gem is clicked on. Also from the original base.
+	 */
+	public void slayerGem() {
+		c.interfaceEffect = 4;
+		c.clearQuestInterface();
+		c.sendFrame126(&quot;How am I doing so far?&quot;, 2494);
+		c.sendFrame126(&quot;Who are you?&quot;, 2495);
+		c.sendFrame126(&quot;Where are you?&quot;, 2496);
+		c.sendFrame126(&quot;Nothing really.&quot;, 2497);
+		c.sendFrame126(&quot;&quot;, 2498);
+		c.sendQuestSomething(8143);
+		c.sendFrame164(2492);
+		c.flushOutStream();
+	}
+
+	/**
+	 * Used to reduce redundant code.
+	 */
+	private int v = 10 + Misc.random(25);
+	private int w = 10 + Misc.random(40);
+	private int x = Misc.random(1);
+	private int y = Misc.random(2);
+	private int z = Misc.random(3);
+
+	/**
+	 * Switches for donator level-specific slayer tasks.
+	 */
+	public void giveTask() {
+		switch (c.donator) {
+
+		case 0:
+			if (c.combatLevel &gt;= 8 &amp;&amp; c.combatLevel &lt;= 140) {
+				slayerNpc = lowNormalTask();
+			} else {
+				slayerNpc = highNormalTask();
+			}
+			slayerAmount = w;
+			c.talk2(&quot;Your task is to kill &quot; + slayerAmount + &quot; &quot;
+				+ c.GetNpcName(slayerNpc) + &quot;s.&quot;, &quot;&quot;, 1597);
+			break;
+
+		case 1:
+			if (c.combatLevel &gt;= 8 &amp;&amp; c.combatLevel &lt;= 140) {
+				if (x == 0) {
+					slayerNpc = lowNormalTask();
+				} else {
+					slayerNpc = lowDonatorTask();
+				}
+			} else {
+				if (x == 0) {
+					slayerNpc = highNormalTask();
+				} else {
+					slayerNpc = highDonatorTask();
+				}
+			}
+			slayerAmount = w;
+			c.talk2(&quot;Your task is to kill &quot; + slayerAmount + &quot; &quot;
+				+ c.GetNpcName(slayerNpc) + &quot;s.&quot;, &quot;&quot;, 1597);
+			break;
+
+		case 2:
+			if  (c.combatLevel &gt;= 3 &amp;&amp; c.combatLevel &lt;= 140) {
+				if (y == 0) {
+					slayerNpc = highNormalTask();
+				} else if (y == 1) {
+					slayerNpc = highDonatorTask();
+				} else {
+					slayerNpc = randomSuperTask();
+				}
+				slayerAmount = w;
+				c.talk2(&quot;Your task is to kill &quot; + slayerAmount + &quot; &quot;
+					+ c.GetNpcName(slayerNpc) + &quot;s.&quot;, &quot;&quot;, 1597);
+			} else {
+				if (z == 0) {
+					slayerNpc = highNormalTask();
+				} else if (z == 1) {
+					slayerNpc = highDonatorTask();
+				} else if (z == 2) {
+					slayerNpc = randomSuperTask();
+				} else if (z == 3) {
+					slayerNpc = randomUltTask();
+				}
+				if (z != 3) { 
+					slayerAmount = w;
+				} else {
+					slayerAmount = v;
+				}
+				c.talk2(&quot;Your task is to kill &quot; + slayerAmount + &quot; &quot;
+					+ c.GetNpcName(slayerNpc) + &quot;s.&quot;, &quot;&quot;, 1597);
+			}
+			break;
+		}
+	}
+
+	/**
+	 * Handles slayer task kills and points. 
+	 */
+	public void handleSlayer(int npc) {
+		for (SlayerCreatures s : SlayerCreatures.values()) {
+			if (slayerNpc == s.id) {
+				if (slayerAmount == 0) {
+					if (c.donator &gt; 0) {
+						c.slayerPoints += s.slayPts2(slayerNpc);
+						c.sM(&quot;You gained &quot; + s.slayPts2(slayerNpc) + &quot; Slayer Points for completing your Slayer task.&quot;);
+					} else {
+						c.slayerPoints += s.slayPts(slayerNpc);
+						c.sM(&quot;You gained &quot; + s.slayPts(slayerNpc) + &quot; Slayer Points for completing your Slayer task.&quot;);
+					}
+					c.addSkillXP(s.slayerXp(slayerNpc), c.playerSlayer);
+					c.sM(&quot;You have completed your Slayer task. Speak to Vannaka for a new one.&quot;);
+					slayerNpc = -1;
+				}
+			} 
+		}
+	}
+}
+[/code]
+2. In Player.java, paste this in. This goes in Player.java since it is player specific on how many slayerPoints a player has.
+[code=Java]
+public int slayerPoints;
+[/code]
+3. In your NPCHandler.java or wherever the server handles NPCs, search for code that relates to Slayer such as
+[code=Java]
+if (npcs[i].npcType == 941 &amp;&amp; temp.taskID == 941) {
+	temp.addSkillXP(160000, 18);
+	temp.taskAmount -= 1;
+	if (temp.taskAmount == 0
+		|| temp.taskAmount == 1) {	
+                            temp.taskID = -1;
+		temp.taskAmount = -1;
+		temp.sM(&quot;You have completed your task. Talk to Vannaka to get a new one.&quot;);
+	}
+}
+[/code]
+*There&#39;s a good probability that this isn&#39;t the exact code in your source. Just use it as a reference on what to delete.
+
+and replace it with
+[code=java]
+if (npcs[i].npcType == temp.getSlayerHandler().slayerNpc) {
+	temp.getSlayerHandler().slayerAmount -= 1;
+	temp.getSlayerHandler().handleSlayer(npcs[i].npcType);
+}
+[/code]
+Remember to import the SlayerHandler class into the NPCHandler class!
+
+I&#39;ll leave the NPC clicking, dialogue, and button handling to you as to not make this post extraneously long. 
+
+Good luck!</description>
+    
+    <lastBuildDate>Mon, 15 Jul 2013 01:51:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Doesn’t really matter, no. But, I dislike using Maps for this kind of thing, but it’s your choice.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/11</link>
+        <pubDate>Mon, 15 Jul 2013 01:51:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-11</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@Null_Amount N_A]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/null_amount">@Null_Amount</a> wrote:</p>
+          <blockquote>
+              <p>So it’d effectively be about the same grabbing data from a Map and looping through the data?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/10</link>
+        <pubDate>Mon, 15 Jul 2013 01:40:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-10</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>True.</p>
+<p>edit: looked it up</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/9</link>
+        <pubDate>Sun, 14 Jul 2013 23:06:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-9</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@relexlawl relexlawl]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/relexlawl">@relexlawl</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:5, topic:524050”][code]<br>
+public int slayPts(int id) {<br>
+return slayerPoints;<br>
+}</p>
+<pre><code>            public int slayPts2(int id) {
+                    return slayerPoints2;
+            }[/code]
+</code></pre>
+<p>the params aren’t necessary</p>
+<aside class="quote">
+<blockquote>
+<p>This is the getter</p>
+<aside class="quote">
+<blockquote>
+<p><code>
+public int slayerId(int id) {                        
+     return id;              
+}</code></p>
+</blockquote>
+</aside>
+<p>You will have to create a Map of the values inside of the enum and then call from the map. You will need a getter saying something like getNPCId().</p>
+<p>Such as…</p>
+<pre><code class="lang-auto">private static Map&lt;Integer, SlayerCreatures&gt; map = new HashMap&lt;Integer, SlayerCreatures&gt;();
+
+static {
+     for (SlayerCreatures sc : SlayerCreatures.values())
+          map.put(sc.getNPCId(), sc);
+}
+
+public static int getCreature(int npcId) {
+     return map.get(npcId).getId();
+}
+
+public int getNPCId() {
+     return id;
+}</code></pre>
+<p>I just wrote this up inside of this page, but you should get the gist of what I’m saying. You shouldn’t need anything inside of the parameters of the getters, especially for the getter slayerId() when you are getting the Id of the Id. It just doesn’t make sense.</p>
+</blockquote>
+</aside>
+<p>also this is a bad suggestion, you shouldn’t populate a map with these values it’s just as easy and inferred to use the values() array reference to get your values</p>
+<p><code>
+public static EnumClass getDef(...) {
+    for (EnumClass enumClass : EnumClass.values()) {
+        if (enumClass != null &amp;&amp; enumClass... == ...) {
+            return enumClass;
+        }
+    }
+    return null;
+}</code>[/quote]</p>
+<p>Memory is cheap…</p>
+<p>Having said that, getting the value from the map (obviously) takes less time (ns) than getting the value by looping.</p>
+<p>You shouldn’t say it’s a bad suggestion, since either way is fine.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/8</link>
+        <pubDate>Sun, 14 Jul 2013 22:20:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-8</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p><a class="mention" href="/u/atomic">@Atomic</a> Int: Tell me which one is faster, and test each of them 5 times. I’m not trying to prove anything, I just want to know. I don’t have a computer right now so I can’t do any testing.</p>
+<p>I really don’t Know how to scroll down when I try to quote someone on an IPod.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/7</link>
+        <pubDate>Sun, 14 Jul 2013 19:27:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-7</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@Null_Amount N_A]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/null_amount">@Null_Amount</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“AtomicInt_, post:5, topic:524050”]this isn’t much better, but thanks for the release!</p>
+<p>note:</p>
+<p>[code]<br>
+public int slayPts(int id) {<br>
+return slayerPoints;<br>
+}</p>
+<pre><code>            public int slayPts2(int id) {
+                    return slayerPoints2;
+            }[/code]
+</code></pre>
+<p>the params aren’t necessary</p>
+<aside class="quote">
+<blockquote>
+<p>This is the getter</p>
+<aside class="quote">
+<blockquote>
+<p><code>
+public int slayerId(int id) {                        
+     return id;              
+}</code></p>
+</blockquote>
+</aside>
+<p>You will have to create a Map of the values inside of the enum and then call from the map. You will need a getter saying something like getNPCId().</p>
+<p>Such as…</p>
+<pre><code class="lang-auto">private static Map&lt;Integer, SlayerCreatures&gt; map = new HashMap&lt;Integer, SlayerCreatures&gt;();
+
+static {
+     for (SlayerCreatures sc : SlayerCreatures.values())
+          map.put(sc.getNPCId(), sc);
+}
+
+public static int getCreature(int npcId) {
+     return map.get(npcId).getId();
+}
+
+public int getNPCId() {
+     return id;
+}</code></pre>
+<p>I just wrote this up inside of this page, but you should get the gist of what I’m saying. You shouldn’t need anything inside of the parameters of the getters, especially for the getter slayerId() when you are getting the Id of the Id. It just doesn’t make sense.</p>
+</blockquote>
+</aside>
+<p>also this is a bad suggestion, you shouldn’t populate a map with these values it’s just as easy and inferred to use the values() array reference to get your values</p>
+<p><code>
+public static EnumClass getDef(...) {
+    for (EnumClass enumClass : EnumClass.values()) {
+        if (enumClass != null &amp;&amp; enumClass... == ...) {
+            return enumClass;
+        }
+    }
+    return null;
+}</code>[/quote]<br>
+I think I’ll redo parts of it using your suggestion, thanks for the feedback!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/6</link>
+        <pubDate>Fri, 12 Jul 2013 17:36:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-6</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>this isn’t much better, but thanks for the release!</p>
+<p>note:</p>
+<p>[code]<br>
+public int slayPts(int id) {<br>
+return slayerPoints;<br>
+}</p>
+<pre><code>            public int slayPts2(int id) {
+                    return slayerPoints2;
+            }[/code]
+</code></pre>
+<p>the params aren’t necessary</p>
+<p>[quote=“wildskiller, post:4, topic:524050”]This is the getter</p>
+<aside class="quote">
+<blockquote>
+<p><code>
+public int slayerId(int id) {                        
+     return id;              
+}</code></p>
+</blockquote>
+</aside>
+<p>You will have to create a Map of the values inside of the enum and then call from the map. You will need a getter saying something like getNPCId().</p>
+<p>Such as…</p>
+<pre><code class="lang-auto">private static Map&lt;Integer, SlayerCreatures&gt; map = new HashMap&lt;Integer, SlayerCreatures&gt;();
+
+static {
+     for (SlayerCreatures sc : SlayerCreatures.values())
+          map.put(sc.getNPCId(), sc);
+}
+
+public static int getCreature(int npcId) {
+     return map.get(npcId).getId();
+}
+
+public int getNPCId() {
+     return id;
+}</code></pre>
+<p>I just wrote this up inside of this page, but you should get the gist of what I’m saying. You shouldn’t need anything inside of the parameters of the getters, especially for the getter slayerId() when you are getting the Id of the Id. It just doesn’t make sense.[/quote]</p>
+<p>also this is a bad suggestion, you shouldn’t populate a map with these values it’s just as easy and inferred to use the values() array reference to get your values</p>
+<p><code>
+public static EnumClass getDef(...) {
+    for (EnumClass enumClass : EnumClass.values()) {
+        if (enumClass != null &amp;&amp; enumClass... == ...) {
+            return enumClass;
+        }
+    }
+    return null;
+}</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/5</link>
+        <pubDate>Fri, 12 Jul 2013 17:19:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-5</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>This is the getter</p>
+<blockquote>[code=java]
+public int slayerId(int id) {                        
+     return id;              
+}[/code]</blockquote>
+<p>You will have to create a Map of the values inside of the enum and then call from the map. You will need a getter saying something like getNPCId().</p>
+<p>Such as…</p>
+<pre><code class="lang-auto">private static Map&lt;Integer, SlayerCreatures&gt; map = new HashMap&lt;Integer, SlayerCreatures&gt;();
+
+static {
+     for (SlayerCreatures sc : SlayerCreatures.values())
+          map.put(sc.getNPCId(), sc);
+}
+
+public static int getCreature(int npcId) {
+     return map.get(npcId).getId();
+}
+
+public int getNPCId() {
+     return id;
+}</code></pre>
+<p>I just wrote this up inside of this page, but you should get the gist of what I’m saying. You shouldn’t need anything inside of the parameters of the getters, especially for the getter slayerId() when you are getting the Id of the Id. It just doesn’t make sense.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/4</link>
+        <pubDate>Fri, 12 Jul 2013 15:50:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-4</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@Null_Amount N_A]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/null_amount">@Null_Amount</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="2" data-topic="524050">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/wildskiller/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> wildskiller:</div>
+<blockquote>
+<p>you shouldn’t need anything inside the parameters of the getters for the enum.</p>
+</blockquote>
+</aside>
+<p>What do you mean?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/3</link>
+        <pubDate>Sun, 07 Jul 2013 00:36:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-3</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>you shouldn’t need anything inside the parameters of the getters for the enum.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/2</link>
+        <pubDate>Sat, 06 Jul 2013 23:29:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-2</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+      <item>
+        <title>[Delta/PI] New Slayer Handler</title>
+        <dc:creator><![CDATA[@Null_Amount N_A]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/null_amount">@Null_Amount</a> wrote:</p>
+          <blockquote>
+              <p>This was created for a Delta based server. However, you could easily convert it to PI.</p>
+<p>*Note: There might be some methods that you don’t have in your source or you might have them, and you just need to import the package. I’m also basically directly c&amp;p it from my own server. I’m also aware that some of the methods are incorrectly named according to official Java conventions/guidelines. This is due to these methods being from either the original Delta base or from past developers working on the source.</p>
+<p><span class="bbcode-b">What does it do?</span><br>
+Instead of giving XP after each kill, it gives a large amount of XP at the end of the task. However, this can be easily changed so that it gives XP after each kill if you want. It also includes a new Slayer Points reward. It also gives donator level and some-what combat level specific slayer tasks. If there are donator only type monsters, they can be assigned as a slayer task for donators only. Since I’m too lazy to explain every single segment of code, I’m lazily commenting notes that I deem are important.</p>
+<ol>
+<li>Create a new class file.</li>
+</ol>
+<pre><code class="lang-auto">package net.projectrainbow.server.content.skills;
+
+import net.projectrainbow.server.model.player.Client;
+import net.projectrainbow.server.model.player.Player;
+import net.projectrainbow.server.util.Misc;
+
+/**
+ * Slayer class to handle all possible tasks, etc.
+ * @author N_A
+ */
+
+public class SlayerHandler {
+
+	private Client c;
+
+	public SlayerHandler(Client client) {
+		this.c = client;
+	}
+
+	/**
+	 * An enum of slayer creatures, their xp, and amount of points given when their task is completed.
+	 */
+	public static enum SlayerCreatures {
+
+		NPC_NAME(id, xp, slayerPoints, slayerPoints2), //Simply use this format to put in more possible slayer task 
+                NPC_NAME(id, xp, slayerPoints, slayerPoints2); // NPCs. 
+
+		private int id, xp, slayerPoints, slayerPoints2; //slayerPoints is how many points non-donators get
+                                                                      //slayerPoints2 is how many points donators receive.
+		private SlayerCreatures(int id, int xp, int slayerPoints, int slayerPoints2) {
+			this.id = id;
+			this.xp = xp;
+			this.slayerPoints = slayerPoints;
+			this.slayerPoints2 = slayerPoints2;
+		} 
+
+		public int slayerId(int id) {
+			return id;
+		}
+
+		public int slayerXp(int id) {
+			return xp;
+		}
+
+		public int slayPts(int id) {
+			return slayerPoints;
+		}
+
+		public int slayPts2(int id) {
+			return slayerPoints2;
+		}
+	}
+
+	/**
+	 * Default task ID and default amount of monsters needed to kill.
+	 */
+	public int slayerNpc = -1;
+	public int slayerAmount = -1;
+
+	/**
+	 * Different levels of possible slayer tasks. 
+	 */
+	public int[] lowTask = { 82, 1610, 3340, 2468, 2025, 2026, 2027, 2028, 2029, 2030, //Change these, these are server
+							1338, 941, 117, 1681, 1183 }; //specific NPC IDs. 
+	public int[] highTask = { 2710, 2714, 3389, 181, 71, 3387, 3391, 1472, 1384, 3494, //They are most likely not the
+							1115, 72, 2783, 50, 1626, 3200 }; //same NPCs that are
+	public int[] lowDonorTasks = { 158, 1813, 1352, 3347, 1614, 3346, 1225, 371, 1633, //used in other servers.
+							3070, 3388 };
+	public int[] highDonorTasks = { 3070, 3386, 1472, 1384, 2783, 50, 1160, 1624, 2881,
+							2882, 2883, 181 };
+	public int[] superTask = { 2705, 418, 1813, 71, 3381, 2714, 2710, 2881, 2882, 2883,
+							1626, 1637, 1160, 50, 3389 };
+	public int[] ultimateTask = { 2705, 418, 1352, 3389, 1566, 3385, 3382, 3381, 181, 1015,
+							897, 1125, 1384 };
+
+	/**
+	 * Assigns random task for each task level.
+	 */
+	public int lowNormalTask() {
+		return lowTask[(int) (Math.random() * lowTask.length)];
+	}
+	public int highNormalTask() {
+		return highTask[(int) (Math.random() * highTask.length)];
+	}
+	public int lowDonatorTask() {
+		return lowDonorTasks[(int) (Math.random() * lowDonorTasks.length)];
+	}
+	public int highDonatorTask() {
+		return highDonorTasks[(int) (Math.random() * highDonorTasks.length)];
+	}
+	public int randomSuperTask() {
+		return superTask[(int) (Math.random() * superTask.length)];
+	}
+	public int randomUltTask() {
+		return ultimateTask[(int) (Math.random() * ultimateTask.length)];
+	}
+
+	/**
+	 * Called to display options when speaking to a Slayer Master. This is from the original base.
+	 */
+	public void slayerTalk() {
+		c.interfaceEffect = 3; //How many options
+		c.clearQuestInterface();
+		c.sendFrame126("", 2494);
+		c.sendFrame126("I need another assignment.", 2495);
+		c.sendFrame126("Do you have anything for trade?", 2496);
+		c.sendFrame126("Er...nothing...", 2497);
+		c.sendFrame126("", 2498);
+		c.sendQuestSomething(8143);
+		c.sendFrame164(2492);
+		c.flushOutStream();
+	}
+
+	/**
+	 * Used to display options when a Slayer Gem is clicked on. Also from the original base.
+	 */
+	public void slayerGem() {
+		c.interfaceEffect = 4;
+		c.clearQuestInterface();
+		c.sendFrame126("How am I doing so far?", 2494);
+		c.sendFrame126("Who are you?", 2495);
+		c.sendFrame126("Where are you?", 2496);
+		c.sendFrame126("Nothing really.", 2497);
+		c.sendFrame126("", 2498);
+		c.sendQuestSomething(8143);
+		c.sendFrame164(2492);
+		c.flushOutStream();
+	}
+
+	/**
+	 * Used to reduce redundant code.
+	 */
+	private int v = 10 + Misc.random(25);
+	private int w = 10 + Misc.random(40);
+	private int x = Misc.random(1);
+	private int y = Misc.random(2);
+	private int z = Misc.random(3);
+
+	/**
+	 * Switches for donator level-specific slayer tasks.
+	 */
+	public void giveTask() {
+		switch (c.donator) {
+
+		case 0:
+			if (c.combatLevel &gt;= 8 &amp;&amp; c.combatLevel &lt;= 140) {
+				slayerNpc = lowNormalTask();
+			} else {
+				slayerNpc = highNormalTask();
+			}
+			slayerAmount = w;
+			c.talk2("Your task is to kill " + slayerAmount + " "
+				+ c.GetNpcName(slayerNpc) + "s.", "", 1597);
+			break;
+
+		case 1:
+			if (c.combatLevel &gt;= 8 &amp;&amp; c.combatLevel &lt;= 140) {
+				if (x == 0) {
+					slayerNpc = lowNormalTask();
+				} else {
+					slayerNpc = lowDonatorTask();
+				}
+			} else {
+				if (x == 0) {
+					slayerNpc = highNormalTask();
+				} else {
+					slayerNpc = highDonatorTask();
+				}
+			}
+			slayerAmount = w;
+			c.talk2("Your task is to kill " + slayerAmount + " "
+				+ c.GetNpcName(slayerNpc) + "s.", "", 1597);
+			break;
+
+		case 2:
+			if  (c.combatLevel &gt;= 3 &amp;&amp; c.combatLevel &lt;= 140) {
+				if (y == 0) {
+					slayerNpc = highNormalTask();
+				} else if (y == 1) {
+					slayerNpc = highDonatorTask();
+				} else {
+					slayerNpc = randomSuperTask();
+				}
+				slayerAmount = w;
+				c.talk2("Your task is to kill " + slayerAmount + " "
+					+ c.GetNpcName(slayerNpc) + "s.", "", 1597);
+			} else {
+				if (z == 0) {
+					slayerNpc = highNormalTask();
+				} else if (z == 1) {
+					slayerNpc = highDonatorTask();
+				} else if (z == 2) {
+					slayerNpc = randomSuperTask();
+				} else if (z == 3) {
+					slayerNpc = randomUltTask();
+				}
+				if (z != 3) { 
+					slayerAmount = w;
+				} else {
+					slayerAmount = v;
+				}
+				c.talk2("Your task is to kill " + slayerAmount + " "
+					+ c.GetNpcName(slayerNpc) + "s.", "", 1597);
+			}
+			break;
+		}
+	}
+
+	/**
+	 * Handles slayer task kills and points. 
+	 */
+	public void handleSlayer(int npc) {
+		for (SlayerCreatures s : SlayerCreatures.values()) {
+			if (slayerNpc == s.id) {
+				if (slayerAmount == 0) {
+					if (c.donator &gt; 0) {
+						c.slayerPoints += s.slayPts2(slayerNpc);
+						c.sM("You gained " + s.slayPts2(slayerNpc) + " Slayer Points for completing your Slayer task.");
+					} else {
+						c.slayerPoints += s.slayPts(slayerNpc);
+						c.sM("You gained " + s.slayPts(slayerNpc) + " Slayer Points for completing your Slayer task.");
+					}
+					c.addSkillXP(s.slayerXp(slayerNpc), c.playerSlayer);
+					c.sM("You have completed your Slayer task. Speak to Vannaka for a new one.");
+					slayerNpc = -1;
+				}
+			} 
+		}
+	}
+}</code></pre>
+<ol start="2">
+<li>In Player.java, paste this in. This goes in Player.java since it is player specific on how many slayerPoints a player has.</li>
+</ol>
+<pre><code class="lang-auto">public int slayerPoints;</code></pre>
+<ol start="3">
+<li>In your NPCHandler.java or wherever the server handles NPCs, search for code that relates to Slayer such as</li>
+</ol>
+<pre><code class="lang-auto">if (npcs[i].npcType == 941 &amp;&amp; temp.taskID == 941) {
+	temp.addSkillXP(160000, 18);
+	temp.taskAmount -= 1;
+	if (temp.taskAmount == 0
+		|| temp.taskAmount == 1) {	
+                            temp.taskID = -1;
+		temp.taskAmount = -1;
+		temp.sM("You have completed your task. Talk to Vannaka to get a new one.");
+	}
+}</code></pre>
+<p>*There’s a good probability that this isn’t the exact code in your source. Just use it as a reference on what to delete.</p>
+<p>and replace it with</p>
+<pre><code class="lang-auto">if (npcs[i].npcType == temp.getSlayerHandler().slayerNpc) {
+	temp.getSlayerHandler().slayerAmount -= 1;
+	temp.getSlayerHandler().handleSlayer(npcs[i].npcType);
+}</code></pre>
+<p>Remember to import the SlayerHandler class into the NPCHandler class!</p>
+<p>I’ll leave the NPC clicking, dialogue, and button handling to you as to not make this post extraneously long.</p>
+<p>Good luck!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050/1</link>
+        <pubDate>Sat, 06 Jul 2013 23:08:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-524050-1</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-pi-new-slayer-handler/524050.rss">[Delta/PI] New Slayer Handler</source>
+      </item>
+  </channel>
+</rss>

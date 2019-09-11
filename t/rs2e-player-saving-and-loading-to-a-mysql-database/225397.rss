@@ -1,0 +1,784 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+    <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397</link>
+    <description>  Saving to a MySQL database in rs2e.. 
+Tested on: [b]2.7 (upgraded essentials to 3.1)[/b]
+
+What you need: [i] MySQL Connector/J (throw the jar in your classpath or your Java&#39;s &quot;ext&quot; folder and A MySQL database, of course. If you don&#39;t want to use the &quot;root&quot; user, create a user account with access to the database you are using for the tables (Google on how to). 
+  Oh yeah, and rs2e. [/i]
+
+
+[b]  MySQL Saving Pros/Cons  [/b]
+Pros: [i] Easy to manage, easy to create new columns with a default set, and can be integrated seamlessly into an existing website. [/i]
+Cons: [i] Virtually none; code for using the Connector/J can become lengthy. In PHP however, it can be very short. [/i]
+
+[b]  Serializable (what rs2e default is)  [/b]
+Pros: [i] Virtually none. [/i]
+Cons: [i] Random resets, unreadable, very hard to modify and add new info to their char files without accidently whiping characters. In other words, you cannot integrate this into your site unless it is on the same server and you use JSP, but either way, MySQL is the better way in the long run and you will [b]not[/b] regret it! [/i]
+
+
+
+  [b]Before you continue![/b]
+This isn&#39;t for wL, and will not work for it unless you do heavy modifying. Make backups of any file modified before modifying to save yourself. I cannot be at fault if you lose any data or resets occur. This has been tested thoroughly. If you need an app to add the Serializable character files to a MySQL database, create one yourself. 
+
+This [b]does[/b] work and is 100% my work, before you say it&#39;s leeched look up your sources. 
+If you have any problems that aren&#39;t idiocy-related (100 errors is idiocy on your behalf, etc), post them in this topic or PM me. 
+
+If everything doesn&#39;t work fine, please tell me what doesn&#39;t work, because I may have missed something. I am pretty sure I haven&#39;t, but it&#39;s never safe to say I didn&#39;t.
+
+I didn&#39;t read over everything below, so if you notice any errors please tell me.
+
+  [b] So, let&#39;s get everything ready.. [/b]
+Classes modified: [i] Main, PlayerLogin, and GameEngine - remember to backup all files modified! [/i] 
+
+    [b][u] Main [/u][/b]
+Declare:
+[code]public RS2E.Util.MySQL MySQL;[/code]
+This is basically just used for access the class MySQL, which we will create later.
+
+In main method, above [b]m.ge = ...[/b] place:
+[code]m.MySQL = new RS2E.Util.MySQL();[/code]
+This initializes the MySQL class, again, we&#39;ll get it later.
+[code]m.MySQL.connectToDB(); // connect to mysql[/code]
+This connects to the actual database and spits out any errors or if it connected fine.
+
+That&#39;s all for the Main class ..
+
+    [b][u] Packets -&gt; PlayerLogin [/u][/b]
+Find: [code]Main.m.ge.loadGame(p);[/code]
+This is the original code to load player saves. Now, we want to use [i]our[/i] code.
+If you haven&#39;t figured it out already:
+[code]Main.m.MySQL.loadPlayer(p);[/code]
+This is my method. If you want, go into GameEngine class and remove loadGame method if you do not want it anymore.
+
+The players have to save, correct? But we didn&#39;t do anything to make them save! Therefore ....
+
+    [b][u] GameEngine [/u][/b]
+Find the method saveGame..
+Comment the contents of that [b]or[/b] remove the contents, and place the following in:
+[code]Main.m.MySQL.savePlayer(plr); // save to mysql db.
+		return true;[/code]
+This will tell my method to save of course, and returns true. I will go into greater detail on how the method works when we add it.
+
+
+  [b] Last step..! almost. + long step.  [/b]
+Classes modified: [i] None! We are creating a file. [/i] 
+
+Go to your Util folder, and create a file name MySQL.java, this will be the file that everything is centered around [saving and loading, rather].
+Here are the headers, which won&#39;t need a lot of explaining, self explantory, no? 
+Please note, all of this is in [b]the same order as I tell you[/b].
+[code]
+/*
+ * Class MySQL
+ *
+ * Version 1.0
+ *
+ * &lt; Un-recorded date, 2008. &gt;
+ *
+ * Created by Hidendra. 
+ *  Credits to Sun for Connector/J, etc etc.
+ */
+ 
+package RS2E.Util;
+
+import RS2E.Players.*;
+import java.sql.*;
+
+public class MySQL {
+[/code]
+
+So we have those, let&#39;s go on. The section you edit.
+[code]
+	// START EDITING
+	final String username = &quot;root&quot;; // USERNAME FOR USER ... default: &quot;root&quot;
+	final String password = &quot;&quot;; // PASSWORD FOR USER ... default: &quot;&quot;
+	final String host = &quot;localhost&quot;; // HOSTNAME FOR MYSQL ... default: &quot;localhost&quot;
+	final String database = &quot;&quot;; // DATABASE USED ... default: &quot;&quot;
+	// END EDITING
+[/code]
+This is the login data and crap for MySQL, username, commonly root. Your password, pssh... Host, commonly localhost again.. And database, whichever one the tables are located in. You will find the table dump at the end ;o.
+
+Now for variables and the [empty] constructor.
+[code]
+public Connection con;
+	public Statement stmt;
+	String items, itemsN, equipment, equipmentN, bankItems, bankItemsN, skillLvl, skillXP;
+	int itemsY[], itemsNY[], bankItemsY[], bankItemsNY[], equipmentY[], equipmentNY[], skillLvlY[], skillXPY[];
+	
+	public MySQL() { }
+[/code]
+Connection con is used for connecting to MySQL server and for executing queries. 
+Statement is for prepared statements.
+String variables, where user data is temporarily stored. Same with the arrays below it.
+
+Now, for the connectToDB() method.. 
+[code]
+public void connectToDB() {
+		con = null;
+		try {
+			Class.forName(&quot;com.mysql.jdbc.Driver&quot;).newInstance();
+			con = DriverManager.getConnection(&quot;jdbc:mysql://&quot;+host+&quot;/&quot;+database, username, password);
+			if(!con.isClosed()) {
+				System.out.println(&quot;Connected to MySQL.&quot;);
+			}
+		} catch(Exception e) {
+			System.err.println(&quot;Exception: &quot; + e.getMessage());
+		}
+	}
+[/code]
+Looking over the code you&#39;ll notice it loads the driver and starts it, then uses the Connection con to connect to MySQL.
+The catch is if there is an error (connection refused, invalid password, can&#39;t connect, whatever else may happen..).
+
+For the savePlayer method, I will break it down into parts, since it is not simple, and wasn&#39;t the best way probably to do this, but however it works.
+[code]
+public void savePlayer(Player p) {
+		if(p == null) return;
+		int i;
+		items = &quot;&quot;; itemsN = &quot;&quot;; equipment = &quot;&quot;; equipmentN = &quot;&quot;; bankItems = &quot;&quot;; bankItemsN = &quot;&quot;; skillLvl = &quot;&quot;; skillXP = &quot;&quot;;
+[/code]
+Basically it makes all the String&#39;s used empty, creates the int i (used for looping, you&#39;ll see in a minute). As well checks if the player is null.
+
+Next section, we shall go!
+[code]
+for(i=0; i&lt;p.items.length; i++) 
+			items += p.items[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.itemsN.length; i++)
+			itemsN += p.itemsN[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.equipment.length; i++)
+			equipment += p.equipment[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.equipmentN.length; i++)
+			equipmentN += p.equipmentN[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.bankItems.length; i++)
+			bankItems += p.bankItems[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.bankItemsN.length; i++)
+			bankItemsN += p.bankItemsN[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.skillLvl.length; i++)
+			skillLvl += p.skillLvl[i] + &quot;,&quot;;
+		for(i=0; i&lt;p.skillXP.length; i++)
+			skillXP += p.skillXP[i] + &quot;,&quot;;
+[/code]
+Lots of repetition, but no worries! It&#39;s actually very simple. To prevent using 1000000 columns, I broke it down into [b]ONE[/b] single column, and this is how it works:
+It takes each thing that is used as an array, bankitems, skillLvl and XP, items, etc, and loops through each of those and inserts a comma (,) beside it, this is the seperator and is used to break them apart later so we can read them and load the player.
+It&#39;s simple when you think about it.
+
+[code]
+try {
+			stmt = con.createStatement();
+			if(!userExists(p.username))
+				stmt.executeUpdate(&quot;INSERT INTO `users` SET `username`=&#39;&quot;+p.username+&quot;&#39;,`password`=&#39;&quot;+p.password+&quot;&#39;,`absX`=&#39;&quot;+p.absX+&quot;&#39;,`absY`=&#39;&quot;+p.absY+&quot;&#39;,`heightLevel`=&#39;&quot;+p.heightLevel+&quot;&#39;,`rights`=&#39;&quot;+p.rights+&quot;&#39;,`items`=&#39;&quot;+items+&quot;&#39;,`itemsN`=&#39;&quot;+itemsN+&quot;&#39;,`equipment`=&#39;&quot;+equipment+&quot;&#39;,`equipmentN`=&#39;&quot;+equipmentN+&quot;&#39;,`bankItems`=&#39;&quot;+bankItems+&quot;&#39;,`bankItemsN`=&#39;&quot;+bankItemsN+&quot;&#39;,`skillLvl`=&#39;&quot;+skillLvl+&quot;&#39;,`skillXP`=&#39;&quot;+skillXP+&quot;&#39; &quot;);
+			else
+				stmt.executeUpdate(&quot;UPDATE `users` SET `username`=&#39;&quot;+p.username+&quot;&#39;,`password`=&#39;&quot;+p.password+&quot;&#39;,`absX`=&#39;&quot;+p.absX+&quot;&#39;,`absY`=&#39;&quot;+p.absY+&quot;&#39;,`heightLevel`=&#39;&quot;+p.heightLevel+&quot;&#39;,`rights`=&#39;&quot;+p.rights+&quot;&#39;,`items`=&#39;&quot;+items+&quot;&#39;,`itemsN`=&#39;&quot;+itemsN+&quot;&#39;,`equipment`=&#39;&quot;+equipment+&quot;&#39;,`equipmentN`=&#39;&quot;+equipmentN+&quot;&#39;,`bankItems`=&#39;&quot;+bankItems+&quot;&#39;,`bankItemsN`=&#39;&quot;+bankItemsN+&quot;&#39;,`skillLvl`=&#39;&quot;+skillLvl+&quot;&#39;,`skillXP`=&#39;&quot;+skillXP+&quot;&#39; WHERE `username`=&#39;&quot;+p.username+&quot;&#39; &quot;);
+		} catch(SQLException e) { 
+			System.err.println(&quot;ERROR:  &quot;+e.getMessage());
+		}
+	}
+[/code]
+Let&#39;s see.. A try statement, so there&#39;s going to be a possible exception (SQLException).  First it creates a statement so we can execute update&#39;s, then it calls the method userExists (added later on) to make sure the user doesn&#39;t exist already. If the user does, it uses SQL [b]UPDATE[/b], and if the user does [b]not[/b] exist, it uses [b]INSERT[/b].
+
+loadPlayer method is pretty much a beast compared to saving, so let&#39;s break it down ;)
+
+[code]
+public boolean loadPlayer(Player p) { // pre-load the player.
+		try {
+			int i;
+			stmt = con.createStatement();
+			ResultSet rs = stmt.executeQuery(&quot;SELECT * FROM `users` WHERE `username`=&#39;&quot;+p.username+&quot;&#39; &quot;);
+[/code]
+Oh, there&#39;s that int i again, we must be looping again :|. 
+And again, we create a statement, but we are also now using ResultSet to grab the user&#39;s info from MySQL that is trying to login. 
+RS2E verifies the password after this step, but as far as I&#39;m concerned it didn&#39;t affect performance (I didn&#39;t notice anyway) when this was doing all this even if the user&#39;s pass was incorrect.
+Next, we have a while loop, which we will break into thirds (seeing it&#39;s size).. Here we go.
+
+[code]
+while(rs.next()) {
+				String itemsX[] = rs.getString(&quot;items&quot;).split(&quot;,&quot;);
+				String itemsNX[] = rs.getString(&quot;itemsN&quot;).split(&quot;,&quot;);
+				String bankItemsX[] = rs.getString(&quot;bankItems&quot;).split(&quot;,&quot;);
+				String bankItemsNX[] = rs.getString(&quot;bankItemsN&quot;).split(&quot;,&quot;);
+				String equipmentX[] = rs.getString(&quot;equipment&quot;).split(&quot;,&quot;);
+				String equipmentNX[] = rs.getString(&quot;equipmentN&quot;).split(&quot;,&quot;);
+				String skillLvlX[] = rs.getString(&quot;skillLvl&quot;).split(&quot;,&quot;);
+				String skillXPX[] = rs.getString(&quot;skillXP&quot;).split(&quot;,&quot;);
+				itemsY = new int[itemsX.length];
+				itemsNY = new int[itemsNX.length];
+				bankItemsY = new int[bankItemsX.length];
+				bankItemsNY = new int[bankItemsNX.length];
+				equipmentY = new int[equipmentX.length];
+				equipmentNY = new int[equipmentNX.length];
+				skillLvlY = new int[skillLvlX.length];
+				skillXPY = new int[skillXPX.length];
+[/code]
+The jist of all this is it grabs strings, then splits them by the seperator (the comma (,)).. Then it get&#39;s the length of each String and makes an int array with the same size (referred to next). 
+
+[code]
+for(i=0; i&lt;itemsX.length; i++) // loop through and convert to int[]
+					itemsY[i] = Integer.parseInt(itemsX[i]);
+				for(i=0; i&lt;itemsNX.length; i++)
+					itemsNY[i] = Integer.parseInt(itemsNX[i]);
+				for(i=0; i&lt;bankItemsX.length; i++)
+					bankItemsY[i] = Integer.parseInt(bankItemsX[i]);
+				for(i=0; i&lt;bankItemsNX.length; i++)
+					bankItemsNY[i] = Integer.parseInt(bankItemsNX[i]);
+				for(i=0; i&lt;equipmentX.length; i++)
+					equipmentY[i] = Integer.parseInt(equipmentX[i]);
+				for(i=0; i&lt;equipmentNX.length; i++)
+					equipmentNY[i] = Integer.parseInt(equipmentNX[i]);
+				for(i=0; i&lt;skillLvlX.length; i++)
+					skillLvlY[i] = Integer.parseInt(skillLvlX[i]);
+				for(i=0; i&lt;skillXPX.length; i++)
+					skillXPY[i] = Integer.parseInt(skillXPX[i]);
+[/code]
+Lots of repetition going on, again. This loops through each String array and converts each element into an int and places it into the int array. A bit confusing, yes. :(
+
+
+[code]
+p.password = rs.getString(&quot;password&quot;); // begin assigning variables to the player.
+				p.heightLevel = rs.getInt(&quot;heightLevel&quot;);
+				p.teleportToX = rs.getInt(&quot;absX&quot;);
+				p.teleportToY = rs.getInt(&quot;absY&quot;);
+				p.rights = rs.getInt(&quot;rights&quot;);
+				p.items = itemsY;
+				p.itemsN = itemsNY;
+				p.bankItems = bankItemsY;
+				p.bankItemsN = bankItemsNY;
+				p.equipment = equipmentY;
+				p.equipmentN = equipmentNY;
+				p.skillLvl = skillLvlY;
+				p.skillXP = skillXPY;
+				rs.close();
+				return true;
+			}
+[/code]
+This is the finale of the loop, and all this does is assign all the variables to the temporary character before they login.
+Let&#39;s complete the method, now.
+
+[code]
+} catch(SQLException e) {
+			System.err.println(&quot;ERROR:  &quot;+e.getMessage());
+		}
+		return false;
+	}
+[/code]
+SQLException again.. this is kind of self explantory, I hope. ;)
+
+
+Just so you know, we are almost done, honestly. A few more methods (short), a SQL dump to import and you are ready to go! :D
+
+[code]
+public void getUsers() { // output user list to STDOUT
+		try {
+			int i=1;
+			stmt = con.createStatement();
+			ResultSet rs = stmt.executeQuery(&quot;SELECT * FROM `users`&quot;);
+			System.out.println(&quot; ------ START USER DUMP ------ &quot;);
+			System.out.println(&quot;Current users in the database: \n &quot;);
+			while(rs.next()) {
+				String u = rs.getString(&quot;username&quot;);
+				String p = rs.getString(&quot;password&quot;);
+				System.out.println(i+&quot;  [&quot;+u+&quot;]:[&quot;+p+&quot;]&quot;);
+				i++;
+			}
+			System.out.println(&quot; \n ------ END USER DUMP ------ &quot;);
+		} catch(SQLException e) {
+			System.err.println(&quot;ERROR:  &quot;+e.getMessage());
+		}
+	}
+[/code]
+I figured I&#39;d throw this in since I already had it, this dumps all the username and password&#39;s to STDOUT (command prompt). It outputs them as: [b]i: [username]:[password][/b] including the [ and ]. [b]i[/b] represents the number count, you&#39;ll know what I mean.
+
+Thankfully, this is the final method you require.
+
+[code]
+public boolean userExists(String user) { // check if the user exists in db
+		try {
+			stmt = con.createStatement();
+			ResultSet rs = stmt.executeQuery(&quot;SELECT * FROM `users`&quot;); 
+			while(rs.next()) {
+				if(rs.getString(&quot;username&quot;).equalsIgnoreCase(user)) return true;
+			}
+		} catch(SQLException e) { 
+			System.err.println(&quot;ERROR:  &quot;+e.getMessage());
+		}
+		return false;
+	}
+[/code]
+This loops through the users in the database and checks if the username exists. If it doesn&#39;t, return false, if it does, return true, simple.
+
+As well, don&#39;t forget to end the class file ;)
+[code]
+}
+[/code]
+
+
+Ah, yes, the sql dump. You can import it in phpmyadmin (run sql command from the database you wish to use), or from mysql command line, I don&#39;t really care.
+
+SQL DUMP
+[code]
+CREATE TABLE `users` (
+username varchar(12) primary key,
+password varchar(32), 
+absX int(5),
+absY int(5),
+heightLevel int(1),
+rights int(1),
+items text,
+itemsN text,
+bankItems text,
+bankItemsN text,
+equipment text,
+equipmentN text,
+skillLvl text,
+skillXP text
+);
+[/code]
+
+
+Comment, use, whatever, I made this and I don&#39;t need it now, if you have a use for it then awesome. I&#39;m aware of the advisory, you can find it [url=http://moparisthebest.com/smf/index.php/topic,296138]here.[/url]
+
+Have fun.
+
+
+[i]edit 1; changed sentence around. it was backwards.[/i]</description>
+    
+    <lastBuildDate>Fri, 11 Dec 2009 02:47:10 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@m.dog311 m.dog311]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m.dog311">@m.dog311</a> wrote:</p>
+          <blockquote>
+              <aside class="quote no-group quote-modified" data-post="49" data-topic="225397">
+<div class="title">
+<div class="quote-controls"></div>
+ Hard Pk:</div>
+<blockquote>
+<p>You should make one for 317 servers…</p>
+</blockquote>
+</aside>
+<p>This is for the 317 version of RS2E…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/50">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/50</link>
+        <pubDate>Fri, 11 Dec 2009 02:47:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-50</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@Hard_Pk Hard Pk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hard_pk">@Hard_Pk</a> wrote:</p>
+          <blockquote>
+              <p>You should make one for 317 servers…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/49">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/49</link>
+        <pubDate>Thu, 10 Dec 2009 20:53:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-49</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@stability666 stability666]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/stability666">@stability666</a> wrote:</p>
+          <blockquote>
+              <p>All we need now is a JavaDB tut. Storing objects proves to be very use-full if you have more then one world and sql saving/loading.</p>
+<p><span class="mention">@Topic</span> nice job. I like how you explained everything for the people newer to MySQL.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/48">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/48</link>
+        <pubDate>Sun, 15 Nov 2009 17:45:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-48</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@failer failer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/failer">@failer</a> wrote:</p>
+          <blockquote>
+              <p>nice!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/47">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/47</link>
+        <pubDate>Thu, 29 Oct 2009 13:37:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-47</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@P_I_M_P_3_D_Tut `Lewk_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/p_i_m_p_3_d_tut">@P_I_M_P_3_D_Tut</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“m.dog311, post:9, topic:225397”]Amg.  Fuck you.  I was working with figment, and I added this ,and now i get like 90 errors!  Do you get enjoyment out of seeing us suffer???  Fck u.</p>
+<p>Lol, na jkin.  Im not that dumb.  Nice (even though im not using RS2E)[/quote] Oh my God. If i didn’t read that last part i would of majorly flamed you.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/46">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/46</link>
+        <pubDate>Mon, 05 Jan 2009 23:26:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-46</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@m.dog311 m.dog311]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/m.dog311">@m.dog311</a> wrote:</p>
+          <blockquote>
+              <p>Wow.  Now I can sleep tonight because I know you don’t use sql.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/45</link>
+        <pubDate>Mon, 05 Jan 2009 01:20:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-45</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@demonlover14 demonlover14]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/demonlover14">@demonlover14</a> wrote:</p>
+          <blockquote>
+              <p>uhhi would use this guide but i dont use sql types soz</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/44</link>
+        <pubDate>Mon, 05 Jan 2009 01:18:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-44</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@jGod jGod]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/jgod">@jGod</a> wrote:</p>
+          <blockquote>
+              <p>You should use for-each loops to loop through arrays.</p>
+<p>Don’t feel like reading through the rest the code looks kinda messy and you don’t completely follow conventions.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/43</link>
+        <pubDate>Sun, 04 Jan 2009 04:00:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-43</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@xx_qwertyuiop_xx xx qwertyuiop xx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_qwertyuiop_xx">@xx_qwertyuiop_xx</a> wrote:</p>
+          <blockquote>
+              <p>Oh well. This tutorial isn’t bad.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/42</link>
+        <pubDate>Sun, 04 Jan 2009 03:37:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-42</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@ProjectDiabolus ProjectDiabolus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/projectdiabolus">@ProjectDiabolus</a> wrote:</p>
+          <blockquote>
+              <p>LAL I WUNNA GIT BANT SO I GRAVEDIG!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/41</link>
+        <pubDate>Sun, 04 Jan 2009 03:15:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-41</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@Gh0stb4rr4g3 Gh0stb4rr4g3]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/gh0stb4rr4g3">@Gh0stb4rr4g3</a> wrote:</p>
+          <blockquote>
+              <p>Well gj but there aren’t many people who use rs2e</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/40</link>
+        <pubDate>Tue, 25 Nov 2008 10:14:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-40</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@x_Devil_x1 x--Devil--x]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/x_devil_x1">@x_Devil_x1</a> wrote:</p>
+          <blockquote>
+              <p>cool i’ll use this :]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/39</link>
+        <pubDate>Wed, 19 Nov 2008 06:43:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-39</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@bryanc Bryanc]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bryanc">@bryanc</a> wrote:</p>
+          <blockquote>
+              <p>Too bad I bet half of these people don’t use RS2E or don’t even know what it is…</p>
+<p>I use RS2E though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/38</link>
+        <pubDate>Tue, 04 Nov 2008 14:36:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-38</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@Phate Phate]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/phate">@Phate</a> wrote:</p>
+          <blockquote>
+              <p>not bad… reminds me of Scape <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/37</link>
+        <pubDate>Sun, 02 Nov 2008 10:23:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-37</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@curry_muncha curry muncha]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/curry_muncha">@curry_muncha</a> wrote:</p>
+          <blockquote>
+              <p>yeah, very nice <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=6" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/36</link>
+        <pubDate>Sat, 01 Nov 2008 12:02:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-36</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@mynameisfrank mynameisfrank]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mynameisfrank">@mynameisfrank</a> wrote:</p>
+          <blockquote>
+              <p>WOW… thats alot of writting… but it did help me thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/35</link>
+        <pubDate>Sat, 01 Nov 2008 07:35:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-35</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@du_stinkst du stinkst]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/du_stinkst">@du_stinkst</a> wrote:</p>
+          <blockquote>
+              <p>Well Done <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=6" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/34</link>
+        <pubDate>Sat, 25 Oct 2008 11:31:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-34</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@P_I_M_P_3_D_Tut `Lewk_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/p_i_m_p_3_d_tut">@P_I_M_P_3_D_Tut</a> wrote:</p>
+          <blockquote>
+              <p>umm omg no wai?</p>
+<p>Good job i guess…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/33</link>
+        <pubDate>Sat, 25 Oct 2008 02:02:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-33</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@xstrxpurez xstrxpurez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xstrxpurez">@xstrxpurez</a> wrote:</p>
+          <blockquote>
+              <p>oh ok… thanks alot.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/32</link>
+        <pubDate>Sat, 25 Oct 2008 01:58:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-32</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@hidendra Hidendra]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hidendra">@hidendra</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xstrxpurez, post:30, topic:225397”][quote author=Hidendra link=topic=296260.msg2505599#msg2505599 date=1224899695]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>Wow… i am kinda stupid when it comes to mySQL but can u use mySQL on ipbfree?</p>
+</blockquote>
+</aside>
+<p>No. You don’t have access to the MySQL server with ipbfree. You MUST have the user/pass to the database the tables are on.</p>
+</blockquote>
+</aside>
+<p>ok so if i get a real host and make it a .com and it uses ip boards would i then be able to?</p>
+</blockquote>
+</aside>
+<p>Depends. Contact the host and make sure there is ‘Remote MySQL’, meaning you can access the mysql server from another computer (and not just localhost). By default MySQL disables this, so you may have to get them to set it up for you. But if you can get that then of course, you can.<br>
+[/quote]</p>
+<p>ok well i am registering wit <a href="http://vpsland.com" rel="nofollow noopener">vpsland.com</a> and making my forums in to a .com … and it has mySQL and all… but if i will check to see if its remote or local…[/quote]<br>
+If you are getting a VPS then yes, you can. Because with a VPS you have full control… So you can change anything in MySQL etc.</p>
+<p>edit: if the server and site are hosted on the same VPS (I was assuming shared hosting and hosting on your comp), then you don’t need remote mysq.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/31</link>
+        <pubDate>Sat, 25 Oct 2008 01:57:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-31</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@xstrxpurez xstrxpurez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xstrxpurez">@xstrxpurez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Hidendra, post:29, topic:225397”][quote author=xstrxpurez link=topic=296260.msg2505575#msg2505575 date=1224898666]</p>
+<aside class="quote no-group">
+<blockquote>
+<aside class="quote no-group">
+<blockquote>
+<p>Wow… i am kinda stupid when it comes to mySQL but can u use mySQL on ipbfree?</p>
+</blockquote>
+</aside>
+<p>No. You don’t have access to the MySQL server with ipbfree. You MUST have the user/pass to the database the tables are on.</p>
+</blockquote>
+</aside>
+<p>ok so if i get a real host and make it a .com and it uses ip boards would i then be able to?<br>
+[/quote]<br>
+Depends. Contact the host and make sure there is ‘Remote MySQL’, meaning you can access the mysql server from another computer (and not just localhost). By default MySQL disables this, so you may have to get them to set it up for you. But if you can get that then of course, you can.[/quote]</p>
+<p>ok well i am registering wit <a href="http://vpsland.com" rel="nofollow noopener">vpsland.com</a> and making my forums in to a .com … and it has mySQL and all… but if i will check to see if its remote or local…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/30</link>
+        <pubDate>Sat, 25 Oct 2008 01:56:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-30</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@hidendra Hidendra]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hidendra">@hidendra</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“xstrxpurez, post:28, topic:225397”][quote author=Hidendra link=topic=296260.msg2505573#msg2505573 date=1224898621]</p>
+<aside class="quote no-group">
+<blockquote>
+<p>Wow… i am kinda stupid when it comes to mySQL but can u use mySQL on ipbfree?</p>
+</blockquote>
+</aside>
+<p>No. You don’t have access to the MySQL server with ipbfree. You MUST have the user/pass to the database the tables are on.<br>
+[/quote]</p>
+<p>ok so if i get a real host and make it a .com and it uses ip boards would i then be able to?[/quote]<br>
+Depends. Contact the host and make sure there is ‘Remote MySQL’, meaning you can access the mysql server from another computer (and not just localhost). By default MySQL disables this, so you may have to get them to set it up for you. But if you can get that then of course, you can.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/29</link>
+        <pubDate>Sat, 25 Oct 2008 01:54:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-29</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@xstrxpurez xstrxpurez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xstrxpurez">@xstrxpurez</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Hidendra, post:27, topic:225397”][quote author=xstrxpurez link=topic=296260.msg2505570#msg2505570 date=1224898496]<br>
+Wow… i am kinda stupid when it comes to mySQL but can u use mySQL on ipbfree?<br>
+[/quote]<br>
+No. You don’t have access to the MySQL server with ipbfree. You MUST have the user/pass to the database the tables are on.[/quote]</p>
+<p>ok so if i get a real host and make it a .com and it uses ip boards would i then be able to?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/28</link>
+        <pubDate>Sat, 25 Oct 2008 01:37:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-28</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@hidendra Hidendra]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hidendra">@hidendra</a> wrote:</p>
+          <blockquote>
+              <p>No. You don’t have access to the MySQL server with ipbfree. You MUST have the user/pass to the database the tables are on.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/27</link>
+        <pubDate>Sat, 25 Oct 2008 01:37:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-27</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+      <item>
+        <title>[RS2E]: Player Saving and Loading to a MySQL Database</title>
+        <dc:creator><![CDATA[@xstrxpurez xstrxpurez]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xstrxpurez">@xstrxpurez</a> wrote:</p>
+          <blockquote>
+              <p>Wow… i am kinda stupid when it comes to mySQL but can u use mySQL on ipbfree?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397/26</link>
+        <pubDate>Sat, 25 Oct 2008 01:34:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-225397-26</guid>
+        <source url="https://forum.moparisthebest.com/t/rs2e-player-saving-and-loading-to-a-mysql-database/225397.rss">[RS2E]: Player Saving and Loading to a MySQL Database</source>
+      </item>
+  </channel>
+</rss>

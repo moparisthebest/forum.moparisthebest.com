@@ -1,0 +1,787 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>RT3 login protocol breakdown and explanation (impl in C)</title>
+    <link>https://forum.moparisthebest.com/t/rt3-login-protocol-breakdown-and-explanation-impl-in-c/538192</link>
+    <description>Apologies to anyone reading this and shaking their head at some of my less than desirable use of system calls (recv, send) and my ugly unions.
+
+[b]Just the login protocol[/b]
+[code=c]
+/** ----&gt; LOGIN BLOCK &lt;---- */
+void handle_connection(int remotefd)
+{
+  printf(&quot;Handling incoming client...\n&quot;);
+
+  /** Stage 1 */
+  uint8_t connection_type; // Connection type identifier - signifies game login (14)
+  recv(remotefd, &amp;connection_type, sizeof(uint8_t), 0);
+  printf(&quot;Connection Type: %d\n&quot;, connection_type);
+
+  uint8_t name_hash; // A hash of the player&#39;s name, potentially used for quick
+                     // player lookup. I don&#39;t know what the rate of collision
+                     // is on this.
+  recv(remotefd, &amp;name_hash, sizeof(uint8_t), 0);
+  printf(&quot;Name Hash: %d\n&quot;, name_hash);
+
+  /** Stage 2 */
+  ulong_t unix_timestamp; // Whilst this is ignored by the client, it is still
+                          // send. Traditionally it&#39;s a Unix timestamp.
+  unix_timestamp.value = htonll(unix_timestamp.value);
+  send(remotefd, &amp;unix_timestamp.data, sizeof(ulong_t), 0);
+
+  uint8_t response_code = 0; // Reponse code to tell if the client can connect
+                             // &quot;Login Server Offline&quot;, &quot;Invalid Username or Password&quot;,
+                             // etc. Obviously only certain ones apply here since
+                             // Only a name hash and connection type have been read.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  ulong_t issac_seed; // The seed to the ISAAC cipher use as a secure random
+                      // number generator. Both client and server&#39;s random number
+                      // generators are synced up to provide encryption on packet
+                      // opcodes.
+  issac_seed.value = htonll(issac_seed.value);
+  send(remotefd, &amp;issac_seed.data, sizeof(ulong_t), 0);
+
+  /** Stage 3 */
+  uint8_t connection_status; // Another connection status, this time indicating
+                             // if the client is a new connection or is reconnecting.
+  recv(remotefd, &amp;connection_status, sizeof(uint8_t), 0);
+  printf(&quot;Connection Status: %d\n&quot;, connection_status);
+
+  uint8_t rsa_block_size; // The total size of the RSA encrypted block including
+                          // the size header.
+  recv(remotefd, &amp;rsa_block_size, sizeof(uint8_t), 0);
+  printf(&quot;RSA Block Size: %d\n&quot;, rsa_block_size);
+
+  uint8_t magic_255; // A magic number (255)
+  recv(remotefd, &amp;magic_255, sizeof(uint8_t), 0);
+  printf(&quot;Magic (255): %d\n&quot;, magic_255);
+
+  ushort_t client_revision; // The client major revision (ex: 317, 377, etc)
+  recv(remotefd, &amp;client_revision.data, sizeof(ushort_t), 0);
+  client_revision.value = ntohs(client_revision.value);
+  printf(&quot;Client Revision: %d\n&quot;, client_revision.value);
+
+  uint8_t client_memory_type; // Client memory type (High or Low Memory)
+  recv(remotefd, &amp;client_memory_type, sizeof(uint8_t), 0);
+  printf(&quot;Client Memory Type: %d\n&quot;, name_hash);
+
+  // The cache CRC table, which consists of the folllowing:
+  //   Zero padding
+  //   Title archive CRC
+  //   Config archive CRC
+  //   Interface archive CRC
+  //   Media archive CRC
+  //   Versionlist archive CRC
+  //   Textures archive CRC
+  //   Wordenc archive CRC
+  //   Sounds archive CRC
+  for (int i = 0; i &lt; CRC_TABLE_SIZE; ++i) {
+    uint_t crc;
+    recv(remotefd, &amp;crc.data, sizeof(uint_t), 0);
+    crc.value = ntohl(crc.value);
+    printf(&quot;CRC_TABLE[%d]: %x\n&quot;, i, crc.value);
+  }
+
+  /* RSA block header */
+  uint8_t rsa_encrypted_block_size; // The head of the RSA block
+                                    // gives the length of the encrypted data.
+                                    // This is the RSA block size 
+                                    // reported earlier - 1
+  recv(remotefd, &amp;rsa_encrypted_block_size, sizeof(uint8_t), 0);
+  printf(&quot;RSA Encrypted Block Size: %d\n&quot;, rsa_encrypted_block_size);
+
+  /* RSA encrypted block - normally this is encrypted,
+     but this code does not reflect that. Most private server
+     clients do not utilize RSA encryption.
+  */
+  uint8_t magic_10; // A magic number (10)
+  recv(remotefd, &amp;magic_10, sizeof(uint8_t), 0);
+  printf(&quot;Magic (10): %d\n&quot;, magic_10);
+
+  ulong_t client_session_key; // Client session key, the lower 64 bits of the
+                              // client&#39;s ISAAC seed
+  recv(remotefd, &amp;client_session_key.data, sizeof(ulong_t), 0);
+  client_session_key.value = ntohll(client_session_key.value);
+  printf(&quot;Client Session Key: %lld\n&quot;, client_session_key.value);
+
+  ulong_t server_session_key; // Server session key, the upper 64 bits of the
+                              // client&#39;s ISAAC seed
+  recv(remotefd, &amp;server_session_key.data, sizeof(ulong_t), 0);
+  server_session_key.value = ntohll(server_session_key.value);
+  printf(&quot;Server Session Key: %lld\n&quot;, server_session_key.value);
+
+  uint_t uid; // The UID of the player. This is saved to disk on the client&#39;s machine.
+  recv(remotefd, &amp;uid.data, sizeof(uint_t), 0);
+  uid.value = ntohl(uid.value);
+  printf(&quot;UID: %d\n&quot;, uid.value);
+  
+  char username[16]; // The player&#39;s username
+  read_jstr(remotefd, username);
+  printf(&quot;Username: %s\n&quot;, username);
+
+  char password[16]; // The player&#39;s password
+  read_jstr(remotefd, password);
+  printf(&quot;Password: %s\n&quot;, password);
+
+  /** Stage 4 */
+  response_code = 2; // The final response code, see previous explanation.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  uint8_t player_rights; // The player&#39;s access rights (normal, moderator,
+                         // game moderator)
+  send(remotefd, &amp;player_rights, sizeof(uint8_t), 0);
+
+  uint8_t player_cheating_flag; // Should the client send logging information
+                                // for the mouse, etc - is the player suspected
+                                // of cheating?
+  send(remotefd, &amp;player_cheating_flag, sizeof(uint8_t), 0);
+  //End login block
+}
+[/code]
+
+[b]Full Code[/b]
+[code=c]
+/**
+  FILE:        server.c
+  AUTHOR:      t4
+  LICENSE:     GPLv2
+*/
+
+#include &lt;string.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;netdb.h&gt;
+#include &lt;netinet/in.h&gt;
+
+#define CRC_TABLE_SIZE 9
+#define SHORT_MAX_STR_LEN 6
+
+#define ntohll(x) (((uint64_t)(ntohl((uint32_t)((x &lt;&lt; 32) &gt;&gt; 32))) &lt;&lt; 32) | \
+                  ntohl(((uint32_t)(x &gt;&gt; 32))))                                        
+#define htonll(x) ntohll(x)
+
+typedef union {
+  uint16_t value;
+  uint8_t data;
+} ushort_t;
+
+
+typedef union {
+  uint32_t value;
+  uint8_t data;
+} uint_t;
+
+
+typedef union {
+  uint64_t value;
+  uint8_t data;
+} ulong_t;
+
+
+void read_jstr(int remotefd, char *buffer)
+{
+  int ptr = 0;
+  char c;
+  recv(remotefd, &amp;c, sizeof(char), 0);
+  while (c != 10) {
+    buffer[ptr++] = c;
+    recv(remotefd, &amp;c, sizeof(char), 0);
+  }
+  buffer[ptr] = &#39;\0&#39;;
+}
+
+
+/** ----&gt; LOGIN BLOCK &lt;---- */
+void handle_connection(int remotefd)
+{
+  printf(&quot;Handling incoming client...\n&quot;);
+
+  /** Stage 1 */
+  uint8_t connection_type; // Connection type identifier - signifies game login (14)
+  recv(remotefd, &amp;connection_type, sizeof(uint8_t), 0);
+  printf(&quot;Connection Type: %d\n&quot;, connection_type);
+
+  uint8_t name_hash; // A hash of the player&#39;s name, potentially used for quick
+                     // player lookup. I don&#39;t know what the rate of collision
+                     // is on this.
+  recv(remotefd, &amp;name_hash, sizeof(uint8_t), 0);
+  printf(&quot;Name Hash: %d\n&quot;, name_hash);
+
+  /** Stage 2 */
+  ulong_t unix_timestamp; // Whilst this is ignored by the client, it is still
+                          // send. Traditionally it&#39;s a Unix timestamp.
+  unix_timestamp.value = htonll(unix_timestamp.value);
+  send(remotefd, &amp;unix_timestamp.data, sizeof(ulong_t), 0);
+
+  uint8_t response_code = 0; // Reponse code to tell if the client can connect
+                             // &quot;Login Server Offline&quot;, &quot;Invalid Username or Password&quot;,
+                             // etc. Obviously only certain ones apply here since
+                             // Only a name hash and connection type have been read.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  ulong_t issac_seed; // The seed to the ISAAC cipher use as a secure random
+                      // number generator. Both client and server&#39;s random number
+                      // generators are synced up to provide encryption on packet
+                      // opcodes.
+  issac_seed.value = htonll(issac_seed.value);
+  send(remotefd, &amp;issac_seed.data, sizeof(ulong_t), 0);
+
+  /** Stage 3 */
+  uint8_t connection_status; // Another connection status, this time indicating
+                             // if the client is a new connection or is reconnecting.
+  recv(remotefd, &amp;connection_status, sizeof(uint8_t), 0);
+  printf(&quot;Connection Status: %d\n&quot;, connection_status);
+
+  uint8_t rsa_block_size; // The total size of the RSA encrypted block including
+                          // the size header.
+  recv(remotefd, &amp;rsa_block_size, sizeof(uint8_t), 0);
+  printf(&quot;RSA Block Size: %d\n&quot;, rsa_block_size);
+
+  uint8_t magic_255; // A magic number (255)
+  recv(remotefd, &amp;magic_255, sizeof(uint8_t), 0);
+  printf(&quot;Magic (255): %d\n&quot;, magic_255);
+
+  ushort_t client_revision; // The client major revision (ex: 317, 377, etc)
+  recv(remotefd, &amp;client_revision.data, sizeof(ushort_t), 0);
+  client_revision.value = ntohs(client_revision.value);
+  printf(&quot;Client Revision: %d\n&quot;, client_revision.value);
+
+  uint8_t client_memory_type; // Client memory type (High or Low Memory)
+  recv(remotefd, &amp;client_memory_type, sizeof(uint8_t), 0);
+  printf(&quot;Client Memory Type: %d\n&quot;, name_hash);
+
+  // The cache CRC table, which consists of the folllowing:
+  //   Zero padding
+  //   Title archive CRC
+  //   Config archive CRC
+  //   Interface archive CRC
+  //   Media archive CRC
+  //   Versionlist archive CRC
+  //   Textures archive CRC
+  //   Wordenc archive CRC
+  //   Sounds archive CRC
+  for (int i = 0; i &lt; CRC_TABLE_SIZE; ++i) {
+    uint_t crc;
+    recv(remotefd, &amp;crc.data, sizeof(uint_t), 0);
+    crc.value = ntohl(crc.value);
+    printf(&quot;CRC_TABLE[%d]: %x\n&quot;, i, crc.value);
+  }
+
+  /* RSA block header */
+  uint8_t rsa_encrypted_block_size; // The head of the RSA block
+                                    // gives the length of the encrypted data.
+                                    // This is the RSA block size 
+                                    // reported earlier - 1
+  recv(remotefd, &amp;rsa_encrypted_block_size, sizeof(uint8_t), 0);
+  printf(&quot;RSA Encrypted Block Size: %d\n&quot;, rsa_encrypted_block_size);
+
+  /* RSA encrypted block - normally this is encrypted,
+     but this code does not reflect that. Most private server
+     clients do not utilize RSA encryption.
+  */
+  uint8_t magic_10; // A magic number (10)
+  recv(remotefd, &amp;magic_10, sizeof(uint8_t), 0);
+  printf(&quot;Magic (10): %d\n&quot;, magic_10);
+
+  ulong_t client_session_key; // Client session key, the lower 64 bits of the
+                              // client&#39;s ISAAC seed
+  recv(remotefd, &amp;client_session_key.data, sizeof(ulong_t), 0);
+  client_session_key.value = ntohll(client_session_key.value);
+  printf(&quot;Client Session Key: %lld\n&quot;, client_session_key.value);
+
+  ulong_t server_session_key; // Server session key, the upper 64 bits of the
+                              // client&#39;s ISAAC seed
+  recv(remotefd, &amp;server_session_key.data, sizeof(ulong_t), 0);
+  server_session_key.value = ntohll(server_session_key.value);
+  printf(&quot;Server Session Key: %lld\n&quot;, server_session_key.value);
+
+  uint_t uid; // The UID of the player. This is saved to disk on the client&#39;s machine.
+  recv(remotefd, &amp;uid.data, sizeof(uint_t), 0);
+  uid.value = ntohl(uid.value);
+  printf(&quot;UID: %d\n&quot;, uid.value);
+  
+  char username[16]; // The player&#39;s username
+  read_jstr(remotefd, username);
+  printf(&quot;Username: %s\n&quot;, username);
+
+  char password[16]; // The player&#39;s password
+  read_jstr(remotefd, password);
+  printf(&quot;Password: %s\n&quot;, password);
+
+  /** Stage 4 */
+  response_code = 2; // The final response code, see previous explanation.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  uint8_t player_rights; // The player&#39;s access rights (normal, moderator,
+                         // game moderator)
+  send(remotefd, &amp;player_rights, sizeof(uint8_t), 0);
+
+  uint8_t player_cheating_flag; // Should the client send logging information
+                                // for the mouse, etc - is the player suspected
+                                // of cheating?
+  send(remotefd, &amp;player_cheating_flag, sizeof(uint8_t), 0);
+  //End login block
+}
+
+
+int bind_socket(char *hostname, int port, int backlog)
+{
+  int sockfd;
+  int reuse_flag = 1;
+  char port_str[SHORT_MAX_STR_LEN];
+  struct addrinfo hints;
+  struct addrinfo *addrinfo_result = NULL;
+
+  sprintf(port_str, &quot;%d&quot;, port);
+
+  memset(&amp;hints, 0, sizeof(struct addrinfo));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  if (getaddrinfo(hostname, port_str, &amp;hints, &amp;addrinfo_result)) {
+    sockfd = -1;
+    goto out;
+  }
+
+  if ((sockfd = socket(addrinfo_result-&gt;ai_family, addrinfo_result-&gt;ai_socktype,
+       addrinfo_result-&gt;ai_protocol)) == -1) {
+    goto out;
+  }
+
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &amp;reuse_flag, sizeof(int));
+
+  if (bind(sockfd, addrinfo_result-&gt;ai_addr, addrinfo_result-&gt;ai_addrlen) &lt; 0) {
+    sockfd = -1;
+    goto out;
+  }
+
+  if (listen(sockfd, backlog) == -1) {
+    sockfd = -1;
+    goto out;
+  }
+
+out:
+  if (addrinfo_result) {
+    freeaddrinfo(addrinfo_result);
+  }
+  return sockfd;
+}
+
+
+int main(void)
+{
+  struct sockaddr_storage remoteaddr;
+  socklen_t addrlen = sizeof(remoteaddr);
+
+  int listenerfd = bind_socket(&quot;localhost&quot;, 43594, 10);
+  int remotefd;
+  if ((remotefd = accept(listenerfd, (struct sockaddr*) &amp;remoteaddr,
+       &amp;addrlen)) != -1) {
+    handle_connection(remotefd);
+  }
+  close(remotefd);
+  close(listenerfd);
+  return 0;
+}
+[/code]</description>
+    
+    <lastBuildDate>Mon, 06 Jan 2014 11:27:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/rt3-login-protocol-breakdown-and-explanation-impl-in-c/538192.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>RT3 login protocol breakdown and explanation (impl in C)</title>
+        <dc:creator><![CDATA[@T41 t4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/t41">@T41</a> wrote:</p>
+          <blockquote>
+              <p>Apologies to anyone reading this and shaking their head at some of my less than desirable use of system calls (recv, send) and my ugly unions.</p>
+<p><span class="bbcode-b">Just the login protocol</span></p>
+<pre><code class="lang-auto">/** ----&gt; LOGIN BLOCK &lt;---- */
+void handle_connection(int remotefd)
+{
+  printf("Handling incoming client...\n");
+
+  /** Stage 1 */
+  uint8_t connection_type; // Connection type identifier - signifies game login (14)
+  recv(remotefd, &amp;connection_type, sizeof(uint8_t), 0);
+  printf("Connection Type: %d\n", connection_type);
+
+  uint8_t name_hash; // A hash of the player's name, potentially used for quick
+                     // player lookup. I don't know what the rate of collision
+                     // is on this.
+  recv(remotefd, &amp;name_hash, sizeof(uint8_t), 0);
+  printf("Name Hash: %d\n", name_hash);
+
+  /** Stage 2 */
+  ulong_t unix_timestamp; // Whilst this is ignored by the client, it is still
+                          // send. Traditionally it's a Unix timestamp.
+  unix_timestamp.value = htonll(unix_timestamp.value);
+  send(remotefd, &amp;unix_timestamp.data, sizeof(ulong_t), 0);
+
+  uint8_t response_code = 0; // Reponse code to tell if the client can connect
+                             // "Login Server Offline", "Invalid Username or Password",
+                             // etc. Obviously only certain ones apply here since
+                             // Only a name hash and connection type have been read.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  ulong_t issac_seed; // The seed to the ISAAC cipher use as a secure random
+                      // number generator. Both client and server's random number
+                      // generators are synced up to provide encryption on packet
+                      // opcodes.
+  issac_seed.value = htonll(issac_seed.value);
+  send(remotefd, &amp;issac_seed.data, sizeof(ulong_t), 0);
+
+  /** Stage 3 */
+  uint8_t connection_status; // Another connection status, this time indicating
+                             // if the client is a new connection or is reconnecting.
+  recv(remotefd, &amp;connection_status, sizeof(uint8_t), 0);
+  printf("Connection Status: %d\n", connection_status);
+
+  uint8_t rsa_block_size; // The total size of the RSA encrypted block including
+                          // the size header.
+  recv(remotefd, &amp;rsa_block_size, sizeof(uint8_t), 0);
+  printf("RSA Block Size: %d\n", rsa_block_size);
+
+  uint8_t magic_255; // A magic number (255)
+  recv(remotefd, &amp;magic_255, sizeof(uint8_t), 0);
+  printf("Magic (255): %d\n", magic_255);
+
+  ushort_t client_revision; // The client major revision (ex: 317, 377, etc)
+  recv(remotefd, &amp;client_revision.data, sizeof(ushort_t), 0);
+  client_revision.value = ntohs(client_revision.value);
+  printf("Client Revision: %d\n", client_revision.value);
+
+  uint8_t client_memory_type; // Client memory type (High or Low Memory)
+  recv(remotefd, &amp;client_memory_type, sizeof(uint8_t), 0);
+  printf("Client Memory Type: %d\n", name_hash);
+
+  // The cache CRC table, which consists of the folllowing:
+  //   Zero padding
+  //   Title archive CRC
+  //   Config archive CRC
+  //   Interface archive CRC
+  //   Media archive CRC
+  //   Versionlist archive CRC
+  //   Textures archive CRC
+  //   Wordenc archive CRC
+  //   Sounds archive CRC
+  for (int i = 0; i &lt; CRC_TABLE_SIZE; ++i) {
+    uint_t crc;
+    recv(remotefd, &amp;crc.data, sizeof(uint_t), 0);
+    crc.value = ntohl(crc.value);
+    printf("CRC_TABLE[%d]: %x\n", i, crc.value);
+  }
+
+  /* RSA block header */
+  uint8_t rsa_encrypted_block_size; // The head of the RSA block
+                                    // gives the length of the encrypted data.
+                                    // This is the RSA block size 
+                                    // reported earlier - 1
+  recv(remotefd, &amp;rsa_encrypted_block_size, sizeof(uint8_t), 0);
+  printf("RSA Encrypted Block Size: %d\n", rsa_encrypted_block_size);
+
+  /* RSA encrypted block - normally this is encrypted,
+     but this code does not reflect that. Most private server
+     clients do not utilize RSA encryption.
+  */
+  uint8_t magic_10; // A magic number (10)
+  recv(remotefd, &amp;magic_10, sizeof(uint8_t), 0);
+  printf("Magic (10): %d\n", magic_10);
+
+  ulong_t client_session_key; // Client session key, the lower 64 bits of the
+                              // client's ISAAC seed
+  recv(remotefd, &amp;client_session_key.data, sizeof(ulong_t), 0);
+  client_session_key.value = ntohll(client_session_key.value);
+  printf("Client Session Key: %lld\n", client_session_key.value);
+
+  ulong_t server_session_key; // Server session key, the upper 64 bits of the
+                              // client's ISAAC seed
+  recv(remotefd, &amp;server_session_key.data, sizeof(ulong_t), 0);
+  server_session_key.value = ntohll(server_session_key.value);
+  printf("Server Session Key: %lld\n", server_session_key.value);
+
+  uint_t uid; // The UID of the player. This is saved to disk on the client's machine.
+  recv(remotefd, &amp;uid.data, sizeof(uint_t), 0);
+  uid.value = ntohl(uid.value);
+  printf("UID: %d\n", uid.value);
+  
+  char username[16]; // The player's username
+  read_jstr(remotefd, username);
+  printf("Username: %s\n", username);
+
+  char password[16]; // The player's password
+  read_jstr(remotefd, password);
+  printf("Password: %s\n", password);
+
+  /** Stage 4 */
+  response_code = 2; // The final response code, see previous explanation.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  uint8_t player_rights; // The player's access rights (normal, moderator,
+                         // game moderator)
+  send(remotefd, &amp;player_rights, sizeof(uint8_t), 0);
+
+  uint8_t player_cheating_flag; // Should the client send logging information
+                                // for the mouse, etc - is the player suspected
+                                // of cheating?
+  send(remotefd, &amp;player_cheating_flag, sizeof(uint8_t), 0);
+  //End login block
+}</code></pre>
+<p><span class="bbcode-b">Full Code</span></p>
+<pre><code class="lang-auto">/**
+  FILE:        server.c
+  AUTHOR:      t4
+  LICENSE:     GPLv2
+*/
+
+#include &lt;string.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;netdb.h&gt;
+#include &lt;netinet/in.h&gt;
+
+#define CRC_TABLE_SIZE 9
+#define SHORT_MAX_STR_LEN 6
+
+#define ntohll(x) (((uint64_t)(ntohl((uint32_t)((x &lt;&lt; 32) &gt;&gt; 32))) &lt;&lt; 32) | \
+                  ntohl(((uint32_t)(x &gt;&gt; 32))))                                        
+#define htonll(x) ntohll(x)
+
+typedef union {
+  uint16_t value;
+  uint8_t data;
+} ushort_t;
+
+
+typedef union {
+  uint32_t value;
+  uint8_t data;
+} uint_t;
+
+
+typedef union {
+  uint64_t value;
+  uint8_t data;
+} ulong_t;
+
+
+void read_jstr(int remotefd, char *buffer)
+{
+  int ptr = 0;
+  char c;
+  recv(remotefd, &amp;c, sizeof(char), 0);
+  while (c != 10) {
+    buffer[ptr++] = c;
+    recv(remotefd, &amp;c, sizeof(char), 0);
+  }
+  buffer[ptr] = '\0';
+}
+
+
+/** ----&gt; LOGIN BLOCK &lt;---- */
+void handle_connection(int remotefd)
+{
+  printf("Handling incoming client...\n");
+
+  /** Stage 1 */
+  uint8_t connection_type; // Connection type identifier - signifies game login (14)
+  recv(remotefd, &amp;connection_type, sizeof(uint8_t), 0);
+  printf("Connection Type: %d\n", connection_type);
+
+  uint8_t name_hash; // A hash of the player's name, potentially used for quick
+                     // player lookup. I don't know what the rate of collision
+                     // is on this.
+  recv(remotefd, &amp;name_hash, sizeof(uint8_t), 0);
+  printf("Name Hash: %d\n", name_hash);
+
+  /** Stage 2 */
+  ulong_t unix_timestamp; // Whilst this is ignored by the client, it is still
+                          // send. Traditionally it's a Unix timestamp.
+  unix_timestamp.value = htonll(unix_timestamp.value);
+  send(remotefd, &amp;unix_timestamp.data, sizeof(ulong_t), 0);
+
+  uint8_t response_code = 0; // Reponse code to tell if the client can connect
+                             // "Login Server Offline", "Invalid Username or Password",
+                             // etc. Obviously only certain ones apply here since
+                             // Only a name hash and connection type have been read.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  ulong_t issac_seed; // The seed to the ISAAC cipher use as a secure random
+                      // number generator. Both client and server's random number
+                      // generators are synced up to provide encryption on packet
+                      // opcodes.
+  issac_seed.value = htonll(issac_seed.value);
+  send(remotefd, &amp;issac_seed.data, sizeof(ulong_t), 0);
+
+  /** Stage 3 */
+  uint8_t connection_status; // Another connection status, this time indicating
+                             // if the client is a new connection or is reconnecting.
+  recv(remotefd, &amp;connection_status, sizeof(uint8_t), 0);
+  printf("Connection Status: %d\n", connection_status);
+
+  uint8_t rsa_block_size; // The total size of the RSA encrypted block including
+                          // the size header.
+  recv(remotefd, &amp;rsa_block_size, sizeof(uint8_t), 0);
+  printf("RSA Block Size: %d\n", rsa_block_size);
+
+  uint8_t magic_255; // A magic number (255)
+  recv(remotefd, &amp;magic_255, sizeof(uint8_t), 0);
+  printf("Magic (255): %d\n", magic_255);
+
+  ushort_t client_revision; // The client major revision (ex: 317, 377, etc)
+  recv(remotefd, &amp;client_revision.data, sizeof(ushort_t), 0);
+  client_revision.value = ntohs(client_revision.value);
+  printf("Client Revision: %d\n", client_revision.value);
+
+  uint8_t client_memory_type; // Client memory type (High or Low Memory)
+  recv(remotefd, &amp;client_memory_type, sizeof(uint8_t), 0);
+  printf("Client Memory Type: %d\n", name_hash);
+
+  // The cache CRC table, which consists of the folllowing:
+  //   Zero padding
+  //   Title archive CRC
+  //   Config archive CRC
+  //   Interface archive CRC
+  //   Media archive CRC
+  //   Versionlist archive CRC
+  //   Textures archive CRC
+  //   Wordenc archive CRC
+  //   Sounds archive CRC
+  for (int i = 0; i &lt; CRC_TABLE_SIZE; ++i) {
+    uint_t crc;
+    recv(remotefd, &amp;crc.data, sizeof(uint_t), 0);
+    crc.value = ntohl(crc.value);
+    printf("CRC_TABLE[%d]: %x\n", i, crc.value);
+  }
+
+  /* RSA block header */
+  uint8_t rsa_encrypted_block_size; // The head of the RSA block
+                                    // gives the length of the encrypted data.
+                                    // This is the RSA block size 
+                                    // reported earlier - 1
+  recv(remotefd, &amp;rsa_encrypted_block_size, sizeof(uint8_t), 0);
+  printf("RSA Encrypted Block Size: %d\n", rsa_encrypted_block_size);
+
+  /* RSA encrypted block - normally this is encrypted,
+     but this code does not reflect that. Most private server
+     clients do not utilize RSA encryption.
+  */
+  uint8_t magic_10; // A magic number (10)
+  recv(remotefd, &amp;magic_10, sizeof(uint8_t), 0);
+  printf("Magic (10): %d\n", magic_10);
+
+  ulong_t client_session_key; // Client session key, the lower 64 bits of the
+                              // client's ISAAC seed
+  recv(remotefd, &amp;client_session_key.data, sizeof(ulong_t), 0);
+  client_session_key.value = ntohll(client_session_key.value);
+  printf("Client Session Key: %lld\n", client_session_key.value);
+
+  ulong_t server_session_key; // Server session key, the upper 64 bits of the
+                              // client's ISAAC seed
+  recv(remotefd, &amp;server_session_key.data, sizeof(ulong_t), 0);
+  server_session_key.value = ntohll(server_session_key.value);
+  printf("Server Session Key: %lld\n", server_session_key.value);
+
+  uint_t uid; // The UID of the player. This is saved to disk on the client's machine.
+  recv(remotefd, &amp;uid.data, sizeof(uint_t), 0);
+  uid.value = ntohl(uid.value);
+  printf("UID: %d\n", uid.value);
+  
+  char username[16]; // The player's username
+  read_jstr(remotefd, username);
+  printf("Username: %s\n", username);
+
+  char password[16]; // The player's password
+  read_jstr(remotefd, password);
+  printf("Password: %s\n", password);
+
+  /** Stage 4 */
+  response_code = 2; // The final response code, see previous explanation.
+  send(remotefd, &amp;response_code, sizeof(uint8_t), 0);
+
+  uint8_t player_rights; // The player's access rights (normal, moderator,
+                         // game moderator)
+  send(remotefd, &amp;player_rights, sizeof(uint8_t), 0);
+
+  uint8_t player_cheating_flag; // Should the client send logging information
+                                // for the mouse, etc - is the player suspected
+                                // of cheating?
+  send(remotefd, &amp;player_cheating_flag, sizeof(uint8_t), 0);
+  //End login block
+}
+
+
+int bind_socket(char *hostname, int port, int backlog)
+{
+  int sockfd;
+  int reuse_flag = 1;
+  char port_str[SHORT_MAX_STR_LEN];
+  struct addrinfo hints;
+  struct addrinfo *addrinfo_result = NULL;
+
+  sprintf(port_str, "%d", port);
+
+  memset(&amp;hints, 0, sizeof(struct addrinfo));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  if (getaddrinfo(hostname, port_str, &amp;hints, &amp;addrinfo_result)) {
+    sockfd = -1;
+    goto out;
+  }
+
+  if ((sockfd = socket(addrinfo_result-&gt;ai_family, addrinfo_result-&gt;ai_socktype,
+       addrinfo_result-&gt;ai_protocol)) == -1) {
+    goto out;
+  }
+
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &amp;reuse_flag, sizeof(int));
+
+  if (bind(sockfd, addrinfo_result-&gt;ai_addr, addrinfo_result-&gt;ai_addrlen) &lt; 0) {
+    sockfd = -1;
+    goto out;
+  }
+
+  if (listen(sockfd, backlog) == -1) {
+    sockfd = -1;
+    goto out;
+  }
+
+out:
+  if (addrinfo_result) {
+    freeaddrinfo(addrinfo_result);
+  }
+  return sockfd;
+}
+
+
+int main(void)
+{
+  struct sockaddr_storage remoteaddr;
+  socklen_t addrlen = sizeof(remoteaddr);
+
+  int listenerfd = bind_socket("localhost", 43594, 10);
+  int remotefd;
+  if ((remotefd = accept(listenerfd, (struct sockaddr*) &amp;remoteaddr,
+       &amp;addrlen)) != -1) {
+    handle_connection(remotefd);
+  }
+  close(remotefd);
+  close(listenerfd);
+  return 0;
+}</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/rt3-login-protocol-breakdown-and-explanation-impl-in-c/538192/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/rt3-login-protocol-breakdown-and-explanation-impl-in-c/538192/1</link>
+        <pubDate>Mon, 06 Jan 2014 11:27:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-538192-1</guid>
+        <source url="https://forum.moparisthebest.com/t/rt3-login-protocol-breakdown-and-explanation-impl-in-c/538192.rss">RT3 login protocol breakdown and explanation (impl in C)</source>
+      </item>
+  </channel>
+</rss>

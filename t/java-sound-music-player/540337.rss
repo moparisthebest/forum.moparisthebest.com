@@ -1,0 +1,504 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Java sound/music player</title>
+    <link>https://forum.moparisthebest.com/t/java-sound-music-player/540337</link>
+    <description>This is just a snippet showing you how you can play music using Java. This can be used for quiet a few things such as playing sound in a GUI etc.
+Note: The idea came from the 317 client :rolleyes:
+
+Since Clip.java is really rubbish and does not work and sun.audio was not an option for me I&#39;ve made my own implementation to allow you to play sound. This method does not load the sound into memory like Clip did causing outOfMemoryExceptions (or whatever its called), and there is no delay in playing the sound. 
+
+If you want a cheap fading system you can use setVolume() then sleep it whilst decrementing it to create a fading effect,
+
+Sound.java
+[code=java]package com.music;
+
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.text.DecimalFormat;
+
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.DataLine;
+import javax.sound.sampled.DataLine.Info;
+import javax.sound.sampled.FloatControl;
+import javax.sound.sampled.SourceDataLine;
+import javax.sound.sampled.UnsupportedAudioFileException;
+
+/**
+ * A simple way to play sound using Java
+ * 
+ * @author Victoria Connelly &lt;haiix@littlevicky.net&gt;
+ *
+ */
+public class Sound implements Runnable {
+	/**
+	 * Frame rate of the sound file 
+	 */
+	private byte[] frames;
+	
+	/**
+	 * THe path of the sound file
+	 */
+	private String sound;
+	
+	/**
+	 * If the sound is playing
+	 */
+	private boolean playing;
+	
+	/**
+	 * The volume of the sound playing
+	 * range: -40F - 6F
+	 */
+	private float volume = 1F;
+	
+	/**
+	 * The file object for the sound file
+	 */
+	private File file;
+	
+	
+	private AudioFormat format;
+	private AudioInputStream audioStream;
+	private SourceDataLine line;
+	private Info info;
+	
+	/**
+	 * The thread for the sound to play on
+	 */
+	private Thread thread;
+	
+	@Override
+	public void run() {
+		start();
+	}
+	
+	private byte[] getFrames(AudioInputStream audioStream) {
+		int length = (int) (audioStream.getFrameLength() * format.getFrameSize());
+		byte[] samples = new byte[length];
+		
+		DataInputStream input = new DataInputStream(audioStream);
+		
+		try {
+			input.readFully(samples);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		return samples;
+	}
+	
+	/**
+	 * Initiate the sound 
+	 */
+	private void start() {
+		System.out.println(&quot;Started...&quot;);
+		setPlaying(true);
+		try {
+			InputStream stream = new ByteArrayInputStream(getFrames());
+			int bufferSize = format.getFrameSize() * Math.round(format.getSampleRate() / 10);
+			byte[] buffer = new byte[bufferSize];
+			
+			info = new DataLine.Info(SourceDataLine.class, format);
+	        line = (SourceDataLine)AudioSystem.getLine(info);
+	        line.open(format, bufferSize);
+	        
+	        line.start();
+	        FloatControl volume = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
+			volume.setValue(getVolume());
+	       
+			System.out.println(&quot;Length: &quot; + getLength());
+			
+			int bytes = 0;
+	        while (bytes != -1) {
+	            bytes = stream.read(buffer, 0, buffer.length);
+	            if (bytes != -1) {
+	               line.write(buffer, 0, bytes);
+	            }
+	            volume.setValue(getVolume());
+	        }
+		} catch (Exception e) {
+			System.err.println(&quot;Error: There was an error playing &quot; + sound);
+		} finally {
+	        line.drain();
+	        line.close();
+	        
+	        try {
+				audioStream.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+	        
+	        /**
+	         * This is here for the sake of resetting everything to null
+	         * after we are done with the objects.
+                 * - Probably not even needed lol
+	         */
+	        file = null;
+	        sound = null;
+	        info = null;
+	        line = null;
+	        thread = null;
+	        frames = null;
+	        audioStream = null;
+	        format = null;
+	        
+	        System.out.println(&quot;Music finished!&quot;);
+	        setPlaying(false);
+		}
+	}
+	
+	/**
+	 * Play a sound
+	 * 
+	 * @param sound
+	 * 	The path to the sound file
+	 */
+	public void play(String sound) {
+		this.sound = sound;
+		file = new File(sound);
+		
+		try {
+			audioStream = AudioSystem.getAudioInputStream(file);
+		} catch (UnsupportedAudioFileException | IOException e) {
+			System.err.println(&quot;Error: There was an error playing: &quot; + sound);
+			e.printStackTrace();
+		}
+		
+		this.format = audioStream.getFormat();
+		setFrames(getFrames(audioStream));
+		
+		if (isPlaying()) {
+			System.err.println(&quot;There is music already playing!&quot;);
+			return;
+		}
+		thread = new Thread(this);
+		thread.start();
+		
+	}
+	
+	/**
+	 * Inaccurate (close enough) method to get the length of the playing sound
+	 */
+	public double getLength() {
+		AudioFormat format = audioStream.getFormat();
+		long frames = audioStream.getFrameLength();
+		
+		double time = (double) frames / format.getFrameRate() / 60; 
+		
+		DecimalFormat df2 = new DecimalFormat(&quot;###.##&quot;);
+	    return Double.valueOf(df2.format(time));
+	}
+	
+	private byte[] setFrames(byte[] frames) {
+		return this.frames = frames;
+	}
+	
+	private byte[] getFrames() {
+		return frames;
+	}
+	
+	public boolean setPlaying(boolean playing) {
+		return this.playing = playing;
+	}
+	
+	public boolean isPlaying() {
+		return playing;
+	}
+	
+	/**
+	 * Sets the volume of the sound
+	 */
+	public float setVolume(float volume) {
+		if (volume &gt; 6F) {
+			return this.volume = 7;
+		}
+		if (volume &lt; -40F) {
+			return this.volume = -40F;
+		}
+		return this.volume = volume;
+	}
+	
+	public float getVolume() {
+		if (volume &gt; 6) {
+			volume = 6;
+		}
+		return volume;
+	}
+}
+[/code]
+
+Usage: 
+[code=java]Sound sound = new Sound();
+sound.play(&quot;./Feel.wav&quot;);[/code]
+
+Only one Sound object is needed but If you want to play more then one sound at a time you will need to create another sound instance.
+Note: You can use an enum or something to hold your sound files.
+
+Open to suggestions on making this better. 
+
+
+Edit: FloatControl.java may not be supported on Linux or Mac. If you get a problem playing it just comment out the times related in the start() method. 
+FloatControl is being used for the volume.</description>
+    
+    <lastBuildDate>Wed, 19 Feb 2014 13:13:12 +0000</lastBuildDate>
+    <category>General Programming</category>
+    <atom:link href="https://forum.moparisthebest.com/t/java-sound-music-player/540337.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Java sound/music player</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>This is just a snippet showing you how you can play music using Java. This can be used for quiet a few things such as playing sound in a GUI etc.<br>
+Note: The idea came from the 317 client :rolleyes:</p>
+<p>Since Clip.java is really rubbish and does not work and sun.audio was not an option for me I’ve made my own implementation to allow you to play sound. This method does not load the sound into memory like Clip did causing outOfMemoryExceptions (or whatever its called), and there is no delay in playing the sound.</p>
+<p>If you want a cheap fading system you can use setVolume() then sleep it whilst decrementing it to create a fading effect,</p>
+<p>Sound.java</p>
+<p>[code=java]package com.music;</p>
+<p>import java.io.ByteArrayInputStream;<br>
+import java.io.DataInputStream;<br>
+import java.io.File;<br>
+import java.io.IOException;<br>
+import java.io.InputStream;<br>
+import java.text.DecimalFormat;</p>
+<p>import javax.sound.sampled.AudioFormat;<br>
+import javax.sound.sampled.AudioInputStream;<br>
+import javax.sound.sampled.AudioSystem;<br>
+import javax.sound.sampled.DataLine;<br>
+import javax.sound.sampled.DataLine.Info;<br>
+import javax.sound.sampled.FloatControl;<br>
+import javax.sound.sampled.SourceDataLine;<br>
+import javax.sound.sampled.UnsupportedAudioFileException;</p>
+<p>/**</p>
+<ul>
+<li>A simple way to play sound using Java</li>
+<li>
+</li>
+<li>
+<span class="mention">@author</span> Victoria Connelly <a href="mailto:haiix@littlevicky.net">haiix@littlevicky.net</a>
+</li>
+<li>
+</li>
+</ul>
+<p><em>/<br>
+public class Sound implements Runnable {<br>
+/</em>*<br>
+* Frame rate of the sound file<br>
+*/<br>
+private byte[] frames;</p>
+<pre><code>/**
+ * THe path of the sound file
+ */
+private String sound;
+
+/**
+ * If the sound is playing
+ */
+private boolean playing;
+
+/**
+ * The volume of the sound playing
+ * range: -40F - 6F
+ */
+private float volume = 1F;
+
+/**
+ * The file object for the sound file
+ */
+private File file;
+
+
+private AudioFormat format;
+private AudioInputStream audioStream;
+private SourceDataLine line;
+private Info info;
+
+/**
+ * The thread for the sound to play on
+ */
+private Thread thread;
+
+@Override
+public void run() {
+	start();
+}
+
+private byte[] getFrames(AudioInputStream audioStream) {
+	int length = (int) (audioStream.getFrameLength() * format.getFrameSize());
+	byte[] samples = new byte[length];
+	
+	DataInputStream input = new DataInputStream(audioStream);
+	
+	try {
+		input.readFully(samples);
+	} catch (IOException e) {
+		e.printStackTrace();
+	}
+	
+	return samples;
+}
+
+/**
+ * Initiate the sound 
+ */
+private void start() {
+	System.out.println("Started...");
+	setPlaying(true);
+	try {
+		InputStream stream = new ByteArrayInputStream(getFrames());
+		int bufferSize = format.getFrameSize() * Math.round(format.getSampleRate() / 10);
+		byte[] buffer = new byte[bufferSize];
+		
+		info = new DataLine.Info(SourceDataLine.class, format);
+        line = (SourceDataLine)AudioSystem.getLine(info);
+        line.open(format, bufferSize);
+        
+        line.start();
+        FloatControl volume = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
+		volume.setValue(getVolume());
+       
+		System.out.println("Length: " + getLength());
+		
+		int bytes = 0;
+        while (bytes != -1) {
+            bytes = stream.read(buffer, 0, buffer.length);
+            if (bytes != -1) {
+               line.write(buffer, 0, bytes);
+            }
+            volume.setValue(getVolume());
+        }
+	} catch (Exception e) {
+		System.err.println("Error: There was an error playing " + sound);
+	} finally {
+        line.drain();
+        line.close();
+        
+        try {
+			audioStream.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+        
+        /**
+         * This is here for the sake of resetting everything to null
+         * after we are done with the objects.
+             * - Probably not even needed lol
+         */
+        file = null;
+        sound = null;
+        info = null;
+        line = null;
+        thread = null;
+        frames = null;
+        audioStream = null;
+        format = null;
+        
+        System.out.println("Music finished!");
+        setPlaying(false);
+	}
+}
+
+/**
+ * Play a sound
+ * 
+ * @param sound
+ * 	The path to the sound file
+ */
+public void play(String sound) {
+	this.sound = sound;
+	file = new File(sound);
+	
+	try {
+		audioStream = AudioSystem.getAudioInputStream(file);
+	} catch (UnsupportedAudioFileException | IOException e) {
+		System.err.println("Error: There was an error playing: " + sound);
+		e.printStackTrace();
+	}
+	
+	this.format = audioStream.getFormat();
+	setFrames(getFrames(audioStream));
+	
+	if (isPlaying()) {
+		System.err.println("There is music already playing!");
+		return;
+	}
+	thread = new Thread(this);
+	thread.start();
+	
+}
+
+/**
+ * Inaccurate (close enough) method to get the length of the playing sound
+ */
+public double getLength() {
+	AudioFormat format = audioStream.getFormat();
+	long frames = audioStream.getFrameLength();
+	
+	double time = (double) frames / format.getFrameRate() / 60; 
+	
+	DecimalFormat df2 = new DecimalFormat("###.##");
+    return Double.valueOf(df2.format(time));
+}
+
+private byte[] setFrames(byte[] frames) {
+	return this.frames = frames;
+}
+
+private byte[] getFrames() {
+	return frames;
+}
+
+public boolean setPlaying(boolean playing) {
+	return this.playing = playing;
+}
+
+public boolean isPlaying() {
+	return playing;
+}
+
+/**
+ * Sets the volume of the sound
+ */
+public float setVolume(float volume) {
+	if (volume &gt; 6F) {
+		return this.volume = 7;
+	}
+	if (volume &lt; -40F) {
+		return this.volume = -40F;
+	}
+	return this.volume = volume;
+}
+
+public float getVolume() {
+	if (volume &gt; 6) {
+		volume = 6;
+	}
+	return volume;
+}
+</code></pre>
+<p>}<br>
+[/code]</p>
+<p>Usage:</p>
+<p><code>Sound sound = new Sound();
+sound.play("./Feel.wav");</code></p>
+<p>Only one Sound object is needed but If you want to play more then one sound at a time you will need to create another sound instance.<br>
+Note: You can use an enum or something to hold your sound files.</p>
+<p>Open to suggestions on making this better.</p>
+<p>Edit: FloatControl.java may not be supported on Linux or Mac. If you get a problem playing it just comment out the times related in the start() method.<br>
+FloatControl is being used for the volume.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/java-sound-music-player/540337/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/java-sound-music-player/540337/1</link>
+        <pubDate>Wed, 19 Feb 2014 13:13:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-540337-1</guid>
+        <source url="https://forum.moparisthebest.com/t/java-sound-music-player/540337.rss">Java sound/music player</source>
+      </item>
+  </channel>
+</rss>

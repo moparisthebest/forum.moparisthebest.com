@@ -1,0 +1,1340 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Cycle based event system</title>
+    <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985</link>
+    <description>an event system I made earlier this year, any constructive criticism appreciated (sinisoul), mainly posted in this section to get feedback, if its in the wrong section please move it to the appropriate one! Thanks!
+
+[u][b]How this works[/b][/u]
+
+There&#39;s pretty much 3 different types of unique events, each one serving a specific purpose. 
+
+A [i]SimpleEvent[/i] is an event that has a set delay and then executes [b]once[/b], and is then terminated automatically. This can be used for things like bind/freeze delays, and specific parts of combat.
+
+eg: [code=java]        World.getWorld().submit(new SimpleEvent(tree.getRespawnTime(), p) {
+            @Override
+            public void execute() {
+                ObjectHandler.placeObject(new Objects(object, pos.getX(), pos.getY(), pos.getZ(), 0, 10));
+                stumps.remove(pos);
+                stop();
+            }
+        });[/code]
+
+A [i]RecurringEvent[/i] is the most commonly used event, it has a set delay and then once it executes you have the option to either stop the event or to leave it running. This is used for just about anything, skills, combat, running energy, etc.
+
+eg:[code=java]        World.getWorld().submit(new RecurringEvent(4, false) {
+            @Override
+            protected void execute() {
+                if (disconnected) {
+                    this.setRunning(false);
+                }
+
+                if (energy == 100) {
+                    return;
+                }
+                if (isRunning || isRunning2) {
+                    return;
+                }
+
+                energy++;
+                getPA().sendFrame126(energy + &quot;%&quot;, 149);
+            }[/code]
+
+A [i]Processor[/i] event is the least commonly used event, it is basically an event automatically submitted to the core on startup and it runs for as long as the server is online. This can be used for things like automatic announcements and global events.
+
+eg:[code=java]package server.event.type.impl;
+
+import server.event.type.Processor;
+import server.rs2.World;
+import server.rs2.npcs.zombie.Zombie;
+import server.rs2.players.Player;
+import server.rs2.players.PlayerHandler;
+import server.util.ScriptManager;
+
+/**
+ * Controls day and night
+ * 
+ * @author lare96
+ */
+public class Diurnal extends Processor {
+
+    public Diurnal() {
+        super(ScriptManager.getInt(&quot;DIURNAL&quot;));
+    }
+
+    @Override
+    protected void execute() {
+
+        if (World.serverState == 0) {
+            World.serverState++;
+        } else if (World.serverState == 1) {
+            World.serverState++;
+        } else if (World.serverState == 2) {
+            World.serverState++;
+            World.getWorld().replaceDay(Integer.toString(World.currentDay + 1));
+        } else if (World.serverState == 3) {
+            World.serverState = 0;
+        }
+
+        for (Player player : PlayerHandler.players) {
+            if (player == null) {
+                continue;
+            }
+
+            if (player.getRegion().inGame()) {
+                player.getPA().sendFrame126(&quot;@or1@Time: @gre@&quot; + World.getWorld().getCurrentTime(), 7332);
+                player.getPA().sendFrame126(&quot;@or1@Day: @gre@&quot; + World.currentDay, 7333);
+                ScriptManager.callFunc(&quot;update&quot;, player);
+            }
+        }
+
+        Zombie.start();
+    }
+}[/code]
+
+
+
+With the power of polymorphism, all three unique event types are also [i]Event[/i] types meaning we can submit any type of event with one method.
+
+
+[u][b]The system[/b][/u]
+
+[u]Event[/u]
+
+[code=java]package server.event;
+
+/**
+ * Represents an event and all event types extend this. The benefit of having
+ * different event types is managability, where you can provide different
+ * functions for different types, and have this class hold functions for all
+ * event types.
+ * 
+ * @author lare96
+ */
+public abstract class Event {
+
+    /**
+     * Delay in ticks
+     */
+    private int cycle;
+
+    /**
+     * If the event is running
+     */
+    private boolean running;
+
+    /**
+     * The Object the event is binded too
+     */
+    private Object key;
+
+    /**
+     * The amount of ticks this event holds
+     */
+    public int ticks;
+
+    /**
+     * Constructs a new event
+     */
+    public Event(int cycle, Object bind) {
+        setCycle(cycle);
+        setBind(bind);
+        setRunning(true);
+        ticks = 0;
+    }
+
+    /**
+     * Execution of the event
+     */
+    protected abstract void execute();
+
+    /**
+     * When the event has stopped
+     */
+    protected abstract void done();
+
+    /**
+     * Event finalization, it is cruicial that all event types have some sort of
+     * finalization
+     */
+    public abstract void finalization();
+
+    /**
+     * Event on-tick
+     */
+    public boolean tick() {
+        try {
+            /**
+             * Remove events that are no longer running
+             */
+            if (!this.isRunning()) {
+                return false;
+            }
+
+            /**
+             * Increase event ticks by one
+             */
+            this.ticks++;
+
+            /**
+             * Execute the event if needed
+             */
+            if (this.getCycle() == this.ticks &amp;&amp; this.isRunning()) {
+                /**
+                 * Execute
+                 */
+                this.execute();
+
+                /**
+                 * Event finalization (make event loop, make event stop, etc.)
+                 * we need this so processing is ignorant to the type of Event
+                 * we are using!
+                 */
+                this.finalization();
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+        return true;
+    }
+
+    /**
+     * Stops the event and executes the done method
+     */
+    public void stop() {
+        this.setRunning(false);
+        this.done();
+    }
+
+    /**
+     * @return the bind
+     */
+    public Object getKey() {
+        return key;
+    }
+
+    /**
+     * @param bind
+     *            the bind to set
+     */
+    public void setBind(Object bind) {
+        this.key = bind;
+    }
+
+    /**
+     * @return the running
+     */
+    public boolean isRunning() {
+        return running;
+    }
+
+    /**
+     * @param running
+     *            the running to set
+     */
+    public void setRunning(boolean running) {
+        this.running = running;
+    }
+
+    /**
+     * @return the cycle
+     */
+    public int getCycle() {
+        return cycle;
+    }
+
+    /**
+     * @param cycle
+     *            the cycle to set
+     */
+    public void setCycle(int cycle) {
+        this.cycle = cycle;
+    }
+}
+[/code]
+
+[u]EventCore[/u]
+
+[code=java]package server.event;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Queue;
+
+/**
+ * Processes all events, I&#39;ve improved on the design drastically thanks to
+ * iamthenull and mister maggot. Keep in mind the processing is ignorant to the
+ * fact that there are different event types, meaning whenever we add a new
+ * event type we won&#39;t need to change anything here.
+ * 
+ * @author lare96
+ */
+public class EventCore {
+
+    /**
+     * The event core
+     */
+    private static EventCore eventCore;
+
+    /**
+     * A list of events
+     */
+    public List&lt;Event&gt; active = new ArrayList&lt;Event&gt;();
+
+    /**
+     * A queue of events that need to be added
+     */
+    public Queue&lt;Event&gt; newEvents = new ArrayDeque&lt;Event&gt;();
+
+    /**
+     * Being called every 600ms in the server processing thread, processes all
+     * events
+     */
+    public void cycle() {
+        try {
+
+            Event add;
+
+            /**
+             * Add new events
+             */
+            while ((add = newEvents.poll()) != null) {
+                active.add(add);
+            }
+
+            /**
+             * Process events
+             */
+            for (Iterator&lt;Event&gt; iter = active.iterator(); iter.hasNext();) {
+
+                /**
+                 * All event processing logic here
+                 */
+                if (!iter.next().tick()) {
+                    iter.remove();
+                }
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+    }
+
+    /**
+     * @return the eventCore
+     */
+    public static EventCore getCore() {
+        if (eventCore == null) {
+            eventCore = new EventCore();
+        }
+
+        return eventCore;
+    }
+}
+[/code]
+
+[u]SimpleEvent[/u]
+
+[code=java]package server.event.type;
+
+import server.event.Event;
+
+/**
+ * An extremely simple event type that basically has a set delay and then the
+ * event executes.
+ * 
+ * Useful for things like: timer delays.
+ * 
+ * @author lare96
+ */
+public abstract class SimpleEvent extends Event {
+
+    /**
+     * Constructs a new simple event
+     * 
+     * @param cycle
+     *            the delay
+     * @param bind
+     *            the object to bind too
+     */
+    public SimpleEvent(int cycle, Object bind) {
+        super(cycle, bind);
+    }
+
+    /**
+     * Execution of the event
+     */
+    @Override
+    protected abstract void execute();
+
+    /**
+     * This will never be called
+     */
+    @Override
+    protected void done() {
+
+    }
+
+    /**
+     * When the event is finished, set the event as no longer running
+     */
+    @Override
+    public void finalization() {
+        this.setRunning(false);
+        this.ticks = 0;
+    }
+}
+[/code]
+
+[u]RecurringEvent[/u]
+
+[code=java]package server.event.type;
+
+import server.event.Event;
+
+/**
+ * Being a more advanced event, this event type gives you a lot more control
+ * over your event.
+ * 
+ * This event can be kept running and stopped whenever you feel the need to do
+ * so. This is the most flexible and will probably be the most commonly used out
+ * of all 3 event types.
+ * 
+ * Useful for things like: Minigames, teleportation, prayer draining, and stat
+ * regeneration.
+ * 
+ * @author lare96
+ */
+public abstract class RecurringEvent extends Event {
+
+    /**
+     * Constructs a new recurring event
+     * 
+     * @param cycle
+     *            the cycle
+     * @param bind
+     *            the Object to bind too
+     */
+    public RecurringEvent(int cycle, Object bind) {
+        super(cycle, bind);
+    }
+
+    /**
+     * Execution of the event
+     */
+    @Override
+    protected abstract void execute();
+
+    /**
+     * When the event has stopped
+     */
+    @Override
+    protected abstract void done();
+
+    /**
+     * When the event is finished, keep looping
+     */
+    @Override
+    public void finalization() {
+        this.ticks = 0;
+    }
+}
+[/code]
+
+[u]Processor[/u]
+
+[code=java]package server.event.type;
+
+import server.event.Event;
+import server.world.global.GlobalEvent;
+
+/**
+ * An event that runs for as long as the server remains online. This type of
+ * event never stops, even if you set it as not running.
+ * 
+ * Useful for things like: Minigame processing, global events.
+ * 
+ * @author lare96
+ */
+public abstract class Processor extends Event {
+
+    /**
+     * Constructs a new Processor event
+     * 
+     * @param cycle
+     *            the delay between each execution
+     */
+    public Processor(int cycle) {
+        super(cycle, GlobalEvent.GLOBAL_EVENT);
+    }
+
+    /**
+     * Execution of the event
+     */
+    @Override
+    protected abstract void execute();
+
+    /**
+     * This method will never be called
+     */
+    @Override
+    protected void done() {
+
+    }
+
+    /**
+     * For finalization this event sets its running status to true just in case
+     * it was set to false in the execution code
+     */
+    @Override
+    public void finalization() {
+        this.setRunning(true);
+        this.ticks = 0;
+    }
+}
+[/code]</description>
+    
+    <lastBuildDate>Mon, 16 Sep 2013 06:55:55 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="11" data-topic="529985">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/arcik/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Arcik:</div>
+<blockquote>
+<p>Graham’s code is slightly better  :rolleyes:</p>
+</blockquote>
+</aside>
+<p>… obviously lol, its graham.</p>
+<p>for everyone saying i didnt write this, grahams runs on its own thread while mine runs on the main processing thread</p>
+<p>mine uses 4 classes while grahams uses 2…</p>
+<p>mine binds to an object and doesn’t have the option to execute code before the delay (which is a pretty smart idea actually idk why i didnt include it)…</p>
+<p>i have noticed some parts in the EventCore class are similar to some things graham wrote but that’s it</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/12</link>
+        <pubDate>Mon, 16 Sep 2013 06:55:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-12</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>Graham’s code is slightly better  :rolleyes:</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/11</link>
+        <pubDate>Sun, 15 Sep 2013 07:53:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-11</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@eyeownyew Eyeownyew]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/eyeownyew">@eyeownyew</a> wrote:</p>
+          <blockquote>
+              <p><a href="http://www.rune-server.org/runescape-development/rs2-server/tutorials/302738-cycle-based-task-manager.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs2-server/tutorials/302738-cycle-based-task-manager.html</a><br>
+Wot<br>
+Graham never released this eh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/10</link>
+        <pubDate>Sun, 15 Sep 2013 05:48:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-10</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Graham has released code like this  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/9</link>
+        <pubDate>Sun, 15 Sep 2013 05:37:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-9</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="529985">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/arcik/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Arcik:</div>
+<blockquote>
+<p>Looks like something you copied from Graham <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>wtf are you talking about, graham has never released any code like this… :palm: and besides I documented every single piece of code in there, I know exactly how it works and I’ve asked multiple people on how to build on this so I don’t see how I couldn’t have wrote it.</p>
+<aside class="quote" data-post="5" data-topic="529985">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/wildskiller/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> wildskiller:</div>
+<blockquote>
+<p>You can have multiple constructors to help you control how the class is going to work</p>
+</blockquote>
+</aside>
+<p>ehh this is true, I could have pulled off the same result with much less code that way. I’ll work on it. Thanks!</p>
+<aside class="quote" data-post="7" data-topic="529985">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Perhaps you could set an owner attachment to the event. That way you could destruct an event for that specific owner when needed</p>
+</blockquote>
+</aside>
+<p>exactly what I had in mind. did you have a better suggestion of how I should do it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/8</link>
+        <pubDate>Sun, 15 Sep 2013 05:18:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-8</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wildskiller, post:5, topic:529985”]I haven’t seen other people use a cycle based event for running energy.</p>
+<p>Anyway, why do you have so many super classes that are basically the same? You can have multiple constructors to help you control how the class is going to work. <span class="bbcode-b">Also, I really don’t see why you should need the Object bind.</span>[/quote]</p>
+<p>Perhaps you could set an owner attachment to the event. That way you could destruct an event for that specific owner when needed. (I’m not saying this would be the <span class="bbcode-i">best</span> way to do this, I am just saying what I see it being used for)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/7</link>
+        <pubDate>Fri, 13 Sep 2013 20:33:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-7</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>Looks like something you copied from Graham <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/6</link>
+        <pubDate>Fri, 13 Sep 2013 20:07:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-6</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>I haven’t seen other people use a cycle based event for running energy.</p>
+<p>Anyway, why do you have so many super classes that are basically the same? You can have multiple constructors to help you control how the class is going to work. Also, I really don’t see why you should need the Object bind.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/5</link>
+        <pubDate>Fri, 13 Sep 2013 19:53:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-5</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Loveandpower Loveandpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/loveandpower">@Loveandpower</a> wrote:</p>
+          <blockquote>
+              <p>This looks… crazy sexy. Not too fond of some of the naming but meh.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/4</link>
+        <pubDate>Thu, 12 Sep 2013 12:18:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-4</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:2, topic:529985”][quote]<br>
+constructive criticism appreciated (sinisoul)<br>
+[/quote]</p>
+<p>smd</p>
+<p>you are behind the frontline of what we know to work and know not to work[/quote]<br>
+what</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/3</link>
+        <pubDate>Thu, 12 Sep 2013 11:22:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-3</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <blockquote>constructive criticism appreciated (sinisoul)</blockquote>
+<p>smd</p>
+<p>you are behind the frontline of what we know to work and know not to work</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/2</link>
+        <pubDate>Thu, 12 Sep 2013 04:00:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-2</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+      <item>
+        <title>Cycle based event system</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>an event system I made earlier this year, any constructive criticism appreciated (sinisoul), mainly posted in this section to get feedback, if its in the wrong section please move it to the appropriate one! Thanks!</p>
+<p><span class="bbcode-u"><span class="bbcode-b">How this works</span></span></p>
+<p>There’s pretty much 3 different types of unique events, each one serving a specific purpose.</p>
+<p>A <span class="bbcode-i">SimpleEvent</span> is an event that has a set delay and then executes <span class="bbcode-b">once</span>, and is then terminated automatically. This can be used for things like bind/freeze delays, and specific parts of combat.</p>
+<p>eg: <code>        World.getWorld().submit(new SimpleEvent(tree.getRespawnTime(), p) {
+            @Override
+            public void execute() {
+                ObjectHandler.placeObject(new Objects(object, pos.getX(), pos.getY(), pos.getZ(), 0, 10));
+                stumps.remove(pos);
+                stop();
+            }
+        });</code></p>
+<p>A <span class="bbcode-i">RecurringEvent</span> is the most commonly used event, it has a set delay and then once it executes you have the option to either stop the event or to leave it running. This is used for just about anything, skills, combat, running energy, etc.</p>
+<p>eg:[code=java]        World.getWorld().submit(new RecurringEvent(4, false) {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected void execute() {<br>
+if (disconnected) {<br>
+this.setRunning(false);<br>
+}</p>
+<pre><code>            if (energy == 100) {
+                return;
+            }
+            if (isRunning || isRunning2) {
+                return;
+            }
+
+            energy++;
+            getPA().sendFrame126(energy + "%", 149);
+        }[/code]
+</code></pre>
+<p>A <span class="bbcode-i">Processor</span> event is the least commonly used event, it is basically an event automatically submitted to the core on startup and it runs for as long as the server is online. This can be used for things like automatic announcements and global events.</p>
+<p>eg:[code=java]package server.event.type.impl;</p>
+<p>import server.event.type.Processor;<br>
+import server.rs2.World;<br>
+import server.rs2.npcs.zombie.Zombie;<br>
+import server.rs2.players.Player;<br>
+import server.rs2.players.PlayerHandler;<br>
+import server.util.ScriptManager;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Controls day and night</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public class Diurnal extends Processor {</p>
+<p>public Diurnal() {<br>
+super(ScriptManager.getInt(“DIURNAL”));<br>
+}</p>
+<p><a class="mention" href="/u/override">@Override</a><br>
+protected void execute() {</p>
+<pre><code> if (World.serverState == 0) {
+     World.serverState++;
+ } else if (World.serverState == 1) {
+     World.serverState++;
+ } else if (World.serverState == 2) {
+     World.serverState++;
+     World.getWorld().replaceDay(Integer.toString(World.currentDay + 1));
+ } else if (World.serverState == 3) {
+     World.serverState = 0;
+ }
+
+ for (Player player : PlayerHandler.players) {
+     if (player == null) {
+         continue;
+     }
+
+     if (player.getRegion().inGame()) {
+         player.getPA().sendFrame126("@or1@Time: @gre@" + World.getWorld().getCurrentTime(), 7332);
+         player.getPA().sendFrame126("@or1@Day: @gre@" + World.currentDay, 7333);
+         ScriptManager.callFunc("update", player);
+     }
+ }
+
+ Zombie.start();
+</code></pre>
+<p>}<br>
+}[/code]</p>
+</li>
+</ul>
+<p>With the power of polymorphism, all three unique event types are also <span class="bbcode-i">Event</span> types meaning we can submit any type of event with one method.</p>
+<p><span class="bbcode-u"><span class="bbcode-b">The system</span></span></p>
+<p><span class="bbcode-u">Event</span></p>
+<p>[code=java]package server.event;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Represents an event and all event types extend this. The benefit of having</p>
+</li>
+<li>
+<p>different event types is managability, where you can provide different</p>
+</li>
+<li>
+<p>functions for different types, and have this class hold functions for all</p>
+</li>
+<li>
+<p>event types.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public abstract class Event {</p>
+<p>/**</p>
+<ul>
+<li>Delay in ticks<br>
+*/<br>
+private int cycle;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>If the event is running<br>
+*/<br>
+private boolean running;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The Object the event is binded too<br>
+*/<br>
+private Object key;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>The amount of ticks this event holds<br>
+*/<br>
+public int ticks;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Constructs a new event<br>
+*/<br>
+public Event(int cycle, Object bind) {<br>
+setCycle(cycle);<br>
+setBind(bind);<br>
+setRunning(true);<br>
+ticks = 0;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Execution of the event<br>
+*/<br>
+protected abstract void execute();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>When the event has stopped<br>
+*/<br>
+protected abstract void done();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Event finalization, it is cruicial that all event types have some sort of</li>
+<li>finalization<br>
+*/<br>
+public abstract void finalization();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Event on-tick<br>
+<em>/<br>
+public boolean tick() {<br>
+try {<br>
+/</em>*<br>
+* Remove events that are no longer running<br>
+*/<br>
+if (!this.isRunning()) {<br>
+return false;<br>
+}</p>
+<pre><code> /**
+  * Increase event ticks by one
+  */
+ this.ticks++;
+
+ /**
+  * Execute the event if needed
+  */
+ if (this.getCycle() == this.ticks &amp;&amp; this.isRunning()) {
+     /**
+      * Execute
+      */
+     this.execute();
+
+     /**
+      * Event finalization (make event loop, make event stop, etc.)
+      * we need this so processing is ignorant to the type of Event
+      * we are using!
+      */
+     this.finalization();
+ }
+</code></pre>
+<p>} catch (Throwable t) {<br>
+t.printStackTrace();<br>
+}<br>
+return true;<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>Stops the event and executes the done method<br>
+*/<br>
+public void stop() {<br>
+this.setRunning(false);<br>
+this.done();<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the bind<br>
+*/<br>
+public Object getKey() {<br>
+return key;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> bind</li>
+<li>
+<pre><code>       the bind to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setBind(Object bind) {<br>
+this.key = bind;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the running<br>
+*/<br>
+public boolean isRunning() {<br>
+return running;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> running</li>
+<li>
+<pre><code>       the running to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setRunning(boolean running) {<br>
+this.running = running;<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/return">@return</a> the cycle<br>
+*/<br>
+public int getCycle() {<br>
+return cycle;<br>
+}</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<a class="mention" href="/u/param">@param</a> cycle</li>
+<li>
+<pre><code>       the cycle to set
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public void setCycle(int cycle) {<br>
+this.cycle = cycle;<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+<p><span class="bbcode-u">EventCore</span></p>
+<p>[code=java]package server.event;</p>
+<p>import java.util.ArrayDeque;<br>
+import java.util.ArrayList;<br>
+import java.util.Iterator;<br>
+import java.util.List;<br>
+import java.util.Queue;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Processes all events, I’ve improved on the design drastically thanks to</p>
+</li>
+<li>
+<p>iamthenull and mister maggot. Keep in mind the processing is ignorant to the</p>
+</li>
+<li>
+<p>fact that there are different event types, meaning whenever we add a new</p>
+</li>
+<li>
+<p>event type we won’t need to change anything here.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public class EventCore {</p>
+<p>/**</p>
+<ul>
+<li>The event core<br>
+*/<br>
+private static EventCore eventCore;</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>A list of events<br>
+*/<br>
+public List active = new ArrayList();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>A queue of events that need to be added<br>
+*/<br>
+public Queue newEvents = new ArrayDeque();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p>Being called every 600ms in the server processing thread, processes all</p>
+</li>
+<li>
+<p>events<br>
+*/<br>
+public void cycle() {<br>
+try {</p>
+<pre><code> Event add;
+
+ /**
+  * Add new events
+  */
+ while ((add = newEvents.poll()) != null) {
+     active.add(add);
+ }
+
+ /**
+  * Process events
+  */
+ for (Iterator&lt;Event&gt; iter = active.iterator(); iter.hasNext();) {
+
+     /**
+      * All event processing logic here
+      */
+     if (!iter.next().tick()) {
+         iter.remove();
+     }
+ }
+</code></pre>
+<p>} catch (Throwable t) {<br>
+t.printStackTrace();<br>
+}<br>
+}</p>
+</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>
+<p><a class="mention" href="/u/return">@return</a> the eventCore<br>
+*/<br>
+public static EventCore getCore() {<br>
+if (eventCore == null) {<br>
+eventCore = new EventCore();<br>
+}</p>
+<p>return eventCore;<br>
+}<br>
+}<br>
+[/code]</p>
+</li>
+</ul>
+</li>
+</ul>
+<p><span class="bbcode-u">SimpleEvent</span></p>
+<p>[code=java]package server.event.type;</p>
+<p>import server.event.Event;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>An extremely simple event type that basically has a set delay and then the</p>
+</li>
+<li>
+<p>event executes.</p>
+</li>
+<li>
+</li>
+<li>
+<p>Useful for things like: timer delays.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public abstract class SimpleEvent extends Event {</p>
+<p>/**</p>
+<ul>
+<li>Constructs a new simple event</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> cycle</li>
+<li>
+<pre><code>       the delay
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> bind</li>
+<li>
+<pre><code>       the object to bind too
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public SimpleEvent(int cycle, Object bind) {<br>
+super(cycle, bind);<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Execution of the event<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected abstract void execute();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>This will never be called<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected void done() {</li>
+</ul>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>When the event is finished, set the event as no longer running<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void finalization() {<br>
+this.setRunning(false);<br>
+this.ticks = 0;<br>
+}<br>
+}<br>
+[/code]</li>
+</ul>
+</li>
+</ul>
+<p><span class="bbcode-u">RecurringEvent</span></p>
+<p>[code=java]package server.event.type;</p>
+<p>import server.event.Event;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>Being a more advanced event, this event type gives you a lot more control</p>
+</li>
+<li>
+<p>over your event.</p>
+</li>
+<li>
+</li>
+<li>
+<p>This event can be kept running and stopped whenever you feel the need to do</p>
+</li>
+<li>
+<p>so. This is the most flexible and will probably be the most commonly used out</p>
+</li>
+<li>
+<p>of all 3 event types.</p>
+</li>
+<li>
+</li>
+<li>
+<p>Useful for things like: Minigames, teleportation, prayer draining, and stat</p>
+</li>
+<li>
+<p>regeneration.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public abstract class RecurringEvent extends Event {</p>
+<p>/**</p>
+<ul>
+<li>Constructs a new recurring event</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> cycle</li>
+<li>
+<pre><code>       the cycle
+</code></pre>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> bind</li>
+<li>
+<pre><code>       the Object to bind too
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public RecurringEvent(int cycle, Object bind) {<br>
+super(cycle, bind);<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Execution of the event<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected abstract void execute();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>When the event has stopped<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected abstract void done();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>When the event is finished, keep looping<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void finalization() {<br>
+this.ticks = 0;<br>
+}<br>
+}<br>
+[/code]</li>
+</ul>
+</li>
+</ul>
+<p><span class="bbcode-u">Processor</span></p>
+<p>[code=java]package server.event.type;</p>
+<p>import server.event.Event;<br>
+import server.world.global.GlobalEvent;</p>
+<p>/**</p>
+<ul>
+<li>
+<p>An event that runs for as long as the server remains online. This type of</p>
+</li>
+<li>
+<p>event never stops, even if you set it as not running.</p>
+</li>
+<li>
+</li>
+<li>
+<p>Useful for things like: Minigame processing, global events.</p>
+</li>
+<li>
+</li>
+<li>
+<p><span class="mention">@author</span> lare96<br>
+*/<br>
+public abstract class Processor extends Event {</p>
+<p>/**</p>
+<ul>
+<li>Constructs a new Processor event</li>
+<li>
+</li>
+<li>
+<a class="mention" href="/u/param">@param</a> cycle</li>
+<li>
+<pre><code>       the delay between each execution
+</code></pre>
+</li>
+</ul>
+<p>*/<br>
+public Processor(int cycle) {<br>
+super(cycle, GlobalEvent.GLOBAL_EVENT);<br>
+}</p>
+<p>/**</p>
+<ul>
+<li>Execution of the event<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected abstract void execute();</li>
+</ul>
+<p>/**</p>
+<ul>
+<li>This method will never be called<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected void done() {</li>
+</ul>
+<p>}</p>
+<p>/**</p>
+<ul>
+<li>For finalization this event sets its running status to true just in case</li>
+<li>it was set to false in the execution code<br>
+*/<br>
+<a class="mention" href="/u/override">@Override</a><br>
+public void finalization() {<br>
+this.setRunning(true);<br>
+this.ticks = 0;<br>
+}<br>
+}<br>
+[/code]</li>
+</ul>
+</li>
+</ul>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/cycle-based-event-system/529985/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/cycle-based-event-system/529985/1</link>
+        <pubDate>Thu, 12 Sep 2013 03:56:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529985-1</guid>
+        <source url="https://forum.moparisthebest.com/t/cycle-based-event-system/529985.rss">Cycle based event system</source>
+      </item>
+  </channel>
+</rss>

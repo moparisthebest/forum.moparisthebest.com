@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Sending Clans to MySQL DB[562]</title>
+    <link>https://forum.moparisthebest.com/t/sending-clans-to-mysql-db-562/457513</link>
+    <description>Okay I&#39;m trying to send the clans made on my server to my mysql db.  The clans are in an xml file and are outputted like this: [code=xml]  &lt;entry&gt;
+    &lt;string&gt;hansolo415&lt;/string&gt;
+    &lt;com.rs2hd.content.clans.Clan&gt;
+      &lt;roomName&gt;Nex&lt;/roomName&gt;
+      &lt;roomOwner&gt;hansolo415&lt;/roomOwner&gt;
+      &lt;joinReq&gt;0&lt;/joinReq&gt;
+      &lt;talkReq&gt;0&lt;/talkReq&gt;
+      &lt;kickReq&gt;7&lt;/kickReq&gt;
+      &lt;ranks/&gt;
+    &lt;/com.rs2hd.content.clans.Clan&gt;
+  &lt;/entry&gt;
+  &lt;entry&gt;[/code]
+Here is my clanmanager class: [code=java]public class ClanManager {
+
+	private Map&lt;String, Clan&gt; clans;
+
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public ClanManager() {
+		Logger.getInstance().info(&quot;Loading clans....&quot;);
+		try {
+			clans = (HashMap&lt;String, Clan&gt;) XStreamUtil.getXStream().fromXML(new FileInputStream(&quot;data/clans.xml&quot;));
+		} catch (Exception e) {
+			clans = new HashMap&lt;String, Clan&gt;();
+		}
+		for (Map.Entry&lt;String, Clan&gt; entries : clans.entrySet()) {
+			final Clan clan = entries.getValue();
+			clan.setTransient();
+		}
+		Logger.getInstance().info(&quot;Loaded &quot; +clans.size()+ &quot; SageScape clans.&quot;);
+	}
+
+	public Clan getClans(String s) {
+		return clans.get(Misc.formatPlayerNameForProtocol(s));
+	}
+	public Map&lt;String, Clan&gt; getClans() {
+		return clans;
+	}
+
+	public void createClan(Player p, String name) {
+		if (name.equals(&quot;&quot;) || name.length() &lt; 0) {
+			return;
+		}		
+		name = Misc.optimizeText(name);
+		String user = Misc.formatPlayerNameForProtocol(p.getUsername());
+		if (!clans.containsKey(user)) {
+			Clan clan = new Clan(user, name);
+			clans.put(Misc.formatPlayerNameForProtocol(p.getUsername()), clan);
+			p.getActionSender().sendString(clan.getName(), 590, 32);
+			refresh(clan);
+		} else {
+			Clan clan = clans.get(user);
+			clan.setName(name);
+			p.getActionSender().sendString(clan.getName(), 590, 32);
+			refresh(clan);
+		}
+	}
+
+	public void joinClan(final Player p, final String user) {
+		p.getActionSender().sendMessage(&quot;Attempting to join channel...&quot;);
+		final Clan clan = clans.get(Misc.formatPlayerNameForProtocol(user));
+		if (clan == null) {
+			World.getWorld().registerEvent(new Event(500) {
+				@Override
+				public void execute() {
+					p.getActionSender().sendMessage(&quot;Then channel you tried to join does not exist.&quot;);
+					this.stop();
+				}
+			});
+			return;
+		}
+		World.getWorld().registerEvent(new Event(500) {
+			@Override
+			public void execute() {
+				if(clan.canJoin(p)) {
+					p.getSettings().setClanOwner(user);
+					clan.addMember(p);
+					refresh(clan);
+					p.getActionSender().sendConfig(1083, clan.isLootsharing() ? 1 : 0);
+					p.getActionSender().sendMessage(&quot;Now talking in the clan channel &quot; +clan.getName());
+					p.getActionSender().sendMessage(&quot;To talk, start each line of chat with the / symbol.&quot;);
+				} else {
+					p.getActionSender().sendMessage(&quot;You don&#39;t have a high enough rank to join this channel.&quot;);
+				}
+				this.stop();
+			}
+		});
+	}
+	public void destroy(Player player, String username) {
+		Clan c = clans.get(Misc.formatPlayerNameForProtocol(username));
+		if (c != null) {
+			for (Player p : c.getMembers()) {
+				if (p == null) { 
+					continue;
+				}
+				ClanPacket.sendClanList(p, null);
+			}
+		}
+		clans.remove(username);
+	}
+	public void refresh(Clan clan) {
+		for (Player p : clan.getMembers()) {
+			if (p == null) {
+				continue;
+			}
+			ClanPacket.sendClanList(p, clan);
+		}
+	}
+	public void leaveClan(Player player) {
+		if(player.inWkiMini) {
+			player.inWkiMini = false;
+			player.teleport(WKInvasion.DEFAULT_LOC);
+		}
+		if (!player.getSettings().getClanOwner().equals(&quot;&quot;)) {
+			String name = Misc.formatPlayerNameForProtocol(player.getSettings().getClanOwner());
+			Clan c = clans.get(name);
+			if(c != null) {
+				if(c.getOwner().equals(player.getUsername())) {
+					for(Player pl : c.getMembers()) {
+						if(pl.inWkiMini) {
+							pl.inWkiMini = false;
+							pl.teleport(WKInvasion.DEFAULT_LOC);
+						}
+						if(player.wkiStartTimer &gt; 0 || pl.inWkiMini)
+							pl.sm(&quot;The white knights minigame has been cancelled since the owner has left.&quot;);
+					}
+					player.wkiStartTimer = -1;
+				}
+				c.removeMember(player);
+				refresh(c);
+				ClanPacket.sendClanList(player, null);
+			}
+		}
+		player.getActionSender().sendConfig(1083, 0);
+	}
+	public void rankMember(Player player, String user, int rank) {
+		Clan c = clans.get(player.getUsername());
+		if (c == null) {
+			return;
+		}
+		c.rankUser(user, rank);
+		refresh(c);
+	}
+	public String getClanName(String user) {
+		Clan c = clans.get(user);
+		if (c == null) {
+			return &quot;Chat disabled&quot;;
+		} 
+		return c.getName();
+	}
+	public void sendClanMessage(Player player, String text) {
+		Clan c = clans.get(Misc.formatPlayerNameForProtocol(player.getSettings().getClanOwner()));
+		if (c == null) {
+			return;
+		}
+		for (Player pl : c.getMembers()) {
+			if (pl.getIndex() == player.getIndex()) {
+				continue;
+			}
+			ClanMessage.sendClanChatMessage(player, pl, c.getName(), c.getOwner(), text);
+		}
+		ClanMessage.sendClanChatMessage(player, null, c.getName(), c.getOwner(), text);
+	}
+
+	public void toggleLootshare(Player player) {
+		Clan c = clans.get(player.getUsername());
+		if(c != null) {
+			c.toggleLootshare();
+		} else {
+			player.getActionSender().sendMessage(&quot;You don&#39;t have a clan to active lootshare with.&quot;);
+		}
+	}
+}[/code]
+I think I should add a method in my mysql db class and put it in the public ClanManager() method where it loads the clans, but I&#39;m not entirely sure on how to get every owner&#39;s name and roomname correctly.  I know I should use something like this for the sql: [code=java]   public static boolean sendClans(String owner, String name){
+		try {
+            Statement statement = con.createStatement();
+            ResultSet group = statement.executeQuery(&quot;SELECT * FROM clans WHERE owner = &#39;&quot;+ owner +&quot;&#39;&quot;);
+			if (!group.next())
+				statement.execute(&quot;INSERT INTO `clans`(`owner`, `name`) VALUES(&#39;&quot;+ owner +&quot;&#39;, &#39;&quot;+ name +&quot;&#39;)&quot;);
+		} catch (Exception localException) {
+			return false;
+		}
+		return true;
+   }[/code]
+But how would I use sendClans(owner, name);  with the hashmap bullcrap?</description>
+    
+    <lastBuildDate>Fri, 31 Aug 2012 21:33:08 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/sending-clans-to-mysql-db-562/457513.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Sending Clans to MySQL DB[562]</title>
+        <dc:creator><![CDATA[@sageofmali sageofmali]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sageofmali">@sageofmali</a> wrote:</p>
+          <blockquote>
+              <p>Okay I’m trying to send the clans made on my server to my mysql db.  The clans are in an xml file and are outputted like this: <code>  &lt;entry&gt;
+    &lt;string&gt;hansolo415&lt;/string&gt;
+    &lt;com.rs2hd.content.clans.Clan&gt;
+      &lt;roomName&gt;Nex&lt;/roomName&gt;
+      &lt;roomOwner&gt;hansolo415&lt;/roomOwner&gt;
+      &lt;joinReq&gt;0&lt;/joinReq&gt;
+      &lt;talkReq&gt;0&lt;/talkReq&gt;
+      &lt;kickReq&gt;7&lt;/kickReq&gt;
+      &lt;ranks/&gt;
+    &lt;/com.rs2hd.content.clans.Clan&gt;
+  &lt;/entry&gt;
+  &lt;entry&gt;</code><br>
+Here is my clanmanager class: [code=java]public class ClanManager {</p>
+<pre><code>private Map&lt;String, Clan&gt; clans;
+
+@SuppressWarnings("unchecked")
+public ClanManager() {
+	Logger.getInstance().info("Loading clans....");
+	try {
+		clans = (HashMap&lt;String, Clan&gt;) XStreamUtil.getXStream().fromXML(new FileInputStream("data/clans.xml"));
+	} catch (Exception e) {
+		clans = new HashMap&lt;String, Clan&gt;();
+	}
+	for (Map.Entry&lt;String, Clan&gt; entries : clans.entrySet()) {
+		final Clan clan = entries.getValue();
+		clan.setTransient();
+	}
+	Logger.getInstance().info("Loaded " +clans.size()+ " SageScape clans.");
+}
+
+public Clan getClans(String s) {
+	return clans.get(Misc.formatPlayerNameForProtocol(s));
+}
+public Map&lt;String, Clan&gt; getClans() {
+	return clans;
+}
+
+public void createClan(Player p, String name) {
+	if (name.equals("") || name.length() &lt; 0) {
+		return;
+	}		
+	name = Misc.optimizeText(name);
+	String user = Misc.formatPlayerNameForProtocol(p.getUsername());
+	if (!clans.containsKey(user)) {
+		Clan clan = new Clan(user, name);
+		clans.put(Misc.formatPlayerNameForProtocol(p.getUsername()), clan);
+		p.getActionSender().sendString(clan.getName(), 590, 32);
+		refresh(clan);
+	} else {
+		Clan clan = clans.get(user);
+		clan.setName(name);
+		p.getActionSender().sendString(clan.getName(), 590, 32);
+		refresh(clan);
+	}
+}
+
+public void joinClan(final Player p, final String user) {
+	p.getActionSender().sendMessage("Attempting to join channel...");
+	final Clan clan = clans.get(Misc.formatPlayerNameForProtocol(user));
+	if (clan == null) {
+		World.getWorld().registerEvent(new Event(500) {
+			@Override
+			public void execute() {
+				p.getActionSender().sendMessage("Then channel you tried to join does not exist.");
+				this.stop();
+			}
+		});
+		return;
+	}
+	World.getWorld().registerEvent(new Event(500) {
+		@Override
+		public void execute() {
+			if(clan.canJoin(p)) {
+				p.getSettings().setClanOwner(user);
+				clan.addMember(p);
+				refresh(clan);
+				p.getActionSender().sendConfig(1083, clan.isLootsharing() ? 1 : 0);
+				p.getActionSender().sendMessage("Now talking in the clan channel " +clan.getName());
+				p.getActionSender().sendMessage("To talk, start each line of chat with the / symbol.");
+			} else {
+				p.getActionSender().sendMessage("You don't have a high enough rank to join this channel.");
+			}
+			this.stop();
+		}
+	});
+}
+public void destroy(Player player, String username) {
+	Clan c = clans.get(Misc.formatPlayerNameForProtocol(username));
+	if (c != null) {
+		for (Player p : c.getMembers()) {
+			if (p == null) { 
+				continue;
+			}
+			ClanPacket.sendClanList(p, null);
+		}
+	}
+	clans.remove(username);
+}
+public void refresh(Clan clan) {
+	for (Player p : clan.getMembers()) {
+		if (p == null) {
+			continue;
+		}
+		ClanPacket.sendClanList(p, clan);
+	}
+}
+public void leaveClan(Player player) {
+	if(player.inWkiMini) {
+		player.inWkiMini = false;
+		player.teleport(WKInvasion.DEFAULT_LOC);
+	}
+	if (!player.getSettings().getClanOwner().equals("")) {
+		String name = Misc.formatPlayerNameForProtocol(player.getSettings().getClanOwner());
+		Clan c = clans.get(name);
+		if(c != null) {
+			if(c.getOwner().equals(player.getUsername())) {
+				for(Player pl : c.getMembers()) {
+					if(pl.inWkiMini) {
+						pl.inWkiMini = false;
+						pl.teleport(WKInvasion.DEFAULT_LOC);
+					}
+					if(player.wkiStartTimer &gt; 0 || pl.inWkiMini)
+						pl.sm("The white knights minigame has been cancelled since the owner has left.");
+				}
+				player.wkiStartTimer = -1;
+			}
+			c.removeMember(player);
+			refresh(c);
+			ClanPacket.sendClanList(player, null);
+		}
+	}
+	player.getActionSender().sendConfig(1083, 0);
+}
+public void rankMember(Player player, String user, int rank) {
+	Clan c = clans.get(player.getUsername());
+	if (c == null) {
+		return;
+	}
+	c.rankUser(user, rank);
+	refresh(c);
+}
+public String getClanName(String user) {
+	Clan c = clans.get(user);
+	if (c == null) {
+		return "Chat disabled";
+	} 
+	return c.getName();
+}
+public void sendClanMessage(Player player, String text) {
+	Clan c = clans.get(Misc.formatPlayerNameForProtocol(player.getSettings().getClanOwner()));
+	if (c == null) {
+		return;
+	}
+	for (Player pl : c.getMembers()) {
+		if (pl.getIndex() == player.getIndex()) {
+			continue;
+		}
+		ClanMessage.sendClanChatMessage(player, pl, c.getName(), c.getOwner(), text);
+	}
+	ClanMessage.sendClanChatMessage(player, null, c.getName(), c.getOwner(), text);
+}
+
+public void toggleLootshare(Player player) {
+	Clan c = clans.get(player.getUsername());
+	if(c != null) {
+		c.toggleLootshare();
+	} else {
+		player.getActionSender().sendMessage("You don't have a clan to active lootshare with.");
+	}
+}
+</code></pre>
+<p>}[/code]<br>
+I think I should add a method in my mysql db class and put it in the public ClanManager() method where it loads the clans, but I’m not entirely sure on how to get every owner’s name and roomname correctly.  I know I should use something like this for the sql: <code>   public static boolean sendClans(String owner, String name){
+		try {
+            Statement statement = con.createStatement();
+            ResultSet group = statement.executeQuery("SELECT * FROM clans WHERE owner = '"+ owner +"'");
+			if (!group.next())
+				statement.execute("INSERT INTO `clans`(`owner`, `name`) VALUES('"+ owner +"', '"+ name +"')");
+		} catch (Exception localException) {
+			return false;
+		}
+		return true;
+   }</code><br>
+But how would I use sendClans(owner, name);  with the hashmap bullcrap?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/sending-clans-to-mysql-db-562/457513/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/sending-clans-to-mysql-db-562/457513/1</link>
+        <pubDate>Fri, 31 Aug 2012 21:33:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-457513-1</guid>
+        <source url="https://forum.moparisthebest.com/t/sending-clans-to-mysql-db-562/457513.rss">Sending Clans to MySQL DB[562]</source>
+      </item>
+  </channel>
+</rss>

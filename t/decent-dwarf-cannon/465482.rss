@@ -1,0 +1,1193 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Decent Dwarf Cannon</title>
+    <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482</link>
+    <description>Here&#39;s my version of the dwarf cannon;
+
+[code]
+/**
+ * 
+ */
+package com.rs.game.player.content;
+
+import java.io.Serializable;
+
+import com.rs.game.Animation;
+import com.rs.game.Hit;
+import com.rs.game.Hit.HitLook;
+import com.rs.game.World;
+import com.rs.game.WorldObject;
+import com.rs.game.WorldTile;
+import com.rs.game.item.Item;
+import com.rs.game.npc.NPC;
+import com.rs.game.npc.familiar.Steeltitan;
+import com.rs.game.player.CombatDefinitions;
+import com.rs.game.player.Player;
+import com.rs.game.player.Skills;
+import com.rs.game.tasks.WorldTask;
+import com.rs.game.tasks.WorldTasksManager;
+import com.rs.utils.Utils;
+
+/**
+ * @author &lt;Prometheus Development Team&gt;
+ * 
+ */
+public class DwarfCannon implements Serializable {
+
+	/**
+	 * Dwarf Multi Cannon Object Ids: Broken = 5, Full-Cannon = 6, Cannon Base =
+	 * 7, Base+Stand = 8, Base+Stand+Barrels = 9, Base+Stand+Barrels+Furnace =
+	 * 10
+	 * 
+	 * Dwarf Cannon Movement Ids: North = 303 North East = 305 East = 307 South
+	 * East - 289 South = 184 South West 182 West = 178 North West = 291
+	 * 
+	 * Cannon Ball Graphics Id: 53
+	 * 
+	 * Dwarf Multi Cannon Item Ids: CannonBall = 2, Base = 6, Stand = 8, Barrels
+	 * = 10, Furnace = 12
+	 */
+
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 6100930614455400025L;
+
+	public int[] CANNON = { 6, 7, 8, 9 };
+	public int[] ITEMS = { 6, 8, 10, 12, 2 };
+	private WorldObject lastObject;
+	private int cannonBalls = 0;
+	private boolean first = true;
+	private Player player;
+	private boolean hasCannon = false;
+	private boolean isFiring = false;
+	private int cannonDirection;
+	private boolean firstFire = true;
+	private boolean loadedOnce = false;
+	private boolean rotating;
+	private String owner;
+	private boolean settingUp = false;
+	private WorldObject object;
+
+	/**
+	 * Initializes the player variable
+	 * @param player
+	 */
+	public DwarfCannon(Player player) {
+		this.setPlayer(player);
+	}
+
+	/**
+	 * Cannon setup
+	 */
+	public void cannonSetup() {
+		if (hasCannon()) {
+			getPlayer().sm(&quot;You already have a cannon setup.&quot;);
+			return;
+		}
+		if (!getPlayer().getInventory().containsItems(
+				new Item[] { new Item(ITEMS[0]), new Item(ITEMS[1]),
+						new Item(ITEMS[2]), new Item(ITEMS[3]) })) {
+			getPlayer()
+					.sm(&quot;You do not have all the required items to set up the Dwarf Multi-Cannon.&quot;);
+			return;
+		}
+		getPlayer().setNextAnimation(new Animation(827));
+		setCannon(true);
+		setSettingUp(true);
+		WorldTasksManager.schedule(new WorldTask() {
+			int count = 0;
+
+			@Override
+			public void run() {
+				switch (count) {
+				case 0:
+					getPlayer().lock();
+					setLastObject(new WorldObject(CANNON[1], 10, 0, player));
+					World.spawnObject(getLastObject(), false);
+					getPlayer()
+							.sm(&quot;You place the cannon base on the ground...&quot;);
+					getPlayer().getInventory().deleteItem(ITEMS[0], 1);
+					break;
+				case 1:
+					World.removeObject(getLastObject(), false);
+					World.getRegion(getLastObject().getRegionId())
+							.removeObject(getLastObject());
+					setLastObject(new WorldObject(CANNON[2], 10, 0, player));
+					World.spawnObject(getLastObject(), false);
+					getPlayer().sm(&quot;You add the stand...&quot;);
+					getPlayer().getInventory().deleteItem(ITEMS[1], 1);
+					break;
+				case 2:
+					World.removeObject(getLastObject(), false);
+					World.getRegion(getLastObject().getRegionId())
+							.removeObject(getLastObject());
+					setLastObject(new WorldObject(CANNON[3], 10, 0, player));
+					World.spawnObject(getLastObject(), false);
+					getPlayer().sm(&quot;You add the barrel...&quot;);
+					getPlayer().getInventory().deleteItem(ITEMS[2], 1);
+					break;
+				case 3:
+					World.removeObject(getLastObject(), false);
+					World.getRegion(getLastObject().getRegionId())
+							.removeObject(getLastObject());
+					setLastObject(new WorldObject(CANNON[0], 10, 0, player));
+					World.spawnObject(getLastObject(), false);
+					setObject(getLastObject());
+					setSettingUp(false);
+					getPlayer().sm(&quot;You add the furnace...&quot;);
+					getPlayer().getInventory().deleteItem(ITEMS[3], 1);
+					getPlayer().unlock();
+					this.stop();
+					break;
+				}
+				getPlayer().setNextAnimation(new Animation(827));
+				count++;
+			}
+
+		}, 0, 1);
+	}
+
+	/**
+	 * Pre-rotation setup check
+	 * @param object
+	 */
+	public void preRotationSetup(WorldObject object) {
+		if (getObject() != object) {
+			getPlayer().sm(&quot;You are not the owner of this Dwarf Cannon.&quot;);
+			return;
+		}
+		if (getCannonBalls() &lt; 1) {
+			getPlayer().sm(&quot;Your cannon has no ammo left!&quot;);
+			setFiring(false);
+			setRotating(false);
+			return;
+		}
+		if (isFirst() == false) {
+			setFirst(true);
+		}
+		setRotating(true);
+		startRotation(object);
+	}
+
+	/**
+	 * Starts the rotation after pre-setup
+	 * @param object
+	 */
+	public void startRotation(final WorldObject object) {
+		WorldTasksManager.schedule(new WorldTask() {
+			int count = (hasLoadedOnce() == true ? getCannonDirection() : 0);
+
+			@Override
+			public void run() {
+				if (isRotating() == false) {
+					this.stop();
+				} else if (isRotating() == true) {
+					switch (count) {
+					case 0:
+						if (isFirst()) {
+							setLoadedOnce(true);
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(305));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(303));
+						}
+						setCannonDirection(0);
+						break;
+					case 1:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(307));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(305));
+						}
+						setCannonDirection(1);
+						break;
+					case 2:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(289));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(307));
+						}
+						setCannonDirection(2);
+						break;
+					case 3:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(184));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(289));
+						}
+						setCannonDirection(3);
+						break;
+					case 4:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(182));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(184));
+						}
+						setCannonDirection(4);
+						break;
+					case 5:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(178));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(182));
+						}
+						setCannonDirection(5);
+						break;
+					case 6:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(291));
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(178));
+						}
+						setCannonDirection(6);
+						break;
+					case 7:
+						if (isFirst()) {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(303));
+							setFirst(false);
+						} else {
+							World.sendObjectAnimation(getPlayer(), object,
+									new Animation(291));
+						}
+						setCannonDirection(7);
+						count = -1;
+						break;
+					}
+				}
+				count++;
+				if (fireDwarfCannon(object)) {
+					if (!retainsCannonBalls()) {
+						getPlayer().sm(&quot;Your cannon has ran out of ammo!&quot;);
+						setFiring(false);
+						setRotating(false);
+						setLoadedOnce(false);
+						setFirstFire(false);
+						this.stop();
+					}
+				}
+			}
+		}, 0, 0);
+	}
+
+	/**
+	 * Picks up and removes the dwarf cannon from the game
+	 * @param stage
+	 * @param object
+	 */
+	public void pickUpDwarfCannon(int stage, WorldObject object) {
+		if (getObject() != object) {
+			getPlayer().sm(&quot;You are not the owner of this Dwarf Cannon.&quot;);
+			return;
+		}
+		if (isSettingUp()) {
+			getPlayer().sm(&quot;Please finish setting up your current cannon before picking it up.&quot;);
+			return;
+		}
+		if (stage == 0) {
+			getPlayer().getInventory().addItem(ITEMS[0], 1);
+			getPlayer().getInventory().addItem(ITEMS[1], 1);
+			getPlayer().getInventory().addItem(ITEMS[2], 1);
+			getPlayer().getInventory().addItem(ITEMS[3], 1);
+			if (getCannonBalls() &lt; 1) {
+
+			} else {
+				getPlayer().getInventory().addItem(2, cannonBalls);
+			}
+			setCannonBalls(0);
+			setRotating(false);
+			setCannon(false);
+			setFiring(false);
+			setLoadedOnce(false);
+			setFirst(false);
+			setCannonDirection(0);
+			setObject(null);
+			World.removeObject(getLastObject(), true);
+		} else if (stage == 1 || stage == 2 || stage == 4) {
+
+		}
+	}
+	
+	/**
+	 * Loads the Dwarf Multicannon with ammunition
+	 */
+	public void loadDwarfCannon(WorldObject object) {
+		int ballsToAdd = 0;
+		if (getObject() != object) {
+			getPlayer().sm(&quot;You are not the owner of this Dwarf Cannon.&quot;);
+			return;
+		}
+		if (getCannonBalls() == 0 &amp;&amp; getPlayer().getInventory().containsItem(2, 30)) {
+			ballsToAdd = 30;
+			getPlayer().getInventory().deleteItem(2, ballsToAdd);
+			getPlayer().sm(
+					&quot;You load the cannon with &quot; + ballsToAdd + &quot; cannonball&quot;
+							+ (ballsToAdd == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;.&quot;);
+			this.cannonBalls += ballsToAdd;
+			setObject(object);
+		}
+		if (getCannonBalls() &lt; 30 &amp;&amp; getCannonBalls() &lt; 1
+				&amp;&amp; getPlayer().getInventory().containsItem(2, 30 - getCannonBalls())) {
+			ballsToAdd = 30 - this.cannonBalls;
+			getPlayer().getInventory().deleteItem(2, ballsToAdd);
+			getPlayer().sm(
+					&quot;You load the cannon with &quot; + ballsToAdd + &quot; cannonball&quot;
+							+ (ballsToAdd == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;.&quot;);
+			this.cannonBalls += ballsToAdd;
+			setObject(object);
+		}
+	}
+	
+	/**
+	 * Fires the Dwarf MultiCannon
+	 */
+	public boolean fireDwarfCannon(WorldObject object) {
+		boolean hit = false;
+		if (getCannonBalls() == 0) {
+			hit = false;
+			setFiring(false);
+			return false;
+		}
+		for (NPC n : World.getNPCs()) {
+			int damage = Utils.getRandom(300);
+			double combatXp = damage / 2.5;
+			int distanceX = n.getX() - object.getX();
+			int distanceY = n.getY() - object.getY();
+			if (n == null || n.isDead() || !n.getDefinitions().hasAttackOption()) {
+				continue;
+			}
+			switch (getCannonDirection()) {
+			case 0: // North
+				if ((distanceY &lt;= 8 &amp;&amp; distanceY &gt;= 0)
+						&amp;&amp; (distanceX &gt;= -1 &amp;&amp; distanceX &lt;= 1)) {
+					hit = true;
+				}
+				break;
+			case 1: // North East
+				if ((distanceY &lt;= 8 &amp;&amp; distanceY &gt;= 0)
+						&amp;&amp; (distanceX &lt;= 8 &amp;&amp; distanceX &gt;= 0)) {
+					hit = true;
+				}
+				break;
+			case 2: // East
+				if ((distanceY &lt;= 1 &amp;&amp; distanceY &gt;= -1)
+						&amp;&amp; (distanceX &lt;= 8 &amp;&amp; distanceX &gt;= 0)) {
+					hit = true;
+				}
+				break;
+			case 3: // South East
+				if ((distanceY &gt;= -8 &amp;&amp; distanceY &lt;= 0)
+						&amp;&amp; (distanceX &lt;= 8 &amp;&amp; distanceX &gt;= 0)) {
+					hit = true;
+				}
+				break;
+			case 4: // South
+				if ((distanceY &gt;= -8 &amp;&amp; distanceY &lt;= 0)
+						&amp;&amp; (distanceX &lt;= 1 &amp;&amp; distanceX &gt;= -1)) {
+					hit = true;
+				}
+				break;
+			case 5: // South West
+				if ((distanceY &gt;= -8 &amp;&amp; distanceY &lt;= 0)
+						&amp;&amp; (distanceX &gt;= -8 &amp;&amp; distanceX &lt;= 0)) {
+					hit = true;
+				}
+				break;
+			case 6: // West
+				if ((distanceY &gt;= -1 &amp;&amp; distanceY &lt;= 1)
+						&amp;&amp; (distanceX &gt;= -8 &amp;&amp; distanceX &lt;= 0)) {
+					hit = true;
+				}
+				break;
+			case 7: // North West
+				if ((distanceY &lt;= 8 &amp;&amp; distanceY &gt;= 0)
+						&amp;&amp; (distanceX &gt;= -8 &amp;&amp; distanceX &lt;= 0)) {
+					hit = true;
+				}
+				break;
+			default:
+				hit = false;
+				break;
+			}
+			if (hit) {
+				this.cannonBalls -= 1;
+				n.getCombat().setTarget(getPlayer());
+				World.sendProjectile(getPlayer(), object, n, 53, 52, 52, 30, 0,
+						0, 2);
+				n.applyHit(new Hit(getPlayer(), damage, HitLook.CANNON_DAMAGE));
+				getPlayer().getSkills().addXp(Skills.RANGE, combatXp / 2);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public void removeDwarfCannon() {
+		if (getLastObject() != null) {
+			setRotating(false);
+			setCannon(false);
+			setFiring(false);
+			setLoadedOnce(false);
+			setObject(null);
+			setFirstFire(false);
+			setCannonDirection(0);
+			World.getRegion(getLastObject().getRegionId()).removeObject(getLastObject());
+		}
+	}
+
+	public int getCannonDirection() {
+		return cannonDirection;
+	}
+
+	public void setCannonDirection(int cannonDirection) {
+		this.cannonDirection = cannonDirection;
+	}
+
+	public boolean hasLoadedOnce() {
+		return loadedOnce;
+	}
+
+	public void setLoadedOnce(boolean loadedOnce) {
+		this.loadedOnce = loadedOnce;
+	}
+
+	public boolean retainsCannonBalls() {
+		return cannonBalls &gt; 0;
+	}
+
+	/**
+	 * @return the rotating
+	 */
+	public boolean isRotating() {
+		return rotating;
+	}
+
+	/**
+	 * @param rotating
+	 *            the rotating to set
+	 */
+	public void setRotating(boolean rotating) {
+		this.rotating = rotating;
+	}
+
+	public boolean hasCannon() {
+		return hasCannon;
+	}
+
+	public void setCannon(boolean hasCannon) {
+		this.hasCannon = hasCannon;
+	}
+
+	public boolean isFirst() {
+		return first;
+	}
+
+	public void setFirst(boolean first) {
+		this.first = first;
+	}
+
+	public Player getPlayer() {
+		return player;
+	}
+
+	public void setPlayer(Player player) {
+		this.player = player;
+	}
+
+	/**
+	 * @return the owner
+	 */
+	public String getOwner() {
+		return owner;
+	}
+
+	/**
+	 * @param owner
+	 *            the owner to set
+	 */
+	public void setOwner(String owner) {
+		this.owner = owner;
+	}
+
+	public boolean isFiring() {
+		return isFiring;
+	}
+
+	public void setFiring(boolean isFiring) {
+		this.isFiring = isFiring;
+	}
+
+	public boolean isFirstFire() {
+		return firstFire;
+	}
+
+	public void setFirstFire(boolean firstFire) {
+		this.firstFire = firstFire;
+	}
+
+	public WorldObject getLastObject() {
+		return lastObject;
+	}
+
+	public void setLastObject(WorldObject lastObject) {
+		this.lastObject = lastObject;
+	}
+
+	public boolean isSettingUp() {
+		return settingUp;
+	}
+
+	public void setSettingUp(boolean settingUp) {
+		this.settingUp = settingUp;
+	}
+
+	public int getCannonBalls() {
+		return cannonBalls;
+	}
+
+	public void setCannonBalls(int cannonBalls) {
+		this.cannonBalls = cannonBalls;
+	}
+
+	public WorldObject getObject() {
+		return object;
+	}
+
+	public void setObject(WorldObject object) {
+		this.object = object;
+	}
+}
+[/code]
+
+
+Any ideas to make it better, please share.</description>
+    
+    <lastBuildDate>Sun, 11 Nov 2012 03:41:47 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="39" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sinisoul/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sinisoul:</div>
+<blockquote>
+<p>Chill out Halo. Also, good job.</p>
+</blockquote>
+</aside>
+<p>Hadyn, I’ll lick you so hard. Shanks, doh.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/41</link>
+        <pubDate>Sun, 11 Nov 2012 03:41:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-41</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Team_Rocket Team_Rocket]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/team_rocket">@Team_Rocket</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="39" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sinisoul/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sinisoul:</div>
+<blockquote>
+<p>Chill out Halo. Also, good job.</p>
+</blockquote>
+</aside>
+<p>Offer him some minty fresh breath to calm him down.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/40</link>
+        <pubDate>Sat, 10 Nov 2012 23:57:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-40</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Chill out Halo. Also, good job.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/39</link>
+        <pubDate>Sat, 10 Nov 2012 23:22:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-39</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“haloofpower, post:37, topic:465482”]Because I’ve noticed that some Moparians love to attack anyone that release anything.[/quote]we didn’t attack you immediately, we simply wanted proof that this work here was yours and you immediately went on the defensive. after quickly getting to extreme defenses, you started getting quite disrespectful which led up to what happened. take a look at the situation before blaming everyone else.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/38</link>
+        <pubDate>Sat, 10 Nov 2012 14:02:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-38</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Clawz fury, post:36, topic:465482”]why can’t we just all get along</p>
+<p><img src="http://25.media.tumblr.com/tumblr_lmidsbtO7R1qkckeko1_500.png" alt width="500" height="384">[/quote]</p>
+<p>Because I’ve noticed that some Moparians love to attack anyone that release anything.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/37</link>
+        <pubDate>Sat, 03 Nov 2012 06:57:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-37</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <p>why can’t we just all get along</p>
+<p><img src="http://25.media.tumblr.com/tumblr_lmidsbtO7R1qkckeko1_500.png" alt width="500" height="384"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/36</link>
+        <pubDate>Sat, 03 Nov 2012 05:49:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-36</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <p>I completely agree in that sense. But I use it because it annoys me to see it without one. It’s unreasonable, but, meh.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/35</link>
+        <pubDate>Fri, 02 Nov 2012 20:55:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-35</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>there is no need for that specific data to be encapsulated, though.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/34</link>
+        <pubDate>Fri, 02 Nov 2012 19:23:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-34</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="31" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Getters and setters are not needed for private local variables. e.g: in your constructor setPlayer(player); ~&gt; this.player = player;</p>
+</blockquote>
+</aside>
+<p>Not needed, but I still like it. I prefer the getter and setter.</p>
+<p>Actually, to that idiot that likes to make long posts, I originated from Moparscape and moved to a different community because I didn’t like the incompetence level here.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/33</link>
+        <pubDate>Fri, 02 Nov 2012 18:52:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-33</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Team_Rocket Team_Rocket]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/team_rocket">@Team_Rocket</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="31" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Getters and setters are not needed for private local variables. e.g: in your constructor setPlayer(player); ~&gt; this.player = player;</p>
+</blockquote>
+</aside>
+<p>Most sensible thing said in this thread.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/32">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/32</link>
+        <pubDate>Fri, 02 Nov 2012 18:12:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-32</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Getters and setters are not needed for private local variables. e.g: in your constructor setPlayer(player); ~&gt; this.player = player;</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/31">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/31</link>
+        <pubDate>Fri, 02 Nov 2012 14:28:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-31</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Owner_Titanan Owner Titanan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/owner_titanan">@Owner_Titanan</a> wrote:</p>
+          <blockquote>
+              <p>nice work Jeremy. Keep up the good work</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/30">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/30</link>
+        <pubDate>Fri, 02 Nov 2012 12:11:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-30</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <p>This inspired me to have a working cannon on a 194 server… brb.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/29">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/29</link>
+        <pubDate>Fri, 02 Nov 2012 06:05:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-29</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Uncalled Uncalled]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/uncalled">@Uncalled</a> wrote:</p>
+          <blockquote>
+              <p>mopar, or no community at all.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/28">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/28</link>
+        <pubDate>Fri, 02 Nov 2012 04:53:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-28</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“haloofpower, post:26, topic:465482”][quote author=Tutorial link=topic=570753.msg4136445#msg4136445 date=1351740720]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.</p>
+</blockquote>
+</aside>
+<p>Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine</p>
+</blockquote>
+</aside>
+<p>You didn’t even decide to read my post correctly, kcool.<br>
+Why would I care for my rep on a piss poor community like this anyway?</p>
+</blockquote>
+</aside>
+<p>If you don’t care about this community why did you post this here anyways?<br>
+[/quote]</p>
+<p>I have such a low tolerance for insignificant pricks like you. That’s why I decide to not come here. I posted this here because I thought things had changed, maybe even slightly. But it seems the retardation levels have actually risen quite significantly.[/quote]<br>
+I can only assume you are a r-s faggot and think you are better than moparscapers even though it derived from mscp, if its the case</p>
+<p>R-s is just full of people who make their shitty pis, its the cancer of rsps, centering around the use of crappy ass loading 600+ project insanities</p>
+<p>If r-l it just sucks cock so yeah</p>
+<p>If you don’t want to post here, leave, no one wants you here either then.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/27">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/27</link>
+        <pubDate>Fri, 02 Nov 2012 03:54:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-27</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Tutorial, post:25, topic:465482”][quote author=haloofpower link=topic=570753.msg4135843#msg4135843 date=1351699139]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.</p>
+</blockquote>
+</aside>
+<p>Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine</p>
+</blockquote>
+</aside>
+<p>You didn’t even decide to read my post correctly, kcool.<br>
+Why would I care for my rep on a piss poor community like this anyway?<br>
+[/quote]<br>
+If you don’t care about this community why did you post this here anyways?[/quote]</p>
+<p>I have such a low tolerance for insignificant pricks like you. That’s why I decide to not come here. I posted this here because I thought things had changed, maybe even slightly. But it seems the retardation levels have actually risen quite significantly.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/26">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/26</link>
+        <pubDate>Thu, 01 Nov 2012 23:05:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-26</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Tutorial Tutorial]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tutorial">@Tutorial</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“haloofpower, post:23, topic:465482”][quote author=drubrkletern link=topic=570753.msg4135645#msg4135645 date=1351663539]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.</p>
+</blockquote>
+</aside>
+<p>Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine<br>
+[/quote]</p>
+<p>You didn’t even decide to read my post correctly, kcool.<br>
+Why would I care for my rep on a piss poor community like this anyway?[/quote]<br>
+If you don’t care about this community why did you post this here anyways?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/25">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/25</link>
+        <pubDate>Thu, 01 Nov 2012 03:32:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-25</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“haloofpower, post:23, topic:465482”][quote author=drubrkletern link=topic=570753.msg4135645#msg4135645 date=1351663539]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.</p>
+</blockquote>
+</aside>
+<p>Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine<br>
+[/quote]</p>
+<p>You didn’t even decide to read my post correctly, kcool.<br>
+Why would I care for my rep on a piss poor community like this anyway?[/quote]<br>
+You didn’t even decide to read the rules, kcool.</p>
+<p>If you dont care then fuck off</p>
+<p>inb4r-spiusingfaggot</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/24">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/24</link>
+        <pubDate>Thu, 01 Nov 2012 02:57:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-24</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“drubrkletern, post:22, topic:465482”][quote author=haloofpower link=topic=570753.msg4135613#msg4135613 date=1351660928]</p>
+<aside class="quote">
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.<br>
+[/quote]<br>
+Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine[/quote]</p>
+<p>You didn’t even decide to read my post correctly, kcool.<br>
+Why would I care for my rep on a piss poor community like this anyway?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/23</link>
+        <pubDate>Wed, 31 Oct 2012 15:58:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-23</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@drubrkletern drubrkletern]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/drubrkletern">@drubrkletern</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“haloofpower, post:21, topic:465482”][quote author=Team_Rocket link=topic=570753.msg4135508#msg4135508 date=1351649378]<br>
+HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.<br>
+[/quote]</p>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.[/quote]<br>
+Damn badass<br>
+Ok let me take a stab at it</p>
+<p>Faggot</p>
+<p>I disrespected you<br>
+Don’t care it up and snap at me</p>
+<p>If you come bombarding people here, your going to build a reputation here worse than mine</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/22</link>
+        <pubDate>Wed, 31 Oct 2012 06:05:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-22</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="19" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/team_rocket/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Team_Rocket:</div>
+<blockquote>
+<p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+</blockquote>
+</aside>
+<p>Like I care. When someone disrespects me, as pretty much everyone on this thread has, by saying I didn’t make something, it peeves me, just a bit to the point where I don’t care.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/21</link>
+        <pubDate>Wed, 31 Oct 2012 05:22:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-21</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="17" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/haloofpower/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> haloofpower:</div>
+<blockquote>
+<p>The cannon is lost you ignorant bastard. This saves the cannon when used so that the variables in the class only pertain to the user. If you looked at the class you would know it DOES that.</p>
+</blockquote>
+</aside>
+<p>I was replying to Zyle you ignorant bastard!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/20</link>
+        <pubDate>Wed, 31 Oct 2012 04:30:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-20</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@Team_Rocket Team_Rocket]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/team_rocket">@Team_Rocket</a> wrote:</p>
+          <blockquote>
+              <p>HaloOfPower, flaming and disrespecting other members won’t help your cause. Especially someone in a position of power.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/19</link>
+        <pubDate>Wed, 31 Oct 2012 02:09:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-19</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Except in that entire class, you are not serializing, or deserializing anything.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/18</link>
+        <pubDate>Wed, 31 Oct 2012 02:07:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-18</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+      <item>
+        <title>Decent Dwarf Cannon</title>
+        <dc:creator><![CDATA[@haloofpower haloofpower]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/haloofpower">@haloofpower</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“zyle1992, post:15, topic:465482”][quote author=haloofpower link=topic=570753.msg4135321#msg4135321 date=1351635953]</p>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<aside class="quote">
+<blockquote>
+<p>what does the ‘Serializable’ Interface do?</p>
+</blockquote>
+</aside>
+<p>Serialization is the conversion of an object to a series of bytes, so that the object can be easily saved to persistent storage or streamed across a communication link. The byte stream can then be deserialised - converted into a replica of the original object.</p>
+</blockquote>
+</aside>
+<p>I believe he was asking the OP, in order to discern whether this is actually his code or not.</p>
+</blockquote>
+</aside>
+<p>That would prove nothing as to whether it’s my code or not you ignorant fool.</p>
+<p>Also, updated to latest version (Meaning I added something).</p>
+<p><a href="http://www.youtube.com/watch?v=FUxSCOf7Jyc" rel="nofollow noopener">http://www.youtube.com/watch?v=FUxSCOf7Jyc</a></p>
+<p>Watch that video for you skeptics who think I didn’t make it.</p>
+</blockquote>
+</aside>
+<p>That still does not prove that the code is yours. It just shows it’s function in game, not that you are the author. Why are you using serializable? Why do you have empty comment blocks? Those are things that competent programmers don’t do.</p>
+<p>And even then, from viewing the video, you can tell that your code is flawed, as there are 3 rock crabs, that are well within range, that aren’t even being touched.</p>
+</blockquote>
+</aside>
+<p>The shots are done based on tiles, and if they aren’t in that set area of tiles, no firing. Basically, the shots don’t go to every tile, only a set few. And it also goes by size, if they’re close enough the shot doesn’t shoot at the npc because they’re too close.</p>
+<p>I use serializable to save it to each player class and so that it can be called and directly run from the player class. I have empty comment blocks because when I created the class (I use an IDE) it added those and I never felt like removing it.</p>
+<p>Also, just to spite you more, I will show the project threads and releases I’ve made under the name Orient and the project Prometheus.</p>
+<p><a href="http://www.rune-server.org/runescape-development/rs-503-client-server/snippets/450214-decent-dwarf-cannon.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs-503-client-server/snippets/450214-decent-dwarf-cannon.html</a></p>
+<p><a href="http://www.rune-server.org/runescape-development/rs-503-client-server/snippets/450106-useful-grand-exchange-snippets.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs-503-client-server/snippets/450106-useful-grand-exchange-snippets.html</a></p>
+<p><a href="http://www.rune-server.org/runescape-development/rs-503-client-server/projects/431980-prometheus-project-718-a.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/runescape-development/rs-503-client-server/projects/431980-prometheus-project-718-a.html</a></p>
+<p><a href="http://www.rune-server.org/programming/website-development/433481-my-custom-login-registration-system-my-server.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.rune-server.org/programming/website-development/433481-my-custom-login-registration-system-my-server.html</a></p>
+<p><a href="http://www.google.com/forums/showthread.php?80380-Prometheus-Project-718" class="onebox" target="_blank" rel="nofollow noopener">http://www.google.com/forums/showthread.php?80380-Prometheus-Project-718</a></p>
+<p><a href="http://www.google.com/forums/showthread.php?83042-Dwarf-MultiCannon" class="onebox" target="_blank" rel="nofollow noopener">http://www.google.com/forums/showthread.php?83042-Dwarf-MultiCannon</a></p>
+<p><a href="http://www.google.com/forums/showthread.php?83041-Useful-Grand-Exchange-Snippets" class="onebox" target="_blank" rel="nofollow noopener">http://www.google.com/forums/showthread.php?83041-Useful-Grand-Exchange-Snippets</a></p>
+<p><a href="http://www.rspscoding.org/forum/index.php?/topic/6104-decent-dwarf-cannon/page__view__findpost__p__71006" class="onebox" target="_blank" rel="nofollow noopener">http://www.rspscoding.org/forum/index.php?/topic/6104-decent-dwarf-cannon/page__view__findpost__p__71006</a></p>
+<p><a href="http://www.rspscoding.org/forum/index.php?/topic/6103-useful-grand-exchange-snippets/page__view__findpost__p__71005" class="onebox" target="_blank" rel="nofollow noopener">http://www.rspscoding.org/forum/index.php?/topic/6103-useful-grand-exchange-snippets/page__view__findpost__p__71005</a></p>
+<p>Oh! Yeah, here’s the website I use for integration. <a href="http://orient-hq.com" rel="nofollow noopener">http://orient-hq.com</a></p>
+<p>Need more proof or are you going to continue to be a jack ass?<br>
+[/quote]</p>
+<p>Why are you saving a cannon state to each serialized player object? When the player logs out, the server should remove the cannon, and add it to their inventory before saving the file. And when they login, the cannon shouldn’t be rebuilt.</p>
+<p>Overall, there is definitely room for improvement, in terms of both design, and function.</p>
+<p>Also, those still don’t prove that you’re “Orient”. You just linked to a bunch of topics made by that person, but I won’t split hairs.[/quote]<br>
+Go ahead, ask the moderators of all those sites to cross-check my IP address. Go ahead, go on, idiot.</p>
+<p>Also, it does remove it, it’s serializeable so the variables defined in the class only pertain to that single user. Yet again, idiot.</p>
+<aside class="quote" data-post="16" data-topic="465482">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/rodgerwilco/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Rodgerwilco:</div>
+<blockquote>
+<p>If a player logs out, the cannon should be lost <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+</blockquote>
+</aside>
+<p>The cannon is lost you ignorant bastard. This saves the cannon when used so that the variables in the class only pertain to the user. If you looked at the class you would know it DOES that.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482/17</link>
+        <pubDate>Wed, 31 Oct 2012 01:14:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-465482-17</guid>
+        <source url="https://forum.moparisthebest.com/t/decent-dwarf-cannon/465482.rss">Decent Dwarf Cannon</source>
+      </item>
+  </channel>
+</rss>

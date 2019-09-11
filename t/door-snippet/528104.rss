@@ -1,0 +1,1317 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Door Snippet</title>
+    <link>https://forum.moparisthebest.com/t/door-snippet/528104</link>
+    <description>Door handling in a majority of sources, in my opinion, is done wrong. Here&#39;s a snippet of what you could do. Allows you to stop door spamming, and also is much simpler.
+
+Steps: 
+
+Assuming you have all the objects in memory (I do, don&#39;t judge), iterate through all of them.
+If one of the object matches a door objects, then create a door at that position + the position of the hidden objects.
+Create the hidden objects, and then like a light switch hide and show the proper objects when a door is opened.
+
+[code]
+# TODO: May not be valid to set the type in the way I have
+
+java_import &#39;net.scapeemulator.game.model.World&#39;
+java_import &#39;net.scapeemulator.game.model.object.ObjectOrientation&#39;
+java_import &#39;net.scapeemulator.game.model.object.GroundObjectListenerAdapter&#39;
+java_import &#39;net.scapeemulator.game.model.object.ObjectType&#39;
+java_import &#39;net.scapeemulator.game.model.Position&#39;
+java_import &#39;net.scapeemulator.game.model.Door&#39;
+
+module RuneEmulator
+	class Doors
+
+		# The worlds object list to grab objects from
+		OBJECT_LIST = World::getWorld().getGroundObjects()
+
+		# States for if the door is opened or closed
+		OPENED = 0
+		CLOSED = 1
+
+		# Each of the orientations
+		ORIENTATION_ONE   = 1
+		ORIENTATION_TWO   = 2
+		ORIENTATION_THREE = 3
+		ORIENTATION_FOUR  = 4
+
+		# The mapping for all the single doors
+		SINGLE_DOORS = {}
+
+		# The mapping for all the doors registered
+		DOORS = {}
+
+		# The array of objects to add to the object list after a refresh
+		OBJECTS = []
+
+		class &lt;&lt; self
+			def bind_door(opened_obj_id, closed_obj_id)
+				DoorData.new(opened_obj_id, closed_obj_id).bind
+			end
+
+			def create_door(object)
+				data = SINGLE_DOORS[object.id]
+
+				raise &quot;Data does not exist for door, id: #{object.id}&quot; if data == nil
+
+				state       = data.state(object.id)
+				orientation = data.get_orientation(object.rotation, state)
+				origin      = data.get_origin(object.position, object.rotation, state)
+
+				objects = {}
+
+				[ :opened, :closed ].each { |type|
+					object = objects[type] = data.get_object(origin, orientation, type)
+					OBJECTS &lt;&lt; object
+				}
+
+				SingleTileDoor.new(objects[:opened], objects[:closed]).bind
+			end
+
+			def refresh()
+				OBJECT_LIST.fire_all_events(DoorObjectListener.new)
+
+				OBJECTS.each { |object|
+					object.register
+				}
+			end
+		end
+
+		class ObjectProxy
+			attr_reader :id, :position, :rotation, :type
+
+			def initialize(args)
+				case args.size
+				when 1
+					@target = args[:target]
+				when 4
+					@id       = args[:id]
+					@position = args[:position]
+					@rotation = args[:rotation]
+					@type     = args[:type]
+				else
+					raise &#39;Invalid constructor sent to object proxy&#39;
+				end
+			end
+
+			def register()
+				if @target == nil
+					@target = OBJECT_LIST.put(@position, @id, @rotation, @type)
+					#@target.hide
+				end
+			end
+
+			def hide()
+				@target.hide
+			end
+
+			def reveal()
+				@target.reveal
+			end
+		end
+
+		class DoorData
+
+			# Each of the orientations
+			# Orientation One: North, Orientation Two: South, Orientation Three: East, Orientation Four: West
+			ORIENTATIONS = { ORIENTATION_ONE   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 1 }, :opened =&gt; { :x =&gt;  0, :y =&gt;  1, :rotation =&gt; 2 } }, 
+			                 ORIENTATION_TWO   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 3 }, :opened =&gt; { :x =&gt;  0, :y =&gt; -1, :rotation =&gt; 0 } }, 
+			                 ORIENTATION_THREE =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 2 }, :opened =&gt; { :x =&gt;  1, :y =&gt;  0, :rotation =&gt; 3 } }, 
+			                 ORIENTATION_FOUR  =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 0 }, :opened =&gt; { :x =&gt; -1, :y =&gt;  0, :rotation =&gt; 1 } } 
+			               }
+
+			def initialize(opened_obj_id, closed_obj_id)
+				@opened_obj_id = opened_obj_id
+				@closed_obj_id = closed_obj_id
+			end
+
+			def get_origin(position, rotation, state)
+				delta = { :x =&gt; 0, :y =&gt; 0 }
+
+				case state
+				when OPENED
+					case rotation
+					when ObjectOrientation::NORTH
+						delta[:x] =  1
+					when ObjectOrientation::SOUTH
+						delta[:x] = -1
+					when ObjectOrientation::EAST
+						delta[:y] = -1	
+					when ObjectOrientation::WEST
+						delta[:y] =  1
+					end
+				end
+
+				Position.new(position.x + delta[:x], position.y + delta[:y], position.height)
+			end
+
+			def get_orientation(rotation, state)
+				case state
+				when OPENED				
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_FOUR]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_THREE]			
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_TWO]
+					end
+				when CLOSED
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_TWO]					
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_THREE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_FOUR]
+					end
+				end
+			end
+
+			def get_object(origin, orientation, type)
+				case type
+				when :opened
+					position = Position.new(origin.x + orientation[:opened][:x], origin.y + orientation[:opened][:y], origin.height)
+					if OBJECT_LIST.contains(@opened_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@opened_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @opened_obj_id, :position =&gt; position, :rotation =&gt; orientation[:opened][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				when :closed
+					position = Position.new(origin.x + orientation[:closed][:x], origin.y + orientation[:closed][:y], origin.height)
+					if OBJECT_LIST.contains(@closed_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@closed_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @closed_obj_id, :position =&gt; position, :rotation =&gt; orientation[:closed][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				end
+			end
+
+			def state(object_id)
+				{ @opened_obj_id =&gt; OPENED, @closed_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+
+			def bind()
+				SINGLE_DOORS[@opened_obj_id] = self
+				SINGLE_DOORS[@closed_obj_id] = self
+			end
+		end
+
+		class DoubleDoorData
+			def initialize(opened_ldoor_obj_id, opened_rdoor_obj_id, closed_ldoor_obj_id, closed_rdoor_obj_id)
+				@opened_ldoor_obj_id = opened_ldoor_obj_id
+				@opened_rdoor_obj_id = opened_rdoor_obj_id
+				@closed_ldoor_obj_id = closed_ldoor_obj_id
+				@closed_rdoor_obj_id = closed_rdoor_obj_id
+			end
+
+			def get_object(origin, orientation, type)
+			end
+
+			def state(object_id)
+				{ @opened_ldoor_obj_id =&gt; OPENED, @opened_rdoor_obj_id =&gt; OPENED, 
+			      @closed_ldoor_obj_id =&gt; CLOSED, @closed_rdoor_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class GateData
+			def initialize(opened_lgate_obj_id, opened_rgate_obj_id, closed_lgate_obj_id, closed_rgate_obj_id)
+				@opened_lgate_obj_id = opened_lgate_obj_id
+				@opened_rgate_obj_id = opened_rgate_obj_id
+				@closed_lgate_obj_id = closed_lgate_obj_id
+				@closed_rgate_obj_id = closed_rgate_obj_id
+			end
+
+			def get(type)
+			end
+
+			def state(object_id)
+				{ @opened_lgate_obj_id =&gt; OPENED, @opened_rgate_obj_id =&gt; OPENED, 
+			      @closed_lgate_obj_id =&gt; CLOSED, @closed_rgate_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class SingleTileDoor &lt; Door
+			def initialize(opened_door, closed_door)
+				super()
+				@opened_door = opened_door
+				@closed_door = closed_door
+			end
+
+			def open()
+				@opened_door.reveal
+				@closed_door.hide
+			end
+
+			def close()
+				@opened_door.hide
+				@closed_door.reveal
+			end
+
+			def bind()
+				DOORS[@opened_door.position] = @opened_door
+				DOORS[@closed_door.position] = @closed_door
+			end
+		end
+
+		class DoubleTileDoor &lt; Door
+			def initialize(opened_left, opened_right, closed_left, closed_right)
+				super()
+				@opened_left  = opened_left
+				@opened_right = opened_right
+				@closed_left  = closed_left
+				@closed_right = closed_right
+			end
+
+			def open()
+				@opened_left.reveal
+				@opened_right.reveal
+				@closed_left.hide
+				@closed_right.hide
+			end
+
+			def close()
+				@opened_left.hide
+				@opened_right.hide
+				@closed_left.reveal
+				@closed_right.reveal
+			end
+
+			def bind()
+				DOORS[@opened_left.position]  = self
+				DOORS[@opened_right.position] = self
+				DOORS[@closed_left.position]  = self
+				DOORS[@closed_right.position] = self
+			end
+		end
+
+		class DoorObjectListener &lt; GroundObjectListenerAdapter
+			def groundObjectAdded(object)
+				if SINGLE_DOORS.include?(object.id)
+					Doors.create_door(object)
+				end
+			end
+		end
+	end
+end
+
+RuneEmulator::Doors.bind_door(36848, 36846)
+RuneEmulator::Doors.refresh()
+[/code]</description>
+    
+    <lastBuildDate>Fri, 16 Aug 2013 17:24:37 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/door-snippet/528104.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:5, topic:528104”][quote author=arham 4 link=topic=646855.msg4350167#msg4350167 date=1376511022]<br>
+This is Ruby or…?<br>
+[/quote]</p>
+<p><img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+<pre><code class="lang-auto"># TODO: May not be valid to set the type in the way I have
+
+java_import 'net.scapeemulator.game.model.World'
+java_import 'net.scapeemulator.game.model.object.ObjectOrientation'
+java_import 'net.scapeemulator.game.model.object.GroundObjectListenerAdapter'
+java_import 'net.scapeemulator.game.model.object.ObjectType'
+java_import 'net.scapeemulator.game.model.Position'
+java_import 'net.scapeemulator.game.model.Door'
+
+module RuneEmulator
+	class Doors
+
+		# The worlds object list to grab objects from
+		OBJECT_LIST = World::getWorld().getGroundObjects()
+
+		# States for if the door is opened or closed
+		OPENED = 0
+		CLOSED = 1
+
+		# Each of the orientations
+		ORIENTATION_ONE   = 1
+		ORIENTATION_TWO   = 2
+		ORIENTATION_THREE = 3
+		ORIENTATION_FOUR  = 4
+
+		# The mapping for all the single doors
+		SINGLE_DOORS = {}
+
+		# The mapping for all the doors registered
+		DOORS = {}
+
+		# The array of objects to add to the object list after a refresh
+		OBJECTS = []
+
+		class &lt;&lt; self
+			def bind_door(opened_obj_id, closed_obj_id)
+				DoorData.new(opened_obj_id, closed_obj_id).bind
+			end
+
+			def create_door(object)
+				data = SINGLE_DOORS[object.id]
+
+				raise "Data does not exist for door, id: #{object.id}" if data == nil
+
+				state       = data.state(object.id)
+				orientation = data.get_orientation(object.rotation, state)
+				origin      = data.get_origin(object.position, object.rotation, state)
+
+				objects = {}
+
+				[ :opened, :closed ].each { |type|
+					object = objects[type] = data.get_object(origin, orientation, type)
+					OBJECTS &lt;&lt; object
+				}
+
+				SingleTileDoor.new(objects[:opened], objects[:closed]).bind
+			end
+
+			def refresh()
+				OBJECT_LIST.fire_all_events(DoorObjectListener.new)
+
+				OBJECTS.each { |object|
+					object.register
+				}
+			end
+		end
+
+		class ObjectProxy
+			attr_reader :id, :position, :rotation, :type
+
+			def initialize(args)
+				case args.size
+				when 1
+					@target = args[:target]
+				when 4
+					@id       = args[:id]
+					@position = args[:position]
+					@rotation = args[:rotation]
+					@type     = args[:type]
+				else
+					raise 'Invalid constructor sent to object proxy'
+				end
+			end
+
+			def register()
+				if @target == nil
+					@target = OBJECT_LIST.put(@position, @id, @rotation, @type)
+					#@target.hide
+				end
+			end
+
+			def hide()
+				@target.hide
+			end
+
+			def reveal()
+				@target.reveal
+			end
+		end
+
+		class DoorData
+
+			# Each of the orientations
+			# Orientation One: North, Orientation Two: South, Orientation Three: East, Orientation Four: West
+			ORIENTATIONS = { ORIENTATION_ONE   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 1 }, :opened =&gt; { :x =&gt;  0, :y =&gt;  1, :rotation =&gt; 2 } }, 
+			                 ORIENTATION_TWO   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 3 }, :opened =&gt; { :x =&gt;  0, :y =&gt; -1, :rotation =&gt; 0 } }, 
+			                 ORIENTATION_THREE =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 2 }, :opened =&gt; { :x =&gt;  1, :y =&gt;  0, :rotation =&gt; 3 } }, 
+			                 ORIENTATION_FOUR  =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 0 }, :opened =&gt; { :x =&gt; -1, :y =&gt;  0, :rotation =&gt; 1 } } 
+			               }
+
+			def initialize(opened_obj_id, closed_obj_id)
+				@opened_obj_id = opened_obj_id
+				@closed_obj_id = closed_obj_id
+			end
+
+			def get_origin(position, rotation, state)
+				delta = { :x =&gt; 0, :y =&gt; 0 }
+
+				case state
+				when OPENED
+					case rotation
+					when ObjectOrientation::NORTH
+						delta[:x] =  1
+					when ObjectOrientation::SOUTH
+						delta[:x] = -1
+					when ObjectOrientation::EAST
+						delta[:y] = -1	
+					when ObjectOrientation::WEST
+						delta[:y] =  1
+					end
+				end
+
+				Position.new(position.x + delta[:x], position.y + delta[:y], position.height)
+			end
+
+			def get_orientation(rotation, state)
+				case state
+				when OPENED				
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_FOUR]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_THREE]			
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_TWO]
+					end
+				when CLOSED
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_TWO]					
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_THREE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_FOUR]
+					end
+				end
+			end
+
+			def get_object(origin, orientation, type)
+				case type
+				when :opened
+					position = Position.new(origin.x + orientation[:opened][:x], origin.y + orientation[:opened][:y], origin.height)
+					if OBJECT_LIST.contains(@opened_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@opened_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @opened_obj_id, :position =&gt; position, :rotation =&gt; orientation[:opened][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				when :closed
+					position = Position.new(origin.x + orientation[:closed][:x], origin.y + orientation[:closed][:y], origin.height)
+					if OBJECT_LIST.contains(@closed_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@closed_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @closed_obj_id, :position =&gt; position, :rotation =&gt; orientation[:closed][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				end
+			end
+
+			def state(object_id)
+				{ @opened_obj_id =&gt; OPENED, @closed_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+
+			def bind()
+				SINGLE_DOORS[@opened_obj_id] = self
+				SINGLE_DOORS[@closed_obj_id] = self
+			end
+		end
+
+		class DoubleDoorData
+			def initialize(opened_ldoor_obj_id, opened_rdoor_obj_id, closed_ldoor_obj_id, closed_rdoor_obj_id)
+				@opened_ldoor_obj_id = opened_ldoor_obj_id
+				@opened_rdoor_obj_id = opened_rdoor_obj_id
+				@closed_ldoor_obj_id = closed_ldoor_obj_id
+				@closed_rdoor_obj_id = closed_rdoor_obj_id
+			end
+
+			def get_object(origin, orientation, type)
+			end
+
+			def state(object_id)
+				{ @opened_ldoor_obj_id =&gt; OPENED, @opened_rdoor_obj_id =&gt; OPENED, 
+			      @closed_ldoor_obj_id =&gt; CLOSED, @closed_rdoor_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class GateData
+			def initialize(opened_lgate_obj_id, opened_rgate_obj_id, closed_lgate_obj_id, closed_rgate_obj_id)
+				@opened_lgate_obj_id = opened_lgate_obj_id
+				@opened_rgate_obj_id = opened_rgate_obj_id
+				@closed_lgate_obj_id = closed_lgate_obj_id
+				@closed_rgate_obj_id = closed_rgate_obj_id
+			end
+
+			def get(type)
+			end
+
+			def state(object_id)
+				{ @opened_lgate_obj_id =&gt; OPENED, @opened_rgate_obj_id =&gt; OPENED, 
+			      @closed_lgate_obj_id =&gt; CLOSED, @closed_rgate_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class SingleTileDoor &lt; Door
+			def initialize(opened_door, closed_door)
+				super()
+				@opened_door = opened_door
+				@closed_door = closed_door
+			end
+
+			def open()
+				@opened_door.reveal
+				@closed_door.hide
+			end
+
+			def close()
+				@opened_door.hide
+				@closed_door.reveal
+			end
+
+			def bind()
+				DOORS[@opened_door.position] = @opened_door
+				DOORS[@closed_door.position] = @closed_door
+			end
+		end
+
+		class DoubleTileDoor &lt; Door
+			def initialize(opened_left, opened_right, closed_left, closed_right)
+				super()
+				@opened_left  = opened_left
+				@opened_right = opened_right
+				@closed_left  = closed_left
+				@closed_right = closed_right
+			end
+
+			def open()
+				@opened_left.reveal
+				@opened_right.reveal
+				@closed_left.hide
+				@closed_right.hide
+			end
+
+			def close()
+				@opened_left.hide
+				@opened_right.hide
+				@closed_left.reveal
+				@closed_right.reveal
+			end
+
+			def bind()
+				DOORS[@opened_left.position]  = self
+				DOORS[@opened_right.position] = self
+				DOORS[@closed_left.position]  = self
+				DOORS[@closed_right.position] = self
+			end
+		end
+
+		class DoorObjectListener &lt; GroundObjectListenerAdapter
+			def groundObjectAdded(object)
+				if SINGLE_DOORS.include?(object.id)
+					Doors.create_door(object)
+				end
+			end
+		end
+	end
+end
+
+RuneEmulator::Doors.bind_door(36848, 36846)
+RuneEmulator::Doors.refresh()</code></pre>
+<p>Heres a much CLEANER version.[/quote]<br>
+Thanks for this. And I’m not guessing this is in the Ruby programming language. xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/6</link>
+        <pubDate>Fri, 16 Aug 2013 17:24:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-6</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="4" data-topic="528104">
+<div class="title">
+<div class="quote-controls"></div>
+ arham 4:</div>
+<blockquote>
+<p>This is Ruby or…?</p>
+</blockquote>
+</aside>
+<p><img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+<pre><code class="lang-auto"># TODO: May not be valid to set the type in the way I have
+
+java_import 'net.scapeemulator.game.model.World'
+java_import 'net.scapeemulator.game.model.object.ObjectOrientation'
+java_import 'net.scapeemulator.game.model.object.GroundObjectListenerAdapter'
+java_import 'net.scapeemulator.game.model.object.ObjectType'
+java_import 'net.scapeemulator.game.model.Position'
+java_import 'net.scapeemulator.game.model.Door'
+
+module RuneEmulator
+	class Doors
+
+		# The worlds object list to grab objects from
+		OBJECT_LIST = World::getWorld().getGroundObjects()
+
+		# States for if the door is opened or closed
+		OPENED = 0
+		CLOSED = 1
+
+		# Each of the orientations
+		ORIENTATION_ONE   = 1
+		ORIENTATION_TWO   = 2
+		ORIENTATION_THREE = 3
+		ORIENTATION_FOUR  = 4
+
+		# The mapping for all the single doors
+		SINGLE_DOORS = {}
+
+		# The mapping for all the doors registered
+		DOORS = {}
+
+		# The array of objects to add to the object list after a refresh
+		OBJECTS = []
+
+		class &lt;&lt; self
+			def bind_door(opened_obj_id, closed_obj_id)
+				DoorData.new(opened_obj_id, closed_obj_id).bind
+			end
+
+			def create_door(object)
+				data = SINGLE_DOORS[object.id]
+
+				raise "Data does not exist for door, id: #{object.id}" if data == nil
+
+				state       = data.state(object.id)
+				orientation = data.get_orientation(object.rotation, state)
+				origin      = data.get_origin(object.position, object.rotation, state)
+
+				objects = {}
+
+				[ :opened, :closed ].each { |type|
+					object = objects[type] = data.get_object(origin, orientation, type)
+					OBJECTS &lt;&lt; object
+				}
+
+				SingleTileDoor.new(objects[:opened], objects[:closed]).bind
+			end
+
+			def refresh()
+				OBJECT_LIST.fire_all_events(DoorObjectListener.new)
+
+				OBJECTS.each { |object|
+					object.register
+				}
+			end
+		end
+
+		class ObjectProxy
+			attr_reader :id, :position, :rotation, :type
+
+			def initialize(args)
+				case args.size
+				when 1
+					@target = args[:target]
+				when 4
+					@id       = args[:id]
+					@position = args[:position]
+					@rotation = args[:rotation]
+					@type     = args[:type]
+				else
+					raise 'Invalid constructor sent to object proxy'
+				end
+			end
+
+			def register()
+				if @target == nil
+					@target = OBJECT_LIST.put(@position, @id, @rotation, @type)
+					#@target.hide
+				end
+			end
+
+			def hide()
+				@target.hide
+			end
+
+			def reveal()
+				@target.reveal
+			end
+		end
+
+		class DoorData
+
+			# Each of the orientations
+			# Orientation One: North, Orientation Two: South, Orientation Three: East, Orientation Four: West
+			ORIENTATIONS = { ORIENTATION_ONE   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 1 }, :opened =&gt; { :x =&gt;  0, :y =&gt;  1, :rotation =&gt; 2 } }, 
+			                 ORIENTATION_TWO   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 3 }, :opened =&gt; { :x =&gt;  0, :y =&gt; -1, :rotation =&gt; 0 } }, 
+			                 ORIENTATION_THREE =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 2 }, :opened =&gt; { :x =&gt;  1, :y =&gt;  0, :rotation =&gt; 3 } }, 
+			                 ORIENTATION_FOUR  =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 0 }, :opened =&gt; { :x =&gt; -1, :y =&gt;  0, :rotation =&gt; 1 } } 
+			               }
+
+			def initialize(opened_obj_id, closed_obj_id)
+				@opened_obj_id = opened_obj_id
+				@closed_obj_id = closed_obj_id
+			end
+
+			def get_origin(position, rotation, state)
+				delta = { :x =&gt; 0, :y =&gt; 0 }
+
+				case state
+				when OPENED
+					case rotation
+					when ObjectOrientation::NORTH
+						delta[:x] =  1
+					when ObjectOrientation::SOUTH
+						delta[:x] = -1
+					when ObjectOrientation::EAST
+						delta[:y] = -1	
+					when ObjectOrientation::WEST
+						delta[:y] =  1
+					end
+				end
+
+				Position.new(position.x + delta[:x], position.y + delta[:y], position.height)
+			end
+
+			def get_orientation(rotation, state)
+				case state
+				when OPENED				
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_FOUR]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_THREE]			
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_TWO]
+					end
+				when CLOSED
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_TWO]					
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_THREE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_FOUR]
+					end
+				end
+			end
+
+			def get_object(origin, orientation, type)
+				case type
+				when :opened
+					position = Position.new(origin.x + orientation[:opened][:x], origin.y + orientation[:opened][:y], origin.height)
+					if OBJECT_LIST.contains(@opened_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@opened_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @opened_obj_id, :position =&gt; position, :rotation =&gt; orientation[:opened][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				when :closed
+					position = Position.new(origin.x + orientation[:closed][:x], origin.y + orientation[:closed][:y], origin.height)
+					if OBJECT_LIST.contains(@closed_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@closed_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @closed_obj_id, :position =&gt; position, :rotation =&gt; orientation[:closed][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				end
+			end
+
+			def state(object_id)
+				{ @opened_obj_id =&gt; OPENED, @closed_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+
+			def bind()
+				SINGLE_DOORS[@opened_obj_id] = self
+				SINGLE_DOORS[@closed_obj_id] = self
+			end
+		end
+
+		class DoubleDoorData
+			def initialize(opened_ldoor_obj_id, opened_rdoor_obj_id, closed_ldoor_obj_id, closed_rdoor_obj_id)
+				@opened_ldoor_obj_id = opened_ldoor_obj_id
+				@opened_rdoor_obj_id = opened_rdoor_obj_id
+				@closed_ldoor_obj_id = closed_ldoor_obj_id
+				@closed_rdoor_obj_id = closed_rdoor_obj_id
+			end
+
+			def get_object(origin, orientation, type)
+			end
+
+			def state(object_id)
+				{ @opened_ldoor_obj_id =&gt; OPENED, @opened_rdoor_obj_id =&gt; OPENED, 
+			      @closed_ldoor_obj_id =&gt; CLOSED, @closed_rdoor_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class GateData
+			def initialize(opened_lgate_obj_id, opened_rgate_obj_id, closed_lgate_obj_id, closed_rgate_obj_id)
+				@opened_lgate_obj_id = opened_lgate_obj_id
+				@opened_rgate_obj_id = opened_rgate_obj_id
+				@closed_lgate_obj_id = closed_lgate_obj_id
+				@closed_rgate_obj_id = closed_rgate_obj_id
+			end
+
+			def get(type)
+			end
+
+			def state(object_id)
+				{ @opened_lgate_obj_id =&gt; OPENED, @opened_rgate_obj_id =&gt; OPENED, 
+			      @closed_lgate_obj_id =&gt; CLOSED, @closed_rgate_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class SingleTileDoor &lt; Door
+			def initialize(opened_door, closed_door)
+				super()
+				@opened_door = opened_door
+				@closed_door = closed_door
+			end
+
+			def open()
+				@opened_door.reveal
+				@closed_door.hide
+			end
+
+			def close()
+				@opened_door.hide
+				@closed_door.reveal
+			end
+
+			def bind()
+				DOORS[@opened_door.position] = @opened_door
+				DOORS[@closed_door.position] = @closed_door
+			end
+		end
+
+		class DoubleTileDoor &lt; Door
+			def initialize(opened_left, opened_right, closed_left, closed_right)
+				super()
+				@opened_left  = opened_left
+				@opened_right = opened_right
+				@closed_left  = closed_left
+				@closed_right = closed_right
+			end
+
+			def open()
+				@opened_left.reveal
+				@opened_right.reveal
+				@closed_left.hide
+				@closed_right.hide
+			end
+
+			def close()
+				@opened_left.hide
+				@opened_right.hide
+				@closed_left.reveal
+				@closed_right.reveal
+			end
+
+			def bind()
+				DOORS[@opened_left.position]  = self
+				DOORS[@opened_right.position] = self
+				DOORS[@closed_left.position]  = self
+				DOORS[@closed_right.position] = self
+			end
+		end
+
+		class DoorObjectListener &lt; GroundObjectListenerAdapter
+			def groundObjectAdded(object)
+				if SINGLE_DOORS.include?(object.id)
+					Doors.create_door(object)
+				end
+			end
+		end
+	end
+end
+
+RuneEmulator::Doors.bind_door(36848, 36846)
+RuneEmulator::Doors.refresh()</code></pre>
+<p>Heres a much CLEANER version.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/5</link>
+        <pubDate>Fri, 16 Aug 2013 09:34:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-5</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>This is Ruby or…?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/4</link>
+        <pubDate>Wed, 14 Aug 2013 20:10:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-4</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="528104">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sspoke/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sspoke:</div>
+<blockquote>
+<p>Is it possible to predict how the doors rotation will look opened or closed without making a doors.cfg file for all doors orientations</p>
+</blockquote>
+</aside>
+<p>Single tile doors only open outward, double tile doors only open *outward, gates open counter clockwise.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/3</link>
+        <pubDate>Wed, 14 Aug 2013 19:45:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-3</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@sspoke sspoke]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sspoke">@sspoke</a> wrote:</p>
+          <blockquote>
+              <p>Is it possible to predict how the doors rotation will look opened or closed without making a doors.cfg file for all doors orientations</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/2</link>
+        <pubDate>Wed, 14 Aug 2013 19:21:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-2</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+      <item>
+        <title>Door Snippet</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Door handling in a majority of sources, in my opinion, is done wrong. Here’s a snippet of what you could do. Allows you to stop door spamming, and also is much simpler.</p>
+<p>Steps:</p>
+<p>Assuming you have all the objects in memory (I do, don’t judge), iterate through all of them.<br>
+If one of the object matches a door objects, then create a door at that position + the position of the hidden objects.<br>
+Create the hidden objects, and then like a light switch hide and show the proper objects when a door is opened.</p>
+<pre><code class="lang-auto"># TODO: May not be valid to set the type in the way I have
+
+java_import 'net.scapeemulator.game.model.World'
+java_import 'net.scapeemulator.game.model.object.ObjectOrientation'
+java_import 'net.scapeemulator.game.model.object.GroundObjectListenerAdapter'
+java_import 'net.scapeemulator.game.model.object.ObjectType'
+java_import 'net.scapeemulator.game.model.Position'
+java_import 'net.scapeemulator.game.model.Door'
+
+module RuneEmulator
+	class Doors
+
+		# The worlds object list to grab objects from
+		OBJECT_LIST = World::getWorld().getGroundObjects()
+
+		# States for if the door is opened or closed
+		OPENED = 0
+		CLOSED = 1
+
+		# Each of the orientations
+		ORIENTATION_ONE   = 1
+		ORIENTATION_TWO   = 2
+		ORIENTATION_THREE = 3
+		ORIENTATION_FOUR  = 4
+
+		# The mapping for all the single doors
+		SINGLE_DOORS = {}
+
+		# The mapping for all the doors registered
+		DOORS = {}
+
+		# The array of objects to add to the object list after a refresh
+		OBJECTS = []
+
+		class &lt;&lt; self
+			def bind_door(opened_obj_id, closed_obj_id)
+				DoorData.new(opened_obj_id, closed_obj_id).bind
+			end
+
+			def create_door(object)
+				data = SINGLE_DOORS[object.id]
+
+				raise "Data does not exist for door, id: #{object.id}" if data == nil
+
+				state       = data.state(object.id)
+				orientation = data.get_orientation(object.rotation, state)
+				origin      = data.get_origin(object.position, object.rotation, state)
+
+				objects = {}
+
+				[ :opened, :closed ].each { |type|
+					object = objects[type] = data.get_object(origin, orientation, type)
+					OBJECTS &lt;&lt; object
+				}
+
+				SingleTileDoor.new(objects[:opened], objects[:closed]).bind
+			end
+
+			def refresh()
+				OBJECT_LIST.fire_all_events(DoorObjectListener.new)
+
+				OBJECTS.each { |object|
+					object.register
+				}
+			end
+		end
+
+		class ObjectProxy
+			attr_reader :id, :position, :rotation, :type
+
+			def initialize(args)
+				case args.size
+				when 1
+					@target = args[:target]
+				when 4
+					@id       = args[:id]
+					@position = args[:position]
+					@rotation = args[:rotation]
+					@type     = args[:type]
+				else
+					raise 'Invalid constructor sent to object proxy'
+				end
+			end
+
+			def register()
+				if @target == nil
+					@target = OBJECT_LIST.put(@position, @id, @rotation, @type)
+					#@target.hide
+				end
+			end
+
+			def hide()
+				@target.hide
+			end
+
+			def reveal()
+				@target.reveal
+			end
+		end
+
+		class DoorData
+
+			# Each of the orientations
+			# Orientation One: North, Orientation Two: South, Orientation Three: East, Orientation Four: West
+			ORIENTATIONS = { ORIENTATION_ONE   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 1 }, :opened =&gt; { :x =&gt;  0, :y =&gt;  1, :rotation =&gt; 2 } }, 
+			                 ORIENTATION_TWO   =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 3 }, :opened =&gt; { :x =&gt;  0, :y =&gt; -1, :rotation =&gt; 0 } }, 
+			                 ORIENTATION_THREE =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 2 }, :opened =&gt; { :x =&gt;  1, :y =&gt;  0, :rotation =&gt; 3 } }, 
+			                 ORIENTATION_FOUR  =&gt; { :closed =&gt; { :x =&gt; 0, :y =&gt; 0, :rotation =&gt; 0 }, :opened =&gt; { :x =&gt; -1, :y =&gt;  0, :rotation =&gt; 1 } } 
+			               }
+
+			def initialize(opened_obj_id, closed_obj_id)
+				@opened_obj_id = opened_obj_id
+				@closed_obj_id = closed_obj_id
+			end
+
+			def get_origin(position, rotation, state)
+				delta = { :x =&gt; 0, :y =&gt; 0 }
+
+				case state
+				when OPENED
+					case rotation
+					when ObjectOrientation::NORTH
+						delta[:x] =  1
+					when ObjectOrientation::SOUTH
+						delta[:x] = -1
+					when ObjectOrientation::EAST
+						delta[:y] = -1	
+					when ObjectOrientation::WEST
+						delta[:y] =  1
+					end
+				end
+
+				Position.new(position.x + delta[:x], position.y + delta[:y], position.height)
+			end
+
+			def get_orientation(rotation, state)
+				case state
+				when OPENED				
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_FOUR]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_THREE]			
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_TWO]
+					end
+				when CLOSED
+					case rotation
+					when ObjectOrientation::NORTH
+						ORIENTATIONS[ORIENTATION_ONE]
+					when ObjectOrientation::SOUTH
+						ORIENTATIONS[ORIENTATION_TWO]					
+					when ObjectOrientation::EAST
+						ORIENTATIONS[ORIENTATION_THREE]
+					when ObjectOrientation::WEST
+						ORIENTATIONS[ORIENTATION_FOUR]
+					end
+				end
+			end
+
+			def get_object(origin, orientation, type)
+				case type
+				when :opened
+					position = Position.new(origin.x + orientation[:opened][:x], origin.y + orientation[:opened][:y], origin.height)
+					if OBJECT_LIST.contains(@opened_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@opened_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @opened_obj_id, :position =&gt; position, :rotation =&gt; orientation[:opened][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				when :closed
+					position = Position.new(origin.x + orientation[:closed][:x], origin.y + orientation[:closed][:y], origin.height)
+					if OBJECT_LIST.contains(@closed_obj_id, position)
+						args = { :target =&gt; OBJECT_LIST.get(@closed_obj_id, position) }
+						ObjectProxy.new(args)
+					else
+						args = { :id =&gt; @closed_obj_id, :position =&gt; position, :rotation =&gt; orientation[:closed][:rotation], :type =&gt; ObjectType::TYPE_0 }
+						ObjectProxy.new(args)
+					end
+				end
+			end
+
+			def state(object_id)
+				{ @opened_obj_id =&gt; OPENED, @closed_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+
+			def bind()
+				SINGLE_DOORS[@opened_obj_id] = self
+				SINGLE_DOORS[@closed_obj_id] = self
+			end
+		end
+
+		class DoubleDoorData
+			def initialize(opened_ldoor_obj_id, opened_rdoor_obj_id, closed_ldoor_obj_id, closed_rdoor_obj_id)
+				@opened_ldoor_obj_id = opened_ldoor_obj_id
+				@opened_rdoor_obj_id = opened_rdoor_obj_id
+				@closed_ldoor_obj_id = closed_ldoor_obj_id
+				@closed_rdoor_obj_id = closed_rdoor_obj_id
+			end
+
+			def get_object(origin, orientation, type)
+			end
+
+			def state(object_id)
+				{ @opened_ldoor_obj_id =&gt; OPENED, @opened_rdoor_obj_id =&gt; OPENED, 
+			      @closed_ldoor_obj_id =&gt; CLOSED, @closed_rdoor_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class GateData
+			def initialize(opened_lgate_obj_id, opened_rgate_obj_id, closed_lgate_obj_id, closed_rgate_obj_id)
+				@opened_lgate_obj_id = opened_lgate_obj_id
+				@opened_rgate_obj_id = opened_rgate_obj_id
+				@closed_lgate_obj_id = closed_lgate_obj_id
+				@closed_rgate_obj_id = closed_rgate_obj_id
+			end
+
+			def get(type)
+			end
+
+			def state(object_id)
+				{ @opened_lgate_obj_id =&gt; OPENED, @opened_rgate_obj_id =&gt; OPENED, 
+			      @closed_lgate_obj_id =&gt; CLOSED, @closed_rgate_obj_id =&gt; CLOSED }.fetch(object_id)
+			end
+		end
+
+		class SingleTileDoor &lt; Door
+			def initialize(opened_door, closed_door)
+				super()
+				@opened_door = opened_door
+				@closed_door = closed_door
+			end
+
+			def open()
+				@opened_door.reveal
+				@closed_door.hide
+			end
+
+			def close()
+				@opened_door.hide
+				@closed_door.reveal
+			end
+
+			def bind()
+				DOORS[@opened_door.position] = @opened_door
+				DOORS[@closed_door.position] = @closed_door
+			end
+		end
+
+		class DoubleTileDoor &lt; Door
+			def initialize(opened_left, opened_right, closed_left, closed_right)
+				super()
+				@opened_left  = opened_left
+				@opened_right = opened_right
+				@closed_left  = closed_left
+				@closed_right = closed_right
+			end
+
+			def open()
+				@opened_left.reveal
+				@opened_right.reveal
+				@closed_left.hide
+				@closed_right.hide
+			end
+
+			def close()
+				@opened_left.hide
+				@opened_right.hide
+				@closed_left.reveal
+				@closed_right.reveal
+			end
+
+			def bind()
+				DOORS[@opened_left.position]  = self
+				DOORS[@opened_right.position] = self
+				DOORS[@closed_left.position]  = self
+				DOORS[@closed_right.position] = self
+			end
+		end
+
+		class DoorObjectListener &lt; GroundObjectListenerAdapter
+			def groundObjectAdded(object)
+				if SINGLE_DOORS.include?(object.id)
+					Doors.create_door(object)
+				end
+			end
+		end
+	end
+end
+
+RuneEmulator::Doors.bind_door(36848, 36846)
+RuneEmulator::Doors.refresh()</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/door-snippet/528104/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/door-snippet/528104/1</link>
+        <pubDate>Wed, 14 Aug 2013 17:58:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-528104-1</guid>
+        <source url="https://forum.moparisthebest.com/t/door-snippet/528104.rss">Door Snippet</source>
+      </item>
+  </channel>
+</rss>

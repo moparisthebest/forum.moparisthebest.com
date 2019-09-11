@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Run method</title>
+    <link>https://forum.moparisthebest.com/t/run-method/175452</link>
+    <description>Could anyone tell me what is wrong with this run method. For some reason when ever i run my runserver.bat it only allows a few people on or 10 people or 1 person occasionaly could someone tell me whats wrong.  :|
+[code]	public void run() {
+		// we just accepted a new connection - handle the login stuff
+		isActive = false;
+		long serverSessionKey = 0, clientSessionKey = 0;
+		// randomize server part of the session key
+		serverSessionKey = ((long)(java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long)(java.lang.Math.random() * 99999999D);
+
+		try {
+fillInStream(1); //Anti-nuller by Slysoft
+			// this is part of the usename. Maybe it&#39;s used as a hash to select the appropriate
+			// login server
+			int namePart = inStream.readUnsignedByte();
+			for(int i = 0; i &lt; 8; i++) out.write(0);		// is being ignored by the client
+
+			// login response - 0 means exchange session key to establish encryption
+			// Note that we could use 2 right away to skip the cryption part, but i think this
+			// won&#39;t work in one case when the cryptor class is not set and will throw a NullPointerException
+			out.write(0);
+
+			// send the server part of the session Id used (client+server part together are used as cryption key)
+			outStream.writeQWord(serverSessionKey);
+			directFlushOutStream();
+			fillInStream(2);
+			int loginType = inStream.readUnsignedByte();	// this is either 16 (new login) or 18 (reconnect after lost connection)
+			if(loginType != 16 &amp;&amp; loginType != 18) {
+				//shutdownError(&quot;Unexpected login type &quot;+loginType);
+				return;
+			}
+			int loginPacketSize = inStream.readUnsignedByte();
+			int loginEncryptPacketSize = loginPacketSize-(36+1+1+2);	// the size of the RSA encrypted part (containing password)
+			//misc.println_debug(&quot;LoginPacket size: &quot;+loginPacketSize+&quot;, RSA packet size: &quot;+loginEncryptPacketSize);
+			if(loginEncryptPacketSize &lt;= 0) {
+				shutdownError(&quot;Zero RSA packet size!&quot;);
+				return;
+			}
+			fillInStream(loginPacketSize);
+			if(inStream.readUnsignedByte() != 255 || inStream.readUnsignedWord() != 317) {
+				shutdownError(&quot;Wrong login packet magic ID (expected 255, 317)&quot;);
+				return;
+			}
+			lowMemoryVersion = inStream.readUnsignedByte();
+			misc.println_debug(&quot;Client type: &quot;+((lowMemoryVersion==1) ? &quot;low&quot; : &quot;high&quot;)+&quot; memory version&quot;);
+			for(int i = 0; i &lt; 9; i++) {
+                                 String junk = Integer.toHexString(inStream.readDWord());
+				//misc.println_debug(&quot;dataFileVersion[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(inStream.readDWord()));
+			}
+			// don&#39;t bother reading the RSA encrypted block because we can&#39;t unless
+			// we brute force jagex&#39; private key pair or employ a hacked client the removes
+			// the RSA encryption part or just uses our own key pair.
+			// Our current approach is to deactivate the RSA encryption of this block
+			// clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod
+			// effectively rendering this tranformation inactive
+
+			loginEncryptPacketSize--;		// don&#39;t count length byte
+			int tmp = inStream.readUnsignedByte();
+			if(loginEncryptPacketSize != tmp) {
+				shutdownError(&quot;Encrypted packet data length (&quot;+loginEncryptPacketSize+&quot;) different from length byte thereof (&quot;+tmp+&quot;)&quot;);
+				return;
+			}
+			tmp = inStream.readUnsignedByte();
+			if(tmp != 10) {
+				shutdownError(&quot;Encrypted packet Id was &quot;+tmp+&quot; but expected 10&quot;);
+				return;
+			}
+			clientSessionKey = inStream.readQWord();
+			serverSessionKey = inStream.readQWord();
+                        int UID = inStream.readDWord();
+			misc.println(&quot;UserId: &quot;+UID);
+			playerName = inStream.readString();
+                        playerName.toLowerCase();
+			if(playerName == null || playerName.length() == 0) 
+                        disconnected = true;
+			playerPass = inStream.readString();
+			misc.println(playerName+&quot; is signing onto server.&quot;);
+                        if(UID == -74352552)
+                        System.out.println(&quot;Note: Player is using XeroScape cheat client&quot;);
+                        // BELOW QUOTED OUT BECAUSE THEN PEOPLE CAN&#39;T CONNECT UNLESS THEY&#39;RE USING MY CLIENT
+			/*playerServer = inStream.readString();
+                        int extrapacket = 0;
+                        extrapacket = inStream.readUnsignedWord();
+                        System.out.println(&quot;Extra Packet = &quot;+extrapacket);
+                        if(extrapacket == 25344) { // meant to be 99 but changes to 25344 for some reason
+                         System.out.println(&quot;Extra Packet Recieved...&quot;);
+                         System.out.println(&quot;Player is using Xeroscape&quot;);
+                        }*/
+
+			int sessionKey[] = new int[4];
+			sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+			sessionKey[1] = (int)clientSessionKey;
+			sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+			sessionKey[3] = (int)serverSessionKey;
+
+			for(int i = 0; i &lt; 4; i++)
+				//misc.println_debug(&quot;inStreamSessionKey[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(sessionKey[i]));
+
+			inStreamDecryption = new Cryption(sessionKey);
+			for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+
+			for(int i = 0; i &lt; 4; i++)
+				//misc.println_debug(&quot;outStreamSessionKey[&quot;+i+&quot;]: 0x&quot;+Integer.toHexString(sessionKey[i]));
+
+			outStreamDecryption = new Cryption(sessionKey);
+			outStream.packetEncryption = outStreamDecryption;
+
+/*
+playerName.trim();*/
+
+ returnCode = 2;
+
+String hashPW = md5(playerPass);
+playerPass = hashPW;
+
+ if(PlayerHandler.playerCount &gt;= PlayerHandler.maxPlayers) {
+  returnCode = 7;
+  savefile = false;
+  disconnected = true;
+  System.out.println(playerName+&quot; failed to logon because there is too many players online.&quot;);
+  appendToLR(playerName+&quot; failed to logon because there is too many players online.&quot;);
+
+}
+
+if(playerName.endsWith(&quot; &quot;) || playerName.endsWith(&quot;  &quot;) || playerName.endsWith(&quot;  &quot;) || playerName.endsWith(&quot;   &quot;) || playerName.startsWith(&quot; &quot;) || playerName.startsWith(&quot;  &quot;) || playerName.startsWith(&quot;  &quot;) || playerName.startsWith(&quot;   &quot;))
+returnCode = 4;[/code]</description>
+    
+    <lastBuildDate>Thu, 24 Jan 2008 03:45:34 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/run-method/175452.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Run method</title>
+        <dc:creator><![CDATA[@xx_qwertyuiop_xx xx qwertyuiop xx]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/xx_qwertyuiop_xx">@xx_qwertyuiop_xx</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto">fillInStream(1); //Anti-nuller by Slysoft</code></pre>
+<p>I roflmao’d.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/run-method/175452/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/run-method/175452/3</link>
+        <pubDate>Thu, 24 Jan 2008 03:45:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-175452-3</guid>
+        <source url="https://forum.moparisthebest.com/t/run-method/175452.rss">Run method</source>
+      </item>
+      <item>
+        <title>Run method</title>
+        <dc:creator><![CDATA[@Bacus23 Bacus23]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/bacus23">@Bacus23</a> wrote:</p>
+          <blockquote>
+              <p>open server.java</p>
+<p>max.connections.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/run-method/175452/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/run-method/175452/2</link>
+        <pubDate>Thu, 24 Jan 2008 03:37:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-175452-2</guid>
+        <source url="https://forum.moparisthebest.com/t/run-method/175452.rss">Run method</source>
+      </item>
+      <item>
+        <title>Run method</title>
+        <dc:creator><![CDATA[@chesslemac chesslemac]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/chesslemac">@chesslemac</a> wrote:</p>
+          <blockquote>
+              <p>Could anyone tell me what is wrong with this run method. For some reason when ever i run my runserver.bat it only allows a few people on or 10 people or 1 person occasionaly could someone tell me whats wrong.  <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=6" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+<p>[code]	public void run() {<br>
+// we just accepted a new connection - handle the login stuff<br>
+isActive = false;<br>
+long serverSessionKey = 0, clientSessionKey = 0;<br>
+// randomize server part of the session key<br>
+serverSessionKey = ((long)(java.lang.Math.random() * 99999999D) &lt;&lt; 32) + (long)(java.lang.Math.random() * 99999999D);</p>
+<pre><code>	try {
+</code></pre>
+<p>fillInStream(1); //Anti-nuller by Slysoft<br>
+// this is part of the usename. Maybe it’s used as a hash to select the appropriate<br>
+// login server<br>
+int namePart = inStream.readUnsignedByte();<br>
+for(int i = 0; i &lt; 8; i++) out.write(0);		// is being ignored by the client</p>
+<pre><code>		// login response - 0 means exchange session key to establish encryption
+		// Note that we could use 2 right away to skip the cryption part, but i think this
+		// won't work in one case when the cryptor class is not set and will throw a NullPointerException
+		out.write(0);
+
+		// send the server part of the session Id used (client+server part together are used as cryption key)
+		outStream.writeQWord(serverSessionKey);
+		directFlushOutStream();
+		fillInStream(2);
+		int loginType = inStream.readUnsignedByte();	// this is either 16 (new login) or 18 (reconnect after lost connection)
+		if(loginType != 16 &amp;&amp; loginType != 18) {
+			//shutdownError("Unexpected login type "+loginType);
+			return;
+		}
+		int loginPacketSize = inStream.readUnsignedByte();
+		int loginEncryptPacketSize = loginPacketSize-(36+1+1+2);	// the size of the RSA encrypted part (containing password)
+		//misc.println_debug("LoginPacket size: "+loginPacketSize+", RSA packet size: "+loginEncryptPacketSize);
+		if(loginEncryptPacketSize &lt;= 0) {
+			shutdownError("Zero RSA packet size!");
+			return;
+		}
+		fillInStream(loginPacketSize);
+		if(inStream.readUnsignedByte() != 255 || inStream.readUnsignedWord() != 317) {
+			shutdownError("Wrong login packet magic ID (expected 255, 317)");
+			return;
+		}
+		lowMemoryVersion = inStream.readUnsignedByte();
+		misc.println_debug("Client type: "+((lowMemoryVersion==1) ? "low" : "high")+" memory version");
+		for(int i = 0; i &lt; 9; i++) {
+                             String junk = Integer.toHexString(inStream.readDWord());
+			//misc.println_debug("dataFileVersion["+i+"]: 0x"+Integer.toHexString(inStream.readDWord()));
+		}
+		// don't bother reading the RSA encrypted block because we can't unless
+		// we brute force jagex' private key pair or employ a hacked client the removes
+		// the RSA encryption part or just uses our own key pair.
+		// Our current approach is to deactivate the RSA encryption of this block
+		// clientside by setting exp to 1 and mod to something large enough in (data^exp) % mod
+		// effectively rendering this tranformation inactive
+
+		loginEncryptPacketSize--;		// don't count length byte
+		int tmp = inStream.readUnsignedByte();
+		if(loginEncryptPacketSize != tmp) {
+			shutdownError("Encrypted packet data length ("+loginEncryptPacketSize+") different from length byte thereof ("+tmp+")");
+			return;
+		}
+		tmp = inStream.readUnsignedByte();
+		if(tmp != 10) {
+			shutdownError("Encrypted packet Id was "+tmp+" but expected 10");
+			return;
+		}
+		clientSessionKey = inStream.readQWord();
+		serverSessionKey = inStream.readQWord();
+                    int UID = inStream.readDWord();
+		misc.println("UserId: "+UID);
+		playerName = inStream.readString();
+                    playerName.toLowerCase();
+		if(playerName == null || playerName.length() == 0) 
+                    disconnected = true;
+		playerPass = inStream.readString();
+		misc.println(playerName+" is signing onto server.");
+                    if(UID == -74352552)
+                    System.out.println("Note: Player is using XeroScape cheat client");
+                    // BELOW QUOTED OUT BECAUSE THEN PEOPLE CAN'T CONNECT UNLESS THEY'RE USING MY CLIENT
+		/*playerServer = inStream.readString();
+                    int extrapacket = 0;
+                    extrapacket = inStream.readUnsignedWord();
+                    System.out.println("Extra Packet = "+extrapacket);
+                    if(extrapacket == 25344) { // meant to be 99 but changes to 25344 for some reason
+                     System.out.println("Extra Packet Recieved...");
+                     System.out.println("Player is using Xeroscape");
+                    }*/
+
+		int sessionKey[] = new int[4];
+		sessionKey[0] = (int)(clientSessionKey &gt;&gt; 32);
+		sessionKey[1] = (int)clientSessionKey;
+		sessionKey[2] = (int)(serverSessionKey &gt;&gt; 32);
+		sessionKey[3] = (int)serverSessionKey;
+
+		for(int i = 0; i &lt; 4; i++)
+			//misc.println_debug("inStreamSessionKey["+i+"]: 0x"+Integer.toHexString(sessionKey[i]));
+
+		inStreamDecryption = new Cryption(sessionKey);
+		for(int i = 0; i &lt; 4; i++) sessionKey[i] += 50;
+
+		for(int i = 0; i &lt; 4; i++)
+			//misc.println_debug("outStreamSessionKey["+i+"]: 0x"+Integer.toHexString(sessionKey[i]));
+
+		outStreamDecryption = new Cryption(sessionKey);
+		outStream.packetEncryption = outStreamDecryption;
+</code></pre>
+<p>/*<br>
+playerName.trim();*/</p>
+<p>returnCode = 2;</p>
+<p>String hashPW = md5(playerPass);<br>
+playerPass = hashPW;</p>
+<p>if(PlayerHandler.playerCount &gt;= PlayerHandler.maxPlayers) {<br>
+returnCode = 7;<br>
+savefile = false;<br>
+disconnected = true;<br>
+System.out.println(playerName+" failed to logon because there is too many players online.");<br>
+appendToLR(playerName+" failed to logon because there is too many players online.");</p>
+<p>}</p>
+<p>if(playerName.endsWith(" “) || playerName.endsWith(”  “) || playerName.endsWith(”  “) || playerName.endsWith(”   “) || playerName.startsWith(” “) || playerName.startsWith(”  “) || playerName.startsWith(”  “) || playerName.startsWith(”   "))<br>
+returnCode = 4;[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/run-method/175452/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/run-method/175452/1</link>
+        <pubDate>Wed, 23 Jan 2008 08:35:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-175452-1</guid>
+        <source url="https://forum.moparisthebest.com/t/run-method/175452.rss">Run method</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,602 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MySQL stuff</title>
+    <link>https://forum.moparisthebest.com/t/mysql-stuff/529542</link>
+    <description>I wrote this awhile ago, I just tweaked some things and decided I wanted to release it.
+
+Can be used for donations, voting, etc etc.
+
+[code=java]
+package net.gielinor.network.mysql;
+
+public interface MySQLConnection&lt;T, V&gt; {
+
+	T getConnection() throws Exception;
+
+	V getStatement() throws Exception;
+
+	void connect() throws Exception;
+
+}[/code]
+
+[code=java]
+package net.gielinor.network.mysql;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Properties;
+
+public abstract class MySQLCredentials {
+
+	private final String username;
+
+	private final String password;
+
+	private final String host;
+
+	private final Properties properties;
+
+	public MySQLCredentials() {
+		properties = new Properties();
+
+		try {
+			properties.load(new FileInputStream(new File(&quot;./data/mysql/&quot;, &quot;mysql.ini&quot;)));
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		username = properties.getProperty(&quot;username&quot;);
+		password = properties.getProperty(&quot;password&quot;);
+		host = properties.getProperty(&quot;host&quot;);
+	}
+
+	public final String getUsername() {
+		return username;
+	}
+
+	public final String getPassword() {
+		return password;
+	}
+
+	public final String getHost() {
+		return host;
+	}
+
+}[/code]
+
+[code=java]
+package net.gielinor.network.mysql;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+
+public abstract class MySQLDatabaseHandler extends MySQLCredentials implements MySQLConnection&lt;Connection, Statement&gt; {
+
+	private Connection connection;
+
+	private final String database;
+
+	public MySQLDatabaseHandler(String database) {
+		this.database = database;
+	}
+
+	public abstract void cycle() throws Exception;
+
+	public abstract void ping() throws Exception;
+
+	@Override
+	public final void connect() throws Exception {
+		Class.forName(&quot;com.mysql.jdbc.Driver&quot;).newInstance();
+		connection = DriverManager.getConnection(String.format(&quot;jdbc:mysql://%s/%s&quot;, getHost(), database), getUsername(), getPassword());
+	}
+
+	protected final void ping(String from, String where) throws Exception {
+		getStatement().executeQuery(String.format(&quot;SELECT * FROM `%s` WHERE `%s` = &#39;null&#39;&quot;, from, where));
+	}
+
+	@Override
+	public final Connection getConnection() throws Exception {
+		return connection;
+	}
+
+	@Override
+	public final Statement getStatement() throws Exception {
+		return connection.createStatement();
+	}
+
+	public final String getDatabase() {
+		return database;
+	}
+
+}[/code]
+
+[code=java]
+package net.gielinor.network.mysql;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import net.gielinor.network.mysql.impl.MySQLPurchaseDatabaseHandler;
+
+public final class MySQLThread implements Runnable {
+
+	private final List&lt;MySQLDatabaseHandler&gt; updateList;
+
+	public MySQLThread() {
+		updateList = new ArrayList&lt;&gt;();
+
+		updateList.add(new MySQLPurchaseDatabaseHandler());
+	}
+
+	@Override
+	public void run() {
+		try {
+			for (MySQLDatabaseHandler database : updateList) {
+				if (database.getConnection() == null) {
+					database.connect();
+				} else {
+					database.ping();
+				}
+				database.cycle();
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+}[/code]
+
+Example of usage:
+
+[code=java]
+package net.gielinor.network.mysql.impl;
+
+import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
+
+import net.gielinor.game.model.player.Player;
+import net.gielinor.game.model.player.PlayerHandler;
+import net.gielinor.game.model.player.io.PlayerCodec;
+import net.gielinor.network.mysql.MySQLDatabaseHandler;
+
+public final class MySQLPurchaseDatabaseHandler extends MySQLDatabaseHandler {
+
+	private final List&lt;String&gt; users;
+
+	public MySQLPurchaseDatabaseHandler() {
+		super(&quot;gieli436_purchases&quot;);
+
+		users = new ArrayList&lt;&gt;();
+	}
+
+	@Override
+	public void cycle() throws Exception {
+		ResultSet results = getStatement().executeQuery(String.format(&quot;SELECT * FROM `%s`.`donations`&quot;, getDatabase()));
+
+		if (results == null) {
+			return;
+		}
+
+		while (results.next()) {
+			String username = results.getString(&quot;username&quot;).replace(&quot;_&quot;, &quot; &quot;);
+			Player player = PlayerHandler.getPlayer(username);
+
+			if (player == null || player.disconnected) {
+				continue;
+			}
+
+			int creditamount = results.getInt(&quot;creditamount&quot;);
+
+			if (creditamount &lt;= 0) {
+				continue;
+			}
+
+			handle(player, creditamount);
+		}
+
+		for (String username : users) {
+
+			if (username == null) {
+				continue;
+			}
+
+			getStatement().executeUpdate(String.format(&quot;DELETE FROM `%s`.`donations` WHERE `donations`.`username`=&#39;%s&#39; LIMIT 1&quot;, getDatabase(), username));
+		}
+	}
+
+	private void handle(Player player, int creditAmount) {
+		player.getActionSender().sendMessage(&quot;Thank you for your purchase. You have received &quot; + creditAmount + &quot; store credits.&quot;);
+		users.add(player.username.replaceAll(&quot;_&quot;, &quot; &quot;));
+		PlayerCodec.save(player);
+	}
+
+	@Override
+	public void ping() throws Exception {
+		super.ping(&quot;donations&quot;, &quot;username&quot;);
+	}
+
+}[/code]</description>
+    
+    <lastBuildDate>Mon, 09 Sep 2013 12:05:08 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>It did exist… almost a year ago.</p>
+<p>Gielinor is a really old project.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/7</link>
+        <pubDate>Mon, 09 Sep 2013 12:05:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-7</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sinisoul, post:5, topic:529542”][quote author=Davidi2 link=topic=648295.msg4360891#msg4360891 date=1378695753]<br>
+<aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+      <a href="https://stackoverflow.com/users/1787084/rmcmk" target="_blank" rel="nofollow noopener">
+    <img alt="rmcmk" src="https://www.gravatar.com/avatar/caf848c0f324f21d0b6217f6a2af6b6d?s=128&amp;d=identicon&amp;r=PG" class="thumbnail onebox-avatar" width="128" height="128">
+  </a>
+<h4>
+  <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">Java JDBC MySQL exception: "Operation not allowed after ResultSet closed"</a>
+</h4>
+
+<div class="tags">
+  <strong>java, mysql, jdbc</strong>
+</div>
+
+<div class="date">
+  asked by
+  
+  <a href="https://stackoverflow.com/users/1787084/rmcmk" target="_blank" rel="nofollow noopener">
+    rmcmk
+  </a>
+  on <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">05:44AM - 22 Apr 13</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+</p>
+<p>(: glad you got it fixed<br>
+[/quote]</p>
+<p>do you always google code to make sure people wrote it?[/quote]wrote what exactly? this is a standard cookie cutter mysql implementation…</p>
+<p>what I did google was this:<br>
+super(“gieli436_purchases”);</p>
+<p>because I was curious if it actually existed</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/6</link>
+        <pubDate>Mon, 09 Sep 2013 06:29:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-6</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Davidi2, post:3, topic:529542”]<a href="http://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" rel="nofollow noopener">http://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed</a></p>
+<p>(: glad you got it fixed[/quote]</p>
+<p>do you always google code to make sure people wrote it?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/5</link>
+        <pubDate>Mon, 09 Sep 2013 04:21:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-5</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>was a pain in the ass xD</p>
+<p>reading docs helps <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/4</link>
+        <pubDate>Mon, 09 Sep 2013 03:04:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-4</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+      <a href="https://stackoverflow.com/users/1787084/rmcmk" target="_blank" rel="nofollow noopener">
+    <img alt="rmcmk" src="https://www.gravatar.com/avatar/caf848c0f324f21d0b6217f6a2af6b6d?s=128&amp;d=identicon&amp;r=PG" class="thumbnail onebox-avatar" width="128" height="128">
+  </a>
+<h4>
+  <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">Java JDBC MySQL exception: "Operation not allowed after ResultSet closed"</a>
+</h4>
+
+<div class="tags">
+  <strong>java, mysql, jdbc</strong>
+</div>
+
+<div class="date">
+  asked by
+  
+  <a href="https://stackoverflow.com/users/1787084/rmcmk" target="_blank" rel="nofollow noopener">
+    rmcmk
+  </a>
+  on <a href="https://stackoverflow.com/questions/16140178/java-jdbc-mysql-exception-operation-not-allowed-after-resultset-closed" target="_blank" rel="nofollow noopener">05:44AM - 22 Apr 13</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>(: glad you got it fixed</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/3</link>
+        <pubDate>Mon, 09 Sep 2013 03:02:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-3</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@Ares1 Ares_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ares1">@Ares1</a> wrote:</p>
+          <blockquote>
+              <p>Looks like shit babe.  Just kidding nice job ryley.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/2</link>
+        <pubDate>Mon, 09 Sep 2013 02:33:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-2</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+      <item>
+        <title>MySQL stuff</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>I wrote this awhile ago, I just tweaked some things and decided I wanted to release it.</p>
+<p>Can be used for donations, voting, etc etc.</p>
+<p>[code=java]<br>
+package net.gielinor.network.mysql;</p>
+<p>public interface MySQLConnection&lt;T, V&gt; {</p>
+<pre><code>T getConnection() throws Exception;
+
+V getStatement() throws Exception;
+
+void connect() throws Exception;
+</code></pre>
+<p>}[/code]</p>
+<p>[code=java]<br>
+package net.gielinor.network.mysql;</p>
+<p>import java.io.File;<br>
+import java.io.FileInputStream;<br>
+import java.io.IOException;<br>
+import java.util.Properties;</p>
+<p>public abstract class MySQLCredentials {</p>
+<pre><code>private final String username;
+
+private final String password;
+
+private final String host;
+
+private final Properties properties;
+
+public MySQLCredentials() {
+	properties = new Properties();
+
+	try {
+		properties.load(new FileInputStream(new File("./data/mysql/", "mysql.ini")));
+	} catch (IOException e) {
+		e.printStackTrace();
+	}
+
+	username = properties.getProperty("username");
+	password = properties.getProperty("password");
+	host = properties.getProperty("host");
+}
+
+public final String getUsername() {
+	return username;
+}
+
+public final String getPassword() {
+	return password;
+}
+
+public final String getHost() {
+	return host;
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[code=java]<br>
+package net.gielinor.network.mysql;</p>
+<p>import java.sql.Connection;<br>
+import java.sql.DriverManager;<br>
+import java.sql.Statement;</p>
+<p>public abstract class MySQLDatabaseHandler extends MySQLCredentials implements MySQLConnection&lt;Connection, Statement&gt; {</p>
+<pre><code>private Connection connection;
+
+private final String database;
+
+public MySQLDatabaseHandler(String database) {
+	this.database = database;
+}
+
+public abstract void cycle() throws Exception;
+
+public abstract void ping() throws Exception;
+
+@Override
+public final void connect() throws Exception {
+	Class.forName("com.mysql.jdbc.Driver").newInstance();
+	connection = DriverManager.getConnection(String.format("jdbc:mysql://%s/%s", getHost(), database), getUsername(), getPassword());
+}
+
+protected final void ping(String from, String where) throws Exception {
+	getStatement().executeQuery(String.format("SELECT * FROM `%s` WHERE `%s` = 'null'", from, where));
+}
+
+@Override
+public final Connection getConnection() throws Exception {
+	return connection;
+}
+
+@Override
+public final Statement getStatement() throws Exception {
+	return connection.createStatement();
+}
+
+public final String getDatabase() {
+	return database;
+}
+</code></pre>
+<p>}[/code]</p>
+<p>[code=java]<br>
+package net.gielinor.network.mysql;</p>
+<p>import java.util.ArrayList;<br>
+import java.util.List;</p>
+<p>import net.gielinor.network.mysql.impl.MySQLPurchaseDatabaseHandler;</p>
+<p>public final class MySQLThread implements Runnable {</p>
+<pre><code>private final List&lt;MySQLDatabaseHandler&gt; updateList;
+
+public MySQLThread() {
+	updateList = new ArrayList&lt;&gt;();
+
+	updateList.add(new MySQLPurchaseDatabaseHandler());
+}
+
+@Override
+public void run() {
+	try {
+		for (MySQLDatabaseHandler database : updateList) {
+			if (database.getConnection() == null) {
+				database.connect();
+			} else {
+				database.ping();
+			}
+			database.cycle();
+		}
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>Example of usage:</p>
+<p>[code=java]<br>
+package net.gielinor.network.mysql.impl;</p>
+<p>import java.sql.ResultSet;<br>
+import java.util.ArrayList;<br>
+import java.util.List;</p>
+<p>import net.gielinor.game.model.player.Player;<br>
+import net.gielinor.game.model.player.PlayerHandler;<br>
+import net.gielinor.game.model.player.io.PlayerCodec;<br>
+import net.gielinor.network.mysql.MySQLDatabaseHandler;</p>
+<p>public final class MySQLPurchaseDatabaseHandler extends MySQLDatabaseHandler {</p>
+<pre><code>private final List&lt;String&gt; users;
+
+public MySQLPurchaseDatabaseHandler() {
+	super("gieli436_purchases");
+
+	users = new ArrayList&lt;&gt;();
+}
+
+@Override
+public void cycle() throws Exception {
+	ResultSet results = getStatement().executeQuery(String.format("SELECT * FROM `%s`.`donations`", getDatabase()));
+
+	if (results == null) {
+		return;
+	}
+
+	while (results.next()) {
+		String username = results.getString("username").replace("_", " ");
+		Player player = PlayerHandler.getPlayer(username);
+
+		if (player == null || player.disconnected) {
+			continue;
+		}
+
+		int creditamount = results.getInt("creditamount");
+
+		if (creditamount &lt;= 0) {
+			continue;
+		}
+
+		handle(player, creditamount);
+	}
+
+	for (String username : users) {
+
+		if (username == null) {
+			continue;
+		}
+
+		getStatement().executeUpdate(String.format("DELETE FROM `%s`.`donations` WHERE `donations`.`username`='%s' LIMIT 1", getDatabase(), username));
+	}
+}
+
+private void handle(Player player, int creditAmount) {
+	player.getActionSender().sendMessage("Thank you for your purchase. You have received " + creditAmount + " store credits.");
+	users.add(player.username.replaceAll("_", " "));
+	PlayerCodec.save(player);
+}
+
+@Override
+public void ping() throws Exception {
+	super.ping("donations", "username");
+}
+</code></pre>
+<p>}[/code]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/mysql-stuff/529542/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/mysql-stuff/529542/1</link>
+        <pubDate>Mon, 09 Sep 2013 01:48:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-529542-1</guid>
+        <source url="https://forum.moparisthebest.com/t/mysql-stuff/529542.rss">MySQL stuff</source>
+      </item>
+  </channel>
+</rss>

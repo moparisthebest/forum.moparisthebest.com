@@ -1,0 +1,1231 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>OSRS Navigation Mesh</title>
+    <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145</link>
+    <description>I got bored and created a transit mesh of the entire world for OSRS
+
+Purpose? Calculating paths across the world. Although I had a few questions for those of you who may be savyier than I am.
+
+- What do you think the effective way of storing and referencing nodes are and is there a way I could effectively modify the mesh in real time without destroying dependencies?
+- What is the best way to simplify the mesh beyond what I&#39;ve done already (nodes are simplified into an octet tree combining nodes starting from a size of one where every examined node has a path to the node from the node through any of the nodes. This, means as a result, all tiles in the node have a path to each other as a property. 
+
+For the algorithm I was thinking about testing the property for each node to see if there was a valid traversable property to each edge around the reference space for the node. This of course being a region. From there if you have a starting node, you can use that to create a tree of nodes where each could traverse to and then detect a region to region based path to take then calculate subpaths for each region.
+
+Not entirely sure though. I haven&#39;t implemented it yet.
+
+[img]http://i.imgur.com/AogZKSP.png[/img]
+[img]http://i.imgur.com/qmGPkuH.png[/img]
+[img]http://i.imgur.com/rXblhuQ.png[/img]
+
+I guess since this isn&#39;t a help thread, interesting facts:
+
+Colors for triangles, textures, other functions are stored as a 16 bit packed HSL value which permits 6 bits of hue, 3 bits of luminosity and 7 bits of saturation. The method to grab the index in the RGB_HSL_TABLE is really a method to intensify the color by a factor.</description>
+    
+    <lastBuildDate>Sun, 06 Sep 2015 22:35:22 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>Damn he even had the time to document his code. GUYS!</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/18</link>
+        <pubDate>Sun, 06 Sep 2015 22:35:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-18</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>Its pretty shit so excuse that. People please stop using the term underlay and overlay, its background and foreground. Used jgrapht</p>
+<pre><code class="lang-auto">package org.github.hadyn.api.tool;
+
+import net.openrs.util.ByteBufferUtils;
+import org.github.hadyn.api.model.Position;
+import org.github.hadyn.api.o.*;
+import org.github.hadyn.api.util.HslUtil;
+
+import java.awt.image.BufferedImage;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class MapBlock {
+
+    /**
+     * The width.
+     */
+    private int width;
+
+    /**
+     * The height.
+     */
+    private int height;
+
+    /**
+     * The underlay floor ids.
+     */
+    private int[][][] foregroundConfigIds;
+
+    /**
+     * The overlay floor ids, tile shapes, and rotations.
+     */
+    private int[][][] backgroundConfigIds;
+    private int[][][] tileShapes;
+    private int[][][] tileRotations;
+
+    /**
+     * The accumulated hue, saturation, luminosity, and intensity for each y coordinate.
+     */
+    private int[] accHue;
+    private int[] accSaturation;
+    private int[] accLuminosity;
+    private int[] accIntensity;
+    private int[] counter;
+
+    /**
+     * The tile flags.
+     */
+    private int[][][] flags;
+
+    /**
+     * The game objects.
+     */
+    private List&lt;GroundObject&gt; objects = new ArrayList&lt;&gt;();
+
+    /**
+     * Constructs a new {@link MapBlock};
+     *
+     * @param width the width of the block in tiles.
+     * @param height the height of the block in tiles.
+     */
+    public MapBlock(int width, int height) {
+        this.width = width;
+        this.height = height;
+        foregroundConfigIds = new int[4][width][height];
+        backgroundConfigIds = new int[4][width][height];
+        tileShapes = new int[4][width][height];
+        tileRotations = new int[4][width][height];
+        accHue = new int[height];
+        accLuminosity = new int[height];
+        accSaturation = new int[height];
+        accIntensity = new int[height];
+        counter = new int[height];
+        flags = new int[4][width][height];
+    }
+
+    /**
+     * Decodes a landscape file.
+     *
+     * @param buffer the buffer.
+     */
+    public void decodeLandscape(ByteBuffer buffer) {
+        int id = -1;
+        int deltaId;
+
+        while ((deltaId = ByteBufferUtils.getSmart(buffer)) != 0) {
+            id += deltaId;
+
+            int pos = 0;
+            int deltaPos;
+
+            while ((deltaPos = ByteBufferUtils.getSmart(buffer)) != 0) {
+                pos += deltaPos - 1;
+
+                int localX = (pos &gt;&gt; 6) &amp; 0x3F;
+                int localY = pos &amp; 0x3F;
+                int height = (pos &gt;&gt; 12) &amp; 0x3;
+
+                int temp = buffer.get() &amp; 0xFF;
+                int type = (temp &gt;&gt; 2) &amp; 0x3F;
+                int rotation = temp &amp; 0x3;
+
+                Position position = new Position(localX, localY, height);
+                objects.add(new GroundObject(id, type, position, rotation));
+            }
+        }
+    }
+
+    /**
+     * Decodes a map file.
+     *
+     * @param buffer the buffer.
+     */
+    public void decodeTiles(ByteBuffer buffer) {
+        for (int plane = 0; plane &lt; 4; plane++) {
+            for (int x = 0; x &lt; 64; x++) {
+                for (int y = 0; y &lt; 64; y++) {
+                    for (; ; ) {
+                        int config = buffer.get() &amp; 0xFF;
+                        if (config == 0) {
+                            break;
+                        } else if (config == 1) {
+                            buffer.get();
+                            break;
+                        } else if (config &lt;= 49) {
+                            foregroundConfigIds[plane][x][y] = buffer.get() &amp; 0xff;
+                            tileShapes[plane][x][y] = (config - 2) / 4;
+                            tileRotations[plane][x][y] = (config - 2 &amp; 3);
+                        } else if (config &lt;= 81) {
+                            flags[plane][x][y] = config - 49;
+                        } else {
+                            backgroundConfigIds[plane][x][y] = config - 81;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Gets all of the renderable tiles for a plane.
+     *
+     * @param targetPlane the plane.
+     * @return the renderable tiles.
+     */
+    public List&lt;RenderableTile&gt; getRenderableTiles(int targetPlane) {
+        List&lt;RenderableTile&gt; tiles = new ArrayList&lt;&gt;();
+        for (int plane = 0; plane &lt; 4; plane++) {
+            for (int x = -5; x &lt; width + 5; x++) {
+                for (int y = 0; y &lt; height; y++) {
+                    int accSample = x + 5;
+                    if (accSample &gt;= 0 &amp;&amp; accSample &lt; width) {
+                        int configId = backgroundConfigIds[plane][accSample][y];
+                        if (configId != 0) {
+                            BackgroundFloorConfig config = UnderlayFloorDefinitions.forId(configId - 1);
+                            config.reset();
+
+                            accHue[y] += config.getHue();
+                            accSaturation[y] += config.getSaturation();
+                            accLuminosity[y] += config.getLuminosity();
+                            accIntensity[y] += config.getIntensity();
+                            counter[y]++;
+                        }
+                    }
+
+                    int subSample = x - 5;
+                    if (subSample &gt;= 0 &amp;&amp; subSample &lt; width) {
+                        int configId = backgroundConfigIds[plane][subSample][y];
+                        if (configId != 0) {
+                            BackgroundFloorConfig definition = UnderlayFloorDefinitions.forId(configId - 1);
+                            definition.reset();
+
+                            accHue[y] -= definition.getHue();
+                            accSaturation[y] -= definition.getSaturation();
+                            accLuminosity[y] -= definition.getLuminosity();
+                            accIntensity[y] -= definition.getIntensity();
+                            counter[y]--;
+                        }
+                    }
+                }
+
+                if (x &gt;= 1 &amp;&amp; x &lt; width - 1) {
+                    int hue = 0;
+                    int sat = 0;
+                    int lum = 0;
+                    int intensity = 0;
+                    int total = 0;
+
+                    for (int y = -5; y &lt; height + 5; y++) {
+
+                        int accSample = y + 5;
+                        if (accSample &gt;= 0 &amp;&amp; accSample &lt; height) {
+                            hue += accHue[accSample];
+                            sat += accSaturation[accSample];
+                            lum += accLuminosity[accSample];
+                            intensity += accIntensity[accSample];
+                            total += counter[accSample];
+                        }
+
+                        int subSample = y - 5;
+                        if (subSample &gt;= 0 &amp;&amp; subSample &lt; height) {
+                            hue -= accHue[subSample];
+                            sat -= accSaturation[subSample];
+                            lum -= accLuminosity[subSample];
+                            intensity -= accIntensity[subSample];
+                            total -= counter[subSample];
+                        }
+
+                        if (plane != targetPlane) {
+                            continue;
+                        }
+
+                        if (y &gt;= 1 &amp;&amp; y &lt; height - 1) {
+                            int backgroundConfigId = backgroundConfigIds[plane][x][y];
+                            int foregroundConfigId = foregroundConfigIds[plane][x][y];
+                            if (backgroundConfigId &gt; 0 || foregroundConfigId &gt; 0) {
+                                int packedBackgroundColor = -1;
+                                if (backgroundConfigId &gt; 0) {
+                                    int h = hue * 256 / intensity;
+                                    int s = sat / total;
+                                    int l = lum / total;
+                                    if (l &lt; 0) {
+                                        l = 0;
+                                    } else if (l &gt; 255) {
+                                        l = 255;
+                                    }
+                                    packedBackgroundColor = HslUtil.getHslToInt16(h, s, l);
+                                }
+
+                                int backgroundColor = 0;
+                                if (packedBackgroundColor != -1) {
+                                    backgroundColor = HslUtil.HSL_RGB_TABLE[HslUtil.intensifyHsl(packedBackgroundColor, 96)];
+                                }
+
+                                if (foregroundConfigId == 0) {
+                                    tiles.add(new RenderableTile(x, y, 0, 0, backgroundColor, 0));
+                                } else {
+                                    int shape = tileShapes[plane][x][y] + 1;
+                                    int rotation = tileRotations[plane][x][y];
+
+                                    ForegroundFloorConfig config = ForegroundFloorConfigs.forId(foregroundConfigId - 1);
+                                    config.reset();
+
+                                    int packedForegroundColor = -1;
+                                    if (config.getTextureId() != -1) {
+                                        TextureConfig textureConfig = TextureConfig.forId(config.getTextureId());
+                                        packedForegroundColor = textureConfig.getColor();
+                                    } else if (config.getRgbColor() == 0xff00ff) {
+                                        packedForegroundColor = -2;
+                                    } else {
+                                        packedForegroundColor = HslUtil.getHslToInt16(config.getHue(), config.getSaturation(), config.getLuminosity());
+                                    }
+
+                                    int foregroundColor = 0;
+                                    if (packedForegroundColor != -2) {
+                                        foregroundColor = HslUtil.HSL_RGB_TABLE[HslUtil.intensifyHsl(packedForegroundColor, 96)];
+                                    }
+
+                                    tiles.add(new RenderableTile(x, y, shape, rotation, backgroundColor, foregroundColor));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return tiles;
+    }
+
+    /**
+     * Draws all the artifacts to an image.
+     *
+     * @param plane the plane to use to draw the images for.
+     * @param image the image to draw the artifacts to.
+     */
+    public void drawArtifacts(int plane, BufferedImage image) {
+        for(GroundObject object : objects) {
+            if (object.getPosition().getPlane() != plane) continue;
+
+            int drawX = object.getPosition().getX() * 4;
+            int drawY = object.getPosition().getY() * 4;
+
+            ObjectDefinition definition = ObjectDefinitions.forId(object.getId());
+            if (definition.getArtifactId() != -1) {
+                // BufferedImage sprite = sprites[definition.getArtifactId()];
+                //  Graphics2D graphics = image.createGraphics();
+                //  graphics.drawImage(sprite, drawX, drawY, null);
+                //  graphics.dispose();
+            } else {
+                switch (object.getType()) {
+                    case 0:
+                    case 2:
+                        switch (object.getOrientation()) {
+                            case ObjectOrientation.WEST:
+                                image.setRGB(drawX, drawY, 0xffffff);
+                                image.setRGB(drawX, drawY + 1, 0xffffff);
+                                image.setRGB(drawX, drawY + 2, 0xffffff);
+                                image.setRGB(drawX, drawY + 3, 0xffffff);
+                                break;
+                            case ObjectOrientation.NORTH:
+                                image.setRGB(drawX, drawY + 3, 0xffffff);
+                                image.setRGB(drawX + 1, drawY + 3, 0xffffff);
+                                image.setRGB(drawX + 2, drawY + 3, 0xffffff);
+                                image.setRGB(drawX + 3, drawY + 3, 0xffffff);
+                                break;
+                            case ObjectOrientation.EAST:
+                                image.setRGB(drawX + 3, drawY, 0xffffff);
+                                image.setRGB(drawX + 3, drawY + 1, 0xffffff);
+                                image.setRGB(drawX + 3, drawY + 2, 0xffffff);
+                                image.setRGB(drawX + 3, drawY + 3, 0xffffff);
+                                break;
+                            case ObjectOrientation.SOUTH:
+                                image.setRGB(drawX, drawY, 0xffffff);
+                                image.setRGB(drawX + 1, drawY, 0xffffff);
+                                image.setRGB(drawX + 2, drawY, 0xffffff);
+                                image.setRGB(drawX + 3, drawY, 0xffffff);
+                                break;
+                        }
+                        if(object.getType() == 2) {
+                            switch (object.getOrientation()) {
+                                case ObjectOrientation.WEST:
+                                    image.setRGB(drawX, drawY, 0xffffff);
+                                    image.setRGB(drawX + 1, drawY + 3, 0xffffff);
+                                    image.setRGB(drawX + 2, drawY + 3, 0xffffff);
+                                    image.setRGB(drawX + 3, drawY + 3, 0xffffff);
+                                    break;
+                                case ObjectOrientation.NORTH:
+                                    image.setRGB(drawX + 3, drawY, 0xffffff);
+                                    image.setRGB(drawX + 3, drawY + 1, 0xffffff);
+                                    image.setRGB(drawX + 3, drawY + 2, 0xffffff);
+                                    image.setRGB(drawX + 3, drawY + 3, 0xffffff);
+                                    break;
+                                case ObjectOrientation.EAST:
+                                    image.setRGB(drawX, drawY, 0xffffff);
+                                    image.setRGB(drawX + 1, drawY, 0xffffff);
+                                    image.setRGB(drawX + 2, drawY, 0xffffff);
+                                    image.setRGB(drawX + 3, drawY, 0xffffff);
+                                    break;
+                                case ObjectOrientation.SOUTH:
+                                    image.setRGB(drawX, drawY, 0xffffff);
+                                    image.setRGB(drawX, drawY + 1, 0xffffff);
+                                    image.setRGB(drawX, drawY + 2, 0xffffff);
+                                    image.setRGB(drawX, drawY + 3, 0xffffff);
+                                    break;
+                            }
+                        }
+                        break;
+
+                    case 3:
+                        switch (object.getOrientation()) {
+                            case ObjectOrientation.WEST:
+                                image.setRGB(drawX, drawY + 3, 0xffffff);
+                                break;
+                            case ObjectOrientation.NORTH:
+                                image.setRGB(drawX + 3, drawY + 3, 0xffffff);
+                                break;
+                            case ObjectOrientation.EAST:
+                                image.setRGB(drawX + 3, drawY, 0xffffff);
+                                break;
+                            case ObjectOrientation.SOUTH:
+                                image.setRGB(drawX, drawY, 0xffffff);
+                                break;
+                        }
+                        break;
+                }
+            }
+        }
+    }
+}
+</code></pre>
+<pre><code class="lang-auto">package org.github.hadyn.api.tool;
+
+import net.openrs.cache.Cache;
+import net.openrs.cache.Container;
+import net.openrs.cache.FileStore;
+import net.openrs.cache.ReferenceTable;
+import org.github.hadyn.api.o.ForegroundFloorConfigs;
+import org.github.hadyn.api.o.ObjectDefinitions;
+import org.github.hadyn.api.o.TextureConfig;
+import org.github.hadyn.api.o.UnderlayFloorDefinitions;
+import org.github.hadyn.api.util.LandscapeKeyTable;
+import org.github.hadyn.api.util.HslUtil;
+
+import javax.imageio.ImageIO;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.List;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class MapRenderer {
+
+    /**
+     *
+     */
+    private Cache cache;
+
+    /**
+     *
+     */
+    private LandscapeKeyTable keyTable;
+
+    /**
+     *
+     */
+    private ReferenceTable landscapeTable;
+
+    /**
+     * Constructs a new {@link MapRenderer};
+     *
+     * @param cache the cache.
+     * @param keyTable the landscape key table to use to decrypt landscape files from.
+     *
+     * @throws IOException
+     */
+    public MapRenderer(Cache cache, LandscapeKeyTable keyTable) throws IOException {
+        this.cache = cache;
+        this.keyTable = keyTable;
+        landscapeTable = ReferenceTable.decode(Container.decode(cache.getStore().read(255, 5)).getData());
+    }
+
+    /**
+     * @param plane the plane.
+     * @param x the region x coordinat.e
+     * @param y the region y coordinate.
+     */
+    public BufferedImage render(int plane, int x, int y) throws IOException {
+        int landscapeEntryId = landscapeTable.findEntry("l" + x + "_" + y);
+        int mapEntryId = landscapeTable.findEntry("m" + x + "_" + y);
+        if (landscapeEntryId == -1 || mapEntryId == -1) {
+            return null;
+        }
+
+        // Decode the all of the tiles of the map block
+        MapBlock block = new MapBlock(64, 64);
+        block.decodeTiles(cache.read(5, mapEntryId).getData());
+
+        // Decode the landscape of the map block
+        block.decodeLandscape(Container.decode(cache.getStore().read(5, landscapeEntryId), keyTable.getKeys(x, y)).getData());
+
+        // Draw each of the renderable tiles
+        BufferedImage bufferedImage = new BufferedImage(64 * 4, 64 * 4, BufferedImage.TYPE_INT_RGB);
+        List&lt;RenderableTile&gt; tiles = block.getRenderableTiles(plane);
+        tiles.forEach(tile -&gt; tile.drawTo(bufferedImage));
+
+        // Draw the artifacts
+        //block.drawArtifacts(plane, bufferedImage);
+
+        // Vertically flip the image
+        BufferedImage copy = new BufferedImage(64 * 4, 64 * 4, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = copy.createGraphics();
+
+        AffineTransform at = new AffineTransform();
+        at.concatenate(AffineTransform.getScaleInstance(1, -1));
+        at.concatenate(AffineTransform.getTranslateInstance(0, -bufferedImage.getHeight()));
+        g.transform(at);
+
+        g.drawImage(bufferedImage, 0, 0, null);
+        g.dispose();
+
+        return copy;
+    }
+
+
+    /**
+     * Renders the runescape map out into region by region pictures.
+     *
+     * @param args the command line arguments.
+     */
+    public static void main(String... args) throws IOException {
+        HslUtil.calculateHslRgbTable(0.4, 0, 512);
+
+        Cache cache = new Cache(FileStore.open("data/"));
+        UnderlayFloorDefinitions.init(cache);
+        ForegroundFloorConfigs.init(cache);
+        TextureConfig.init(cache);
+        ObjectDefinitions.init(cache);
+
+        LandscapeKeyTable keyTable = LandscapeKeyTable.open("keys/");
+
+        MapRenderer renderer = new MapRenderer(cache, keyTable);
+        ImageIO.write(renderer.render(0, 50, 50), "png", new FileOutputStream("render.png"));
+    }
+}
+</code></pre>
+<pre><code class="lang-auto">package org.github.hadyn.api.tool;
+
+import java.awt.image.BufferedImage;
+
+class RenderableTile {
+
+    /**
+     * The tile shapes as bit maps.
+     */
+    private static int[][] TILE_SHAPES = new int[][]{
+            {
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    0, 0, 0, 0
+            },
+            {
+                    1, 1, 1, 1,
+                    1, 1, 1, 1,
+                    1, 1, 1, 1,
+                    1, 1, 1, 1
+            },
+            {
+                    1, 0, 0, 0,
+                    1, 1, 0, 0,
+                    1, 1, 1, 0,
+                    1, 1, 1, 1
+            },
+
+            {
+                    1, 1, 0, 0,
+                    1, 1, 0, 0,
+                    1, 0, 0, 0,
+                    1, 0, 0, 0
+            },
+
+            {
+                    0, 0, 1, 1,
+                    0, 0, 1, 1,
+                    0, 0, 0, 1,
+                    0, 0, 0, 1},
+            {
+                    0, 1, 1, 1,
+                    0, 1, 1, 1,
+                    1, 1, 1, 1,
+                    1, 1, 1, 1
+            },
+            {
+                    1, 1, 1, 0,
+                    1, 1, 1, 0,
+                    1, 1, 1, 1,
+                    1, 1, 1, 1
+            },
+            {
+                    1, 1, 0, 0,
+                    1, 1, 0, 0,
+                    1, 1, 0, 0,
+                    1, 1, 0, 0
+            },
+            {
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    1, 0, 0, 0,
+                    1, 1, 0, 0
+            },
+            {
+                    1, 1, 1, 1,
+                    1, 1, 1, 1,
+                    0, 1, 1, 1,
+                    0, 0, 1, 1
+            },
+            {
+                    1, 1, 1, 1,
+                    1, 1, 0, 0,
+                    1, 0, 0, 0,
+                    1, 0, 0, 0
+            },
+
+            {
+                    0, 0, 0, 0,
+                    0, 0, 1, 1,
+                    0, 1, 1, 1,
+                    0, 1, 1, 1
+            },
+
+            {
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    0, 1, 1, 0,
+                    1, 1, 1, 1
+            }
+    };
+
+    /**
+     * The tile rotation matrices for each shape.
+     */
+    private static int[][] TILE_ROTATIONS = new int[][]{
+            {
+                    0, 1, 2, 3,
+                    4, 5, 6, 7,
+                    8, 9, 10, 11,
+                    12, 13, 14, 15
+            },
+
+            {
+                    12, 8, 4, 0,
+                    13, 9, 5, 1,
+                    14, 10, 6, 2,
+                    15, 11, 7, 3
+            },
+
+            {
+                    15, 14, 13, 12,
+                    11, 10, 9, 8,
+                    7, 6, 5, 4,
+                    3, 2, 1, 0
+            },
+
+            {
+                    3, 7, 11, 15,
+                    2, 6, 10, 14,
+                    1, 5, 9, 13,
+                    0, 4, 8, 12
+            }
+    };
+
+    private int x;
+    private int y;
+    private int shape;
+    private int rotation;
+    private int backgroundColor;
+    private int foregroundColor;
+
+    public RenderableTile(int x, int y, int shape, int rotation, int backgroundColor, int foregroundColor) {
+        this.x = x;
+        this.y = y;
+        this.shape = shape;
+        this.rotation = rotation;
+        this.backgroundColor = backgroundColor;
+        this.foregroundColor = foregroundColor;
+    }
+
+    /**
+     * Draws to a buffered image. Assumes that the image we are drawing to will accept a 4 x 4 pixel area to draw
+     * the tile to at the respected x and y coordinate for this tile. This method draws respective to the bottom
+     * left y axis.
+     *
+     * @param image the image to draw to.
+     */
+    public void drawTo(BufferedImage image) {
+        if (shape &gt; 0) {
+            int[] shapeMatrix = TILE_SHAPES[shape];
+            int[] rotationMatrix = TILE_ROTATIONS[rotation];
+
+            if (backgroundColor != 0) {
+                for (int oy = 0; oy &lt; 4; oy++) {
+                    for (int ox = 0; ox &lt; 4; ox++) {
+                        int drawx = x * 4 + ox;
+                        int drawy = y * 4 + oy;
+                        image.setRGB(drawx, drawy, shapeMatrix[rotationMatrix[ox + (3 - oy) * 4]] == 0 ? backgroundColor : foregroundColor);
+                    }
+                }
+            } else {
+                for (int oy = 0; oy &lt; 4; oy++) {
+                    for (int ox = 0; ox &lt; 4; ox++) {
+                        int drawx = x * 4 + ox;
+                        int drawy = y * 4 + oy;
+                        if (shapeMatrix[rotationMatrix[ox + (3 - oy) * 4]] != 0) {
+                            image.setRGB(drawx, drawy, foregroundColor);
+                        }
+                    }
+                }
+            }
+        } else {
+            for (int oy = 0; oy &lt; 4; oy++) {
+                for (int ox = 0; ox &lt; 4; ox++) {
+                    int drawx = x * 4 + ox;
+                    int drawy = y * 4 + oy;
+                    image.setRGB(drawx, drawy, backgroundColor);
+                }
+            }
+        }
+    }
+}</code></pre>
+<pre><code class="lang-auto">package org.github.hadyn.api.util;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class HslUtil {
+
+    /**
+     * The 16 bit HSL to RGB table.
+     */
+    public static int[] HSL_RGB_TABLE = new int[65536];
+
+    /**
+     * Packs a HSL value to a 16 bit integer. Up to 7 bits of the luminosity is retained,
+     * 3 bits of the saturation is retained, and 6 bits of the hue is retained.
+     *
+     * @param hue the hue.
+     * @param saturation the saturation.
+     * @param luminosity the luminosity.
+     * @return the packed HSL value.
+     */
+    public static final int getHslToInt16(int hue, int saturation, int luminosity) {
+        if (luminosity &gt; 179) {
+            saturation /= 2;
+        }
+
+        if (luminosity &gt; 192) {
+            saturation /= 2;
+        }
+
+        if (luminosity &gt; 217) {
+            saturation /= 2;
+        }
+
+        if (luminosity &gt; 243) {
+            saturation /= 2;
+        }
+
+        int value = (hue / 4 &lt;&lt; 10) + (saturation / 32 &lt;&lt; 7) + luminosity / 2;
+        return value;
+    }
+
+    /**
+     * Intensifies an HSL value.
+     *
+     * @param packedHsl the packed HSL value.
+     * @param intensity the intensity factor.
+     * @return the intensified hsl value.
+     */
+    public static final int intensifyHsl(int packedHsl, int intensity) {
+        if (-1 == packedHsl) {
+            return 12345678;
+        } else {
+            intensity = (packedHsl &amp; 127) * intensity &gt;&gt; 7;
+            if (intensity &gt;= 2) {
+                if (intensity &gt; 126) {
+                    intensity = 126;
+                }
+            } else {
+                intensity = 2;
+            }
+
+            return intensity + (packedHsl &amp; 0xff80);
+        }
+    }
+
+    /**
+     * Calculates the HSL to RGB table.
+     *
+     * @param brightness the brightness.
+     * @param start the start.
+     * @param end the end.
+     */
+    public static final void calculateHslRgbTable(double brightness, int start, int end) {
+        brightness += Math.random() * 0.03D - 0.015D;
+        int i = start * 128;
+
+        for (int var13 = start; var13 &lt; end; ++var13) {
+            double var24 = (double) (var13 &gt;&gt; 3) / 64.0D + 0.0078125D;
+            double var22 = (double) (var13 &amp; 7) / 8.0D + 0.0625D;
+
+            for (int hue = 0; hue &lt; 128; ++hue) {
+                double var7 = (double) hue / 128.0D;
+                double rd = var7;
+                double gd = var7;
+                double bd = var7;
+                if (var22 != 0.0D) {
+                    double var9;
+                    if (var7 &lt; 0.5D) {
+                        var9 = var7 * (1.0D + var22);
+                    } else {
+                        var9 = var7 + var22 - var7 * var22;
+                    }
+
+                    double var11 = 2.0D * var7 - var9;
+                    double var17 = var24 + 0.3333333333333333D;
+                    if (var17 &gt; 1.0D) {
+                        --var17;
+                    }
+
+                    double var28 = var24 - 0.3333333333333333D;
+                    if (var28 &lt; 0.0D) {
+                        ++var28;
+                    }
+
+                    if (6.0D * var17 &lt; 1.0D) {
+                        rd = var11 + (var9 - var11) * 6.0D * var17;
+                    } else if (2.0D * var17 &lt; 1.0D) {
+                        rd = var9;
+                    } else if (3.0D * var17 &lt; 2.0D) {
+                        rd = var11 + (var9 - var11) * (0.6666666666666666D - var17) * 6.0D;
+                    } else {
+                        rd = var11;
+                    }
+
+                    if (6.0D * var24 &lt; 1.0D) {
+                        gd = var11 + (var9 - var11) * 6.0D * var24;
+                    } else if (2.0D * var24 &lt; 1.0D) {
+                        gd = var9;
+                    } else if (3.0D * var24 &lt; 2.0D) {
+                        gd = var11 + (var9 - var11) * (0.6666666666666666D - var24) * 6.0D;
+                    } else {
+                        gd = var11;
+                    }
+
+                    if (6.0D * var28 &lt; 1.0D) {
+                        bd = var11 + (var9 - var11) * 6.0D * var28;
+                    } else if (2.0D * var28 &lt; 1.0D) {
+                        bd = var9;
+                    } else if (3.0D * var28 &lt; 2.0D) {
+                        bd = var11 + (var9 - var11) * (0.6666666666666666D - var28) * 6.0D;
+                    } else {
+                        bd = var11;
+                    }
+                }
+
+                int var31 = (int) (rd * 256.0D);
+                int var6 = (int) (gd * 256.0D);
+                int var32 = (int) (bd * 256.0D);
+                int color = (var31 &lt;&lt; 16) + (var6 &lt;&lt; 8) + var32;
+                color = intensifyRgb(color, brightness);
+                if (color == 0) {
+                    color = 1;
+                }
+
+                HSL_RGB_TABLE[i++] = color;
+            }
+        }
+
+    }
+
+    /**
+     * Intensifies a color by a certain brightness.
+     *
+     * @param rgb the RGB color to intensify.
+     * @param brightness the brightness.
+     * @return the intensified RGB color.
+     */
+    public static int intensifyRgb(int rgb, double brightness) {
+        double r = (double) (rgb &gt;&gt; 16) / 256.0D;
+        double g = (double) (rgb &gt;&gt; 8 &amp; 255) / 256.0D;
+        double b = (double) (rgb &amp; 255) / 256.0D;
+        r = Math.pow(r, brightness);
+        g = Math.pow(g, brightness);
+        b = Math.pow(b, brightness);
+        int rc = (int) (r * 256.0D);
+        int gc = (int) (g * 256.0D);
+        int bc = (int) (b * 256.0D);
+        return (rc &lt;&lt; 16) + (gc &lt;&lt; 8) + bc;
+    }
+
+    /**
+     * Prevent instantiation.
+     */
+    private HslUtil() {}
+}
+</code></pre>
+<pre><code class="lang-auto">package org.github.hadyn.api.o;
+
+/**
+ * @author Hadyn Fitzgerald
+ */
+public class MortonCode {
+
+    private static int[] MASKS = new int[]{0x55555555, 0x33333333, 0x0F0F0F0F, 0x00FF00FF};
+    private static int[] SHIFTS = new int[]{1, 2, 4, 8};
+
+    /**
+     * Calculates the z order curve, morton code, of a specific coordinate. This method accepts
+     * up to 16 bits of coordinate information for both the x and y coordinates.
+     *
+     * @param x the x coordinate.
+     * @param y the y coordinate.
+     * @return the z order value.
+     */
+    public static int forXY(int x, int y) {
+        x = (x | (x &lt;&lt; SHIFTS[3])) &amp; MASKS[3];
+        x = (x | (x &lt;&lt; SHIFTS[2])) &amp; MASKS[2];
+        x = (x | (x &lt;&lt; SHIFTS[1])) &amp; MASKS[1];
+        x = (x | (x &lt;&lt; SHIFTS[0])) &amp; MASKS[0];
+
+        y = (y | (y &lt;&lt; SHIFTS[3])) &amp; MASKS[3];
+        y = (y | (y &lt;&lt; SHIFTS[2])) &amp; MASKS[2];
+        y = (y | (y &lt;&lt; SHIFTS[1])) &amp; MASKS[1];
+        y = (y | (y &lt;&lt; SHIFTS[0])) &amp; MASKS[0];
+
+        return x | (y &lt;&lt; 1);
+    }
+}
+</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/17</link>
+        <pubDate>Thu, 03 Sep 2015 22:06:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-17</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sk8rdude461 sk8rdude461]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sk8rdude461">@sk8rdude461</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“sini, post:15, topic:553145”]yes you’re correct and I was looking for someone with the right term</p>
+<p>BUT EVERYONE IS MORE CONCERNED WITH DOING THE PSERVER THAN THAT[/quote]</p>
+<p>I’m more concerned with the code that was used to make this…<br>
+But that’s just me.<br>
+'cause that’s neat.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/16</link>
+        <pubDate>Thu, 03 Sep 2015 21:38:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-16</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>yes you’re correct and I was looking for someone with the right term</p>
+<p>BUT EVERYONE IS MORE CONCERNED WITH DOING THE PSERVER THAN THAT</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/15</link>
+        <pubDate>Thu, 03 Sep 2015 21:34:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-15</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@Frell Frell]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/frell">@Frell</a> wrote:</p>
+          <blockquote>
+              <p>lol transit mesh</p>
+<p>isn’t the proper term navmesh</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/14</link>
+        <pubDate>Thu, 03 Sep 2015 20:59:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-14</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@lothy Lothy]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/lothy">@lothy</a> wrote:</p>
+          <blockquote>
+              <p>The beatings will continue until morale improves.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/13</link>
+        <pubDate>Thu, 03 Sep 2015 07:46:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-13</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="10" data-topic="553145">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/sini/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> sini:</div>
+<blockquote>
+<p>No thread is safe. Should just rename me to slave.</p>
+</blockquote>
+</aside>
+<p>if its not a post about the official server noone wants to read it. stop posting anything unrelated to what you should be doing.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/12</link>
+        <pubDate>Wed, 02 Sep 2015 21:13:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-12</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@pure2ownage Pure_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/pure2ownage">@pure2ownage</a> wrote:</p>
+          <blockquote>
+              <p>same</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/11</link>
+        <pubDate>Wed, 02 Sep 2015 13:07:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-11</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>No thread is safe. Should just rename me to slave.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/10</link>
+        <pubDate>Wed, 02 Sep 2015 11:42:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-10</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@Rodgerwilco Rodgerwilco]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/rodgerwilco">@Rodgerwilco</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="7" data-topic="553145">
+<div class="title">
+<div class="quote-controls"></div>
+ Miss Silabsoft:</div>
+<blockquote>
+<p>only blood? spit in a cup and get coding.</p>
+</blockquote>
+</aside>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/9</link>
+        <pubDate>Wed, 02 Sep 2015 06:07:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-9</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>coughing up blood is just the bad codons leaving your system</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/8</link>
+        <pubDate>Wed, 02 Sep 2015 03:59:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-8</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>only blood? spit in a cup and get coding.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/7</link>
+        <pubDate>Wed, 02 Sep 2015 03:08:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-7</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>I was coughing up blood, I did this the past day :\ Why you gotta be so mean Silab</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/6</link>
+        <pubDate>Tue, 01 Sep 2015 10:00:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-6</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="4" data-topic="553145">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/user_avatar/forum.moparisthebest.com/davidi2/40/2579_1.png" class="avatar"> Davidi2:</div>
+<blockquote>
+<p>I thought you were sick <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+</blockquote>
+</aside>
+<p>by “sick” he means the “sick of the official server project”, its well past his time of leaving something not even half finished for something else <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/5</link>
+        <pubDate>Tue, 01 Sep 2015 04:09:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-5</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@davidi2 Davidi2]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/davidi2">@davidi2</a> wrote:</p>
+          <blockquote>
+              <p>I thought you were sick <img src="https://forum.moparisthebest.com/images/emoji/twitter/expressionless.png?v=5" title=":expressionless:" class="emoji" alt=":expressionless:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/4</link>
+        <pubDate>Tue, 01 Sep 2015 00:16:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-4</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@silabsoft RuneAgent]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/silabsoft">@silabsoft</a> wrote:</p>
+          <blockquote>
+              <p>you could probably take a look at the old ibot source, Ruler Eric was pretty proud of his pathing shit.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/3</link>
+        <pubDate>Mon, 31 Aug 2015 21:04:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-3</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@hadlich4 hadlich4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/hadlich4">@hadlich4</a> wrote:</p>
+          <blockquote>
+              <p>This is neat, dont really understand what all of this is saying but looks cool <img src="https://forum.moparisthebest.com/images/emoji/twitter/smiley.png?v=5" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/2</link>
+        <pubDate>Mon, 31 Aug 2015 15:51:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-2</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+      <item>
+        <title>OSRS Navigation Mesh</title>
+        <dc:creator><![CDATA[@sinisoul sini]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sinisoul">@sinisoul</a> wrote:</p>
+          <blockquote>
+              <p>I got bored and created a transit mesh of the entire world for OSRS</p>
+<p>Purpose? Calculating paths across the world. Although I had a few questions for those of you who may be savyier than I am.</p>
+<ul>
+<li>What do you think the effective way of storing and referencing nodes are and is there a way I could effectively modify the mesh in real time without destroying dependencies?</li>
+<li>What is the best way to simplify the mesh beyond what I’ve done already (nodes are simplified into an octet tree combining nodes starting from a size of one where every examined node has a path to the node from the node through any of the nodes. This, means as a result, all tiles in the node have a path to each other as a property.</li>
+</ul>
+<p>For the algorithm I was thinking about testing the property for each node to see if there was a valid traversable property to each edge around the reference space for the node. This of course being a region. From there if you have a starting node, you can use that to create a tree of nodes where each could traverse to and then detect a region to region based path to take then calculate subpaths for each region.</p>
+<p>Not entirely sure though. I haven’t implemented it yet.</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/AogZKSP.png" title="AogZKSP.png" rel="nofollow noopener"><img src="http://i.imgur.com/AogZKSP.png" alt width="504" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">AogZKSP.png</span><span class="informations">738×732</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/qmGPkuH.png" title="qmGPkuH.png" rel="nofollow noopener"><img src="http://i.imgur.com/qmGPkuH.png" alt width="502" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">qmGPkuH.png</span><span class="informations">741×737</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i.imgur.com/rXblhuQ.png" title="rXblhuQ.png" rel="nofollow noopener"><img src="http://i.imgur.com/rXblhuQ.png" alt width="500" height="500"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">rXblhuQ.png</span><span class="informations">740×740</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>I guess since this isn’t a help thread, interesting facts:</p>
+<p>Colors for triangles, textures, other functions are stored as a 16 bit packed HSL value which permits 6 bits of hue, 3 bits of luminosity and 7 bits of saturation. The method to grab the index in the RGB_HSL_TABLE is really a method to intensify the color by a factor.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145/1</link>
+        <pubDate>Mon, 31 Aug 2015 14:32:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-553145-1</guid>
+        <source url="https://forum.moparisthebest.com/t/osrs-navigation-mesh/553145.rss">OSRS Navigation Mesh</source>
+      </item>
+  </channel>
+</rss>

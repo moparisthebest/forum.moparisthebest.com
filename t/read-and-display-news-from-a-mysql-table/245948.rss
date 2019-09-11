@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Read and display news from a MySQL table</title>
+    <link>https://forum.moparisthebest.com/t/read-and-display-news-from-a-mysql-table/245948</link>
+    <description>Well I was bored and I thought I may as well make a semi-decent news system.
+
+Slightly modified version of ls/net/DatabaseConnection.java (No point in going through the LS for this imo.)
+
+
+
+src/org/rscdaemon/server/net/DBConnection.java
+
+[code]
+package org.rscdaemon.server.net;
+
+import org.rscdaemon.server.util.Logger;
+
+import java.sql.DriverManager;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+/**
+ * Used to interact with the database.
+ */
+public class DBConnection {
+        /**
+        * Define MySQL connection info.
+        */
+        final String MYSQL_HOST = &quot;127.0.0.1&quot;;
+        final String MYSQL_DB = &quot;rscangel&quot;;
+        final String MYSQL_USER = &quot;rscangel&quot;;
+        final String MYSQL_PASS = &quot;rscangel&quot;;
+        /**
+         * The database connection in use
+         */
+        private Connection con;
+        /**
+         * A statement for running queries on
+         */
+        private Statement statement;
+        /**
+         * The last query being executed
+         */
+        private String lastQuery;
+
+        static {
+                testForDriver();
+        }
+
+        /**
+         * Tests we have a mysql Driver
+         */
+        private static void testForDriver() {
+                try {
+                        Class.forName(&quot;com.mysql.jdbc.Driver&quot;);
+                }
+                catch (ClassNotFoundException cnfe) {
+                        Logger.error(cnfe);
+                }
+        }
+
+        /**
+         * Instantiates a new database connection
+         */
+        public DBConnection() {
+                if(!createConnection()) {
+                        Logger.error(new Exception(&quot;Unable to connect to MySQL&quot;));
+                }
+        }
+
+        public boolean createConnection() {
+                try {
+                        con = DriverManager.getConnection(&quot;jdbc:mysql://&quot; + MYSQL_HOST + &quot;/&quot; + MYSQL_DB, MYSQL_USER, MYSQL_PASS);
+                        statement = con.createStatement();
+                        statement.setEscapeProcessing(true);
+                        return isConnected();
+                }
+                catch(SQLException e) {
+                        Logger.error(e.getMessage());
+                        return false;
+                }
+        }
+
+        public boolean isConnected() {
+                try {
+                        statement.executeQuery(&quot;SELECT CURRENT_DATE&quot;);
+                        return true;
+                }
+                catch(SQLException e) {
+                        return false;
+                }
+        }
+
+        /**
+         * Runs a select query on the current database connection
+         *
+         * @param s The query to be ran
+         */
+        public synchronized ResultSet getQuery(String q) throws SQLException {
+                try {
+                        lastQuery = q;
+                        return statement.executeQuery(q);
+                }
+                catch(SQLException e) {
+                        if(!isConnected() &amp;&amp; createConnection()) {
+                                return getQuery(q);
+                        }
+                        throw new SQLException(e.getMessage() + &quot;: &#39;&quot; + lastQuery + &quot;&#39;&quot;, e.getSQLState(), e.getErrorCode());
+                }
+        }
+
+        /**
+         * Runs a update/insert/replace query on the current database connection
+         *
+         * @param s The query to be ran
+         */
+        public synchronized int updateQuery(String q) throws SQLException {
+                try {
+                        lastQuery = q;
+                        return statement.executeUpdate(q);
+                }
+                catch(SQLException e) {
+                        if(!isConnected() &amp;&amp; createConnection()) {
+                                return updateQuery(q);
+                        }
+                        throw new SQLException(e.getMessage() + &quot;: &#39;&quot; + lastQuery + &quot;&#39;&quot;, e.getSQLState(), e.getErrorCode());
+                }
+        }
+
+        /**
+         * Closes the database conection.
+         *
+         * @throws SQLException if there was an error when closing the connection
+         */
+        public void close() throws SQLException {
+                con.close();
+                con = null;
+        }
+}
+[/code]
+
+Open src/org/rscdaemon/server/GameEngine.java and insert this towards the top, by the other imports:
+
+[code]
+import org.rscdaemon.server.net.DBConnection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+[/code]
+
+Under
+
+[code]
+public final class GameEngine extends Thread {
+[/code]
+
+Add
+
+[code]
+         /**
+         * Connection to the MySQL database
+         */
+        public static DBConnection db;
+        public static String news = &quot;&quot;;
+        public static String getNews() {
+                return news;
+        }
+[/code]
+
+Find
+
+[code]
+        public void run() {
+                Logger.print(&quot;GameEngine now running&quot;);
+[/code]
+
+Below it add
+
+[code]
+                // Get news
+                try {
+                        db = new DBConnection();
+                        ResultSet result;
+                        result = db.getQuery(&quot;SELECT news from rscd_news&quot;);
+                                if(result.next()) {
+                                news = result.getString(&quot;news&quot;);
+                        }
+                        db.close();
+                } catch(SQLException e){
+                        System.out.println(&quot;MySQL error while retriving news:&quot;);
+                        System.err.println(e);
+                }
+[/code]
+
+Find
+
+[code]
+                eventHandler.add(new DelayedEvent(null, 300000) { //5 min (might be a slightly different time here)
+                        public void run() {
+                        Long now = System.currentTimeMillis();
+[/code]
+
+Under it add
+
+[code]
+                                //Update news
+                try {
+                        db = new DBConnection();
+                        ResultSet result;
+                        result = db.getQuery(&quot;SELECT news from rscd_news&quot;);
+                                if(result.next()) {
+                                news = result.getString(&quot;news&quot;);
+                        }
+                        db.close();
+                } catch(SQLException e){
+                        System.out.println(&quot;MySQL error while retriving news:&quot;);
+                        System.err.println(e);
+                }
+[/code]
+
+Open src/org/rscdaemon/server/packethandler/PlayerLogin.java
+
+find
+
+[code]
+                        sender.sendMessage(&quot;Welcome to RSCAngel :)&quot;); // Or whatever your server message says.
+[/code]
+
+add
+
+[code]
+                        String news = org.rscdaemon.server.GameEngine.getNews();
+                        player.getActionSender().sendAlert(&quot;News: &quot; + news, false);
+[/code]
+
+
+Now create a mysql table called rscd_news with a varchar(255) field called &quot;news&quot; and add whatever news you like.
+
+[code]
+CREATE table `rscd_news` (`news` varchar(255));
+INSERT INTO `rscd_news` VALUES(&quot;LOL HI&quot;);
+[/code]
+
+I haven&#39;t actually tested this yet so I&#39;d advise you to test it before using it.</description>
+    
+    <lastBuildDate>Sun, 23 Nov 2008 01:09:25 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/read-and-display-news-from-a-mysql-table/245948.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Read and display news from a MySQL table</title>
+        <dc:creator><![CDATA[@KO9 KO9]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ko9">@KO9</a> wrote:</p>
+          <blockquote>
+              <p>Well I was bored and I thought I may as well make a semi-decent news system.</p>
+<p>Slightly modified version of ls/net/DatabaseConnection.java (No point in going through the LS for this imo.)</p>
+<p>src/org/rscdaemon/server/net/DBConnection.java</p>
+<pre><code class="lang-auto">package org.rscdaemon.server.net;
+
+import org.rscdaemon.server.util.Logger;
+
+import java.sql.DriverManager;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+/**
+ * Used to interact with the database.
+ */
+public class DBConnection {
+        /**
+        * Define MySQL connection info.
+        */
+        final String MYSQL_HOST = "127.0.0.1";
+        final String MYSQL_DB = "rscangel";
+        final String MYSQL_USER = "rscangel";
+        final String MYSQL_PASS = "rscangel";
+        /**
+         * The database connection in use
+         */
+        private Connection con;
+        /**
+         * A statement for running queries on
+         */
+        private Statement statement;
+        /**
+         * The last query being executed
+         */
+        private String lastQuery;
+
+        static {
+                testForDriver();
+        }
+
+        /**
+         * Tests we have a mysql Driver
+         */
+        private static void testForDriver() {
+                try {
+                        Class.forName("com.mysql.jdbc.Driver");
+                }
+                catch (ClassNotFoundException cnfe) {
+                        Logger.error(cnfe);
+                }
+        }
+
+        /**
+         * Instantiates a new database connection
+         */
+        public DBConnection() {
+                if(!createConnection()) {
+                        Logger.error(new Exception("Unable to connect to MySQL"));
+                }
+        }
+
+        public boolean createConnection() {
+                try {
+                        con = DriverManager.getConnection("jdbc:mysql://" + MYSQL_HOST + "/" + MYSQL_DB, MYSQL_USER, MYSQL_PASS);
+                        statement = con.createStatement();
+                        statement.setEscapeProcessing(true);
+                        return isConnected();
+                }
+                catch(SQLException e) {
+                        Logger.error(e.getMessage());
+                        return false;
+                }
+        }
+
+        public boolean isConnected() {
+                try {
+                        statement.executeQuery("SELECT CURRENT_DATE");
+                        return true;
+                }
+                catch(SQLException e) {
+                        return false;
+                }
+        }
+
+        /**
+         * Runs a select query on the current database connection
+         *
+         * @param s The query to be ran
+         */
+        public synchronized ResultSet getQuery(String q) throws SQLException {
+                try {
+                        lastQuery = q;
+                        return statement.executeQuery(q);
+                }
+                catch(SQLException e) {
+                        if(!isConnected() &amp;&amp; createConnection()) {
+                                return getQuery(q);
+                        }
+                        throw new SQLException(e.getMessage() + ": '" + lastQuery + "'", e.getSQLState(), e.getErrorCode());
+                }
+        }
+
+        /**
+         * Runs a update/insert/replace query on the current database connection
+         *
+         * @param s The query to be ran
+         */
+        public synchronized int updateQuery(String q) throws SQLException {
+                try {
+                        lastQuery = q;
+                        return statement.executeUpdate(q);
+                }
+                catch(SQLException e) {
+                        if(!isConnected() &amp;&amp; createConnection()) {
+                                return updateQuery(q);
+                        }
+                        throw new SQLException(e.getMessage() + ": '" + lastQuery + "'", e.getSQLState(), e.getErrorCode());
+                }
+        }
+
+        /**
+         * Closes the database conection.
+         *
+         * @throws SQLException if there was an error when closing the connection
+         */
+        public void close() throws SQLException {
+                con.close();
+                con = null;
+        }
+}</code></pre>
+<p>Open src/org/rscdaemon/server/GameEngine.java and insert this towards the top, by the other imports:</p>
+<pre><code class="lang-auto">import org.rscdaemon.server.net.DBConnection;
+import java.sql.ResultSet;
+import java.sql.SQLException;</code></pre>
+<p>Under</p>
+<pre><code class="lang-auto">public final class GameEngine extends Thread {</code></pre>
+<p>Add</p>
+<pre><code class="lang-auto">         /**
+         * Connection to the MySQL database
+         */
+        public static DBConnection db;
+        public static String news = "";
+        public static String getNews() {
+                return news;
+        }</code></pre>
+<p>Find</p>
+<pre><code class="lang-auto">        public void run() {
+                Logger.print("GameEngine now running");</code></pre>
+<p>Below it add</p>
+<pre><code class="lang-auto">                // Get news
+                try {
+                        db = new DBConnection();
+                        ResultSet result;
+                        result = db.getQuery("SELECT news from rscd_news");
+                                if(result.next()) {
+                                news = result.getString("news");
+                        }
+                        db.close();
+                } catch(SQLException e){
+                        System.out.println("MySQL error while retriving news:");
+                        System.err.println(e);
+                }</code></pre>
+<p>Find</p>
+<pre><code class="lang-auto">                eventHandler.add(new DelayedEvent(null, 300000) { //5 min (might be a slightly different time here)
+                        public void run() {
+                        Long now = System.currentTimeMillis();</code></pre>
+<p>Under it add</p>
+<pre><code class="lang-auto">                                //Update news
+                try {
+                        db = new DBConnection();
+                        ResultSet result;
+                        result = db.getQuery("SELECT news from rscd_news");
+                                if(result.next()) {
+                                news = result.getString("news");
+                        }
+                        db.close();
+                } catch(SQLException e){
+                        System.out.println("MySQL error while retriving news:");
+                        System.err.println(e);
+                }</code></pre>
+<p>Open src/org/rscdaemon/server/packethandler/PlayerLogin.java</p>
+<p>find</p>
+<pre><code class="lang-auto">                        sender.sendMessage("Welcome to RSCAngel :)"); // Or whatever your server message says.</code></pre>
+<p>add</p>
+<pre><code class="lang-auto">                        String news = org.rscdaemon.server.GameEngine.getNews();
+                        player.getActionSender().sendAlert("News: " + news, false);</code></pre>
+<p>Now create a mysql table called rscd_news with a varchar(255) field called “news” and add whatever news you like.</p>
+<pre><code class="lang-auto">CREATE table `rscd_news` (`news` varchar(255));
+INSERT INTO `rscd_news` VALUES("LOL HI");</code></pre>
+<p>I haven’t actually tested this yet so I’d advise you to test it before using it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/read-and-display-news-from-a-mysql-table/245948/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/read-and-display-news-from-a-mysql-table/245948/1</link>
+        <pubDate>Sun, 23 Nov 2008 01:09:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-245948-1</guid>
+        <source url="https://forum.moparisthebest.com/t/read-and-display-news-from-a-mysql-table/245948.rss">Read and display news from a MySQL table</source>
+      </item>
+  </channel>
+</rss>

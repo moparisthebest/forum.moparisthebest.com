@@ -1,0 +1,402 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Benchmarking LUKS Partition Encryption</title>
+    <link>https://forum.moparisthebest.com/t/benchmarking-luks-partition-encryption/310345</link>
+    <description>This has started to interest me, and when I get some spare time and a free hard drive I am going to encrypt /home on my laptop.  However, I wanted to see what kind of performance hit I might encounter with different hardware, so I threw together this little script to benchmark actual performance differences on any particular system.
+
+I commented it fully, so if you want the full rundown read through the script.  But basically it will create 2 identical 1gb files (you can adjust the size), initialize LUKS encryption on one, format both as ext4 (you can change that too), mount them in directories, then use bonnie++ to perform performance tests on them, then puts the results in an easy to read results.html.
+
+So if you have a little extra space to play with (obviously you can delete everything afterwards) please post your results and your setup so we can compare.
+
+Here is the script:
+[code]
+#!/bin/sh
+
+# Author: moparisthebest
+# required packages: cryptsetup bonnie++
+
+# references:
+# cryptsetup: http://feraga.com/node/51
+# bonnie++: http://www.linux.com/archive/feature/139742
+
+# the file size of the loop mounted files
+# keep in mind there will be 2 of these sized files
+FILE_SIZE_MB=2048
+
+# file system type to use, choose any you like
+# program executed as mkfs.$FS_TYPE
+FS_TYPE=ext4
+
+# file for dd to get the data from with which to originally
+# fill the files, /dev/random is best but slowest,
+# /dev/urandom is a good compromise, /dev/zero is fastest
+# but won&#39;t be as secure, but if we are just benchmarking
+# security doesn&#39;t matter anyway.
+DATA_FILE=/dev/zero
+
+# the rest of these I will calculate myself
+# but you can change them if you want...
+
+# max size of files bonnie++ makes
+BON_SIZE=$(($FILE_SIZE_MB / 2))
+# max ram bonnie++ uses, must be half of $BON_SIZE, per bonnie++
+BON_RAM=$(($BON_SIZE / 2))
+
+setup_luks () {
+# just run this script once!
+
+# in debian (probably ubuntu too) we need this package:
+# sudo apt-get install cryptsetup
+
+# create a 1gb file, filled with random data
+echo &quot;creating a $FILE_SIZE_MB MB file, filled with data&quot;
+echo &quot;from $DATA_FILE, may take quite a long while...&quot;
+dd if=$DATA_FILE of=clearfile bs=1M count=$FILE_SIZE_MB
+# copy it to encryptfile
+echo &quot;now copying that file to another file, may take a bit&quot;
+cp clearfile encryptfile
+
+# mount the files as loop devices
+sudo losetup /dev/loop0 encryptfile
+sudo losetup /dev/loop1 clearfile
+
+# only do the crypt stuff on encryptfile (obviously)
+sudo cryptsetup luksFormat /dev/loop0
+sudo cryptsetup luksOpen /dev/loop0 encryptfs
+
+# we format both devices the same, you can use any filesystem
+# you desire, I choose ext4 because... I like it?
+sudo mkfs.$FS_TYPE /dev/mapper/encryptfs
+sudo mkfs.$FS_TYPE /dev/loop1
+
+# close the mapper device
+sudo cryptsetup luksClose /dev/mapper/encryptfs
+
+# unmount the loop devices
+sudo losetup -d /dev/loop0
+sudo losetup -d /dev/loop1
+}
+
+mount_luks () {
+# mount the files as loop devices
+sudo losetup /dev/loop0 encryptfile
+sudo losetup /dev/loop1 clearfile
+
+# only do the crypt stuff on encryptfile (obviously)
+sudo cryptsetup luksOpen /dev/loop0 encryptfs
+
+# make sure the folders exist first
+mkdir -p encryptfs
+mkdir -p clearfs
+
+# mount both devices
+sudo mount /dev/mapper/encryptfs ./encryptfs/
+sudo mount /dev/loop1 ./clearfs/
+
+# change permissions to 777, default for me was root read/write only
+sudo chmod -R 777 ./encryptfs
+sudo chmod -R 777 ./clearfs
+}
+
+umount_luks () {
+# unmount both devices
+sudo umount ./encryptfs/
+sudo umount ./clearfs/
+
+# close the mapper device
+sudo cryptsetup luksClose /dev/mapper/encryptfs
+
+# unmount the loop devices
+sudo losetup -d /dev/loop0
+sudo losetup -d /dev/loop1
+}
+
+benchmark_luks () {
+# in debian (probably ubuntu too) we need this package:
+# sudo apt-get install bonnie++
+
+# benchmark the two filesystems, we also want to save a log
+/usr/sbin/bonnie++ -s $BON_SIZE -r $BON_RAM -d ./encryptfs | tee bonnie_encryptfs_log
+/usr/sbin/bonnie++ -s $BON_SIZE -r $BON_RAM -d ./clearfs | tee bonnie_clearfs_log
+
+# output html files, only the last line is a csv list
+cat bonnie_encryptfs_log | tail -n1 | bon_csv2html &gt; bonnie_encryptfs.html
+cat bonnie_clearfs_log | tail -n1 | bon_csv2html &gt; bonnie_clearfs.html
+
+# attempt to create one nice result.html page
+cat bonnie_encryptfs.html | grep -A9 &quot;DOCTYPE&quot; &gt; result.html
+echo &quot;&lt;h3&gt;Script Info:&lt;/h3&gt;&quot; &gt;&gt; result.html
+echo &quot;FILE_SIZE_MB=$FILE_SIZE_MB &lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;FS_TYPE=$FS_TYPE &lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;DATA_FILE=$DATA_FILE &lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;BON_SIZE=$BON_SIZE &lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;BON_RAM=$BON_RAM &lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;&lt;h3&gt;System Info:&lt;/h3&gt;&quot; &gt;&gt; result.html
+uname -a &gt;&gt; result.html
+echo &quot;&lt;br&gt;&lt;br&gt;Memory: &lt;br&gt;&quot; &gt;&gt; result.html
+cat /proc/meminfo | grep MemTotal &gt;&gt; result.html
+echo &quot;&lt;br&gt;&quot; &gt;&gt; result.html
+cat /proc/meminfo | grep SwapTotal &gt;&gt; result.html
+echo &quot;&lt;br&gt;&lt;br&gt;CPU: &lt;br&gt;&quot; &gt;&gt; result.html
+cat /proc/cpuinfo | grep MHz &gt;&gt; result.html
+echo &quot;&lt;br&gt;&quot; &gt;&gt; result.html
+cat /proc/cpuinfo | grep name &gt;&gt; result.html
+echo &quot;&lt;br&gt;&quot; &gt;&gt; result.html
+echo &quot;&lt;h3&gt;Benchmarks:&lt;/h3&gt;&quot; &gt;&gt; result.html
+echo &quot;encryptfs: &lt;br&gt;&quot; &gt;&gt; result.html
+cat bonnie_encryptfs.html | grep -A11 &quot;&lt;TABLE&quot; &gt;&gt; result.html
+echo &quot;&lt;br&gt;clearfs: &lt;br&gt;&quot; &gt;&gt; result.html
+cat bonnie_clearfs.html | grep -A11 &quot;&lt;TABLE&quot; &gt;&gt; result.html
+echo &quot;&lt;/BODY&gt;&quot; &gt;&gt; result.html
+echo &quot;&lt;/HTML&gt;&quot; &gt;&gt; result.html
+
+echo &quot;results have been calculated and placed in result.html&quot;
+}
+
+case &quot;$1&quot; in
+    setup)
+        setup_luks
+        ;;
+    mount)
+        mount_luks
+        ;;
+    unmount|umount)
+        umount_luks
+        ;;
+    benchmark)
+        benchmark_luks
+        ;;
+    all)
+        setup_luks
+        mount_luks
+        benchmark_luks
+        umount_luks
+        ;;
+    *)
+        echo &quot;Usage: $SCRIPTNAME {setup|mount|unmount|umount|benchmark|all}&quot; &gt;&amp;2
+        exit 1
+        ;;
+esac
+
+exit 0
+[/code]
+
+Here is my benchmark:
+http://www.moparisthebest.com/result.html
+
+System specs:
+OS: debian lenny
+RAM: 1GB
+cpu: really slow sempron
+hd: 5400rpm laptop ATA hd
+
+So, post them up. :)
+And if you have any recommendations for my script, please share.
+
+edit: I&#39;ve updated the script to put some system info in the result.html page, if anyone knows a standard way to get hard drive info I would appreciate it.
+edit2: I&#39;ve updated the script with some variables at the top to make it easier to customize.  Variables are output in result.html as well.</description>
+    
+    <lastBuildDate>Sat, 24 Oct 2009 04:38:53 +0000</lastBuildDate>
+    <category>Technology</category>
+    <atom:link href="https://forum.moparisthebest.com/t/benchmarking-luks-partition-encryption/310345.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Benchmarking LUKS Partition Encryption</title>
+        <dc:creator><![CDATA[@moparisthebest Moparisthebest]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/moparisthebest">@moparisthebest</a> wrote:</p>
+          <blockquote>
+              <p>This has started to interest me, and when I get some spare time and a free hard drive I am going to encrypt /home on my laptop.  However, I wanted to see what kind of performance hit I might encounter with different hardware, so I threw together this little script to benchmark actual performance differences on any particular system.</p>
+<p>I commented it fully, so if you want the full rundown read through the script.  But basically it will create 2 identical 1gb files (you can adjust the size), initialize LUKS encryption on one, format both as ext4 (you can change that too), mount them in directories, then use bonnie++ to perform performance tests on them, then puts the results in an easy to read results.html.</p>
+<p>So if you have a little extra space to play with (obviously you can delete everything afterwards) please post your results and your setup so we can compare.</p>
+<p>Here is the script:</p>
+<pre><code class="lang-auto">#!/bin/sh
+
+# Author: moparisthebest
+# required packages: cryptsetup bonnie++
+
+# references:
+# cryptsetup: http://feraga.com/node/51
+# bonnie++: http://www.linux.com/archive/feature/139742
+
+# the file size of the loop mounted files
+# keep in mind there will be 2 of these sized files
+FILE_SIZE_MB=2048
+
+# file system type to use, choose any you like
+# program executed as mkfs.$FS_TYPE
+FS_TYPE=ext4
+
+# file for dd to get the data from with which to originally
+# fill the files, /dev/random is best but slowest,
+# /dev/urandom is a good compromise, /dev/zero is fastest
+# but won't be as secure, but if we are just benchmarking
+# security doesn't matter anyway.
+DATA_FILE=/dev/zero
+
+# the rest of these I will calculate myself
+# but you can change them if you want...
+
+# max size of files bonnie++ makes
+BON_SIZE=$(($FILE_SIZE_MB / 2))
+# max ram bonnie++ uses, must be half of $BON_SIZE, per bonnie++
+BON_RAM=$(($BON_SIZE / 2))
+
+setup_luks () {
+# just run this script once!
+
+# in debian (probably ubuntu too) we need this package:
+# sudo apt-get install cryptsetup
+
+# create a 1gb file, filled with random data
+echo "creating a $FILE_SIZE_MB MB file, filled with data"
+echo "from $DATA_FILE, may take quite a long while..."
+dd if=$DATA_FILE of=clearfile bs=1M count=$FILE_SIZE_MB
+# copy it to encryptfile
+echo "now copying that file to another file, may take a bit"
+cp clearfile encryptfile
+
+# mount the files as loop devices
+sudo losetup /dev/loop0 encryptfile
+sudo losetup /dev/loop1 clearfile
+
+# only do the crypt stuff on encryptfile (obviously)
+sudo cryptsetup luksFormat /dev/loop0
+sudo cryptsetup luksOpen /dev/loop0 encryptfs
+
+# we format both devices the same, you can use any filesystem
+# you desire, I choose ext4 because... I like it?
+sudo mkfs.$FS_TYPE /dev/mapper/encryptfs
+sudo mkfs.$FS_TYPE /dev/loop1
+
+# close the mapper device
+sudo cryptsetup luksClose /dev/mapper/encryptfs
+
+# unmount the loop devices
+sudo losetup -d /dev/loop0
+sudo losetup -d /dev/loop1
+}
+
+mount_luks () {
+# mount the files as loop devices
+sudo losetup /dev/loop0 encryptfile
+sudo losetup /dev/loop1 clearfile
+
+# only do the crypt stuff on encryptfile (obviously)
+sudo cryptsetup luksOpen /dev/loop0 encryptfs
+
+# make sure the folders exist first
+mkdir -p encryptfs
+mkdir -p clearfs
+
+# mount both devices
+sudo mount /dev/mapper/encryptfs ./encryptfs/
+sudo mount /dev/loop1 ./clearfs/
+
+# change permissions to 777, default for me was root read/write only
+sudo chmod -R 777 ./encryptfs
+sudo chmod -R 777 ./clearfs
+}
+
+umount_luks () {
+# unmount both devices
+sudo umount ./encryptfs/
+sudo umount ./clearfs/
+
+# close the mapper device
+sudo cryptsetup luksClose /dev/mapper/encryptfs
+
+# unmount the loop devices
+sudo losetup -d /dev/loop0
+sudo losetup -d /dev/loop1
+}
+
+benchmark_luks () {
+# in debian (probably ubuntu too) we need this package:
+# sudo apt-get install bonnie++
+
+# benchmark the two filesystems, we also want to save a log
+/usr/sbin/bonnie++ -s $BON_SIZE -r $BON_RAM -d ./encryptfs | tee bonnie_encryptfs_log
+/usr/sbin/bonnie++ -s $BON_SIZE -r $BON_RAM -d ./clearfs | tee bonnie_clearfs_log
+
+# output html files, only the last line is a csv list
+cat bonnie_encryptfs_log | tail -n1 | bon_csv2html &gt; bonnie_encryptfs.html
+cat bonnie_clearfs_log | tail -n1 | bon_csv2html &gt; bonnie_clearfs.html
+
+# attempt to create one nice result.html page
+cat bonnie_encryptfs.html | grep -A9 "DOCTYPE" &gt; result.html
+echo "&lt;h3&gt;Script Info:&lt;/h3&gt;" &gt;&gt; result.html
+echo "FILE_SIZE_MB=$FILE_SIZE_MB &lt;br&gt;" &gt;&gt; result.html
+echo "FS_TYPE=$FS_TYPE &lt;br&gt;" &gt;&gt; result.html
+echo "DATA_FILE=$DATA_FILE &lt;br&gt;" &gt;&gt; result.html
+echo "BON_SIZE=$BON_SIZE &lt;br&gt;" &gt;&gt; result.html
+echo "BON_RAM=$BON_RAM &lt;br&gt;" &gt;&gt; result.html
+echo "&lt;h3&gt;System Info:&lt;/h3&gt;" &gt;&gt; result.html
+uname -a &gt;&gt; result.html
+echo "&lt;br&gt;&lt;br&gt;Memory: &lt;br&gt;" &gt;&gt; result.html
+cat /proc/meminfo | grep MemTotal &gt;&gt; result.html
+echo "&lt;br&gt;" &gt;&gt; result.html
+cat /proc/meminfo | grep SwapTotal &gt;&gt; result.html
+echo "&lt;br&gt;&lt;br&gt;CPU: &lt;br&gt;" &gt;&gt; result.html
+cat /proc/cpuinfo | grep MHz &gt;&gt; result.html
+echo "&lt;br&gt;" &gt;&gt; result.html
+cat /proc/cpuinfo | grep name &gt;&gt; result.html
+echo "&lt;br&gt;" &gt;&gt; result.html
+echo "&lt;h3&gt;Benchmarks:&lt;/h3&gt;" &gt;&gt; result.html
+echo "encryptfs: &lt;br&gt;" &gt;&gt; result.html
+cat bonnie_encryptfs.html | grep -A11 "&lt;TABLE" &gt;&gt; result.html
+echo "&lt;br&gt;clearfs: &lt;br&gt;" &gt;&gt; result.html
+cat bonnie_clearfs.html | grep -A11 "&lt;TABLE" &gt;&gt; result.html
+echo "&lt;/BODY&gt;" &gt;&gt; result.html
+echo "&lt;/HTML&gt;" &gt;&gt; result.html
+
+echo "results have been calculated and placed in result.html"
+}
+
+case "$1" in
+    setup)
+        setup_luks
+        ;;
+    mount)
+        mount_luks
+        ;;
+    unmount|umount)
+        umount_luks
+        ;;
+    benchmark)
+        benchmark_luks
+        ;;
+    all)
+        setup_luks
+        mount_luks
+        benchmark_luks
+        umount_luks
+        ;;
+    *)
+        echo "Usage: $SCRIPTNAME {setup|mount|unmount|umount|benchmark|all}" &gt;&amp;2
+        exit 1
+        ;;
+esac
+
+exit 0</code></pre>
+<p>Here is my benchmark:<br>
+<a href="http://www.moparisthebest.com/result.html" class="onebox" target="_blank">http://www.moparisthebest.com/result.html</a></p>
+<p>System specs:<br>
+OS: debian lenny<br>
+RAM: 1GB<br>
+cpu: really slow sempron<br>
+hd: 5400rpm laptop ATA hd</p>
+<p>So, post them up. <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"><br>
+And if you have any recommendations for my script, please share.</p>
+<p>edit: I’ve updated the script to put some system info in the result.html page, if anyone knows a standard way to get hard drive info I would appreciate it.<br>
+edit2: I’ve updated the script with some variables at the top to make it easier to customize.  Variables are output in result.html as well.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/benchmarking-luks-partition-encryption/310345/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/benchmarking-luks-partition-encryption/310345/1</link>
+        <pubDate>Sat, 24 Oct 2009 04:38:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-310345-1</guid>
+        <source url="https://forum.moparisthebest.com/t/benchmarking-luks-partition-encryption/310345.rss">Benchmarking LUKS Partition Encryption</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>861 cache revisions</title>
+    <link>https://forum.moparisthebest.com/t/861-cache-revisions/554259</link>
+    <description>i am having issues getting the Rune-Love3 source to allow the newest cache revision of 861, the error i get with the rune-love3 source is this([Virtue Logger]: Loading cache.
+[Virtue Logger]: Decoding cache index 0
+[Virtue Logger]: An exception has been caught on engine cycle # 2. Terminating process.
+[Virtue Logger]: Total runtime: 1 seconds, 0 minutes, 0 hours, 0 days.
+java.lang.RuntimeException
+	at org.virtue.cache.ReferenceTable.decode(ReferenceTable.java:255)
+	at org.virtue.cache.Cache.createChecksumTable(Cache.java:121)
+	at org.virtue.Launcher.loadCache(Launcher.java:117)
+	at org.virtue.Launcher.main(Launcher.java:82)
+
+the lines in question say this (ReferenceTable.java:255 this is more than just the 255 line)-public static ReferenceTable decode(ByteBuffer buffer) {
+		/* create a new table */
+		ReferenceTable table = new ReferenceTable();
+
+		/* read header */
+		table.format = buffer.get() &amp; 0xFF;
+		if (table.format &lt; 5 || table.format &gt; 7)
+			throw new RuntimeException();
+		if (table.format &gt;= 6) {
+			table.version = buffer.getInt();
+		}
+		table.flags = buffer.get() &amp; 0xFF;
+
+		/* read the ids */
+		int[] ids = new int[table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF];
+		int accumulator = 0, size = -1;
+		for (int i = 0; i &lt; ids.length; i++) {
+			int delta = table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer)
+					: buffer.getShort() &amp; 0xFFFF;
+			ids[i] = accumulator += delta;
+			if (ids[i] &gt; size) {
+				size = ids[i];
+			}
+		}
+		size++;
+		//table.indices = ids;
+
+		/* and allocate specific entries within that array */
+		for (int id : ids) {			
+			table.entries.put(id, new Entry());
+		}
+
+		/* read the identifiers if present */
+		if ((table.flags &amp; FLAG_IDENTIFIERS) != 0) {
+			for (int id : ids) {
+				table.entries.get(id).identifier = buffer.getInt();
+			}
+		}
+
+		/* read the CRC32 checksums */
+		for (int id : ids) {
+			table.entries.get(id).crc = buffer.getInt();
+		}
+
+		/* read the whirlpool digests if present */
+		if ((table.flags &amp; FLAG_WHIRLPOOL) != 0) {
+			for (int id : ids) {
+				buffer.get(table.entries.get(id).whirlpool);
+			}
+		}
+
+		/* read the version numbers */
+		for (int id : ids) {
+			table.entries.get(id).version = buffer.getInt();
+		}
+
+		/* read the child sizes */
+		int[][] members = new int[size][];
+		for (int id : ids) {
+			members[id] = new int[table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF];
+		}
+
+		/* read the child ids */
+		for (int id : ids) {
+			/* reset the accumulator and size */
+			accumulator = 0;
+			size = -1;
+
+			/* loop through the array of ids */
+			for (int i = 0; i &lt; members[id].length; i++) {
+				int delta = table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF;
+				members[id][i] = accumulator += delta;
+				if (members[id][i] &gt; size) {
+					size = members[id][i];
+				}
+			}
+			size++;
+
+			/* and allocate specific entries within the array */
+			for (int child : members[id]) {
+				table.entries.get(id).entries.put(child, new ChildEntry());
+			}
+		}
+
+		/* read the child identifiers if present */
+		if ((table.flags &amp; FLAG_IDENTIFIERS) != 0) {
+			for (int id : ids) {
+				for (int child : members[id]) {
+					table.entries.get(id).entries.get(child).identifier = buffer.getInt();
+				}
+			}
+		}
+
+		/* return the table we constructed */
+		return table;
+cache.java:121-public ChecksumTable createChecksumTable() throws IOException {
+		/* create the checksum table */
+		int size = store.getTypeCount();
+		ChecksumTable table = new ChecksumTable(size);
+
+		/* loop through all the reference tables and get their CRC and versions */
+		for (int i = 0; i &lt; size; i++) {
+			ByteBuffer buf = store.read(40, i);
+			/*
+			 * try (FileChannel out = new
+			 * FileOutputStream(&quot;data/test_broken_1.bin&quot;).getChannel()) {
+			 * out.write(buf); } buf.flip();
+			 */
+
+			int crc = 0;
+			int version = 0;
+			int files = 0;
+			int archiveSize = 0;
+			byte[] whirlpool = new byte[64];
+
+			/*
+			 * if there is actually a reference table, calculate the CRC,
+			 * version and whirlpool hash
+			 */
+			if (buf != null &amp;&amp; buf.limit() &gt; 0) { // some indices are not used,
+													// is this appropriate?
+				System.out.println(&quot;Decoding cache index &quot; + i);
+				ReferenceTable ref = ReferenceTable.decode(Container
+						.decode(buf).getData());
+				crc = ByteBufferUtils.getCrcChecksum(buf);// Crc
+				version = ref.getVersion();// Version
+				files = ref.capacity();
+				archiveSize = 0;
+				buf.position(0);
+				whirlpool = ByteBufferUtils.getWhirlpoolDigest(buf);
+			}
+
+			table.setEntry(i, new ChecksumTable.Entry(crc, version, files,
+					archiveSize, whirlpool));
+		}
+
+		/* return the table */
+		return table;
+
+launcher.java:82 and 117- public static void main(String[] args) {
+		try {
+			System.setOut(new ConsoleLogger(System.out));
+			System.setErr(new ConsoleLogger(System.err));
+			long currentTime = TimeUtil.currentTimeMillis();
+			System.out.println(&quot;Welcome to &quot; + Constants.NAME + &quot;.&quot;);
+			loadEngine();
+			loadCache();
+			if (Constants.LOGIN_SERVER) {
+				DataServer.load();
+			}
+			Lobby.load();
+			IOHub.load();
+			NETWORK.load();
+			CLANS = new ClanSettingsManager();
+			System.out.println(&quot;CloneScape 861 &quot; + (TimeUtil.currentTimeMillis() - currentTime) + &quot; milli seconds to launch.&quot;);
+		} catch (Exception e) {
+			ENGINE.handleException(e);
+
+i included the whole section of the error in case i messed something up somewhere.
+
+my system is win10, jre7, jre1.8.0_60, jdk1.7.0_79
+
+i have even added these numbers (2669, 69795, 41651, 35866,
+		358716, 44375, 18239, 20584, 169706, 1095964, 424404, 554703, 809735, 1147967,
+		34707, 818260, 20882, 1244, 65037, 2096, 119, 1349233, 4156676, 8991, 23087) to the cache.java file and changed the revision to match the cache file of 861 and left the sub-build at 1.  the only thing i can think of that may be the reason is that inside the cache file there is a new file (main_file_cache.dat2m) have i forgot something somewhere that would be causing this issue? fyi it is the server that wont run.
+
+the exact lines that are involved = ReferenceTable.java:255  throw new RuntimeException();
+cache.java:121  ReferenceTable ref = ReferenceTable.decode(Container
+launcher.java:117   Container container = new Container(Container.COMPRESSION_NONE, CACHE.createChecksumTable().encode(true, ChecksumTable.ON_DEMAND_MODULUS, ChecksumTable.ON_DEMAND_EXPONENT));
+and
+launcher.java:82   loadCache();
+(edit to add exact lines not just the whole section)</description>
+    
+    <lastBuildDate>Thu, 31 Dec 2015 23:48:00 +0000</lastBuildDate>
+    <category>Game Development</category>
+    <atom:link href="https://forum.moparisthebest.com/t/861-cache-revisions/554259.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>861 cache revisions</title>
+        <dc:creator><![CDATA[@zenthrose zenthrose]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zenthrose">@zenthrose</a> wrote:</p>
+          <blockquote>
+              <p>i am having issues getting the Rune-Love3 source to allow the newest cache revision of 861, the error i get with the rune-love3 source is this([Virtue Logger]: Loading cache.<br>
+[Virtue Logger]: Decoding cache index 0<br>
+[Virtue Logger]: An exception has been caught on engine cycle # 2. Terminating process.<br>
+[Virtue Logger]: Total runtime: 1 seconds, 0 minutes, 0 hours, 0 days.<br>
+java.lang.RuntimeException<br>
+at org.virtue.cache.ReferenceTable.decode(ReferenceTable.java:255)<br>
+at org.virtue.cache.Cache.createChecksumTable(Cache.java:121)<br>
+at org.virtue.Launcher.loadCache(Launcher.java:117)<br>
+at org.virtue.Launcher.main(Launcher.java:82)</p>
+<p>the lines in question say this (ReferenceTable.java:255 this is more than just the 255 line)-public static ReferenceTable decode(ByteBuffer buffer) {<br>
+/* create a new table */<br>
+ReferenceTable table = new ReferenceTable();</p>
+<pre><code>	/* read header */
+	table.format = buffer.get() &amp; 0xFF;
+	if (table.format &lt; 5 || table.format &gt; 7)
+		throw new RuntimeException();
+	if (table.format &gt;= 6) {
+		table.version = buffer.getInt();
+	}
+	table.flags = buffer.get() &amp; 0xFF;
+
+	/* read the ids */
+	int[] ids = new int[table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF];
+	int accumulator = 0, size = -1;
+	for (int i = 0; i &lt; ids.length; i++) {
+		int delta = table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer)
+				: buffer.getShort() &amp; 0xFFFF;
+		ids[i] = accumulator += delta;
+		if (ids[i] &gt; size) {
+			size = ids[i];
+		}
+	}
+	size++;
+	//table.indices = ids;
+
+	/* and allocate specific entries within that array */
+	for (int id : ids) {			
+		table.entries.put(id, new Entry());
+	}
+
+	/* read the identifiers if present */
+	if ((table.flags &amp; FLAG_IDENTIFIERS) != 0) {
+		for (int id : ids) {
+			table.entries.get(id).identifier = buffer.getInt();
+		}
+	}
+
+	/* read the CRC32 checksums */
+	for (int id : ids) {
+		table.entries.get(id).crc = buffer.getInt();
+	}
+
+	/* read the whirlpool digests if present */
+	if ((table.flags &amp; FLAG_WHIRLPOOL) != 0) {
+		for (int id : ids) {
+			buffer.get(table.entries.get(id).whirlpool);
+		}
+	}
+
+	/* read the version numbers */
+	for (int id : ids) {
+		table.entries.get(id).version = buffer.getInt();
+	}
+
+	/* read the child sizes */
+	int[][] members = new int[size][];
+	for (int id : ids) {
+		members[id] = new int[table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF];
+	}
+
+	/* read the child ids */
+	for (int id : ids) {
+		/* reset the accumulator and size */
+		accumulator = 0;
+		size = -1;
+
+		/* loop through the array of ids */
+		for (int i = 0; i &lt; members[id].length; i++) {
+			int delta = table.format &gt;= 7 ? ByteBufferUtils.getSmartInt(buffer) : buffer.getShort() &amp; 0xFFFF;
+			members[id][i] = accumulator += delta;
+			if (members[id][i] &gt; size) {
+				size = members[id][i];
+			}
+		}
+		size++;
+
+		/* and allocate specific entries within the array */
+		for (int child : members[id]) {
+			table.entries.get(id).entries.put(child, new ChildEntry());
+		}
+	}
+
+	/* read the child identifiers if present */
+	if ((table.flags &amp; FLAG_IDENTIFIERS) != 0) {
+		for (int id : ids) {
+			for (int child : members[id]) {
+				table.entries.get(id).entries.get(child).identifier = buffer.getInt();
+			}
+		}
+	}
+
+	/* return the table we constructed */
+	return table;
+</code></pre>
+<p>cache.java:121-public ChecksumTable createChecksumTable() throws IOException {<br>
+/* create the checksum table */<br>
+int size = store.getTypeCount();<br>
+ChecksumTable table = new ChecksumTable(size);</p>
+<pre><code>	/* loop through all the reference tables and get their CRC and versions */
+	for (int i = 0; i &lt; size; i++) {
+		ByteBuffer buf = store.read(40, i);
+		/*
+		 * try (FileChannel out = new
+		 * FileOutputStream("data/test_broken_1.bin").getChannel()) {
+		 * out.write(buf); } buf.flip();
+		 */
+
+		int crc = 0;
+		int version = 0;
+		int files = 0;
+		int archiveSize = 0;
+		byte[] whirlpool = new byte[64];
+
+		/*
+		 * if there is actually a reference table, calculate the CRC,
+		 * version and whirlpool hash
+		 */
+		if (buf != null &amp;&amp; buf.limit() &gt; 0) { // some indices are not used,
+												// is this appropriate?
+			System.out.println("Decoding cache index " + i);
+			ReferenceTable ref = ReferenceTable.decode(Container
+					.decode(buf).getData());
+			crc = ByteBufferUtils.getCrcChecksum(buf);// Crc
+			version = ref.getVersion();// Version
+			files = ref.capacity();
+			archiveSize = 0;
+			buf.position(0);
+			whirlpool = ByteBufferUtils.getWhirlpoolDigest(buf);
+		}
+
+		table.setEntry(i, new ChecksumTable.Entry(crc, version, files,
+				archiveSize, whirlpool));
+	}
+
+	/* return the table */
+	return table;
+</code></pre>
+<p>launcher.java:82 and 117- public static void main(String[] args) {<br>
+try {<br>
+System.setOut(new ConsoleLogger(System.out));<br>
+System.setErr(new ConsoleLogger(System.err));<br>
+long currentTime = TimeUtil.currentTimeMillis();<br>
+System.out.println("Welcome to " + Constants.NAME + “.”);<br>
+loadEngine();<br>
+loadCache();<br>
+if (Constants.LOGIN_SERVER) {<br>
+DataServer.load();<br>
+}<br>
+Lobby.load();<br>
+IOHub.load();<br>
+NETWORK.load();<br>
+CLANS = new ClanSettingsManager();<br>
+System.out.println(“CloneScape 861 " + (TimeUtil.currentTimeMillis() - currentTime) + " milli seconds to launch.”);<br>
+} catch (Exception e) {<br>
+ENGINE.handleException(e);</p>
+<p>i included the whole section of the error in case i messed something up somewhere.</p>
+<p>my system is win10, jre7, jre1.8.0_60, jdk1.7.0_79</p>
+<p>i have even added these numbers (2669, 69795, 41651, 35866,<br>
+358716, 44375, 18239, 20584, 169706, 1095964, 424404, 554703, 809735, 1147967,<br>
+34707, 818260, 20882, 1244, 65037, 2096, 119, 1349233, 4156676, 8991, 23087) to the cache.java file and changed the revision to match the cache file of 861 and left the sub-build at 1.  the only thing i can think of that may be the reason is that inside the cache file there is a new file (main_file_cache.dat2m) have i forgot something somewhere that would be causing this issue? fyi it is the server that wont run.</p>
+<p>the exact lines that are involved = ReferenceTable.java:255  throw new RuntimeException();<br>
+cache.java:121  ReferenceTable ref = ReferenceTable.decode(Container<br>
+launcher.java:117   Container container = new Container(Container.COMPRESSION_NONE, CACHE.createChecksumTable().encode(true, ChecksumTable.ON_DEMAND_MODULUS, ChecksumTable.ON_DEMAND_EXPONENT));<br>
+and<br>
+launcher.java:82   loadCache();<br>
+(edit to add exact lines not just the whole section)</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/861-cache-revisions/554259/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/861-cache-revisions/554259/1</link>
+        <pubDate>Thu, 31 Dec 2015 23:48:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-554259-1</guid>
+        <source url="https://forum.moparisthebest.com/t/861-cache-revisions/554259.rss">861 cache revisions</source>
+      </item>
+  </channel>
+</rss>

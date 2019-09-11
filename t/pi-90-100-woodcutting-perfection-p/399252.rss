@@ -1,0 +1,968 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+    <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252</link>
+    <description>this features ( in addition to the regular PI ) :
+* correct animations for every axe ( so you wont be seeing yourself use a steel axe when you&#39;re using rune or dragon axe )
+* the trees get deleted and replaced by stumps at random , then after a while the tree regrows at its original position.
+* the axe you are using will affect how long it takes to chop 1 log
+* the tree you are cutting will also affect this
+* the time required for the tree to respawn depends on how many players there are online ( more players = faster respawn )
+
+things that need to be done :
+* the higher your WC level , the  shorter it should take to cut a log
+
+UPDATED : max logs per tree has been added. ( change them from the cutForChop method in the WC class )
+UPDATED : anims now depends onn the goodAxe() int , instead of the axe you&#39;re wearing
+
+THE CODES:
+Woodcutting.java ( just replace everything in that file by this code below :
+[code]
+package server.model.players.skills;
+
+import server.model.players.*;
+import server.Config;
+import server.util.Misc;
+import server.Server;
+import java.lang.Math;
+import server.model.players.Client;
+import server.model.players.PacketType;
+import server.model.objects.Object;
+import server.model.players.PlayerHandler;
+
+	/**
+	* @author Sanity
+	* @note Heavily modified by Cres || rebellion
+	*/
+
+public class Woodcutting {
+	
+	Client c;
+	
+	private final int VALID_AXE[] = {1351,1349,1353,1361,1355,1357,1359,6739};
+	private final int[] AXE_REQS = {1,1,6,6,21,31,41,61};
+	private int logType;
+	private int exp;
+	private int levelReq;
+	private int axeType;
+	private int treeX;
+	private int treeY;
+	private int density;
+	private int treeType;
+	public int logsCutFromTree;
+	public int tempTimer = 0;
+	
+	public static int TREE_TIMER = 2000;
+	
+	public Woodcutting(Client c) {
+		this.c = c;
+	}
+	
+	public void startWoodcutting(int logType, int levelReq, int exp, int treeX, int treeY, int density, int treeType) {
+		if (goodAxe() &gt; 0) {
+			c.turnPlayerTo(treeX, treeY);
+			if (c.playerLevel[c.playerWoodcutting] &gt;= levelReq) {
+				this.logType = logType;
+				this.exp = exp;
+				this.levelReq = levelReq;
+				this.treeX = treeX;
+				this.treeY = treeY;
+				this.density = density;
+				this.treeType = treeType;
+				this.axeType = goodAxe();
+				c.wcTimer = getWcTimer(density);
+				c.startAnimation(getWcEmote());
+			} else {
+				c.getPA().resetVariables();
+				c.startAnimation(65535);
+				c.sendMessage(&quot;You need a woodcutting level of &quot; + levelReq + &quot; to cut this tree.&quot;);
+			}		
+		} else {
+			c.startAnimation(65535);
+			c.sendMessage(&quot;You don&#39;t have an axe for which you have the level to use.&quot;);
+			c.getPA().resetVariables();
+		}
+	}
+	
+	public void resetWoodcut() {
+		this.logType = -1;
+		this.exp = -1;
+		this.levelReq = -1;
+		this.axeType = -1;
+		this.density = -1;
+		this.treeX = -1;
+		this.treeY = -1;
+		this.treeType = -1;
+		c.wcTimer = -1;	
+		logsCutFromTree = 0;
+	}
+	
+	public int getWcEmote() {
+		if (axeType == 1351) // bronze
+			return 879;
+		if (axeType == 1349) // iron
+			return 877;
+		if (axeType == 1353) // steel
+			return 875;
+		if (axeType == 1355) // mith
+			return 871;
+		if (axeType == 1357) // addy
+			return 869;
+		if (axeType == 1359) // rune
+			return 867;
+		if (axeType == 6739) // d axe
+			return 2846;
+		if (axeType == 1361) // black
+			return 873;
+		else
+			return 0;
+	}
+	
+	public void cutWood() {
+		int maxLogsPerTree = cutForChop(treeType);
+		if (logsCutFromTree &lt; maxLogsPerTree) {
+			if (c.getItems().addItem(logType,1)) {
+				c.startAnimation(getWcEmote());
+				logsCutFromTree += 1;
+				c.sendMessage(&quot;You get some logs.&quot;);
+				c.getPA().addSkillXP(exp * Config.WOODCUTTING_EXPERIENCE, c.playerWoodcutting);
+				c.getPA().refreshSkill(c.playerWoodcutting);
+				c.wcTimer = getWcTimer(density);
+			} else {
+				c.getPA().resetVariables();
+				return;
+			}
+		} else {
+			for (int j = 0; j &lt; Server.playerHandler.players.length; j++) {
+				if (Server.playerHandler.players[j] != null) {
+					Client c2 = (Client)Server.playerHandler.players[j]; 
+					new Object(1343, treeX, treeY, 0, 1, 10, treeType, getTicksForTree());	
+					c.getPA().resetVariables();
+					resetWoodcut();
+				}
+			}
+			return;
+		}
+	}
+	
+	public int getTicksForTree() {
+		return (2000-PlayerHandler.getPlayerCount())/100 + additionalTicksPerTree();
+	}
+	
+	public int additionalTicksPerTree() {
+		if (treeType == 1276) // reg
+			return 1;
+		if (treeType == 1278) // reg
+			return 1;
+		if (treeType == 1281) // oak
+			return 2;
+		if (treeType == 1308) // willow
+			return 3;
+		if (treeType == 1307) // maple
+			return 4;
+		if (treeType == 1309) // yew
+			return 6;
+		if (treeType == 1306) // magic
+			return 7;
+		else
+			return 0;
+	}
+	
+	public int cutForChop(int tree) {
+		if (tree == 1276 || tree == 1278)
+			return 3;
+		if (tree == 1281)
+			return 5;
+		if (tree == 1308)
+			return 6;
+		if (tree == 1307)
+			return 7;
+		if (tree == 1309)
+			return 8;
+		if (tree == 1306)
+			return 10;
+		else
+			return 0;
+	}
+	
+	public int axePower(int axe) {
+		if (axe == 1351) // bronze
+			return 1;
+		if (axe == 1349) // iron
+			return 1;
+		if (axe == 1353) // steel
+			return 2;
+		if (axe == 1361) // black
+			return 2;
+		if (axe == 1355) // mith
+			return 3;
+		if (axe == 1357) // addy
+			return 4;
+		if (axe == 1359) // rune
+			return 5;
+		if (axe == 6739) //daxe
+			return 7;
+		else
+			return 0;
+	}
+	
+	public int goodAxe() {
+		for (int j = VALID_AXE.length - 1; j &gt;= 0; j--) {
+			if (c.playerEquipment[c.playerWeapon] == VALID_AXE[j]) {
+				if (c.playerLevel[c.playerWoodcutting] &gt;= AXE_REQS[j])
+					return VALID_AXE[j];
+			}		
+		}
+		for (int i = 0; i &lt; c.playerItems.length; i++) {
+			for (int j = VALID_AXE.length - 1; j &gt;= 0; j--) {
+				if (c.playerItems[i] == VALID_AXE[j] + 1) {
+					if (c.playerLevel[c.playerWoodcutting] &gt;= AXE_REQS[j])
+						return VALID_AXE[j];
+				}
+			}		
+		}
+		return - 1;
+	}
+	
+	public int getWcTimer(int density) {
+		int time = Misc.random(2);
+		return density + time - axePower(goodAxe());
+	}
+
+}
+[/code]
+
+Now , in ActionHandler.java , add these...
+[code]
+		/**
+			* @param 0 , the log you get for cutting the tree.
+			* @param 1 , the level required to cut the tree.
+			* @param 2 , the experience gained for cutting the tree.
+			* @param 3 , the X coordinate of the tree.
+			* @param 4 , the Y coordinate of the tree.
+			* @param 5 , the density of the tree.
+			* @param 6 , the id of the tree.
+		*/
+			
+		case 1276:
+		case 1278://trees
+			c.woodcut[0] = 1511;
+			c.woodcut[1] = 1;
+			c.woodcut[2] = 25;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 8;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+		case 1281: //oak
+			c.woodcut[0] = 1521;
+			c.woodcut[1] = 15;
+			c.woodcut[2] = 37;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 9;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+		
+		case 1308: //willow
+			c.woodcut[0] = 1519;
+			c.woodcut[1] = 30;
+			c.woodcut[2] = 68;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 10;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+		
+		case 1307: //maple
+			c.woodcut[0] = 1517;
+			c.woodcut[1] = 45;
+			c.woodcut[2] = 100;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 11;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+		
+		case 1309: //yew
+			c.woodcut[0] = 1515;
+			c.woodcut[1] = 60;
+			c.woodcut[2] = 175;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 12;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+		
+		case 1306: // magic
+			c.woodcut[0] = 1513;
+			c.woodcut[1] = 75;
+			c.woodcut[2] = 250;
+			c.woodcut[3] = obX;
+			c.woodcut[4] = obY;
+			c.woodcut[5] = 13;
+			c.woodcut[6] = objectType;
+			c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+		break;
+
+[/code]
+
+Now , in the Player.java class
+search for 
+[b]public int[] woodcut = new int[/b]
+delete that line , replace it by
+[b]public int[] woodcut = new int [7];[/b]
+
+And that&#39;s it!
+Enjoy 90% - 100% woodcutting :p</description>
+    
+    <lastBuildDate>Sun, 03 Feb 2013 10:56:55 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“the elve age, post:56, topic:399252”]… This looks a lot like my woodcutting I wrote for deltascape a couple years back… Very very similar.</p>
+<p><a href="http://www.moparisthebest.com/smf/index.php/topic,436465.0.html%5B/quote%5D" class="onebox" target="_blank" rel="nofollow noopener">http://www.moparisthebest.com/smf/index.php/topic,436465.0.html[/quote]</a></p>
+<p>Aye it does xD<br>
+I didn’t know of your code though, wrote this before I knew of better ways of adding it.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/57">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/57</link>
+        <pubDate>Sun, 03 Feb 2013 10:56:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-57</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@the_elve_age the elve age]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/the_elve_age">@the_elve_age</a> wrote:</p>
+          <blockquote>
+              <p>… This looks a lot like my woodcutting I wrote for deltascape a couple years back… Very very similar.</p>
+<aside class="onebox whitelistedgeneric">
+  <header class="source">
+      <img src="https://forum.moparisthebest.com/uploads/default/original/2X/1/1f0dc167bcf798bdbd70b03bf0fd1bc836e54e1a.png" class="site-icon" width="32" height="32">
+      <a href="https://forum.moparisthebest.com/" target="_blank">moparisthebest.com</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://forum.moparisthebest.com/images/default-apple-touch-icon.png" class="thumbnail onebox-avatar" width="144" height="144">
+
+<h3><a href="https://forum.moparisthebest.com/" target="_blank">moparisthebest.com</a></h3>
+
+<p>programming, irc, cars</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/56">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/56</link>
+        <pubDate>Sun, 03 Feb 2013 02:48:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-56</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="54" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/r00wns/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> r00wns:</div>
+<blockquote>
+<p>i got troubles when i cut and move the animation doesn’t stop <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> , got same with mining (PI) solve able?</p>
+</blockquote>
+</aside>
+<p>Probably a mistake in the process() method.<br>
+Make sure that it doesn’t make the player perform the animation when it isn’t needed.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/55">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/55</link>
+        <pubDate>Fri, 01 Feb 2013 17:27:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-55</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@r00wns r00wns]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/r00wns">@r00wns</a> wrote:</p>
+          <blockquote>
+              <p>i got troubles when i cut and move the animation doesn’t stop <img src="https://forum.moparisthebest.com/images/emoji/twitter/frowning.png?v=5" title=":frowning:" class="emoji" alt=":frowning:"> , got same with mining (PI) solve able?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/54">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/54</link>
+        <pubDate>Wed, 30 Jan 2013 21:40:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-54</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Clawz_fury lare69]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/clawz_fury">@Clawz_fury</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="20" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/cres/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Cres:</div>
+<blockquote>
+<p>That’s your problem , don’t code with NotePad…</p>
+</blockquote>
+</aside>
+<p>ty</p>
+<p><span class="mention">@op</span>: why not completely re-write the skills, all of sanitys shit was half assed</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/53">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/53</link>
+        <pubDate>Thu, 13 Dec 2012 12:13:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-53</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Int Bauk, post:51, topic:399252”][quote author=Server programer link=topic=496389.msg4172012#msg4172012 date=1354481282]<br>
+Thanks bro<br>
+[/quote]</p>
+<p>y u bump dis?</p>
+<p>this is also pretty horrid. bad naming, conventions, OOP, layout, declarations. you could also make use of enums.</p>
+<p>also:<code>                case 1278://trees
+                        c.woodcut[0] = 1511;
+                        c.woodcut[1] = 1;
+                        c.woodcut[2] = 25;
+                        c.woodcut[3] = obX;
+                        c.woodcut[4] = obY;
+                        c.woodcut[5] = 8;
+                        c.woodcut[6] = objectType;
+                        c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+                break;</code></p>
+<p>100’s of these kind of cases are making PI dirty. instead of actually declaring the log type, axe etcetera (when clicking each individual tree), above the switch statement just add a method such as:</p>
+<p><code>		if (Woodcutting.playerTrees(c, objectType)) {
+			c.turnPlayerTo(obX, obY);
+			Woodcutting.attemptData(c, objectType, obX, obY);
+			return;
+		}</code>[/quote]</p>
+<p>I agree this could be done better. Rather than giving all the information through the code you could just provide the information in the Woodcut class itself, call the method referring to the treeType and it would just gather info from there.<br>
+Wrote this so long ago so I won’t discuss primitiv programming code xD<br>
+I also forgot PI’s architecture so I won’t be much a help either xD</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/52">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/52</link>
+        <pubDate>Sun, 09 Dec 2012 11:48:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-52</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Int_Bauk Int Bauk]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/int_bauk">@Int_Bauk</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="50" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+ Server programer:</div>
+<blockquote>
+<p>Thanks bro</p>
+</blockquote>
+</aside>
+<p>y u bump dis?</p>
+<p>this is also pretty horrid. bad naming, conventions, OOP, layout, declarations. you could also make use of enums.</p>
+<p>also:<code>                case 1278://trees
+                        c.woodcut[0] = 1511;
+                        c.woodcut[1] = 1;
+                        c.woodcut[2] = 25;
+                        c.woodcut[3] = obX;
+                        c.woodcut[4] = obY;
+                        c.woodcut[5] = 8;
+                        c.woodcut[6] = objectType;
+                        c.getWoodcutting().startWoodcutting(c.woodcut[0], c.woodcut[1], c.woodcut[2], c.woodcut[3], c.woodcut[4], c.woodcut[5], c.woodcut[6]);
+                break;</code></p>
+<p>100’s of these kind of cases are making PI dirty. instead of actually declaring the log type, axe etcetera (when clicking each individual tree), above the switch statement just add a method such as:</p>
+<p><code>		if (Woodcutting.playerTrees(c, objectType)) {
+			c.turnPlayerTo(obX, obY);
+			Woodcutting.attemptData(c, objectType, obX, obY);
+			return;
+		}</code></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/51">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/51</link>
+        <pubDate>Tue, 04 Dec 2012 19:30:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-51</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Server_programer Server programer]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/server_programer">@Server_programer</a> wrote:</p>
+          <blockquote>
+              <p>Thanks bro</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/50">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/50</link>
+        <pubDate>Sun, 02 Dec 2012 20:48:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-50</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@liamp liamp]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/liamp">@liamp</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Yankees_, post:45, topic:399252”]i get this when i compile<br>
+src\server\model\players\ActionHandler.java:890: duplicate case label<br>
+case 1276:<br>
+^<br>
+src\server\model\players\ActionHandler.java:891: duplicate case label<br>
+case 1278://trees<br>
+^<br>
+src\server\model\players\ActionHandler.java:903: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:906: duplicate case label<br>
+case 1281: //oak<br>
+^<br>
+src\server\model\players\ActionHandler.java:910: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:913: duplicate case label<br>
+case 1308: //willow<br>
+^<br>
+src\server\model\players\ActionHandler.java:917: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:920: duplicate case label<br>
+case 1307: //maple<br>
+^<br>
+src\server\model\players\ActionHandler.java:924: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:927: duplicate case label<br>
+case 1309: //yew<br>
+^<br>
+src\server\model\players\ActionHandler.java:931: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:934: duplicate case label<br>
+case 1306: //yew<br>
+^<br>
+src\server\model\players\ActionHandler.java:938: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+Note: Some input files use unchecked or unsafe operations.<br>
+Note: Recompile with -Xlint:unchecked for details.<br>
+13 errors<br>
+Press any key to continue . . .[/quote]</p>
+<p>you have 13 errors because you probably forgot to delete your case and add his ones thats why it says [size=10pt]<span class="bbcode-u">duplicate case label</span>[/size]</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/49">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/49</link>
+        <pubDate>Fri, 08 Jun 2012 11:05:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-49</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <p>The constructor may not be added in the Client class.<br>
+If the class is missing, rip it from another server and construct it in the Client class.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/48">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/48</link>
+        <pubDate>Fri, 08 Jun 2012 04:20:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-48</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Kidpaparoach Kidpaparoach]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/kidpaparoach">@Kidpaparoach</a> wrote:</p>
+          <blockquote>
+              <p>I can’t use c.getWoodcutting . I literally have no woodcutting aha, everything else apart from that works fine. Lil help?&lt;3</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/47">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/47</link>
+        <pubDate>Thu, 07 Jun 2012 23:26:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-47</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <p>It means you have the old woodcutting still in the actionhandler ; i said to replace the old ones by the ones in th OP</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/46">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/46</link>
+        <pubDate>Mon, 18 Jul 2011 10:53:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-46</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Yankees1 Yankees_]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/yankees1">@Yankees1</a> wrote:</p>
+          <blockquote>
+              <p>i get this when i compile<br>
+src\server\model\players\ActionHandler.java:890: duplicate case label<br>
+case 1276:<br>
+^<br>
+src\server\model\players\ActionHandler.java:891: duplicate case label<br>
+case 1278://trees<br>
+^<br>
+src\server\model\players\ActionHandler.java:903: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:906: duplicate case label<br>
+case 1281: //oak<br>
+^<br>
+src\server\model\players\ActionHandler.java:910: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:913: duplicate case label<br>
+case 1308: //willow<br>
+^<br>
+src\server\model\players\ActionHandler.java:917: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:920: duplicate case label<br>
+case 1307: //maple<br>
+^<br>
+src\server\model\players\ActionHandler.java:924: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:927: duplicate case label<br>
+case 1309: //yew<br>
+^<br>
+src\server\model\players\ActionHandler.java:931: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+src\server\model\players\ActionHandler.java:934: duplicate case label<br>
+case 1306: //yew<br>
+^<br>
+src\server\model\players\ActionHandler.java:938: startWoodcutting(int,int,int,in<br>
+t,int,int,int) in server.model.players.skills.Woodcutting cannot be applied to (<br>
+int,int,int)<br>
+c.getWoodcutting().startWoodcutting(c.woodcut[0], c.wood<br>
+cut[1], c.woodcut[2]);<br>
+^<br>
+Note: Some input files use unchecked or unsafe operations.<br>
+Note: Recompile with -Xlint:unchecked for details.<br>
+13 errors<br>
+Press any key to continue . . .</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/45">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/45</link>
+        <pubDate>Mon, 18 Jul 2011 03:28:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-45</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Soviet Soviet]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/soviet">@Soviet</a> wrote:</p>
+          <blockquote>
+              <p>Just read carefully what he’s saying.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/44">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/44</link>
+        <pubDate>Mon, 18 Jul 2011 02:51:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-44</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@dan1 dan.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan1">@dan1</a> wrote:</p>
+          <blockquote>
+              <p>okay i tryed adding it onto the end and it didnt work so how do i do it O.o</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/43">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/43</link>
+        <pubDate>Wed, 06 Jul 2011 10:48:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-43</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Mr.czar, post:40, topic:399252”][quote author=Cres link=topic=496389.msg3651622#msg3651622 date=1309775472]</p>
+<aside class="quote">
+<blockquote>
+<p>wow dudes… all people do on these forums is flip if you say one little thing about it I was just saying the subject is false information gezz… would you wanna add this thinking it’s 90% to a 100? when it sits there and continues wc’ing the whole time until full logs? in the willow tree only tho…</p>
+</blockquote>
+</aside>
+<p>L2Java<br>
+on another note ; every issue you posted is a simple edit away from fixing…<br>
+[/quote]</p>
+<p>dude… I told you I already fixed like 3 times… and still… that’s not 90-100 it’s major glitched out might as well do the 99.9% tut with nest drops even.[/quote]</p>
+<p>That guys wc tutorial is based on mine.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/42">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/42</link>
+        <pubDate>Tue, 05 Jul 2011 11:38:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-42</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@dan1 dan.]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/dan1">@dan1</a> wrote:</p>
+          <blockquote>
+              <p>for the action handler bit do i just add it onto the end of whats allready there? im abit of a noob <img src="https://forum.moparisthebest.com/images/emoji/twitter/slight_smile.png?v=5" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/41">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/41</link>
+        <pubDate>Mon, 04 Jul 2011 14:24:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-41</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Mr.czar Mr.czar]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mr.czar">@Mr.czar</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“Cres, post:39, topic:399252”][quote author=Mr.czar link=topic=496389.msg3650962#msg3650962 date=1309727943]<br>
+wow dudes… all people do on these forums is flip if you say one little thing about it I was just saying the subject is false information gezz… would you wanna add this thinking it’s 90% to a 100? when it sits there and continues wc’ing the whole time until full logs? in the willow tree only tho…<br>
+[/quote]</p>
+<p>L2Java<br>
+on another note ; every issue you posted is a simple edit away from fixing…[/quote]</p>
+<p>dude… I told you I already fixed like 3 times… and still… that’s not 90-100 it’s major glitched out might as well do the 99.9% tut with nest drops even.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/40">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/40</link>
+        <pubDate>Mon, 04 Jul 2011 10:48:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-40</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="38" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mr.czar/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mr.czar:</div>
+<blockquote>
+<p>wow dudes… all people do on these forums is flip if you say one little thing about it I was just saying the subject is false information gezz… would you wanna add this thinking it’s 90% to a 100? when it sits there and continues wc’ing the whole time until full logs? in the willow tree only tho…</p>
+</blockquote>
+</aside>
+<p>L2Java<br>
+on another note ; every issue you posted is a simple edit away from fixing…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/39">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/39</link>
+        <pubDate>Mon, 04 Jul 2011 10:31:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-39</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Mr.czar Mr.czar]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mr.czar">@Mr.czar</a> wrote:</p>
+          <blockquote>
+              <p>wow dudes… all people do on these forums is flip if you say one little thing about it I was just saying the subject is false information gezz… would you wanna add this thinking it’s 90% to a 100? when it sits there and continues wc’ing the whole time until full logs? in the willow tree only tho…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/38">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/38</link>
+        <pubDate>Sun, 03 Jul 2011 21:19:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-38</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@vManlyMan vManlyMan]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/vmanlyman">@vManlyMan</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="36" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mr.czar/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mr.czar:</div>
+<blockquote>
+<p>I told you I did add it myself why are you getting so huffy? =/</p>
+</blockquote>
+</aside>
+<blockquote>i gave you guys a base , work with it , don't expect i'll spoonfeed everything</blockquote>
+<p>I would be irritated if I were him too.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/37">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/37</link>
+        <pubDate>Sun, 03 Jul 2011 21:03:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-37</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Mr.czar Mr.czar]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mr.czar">@Mr.czar</a> wrote:</p>
+          <blockquote>
+              <p>I told you I did add it myself why are you getting so huffy? =/</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/36">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/36</link>
+        <pubDate>Sun, 03 Jul 2011 20:41:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-36</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="34" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mr.czar/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mr.czar:</div>
+<blockquote>
+<p>yea but your saying 100% when its not =/and I didn’t forget anything, and I fixed it up but I dont get how this is 90-100 it doesn’t even have nest drops added.</p>
+</blockquote>
+</aside>
+<p>Again , add it yourself , it’s fucking 5 or 6 lines of code , are you that lazy?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/35">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/35</link>
+        <pubDate>Sun, 03 Jul 2011 19:23:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-35</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Mr.czar Mr.czar]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mr.czar">@Mr.czar</a> wrote:</p>
+          <blockquote>
+              <p>yea but your saying 100% when its not =/and I didn’t forget anything, and I fixed it up but I dont get how this is 90-100 it doesn’t even have nest drops added.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/34">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/34</link>
+        <pubDate>Sun, 03 Jul 2011 14:49:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-34</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+      <item>
+        <title>[PI] 90% - 100% woodcutting || Perfection :p</title>
+        <dc:creator><![CDATA[@Cres Cres]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/cres">@Cres</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="31" data-topic="399252">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/mr.czar/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Mr.czar:</div>
+<blockquote>
+<p>On the willow tree after it disspears it will still keep woodcutting… with mithril hatchet does it on all hatches</p>
+</blockquote>
+</aside>
+<p>must have forgotten a <span class="bbcode-b">return;</span><br>
+cbf to look after it , it’s pretty easy , if you can code then just fix it up , i gave you guys a base , work with it , don’t expect i’ll spoonfeed everything</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/33">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252/33</link>
+        <pubDate>Sun, 03 Jul 2011 11:03:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-399252-33</guid>
+        <source url="https://forum.moparisthebest.com/t/pi-90-100-woodcutting-perfection-p/399252.rss">[PI] 90% - 100% woodcutting || Perfection :p</source>
+      </item>
+  </channel>
+</rss>

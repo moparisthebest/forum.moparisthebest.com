@@ -1,0 +1,661 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The XP Well</title>
+    <link>https://forum.moparisthebest.com/t/the-xp-well/544558</link>
+    <description>[quote=&quot;arham 4, post:2, topic:544124&quot;][b][size=18pt]The XP Well[/size][/b]
+
+Athens now has the XP well, a well which, at a certain point of money given, give double XP for 48 hours!
+[spoiler=Media]
+[img]http://puu.sh/9zi45/eaac0239f5.png[/img]
+[img]http://puu.sh/9zhKb/aa5186b5ff.png[/img]
+[size=8pt]I am well aware that the % is wrong. It was fixed later, but not when I took this picture.[/size]
+[img]http://puu.sh/9ziwr/d7e32badc4.png[/img]
+[img]http://puu.sh/9zjxE/c46b391f3d.png[/img]
+[/spoiler]
+
+The peak at the moment is 20M. Once 20M is donated in the well, there is double XP for 2 days (48 hours)!
+
+Credits to Elrick for the base idea. Credits to Alpha Tester Raptorsaurus for help and helping me test this well.[/quote]
+XPWell.java
+[code=java]
+package com.rs.game.player.content;
+
+import com.rs.Settings;
+import com.rs.game.World;
+import com.rs.game.player.Player;
+import com.rs.game.tasks.WorldTask;
+import com.rs.game.tasks.WorldTasksManager;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.NumberFormat;
+import java.util.Locale;
+
+/**
+ * Created by Arham 4 on 6/18/14.
+ */
+public class XPWell {
+
+    /**
+     * The amount of time for the WorldTask.
+     */
+    public static int taskAmount = 172800000;
+    public static int taskTime = 172800000;
+
+    /**
+     * Sends a dialogue for the amount to give.
+     *
+     * @param player The Player giving the amount.
+     */
+    public static void give(Player player) {
+        if (World.isWellActive()) {
+            player.getPackets().sendGameMessage(&quot;The XP well is already active! Go train!&quot;);
+            return;
+        }
+        player.getPackets().sendRunScript(109, &quot;Progress: &quot; + NumberFormat.getNumberInstance(Locale.US).format(World.getWellAmount()) + &quot; GP (&quot; + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + &quot;% of Goal); Goal: &quot; + NumberFormat.getNumberInstance(Locale.US).format(Settings.WELL_MAX_AMOUNT) + &quot; GP&quot;);
+        player.getTemporaryAttributtes().put(&quot;donate_xp_well&quot;, Boolean.TRUE);
+    }
+
+    /**
+     * Donates to the well the amount to give.
+     *
+     * @param player The Player donating.
+     * @param amount The amount to give.
+     */
+    public static void donate(Player player, int amount) {
+        if (amount &lt; 0)
+            return;
+        if ((World.getWellAmount() + amount) &gt; Settings.WELL_MAX_AMOUNT) {
+            amount = Settings.WELL_MAX_AMOUNT - World.getWellAmount();
+        }
+        if (!player.getInventory().containsItem(995, amount) &amp;&amp; player.money &lt; amount) {
+            player.getPackets().sendGameMessage(&quot;You don&#39;t have that much money!&quot;);
+            return;
+        }
+        if (amount &lt; 100000) {
+            player.getPackets().sendGameMessage(&quot;You must donate at least 100,000 (100K) GP!&quot;);
+            return;
+        }
+        boolean pouch = !player.getInventory().containsItem(995, amount);
+        if (!pouch)
+            player.getInventory().deleteItem(995, amount);
+        else {
+            player.getPackets().sendRunScript(5561, 0, amount);
+            player.money -= amount;
+            player.refreshMoneyPouch();
+        }
+        World.addWellAmount(player.getDisplayName(), amount);
+        postDonation();
+    }
+
+    /**
+     * A check after donating to the well to see if the x2 XP should start.
+     */
+    private static void postDonation() {
+        if (World.getWellAmount() &gt;= Settings.WELL_MAX_AMOUNT) {
+            Settings.COMBAT_XP_RATE = (Settings.COMBAT_XP_RATE * 2);
+            Settings.SKILLING_XP_RATE = (Settings.SKILLING_XP_RATE * 2);
+            World.sendWorldMessage(&quot;&lt;col=FF0000&gt;The goal of &quot; + NumberFormat.getNumberInstance(Locale.US).format(Settings.WELL_MAX_AMOUNT) + &quot; GP has been reached! Double XP for 48 hours begins now!&quot;, false);
+            taskAmount = 172800000;
+            setWellTask();
+            World.setWellActive(true);
+        }
+    }
+
+    /**
+     * Sets the task for the reset of the well.
+     */
+    public static void setWellTask() {
+        WorldTasksManager.schedule(new WorldTask() {
+            @Override
+            public void run() {
+                World.setWellActive(false);
+                World.resetWell();
+                this.stop();
+            }
+        }, taskAmount);
+    }
+
+    /**
+     * Saves the progress of the well. If the x2 event is already active, this sends the amount
+     * left in milliseconds.
+     */
+    public static void save() {
+        File output = new File(&quot;./data/well/data.txt&quot;);
+
+        if (output.canWrite()) {
+            BufferedWriter out = null;
+            try {
+                out = new BufferedWriter(new FileWriter(output, false));
+                if (World.isWellActive()) {
+                    out.write(&quot;true &quot; + taskTime);
+                } else {
+                    out.write(&quot;false &quot; + World.getWellAmount());
+                }
+            } catch (IOException ignored) {
+            } finally {
+                if (out != null) {
+                    try {
+                        out.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+    }
+}
+[/code]
+World.java
+[code=java]
+    public static int getWellAmount() {
+        return wellAmount;
+    }
+
+    public static void addWellAmount(String displayName, int amount) {
+        wellAmount += amount;
+        sendWorldMessage(&quot;&lt;col=FF0000&gt;&quot; + displayName + &quot; has contributed &quot; + NumberFormat.getNumberInstance(Locale.US).format(amount) + &quot; GP to the XP well! Progress now: &quot; + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + &quot;%!&quot;, false);
+    }
+
+    private static void setWellAmount(int amount) {
+        wellAmount = amount;
+    }
+
+    public static void resetWell() {
+        wellAmount = 0;
+        sendWorldMessage(&quot;&lt;col=FF0000&gt;The XP well has been reset!&quot;, false);
+    }
+
+    public static boolean isWellActive() {
+        return wellActive;
+    }
+
+    public static void setWellActive(boolean wellActive) {
+        World.wellActive = wellActive;
+    }
+
+    public static void loadWell() throws IOException {
+        BufferedReader reader = new BufferedReader(new FileReader(&quot;./data/well/data.txt&quot;));
+        String line = null;
+        while ((line = reader.readLine()) != null) {
+            String[] args = line.split(&quot; &quot;);
+            if (args[0].contains(&quot;true&quot;)) {
+                World.setWellActive(true);
+                XPWell.taskTime = Integer.parseInt(args[1]);
+                XPWell.taskAmount = Integer.parseInt(args[1]);
+                XPWell.setWellTask();
+            } else {
+                setWellAmount(Integer.parseInt(args[1]));
+            }
+        }
+    }
+[/code]
+[code=java]
+    private static int wellAmount;
+    private static boolean wellActive = false;
+[/code]
+Settings.java
+[code=java]
+    /**
+     * XP well related.
+     */
+    public static final int WELL_MAX_AMOUNT = 20000000;
+[/code]
+WorldPacketsDecoder.java
+[code=java]
+            else if (player.getTemporaryAttributtes().get(&quot;donate_xp_well&quot;) == Boolean.TRUE) {
+                try {
+                    XPWell.donate(player, Integer.parseInt(value));
+                    player.getTemporaryAttributtes().put(&quot;donate_xp_well&quot;, Boolean.FALSE);
+                } catch (Exception e) {
+                    player.getDialogueManager().startDialogue(&quot;SimpleMessage&quot;, &quot;Invalid format.&quot;);
+                }
+            }
+[/code]</description>
+    
+    <lastBuildDate>Wed, 09 Jul 2014 16:31:50 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/the-xp-well/544558.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@Ashi Ashi]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ashi">@Ashi</a> wrote:</p>
+          <blockquote>
+              <p>Not even proper OOP</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/13</link>
+        <pubDate>Wed, 09 Jul 2014 16:31:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-13</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <pre><code class="lang-auto"> if (amount &lt; 100000) {</code></pre>
+<p><code>
+boolean pouch = !player.getInventory().containsItem(995, amount);
+        if (!pouch)
+            player.getInventory().deleteItem(995, amount);
+        else {
+            player.getPackets().sendRunScript(5561, 0, amount);</code></p>
+<p><code>
+taskAmount = 172800000;</code></p>
+<p>magic numbers</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/12</link>
+        <pubDate>Wed, 09 Jul 2014 16:29:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-12</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@Driman_Rune Driman Rune]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/driman_rune">@Driman_Rune</a> wrote:</p>
+          <blockquote>
+              <p>Disgusting.</p>
+<p>Goodjob Arham.  <img src="https://forum.moparisthebest.com/images/emoji/twitter/cool.png?v=5" title=":cool:" class="emoji" alt=":cool:"></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/11</link>
+        <pubDate>Wed, 09 Jul 2014 16:28:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-11</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“wildskiller, post:8, topic:544558”]Shouldn’t there be a limit after applying a certain amount of GP?</p>
+<p>[quote]</p>
+<p><code>public static void addWellAmount(String displayName, int amount) {
+        wellAmount += amount; //HERE
+        sendWorldMessage("&lt;col=FF0000&gt;" + displayName + " has contributed " + NumberFormat.getNumberInstance(Locale.US).format(amount) + " GP to the XP well! Progress now: " + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + "%!", false);
+}</code><br>
+[/quote][/quote]<br>
+When I call that method, the “amount” variable is:</p>
+<pre><code class="lang-auto">        if ((World.getWellAmount() + amount) &gt; Settings.WELL_MAX_AMOUNT) {
+            amount = Settings.WELL_MAX_AMOUNT - World.getWellAmount();
+        }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/10</link>
+        <pubDate>Wed, 09 Jul 2014 16:21:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-10</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@zyle1992 Zymus]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/zyle1992">@zyle1992</a> wrote:</p>
+          <blockquote>
+              <p>Try to avoid magic numbers, and allow the values to be configurable.</p>
+<ol>
+<li>Minimum donation amount</li>
+<li>Maximum Well Cap (the target to reach to trigger the double experience)</li>
+<li>The amount of time the double experience lasts.</li>
+</ol>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/9</link>
+        <pubDate>Wed, 09 Jul 2014 02:40:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-9</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@wildskiller wildskiller]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wildskiller">@wildskiller</a> wrote:</p>
+          <blockquote>
+              <p>Shouldn’t there be a limit after applying a certain amount of GP?</p>
+<blockquote>[code=java]public static void addWellAmount(String displayName, int amount) {
+        wellAmount += amount; //HERE
+        sendWorldMessage("" + displayName + " has contributed " + NumberFormat.getNumberInstance(Locale.US).format(amount) + " GP to the XP well! Progress now: " + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + "%!", false);
+}[/code]</blockquote>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/8</link>
+        <pubDate>Sat, 05 Jul 2014 19:40:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-8</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="6" data-topic="544558">
+<div class="title">
+<div class="quote-controls"></div>
+ Sessy Pk3r:</div>
+<blockquote>
+<p>What is taskAmount referring to? And what packet # is the sendRunScript method sending?</p>
+</blockquote>
+</aside>
+<p>Its my horrible way (I am going to fix this system up a bit) of saving the time. Don’t make me get into details about it, it makes me sick.</p>
+<p>sendRunScript sends the config (its used for multiple things, such as sending the GFX for the money pouch and such). In this case I am sending the input dialogue.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/7</link>
+        <pubDate>Fri, 04 Jul 2014 17:51:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-7</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@Sessy_Pk3r Sessy Pk3r]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/sessy_pk3r">@Sessy_Pk3r</a> wrote:</p>
+          <blockquote>
+              <p>What is taskAmount referring to? And what packet # is the sendRunScript method sending?</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/6</link>
+        <pubDate>Fri, 04 Jul 2014 16:02:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-6</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@ohokay ohokay]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/ohokay">@ohokay</a> wrote:</p>
+          <blockquote>
+              <p>I think it looks a little messy, maybe could have a better design.</p>
+<p>Also, dat money sink.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/5</link>
+        <pubDate>Thu, 03 Jul 2014 16:10:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-5</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>ignoring exceptions, not using try-with-resources</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/4</link>
+        <pubDate>Thu, 03 Jul 2014 05:16:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-4</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="544558">
+<div class="title">
+<div class="quote-controls"></div>
+ AtomicInt_:</div>
+<blockquote>
+<p>Why do you keep referencing this: [tt]NumberFormat.getNumberInstance(<a href="http://Locale.US" rel="nofollow noopener">Locale.US</a>)[/tt]? make it a field…</p>
+</blockquote>
+</aside>
+<p>Any other concerns? I wanna make this as good as possible</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/3</link>
+        <pubDate>Thu, 03 Jul 2014 05:06:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-3</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@ExtremeX-Scape Ryley]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/extremex-scape">@ExtremeX-Scape</a> wrote:</p>
+          <blockquote>
+              <p>Why do you keep referencing this: [tt]NumberFormat.getNumberInstance(<a href="http://Locale.US" rel="nofollow noopener">Locale.US</a>)[/tt]? make it a field…</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/2</link>
+        <pubDate>Thu, 03 Jul 2014 03:04:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-2</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+      <item>
+        <title>The XP Well</title>
+        <dc:creator><![CDATA[@arham_4 arham 4]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/arham_4">@arham_4</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“arham 4, post:2, topic:544124”]<span class="bbcode-b">[size=18pt]The XP Well[/size]</span></p>
+<p>Athens now has the XP well, a well which, at a certain point of money given, give double XP for 48 hours!<br>
+[spoiler=Media]<br>
+<img src="http://puu.sh/9zi45/eaac0239f5.png" alt width="" height=""><br>
+<img src="http://puu.sh/9zhKb/aa5186b5ff.png" alt width="" height=""><br>
+[size=8pt]I am well aware that the % is wrong. It was fixed later, but not when I took this picture.[/size]<br>
+<img src="http://puu.sh/9ziwr/d7e32badc4.png" alt width="" height=""><br>
+<img src="http://puu.sh/9zjxE/c46b391f3d.png" alt width="" height=""><br>
+[/spoiler]</p>
+<p>The peak at the moment is 20M. Once 20M is donated in the well, there is double XP for 2 days (48 hours)!</p>
+<p>Credits to Elrick for the base idea. Credits to Alpha Tester Raptorsaurus for help and helping me test this well.[/quote]<br>
+XPWell.java</p>
+<pre><code class="lang-auto">package com.rs.game.player.content;
+
+import com.rs.Settings;
+import com.rs.game.World;
+import com.rs.game.player.Player;
+import com.rs.game.tasks.WorldTask;
+import com.rs.game.tasks.WorldTasksManager;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.NumberFormat;
+import java.util.Locale;
+
+/**
+ * Created by Arham 4 on 6/18/14.
+ */
+public class XPWell {
+
+    /**
+     * The amount of time for the WorldTask.
+     */
+    public static int taskAmount = 172800000;
+    public static int taskTime = 172800000;
+
+    /**
+     * Sends a dialogue for the amount to give.
+     *
+     * @param player The Player giving the amount.
+     */
+    public static void give(Player player) {
+        if (World.isWellActive()) {
+            player.getPackets().sendGameMessage("The XP well is already active! Go train!");
+            return;
+        }
+        player.getPackets().sendRunScript(109, "Progress: " + NumberFormat.getNumberInstance(Locale.US).format(World.getWellAmount()) + " GP (" + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + "% of Goal); Goal: " + NumberFormat.getNumberInstance(Locale.US).format(Settings.WELL_MAX_AMOUNT) + " GP");
+        player.getTemporaryAttributtes().put("donate_xp_well", Boolean.TRUE);
+    }
+
+    /**
+     * Donates to the well the amount to give.
+     *
+     * @param player The Player donating.
+     * @param amount The amount to give.
+     */
+    public static void donate(Player player, int amount) {
+        if (amount &lt; 0)
+            return;
+        if ((World.getWellAmount() + amount) &gt; Settings.WELL_MAX_AMOUNT) {
+            amount = Settings.WELL_MAX_AMOUNT - World.getWellAmount();
+        }
+        if (!player.getInventory().containsItem(995, amount) &amp;&amp; player.money &lt; amount) {
+            player.getPackets().sendGameMessage("You don't have that much money!");
+            return;
+        }
+        if (amount &lt; 100000) {
+            player.getPackets().sendGameMessage("You must donate at least 100,000 (100K) GP!");
+            return;
+        }
+        boolean pouch = !player.getInventory().containsItem(995, amount);
+        if (!pouch)
+            player.getInventory().deleteItem(995, amount);
+        else {
+            player.getPackets().sendRunScript(5561, 0, amount);
+            player.money -= amount;
+            player.refreshMoneyPouch();
+        }
+        World.addWellAmount(player.getDisplayName(), amount);
+        postDonation();
+    }
+
+    /**
+     * A check after donating to the well to see if the x2 XP should start.
+     */
+    private static void postDonation() {
+        if (World.getWellAmount() &gt;= Settings.WELL_MAX_AMOUNT) {
+            Settings.COMBAT_XP_RATE = (Settings.COMBAT_XP_RATE * 2);
+            Settings.SKILLING_XP_RATE = (Settings.SKILLING_XP_RATE * 2);
+            World.sendWorldMessage("&lt;col=FF0000&gt;The goal of " + NumberFormat.getNumberInstance(Locale.US).format(Settings.WELL_MAX_AMOUNT) + " GP has been reached! Double XP for 48 hours begins now!", false);
+            taskAmount = 172800000;
+            setWellTask();
+            World.setWellActive(true);
+        }
+    }
+
+    /**
+     * Sets the task for the reset of the well.
+     */
+    public static void setWellTask() {
+        WorldTasksManager.schedule(new WorldTask() {
+            @Override
+            public void run() {
+                World.setWellActive(false);
+                World.resetWell();
+                this.stop();
+            }
+        }, taskAmount);
+    }
+
+    /**
+     * Saves the progress of the well. If the x2 event is already active, this sends the amount
+     * left in milliseconds.
+     */
+    public static void save() {
+        File output = new File("./data/well/data.txt");
+
+        if (output.canWrite()) {
+            BufferedWriter out = null;
+            try {
+                out = new BufferedWriter(new FileWriter(output, false));
+                if (World.isWellActive()) {
+                    out.write("true " + taskTime);
+                } else {
+                    out.write("false " + World.getWellAmount());
+                }
+            } catch (IOException ignored) {
+            } finally {
+                if (out != null) {
+                    try {
+                        out.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+    }
+}</code></pre>
+<p>World.java</p>
+<pre><code class="lang-auto">    public static int getWellAmount() {
+        return wellAmount;
+    }
+
+    public static void addWellAmount(String displayName, int amount) {
+        wellAmount += amount;
+        sendWorldMessage("&lt;col=FF0000&gt;" + displayName + " has contributed " + NumberFormat.getNumberInstance(Locale.US).format(amount) + " GP to the XP well! Progress now: " + ((World.getWellAmount() * 100) / Settings.WELL_MAX_AMOUNT) + "%!", false);
+    }
+
+    private static void setWellAmount(int amount) {
+        wellAmount = amount;
+    }
+
+    public static void resetWell() {
+        wellAmount = 0;
+        sendWorldMessage("&lt;col=FF0000&gt;The XP well has been reset!", false);
+    }
+
+    public static boolean isWellActive() {
+        return wellActive;
+    }
+
+    public static void setWellActive(boolean wellActive) {
+        World.wellActive = wellActive;
+    }
+
+    public static void loadWell() throws IOException {
+        BufferedReader reader = new BufferedReader(new FileReader("./data/well/data.txt"));
+        String line = null;
+        while ((line = reader.readLine()) != null) {
+            String[] args = line.split(" ");
+            if (args[0].contains("true")) {
+                World.setWellActive(true);
+                XPWell.taskTime = Integer.parseInt(args[1]);
+                XPWell.taskAmount = Integer.parseInt(args[1]);
+                XPWell.setWellTask();
+            } else {
+                setWellAmount(Integer.parseInt(args[1]));
+            }
+        }
+    }</code></pre>
+<pre><code class="lang-auto">    private static int wellAmount;
+    private static boolean wellActive = false;</code></pre>
+<p>Settings.java</p>
+<pre><code class="lang-auto">    /**
+     * XP well related.
+     */
+    public static final int WELL_MAX_AMOUNT = 20000000;</code></pre>
+<p>WorldPacketsDecoder.java</p>
+<pre><code class="lang-auto">            else if (player.getTemporaryAttributtes().get("donate_xp_well") == Boolean.TRUE) {
+                try {
+                    XPWell.donate(player, Integer.parseInt(value));
+                    player.getTemporaryAttributtes().put("donate_xp_well", Boolean.FALSE);
+                } catch (Exception e) {
+                    player.getDialogueManager().startDialogue("SimpleMessage", "Invalid format.");
+                }
+            }</code></pre>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/the-xp-well/544558/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/the-xp-well/544558/1</link>
+        <pubDate>Thu, 03 Jul 2014 00:58:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-544558-1</guid>
+        <source url="https://forum.moparisthebest.com/t/the-xp-well/544558.rss">The XP Well</source>
+      </item>
+  </channel>
+</rss>

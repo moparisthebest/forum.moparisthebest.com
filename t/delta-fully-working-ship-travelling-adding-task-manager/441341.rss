@@ -1,0 +1,809 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>[Delta] Fully working ship travelling + adding task manager</title>
+    <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341</link>
+    <description>Requirements:
+*Know where to find some things yourself.
+
+UPDATE:
+Adding task manager: (This is NOT created by me!)
+add those 2 classes:
+
+Task.java
+[code]public abstract class Task {
+
+	private final int delay;
+	private final boolean immediate;
+	private int countdown;
+	private boolean running = true;
+
+	public Task() {
+		this(1);
+	}
+
+	public Task(boolean immediate) {
+		this(1, immediate);
+	}
+
+	public Task(int delay) {
+		this(delay, false);
+	}
+
+	public Task(int delay, boolean immediate) {
+		checkDelay(delay);
+		this.delay = delay;
+		this.countdown = delay;
+		this.immediate = immediate;
+	}
+
+	public boolean isImmediate() {
+		return immediate;
+	}
+
+	public boolean isRunning() {
+		return running;
+	}
+
+	public boolean isStopped() {
+		return !running;
+	}
+
+	public boolean tick() {
+		if (running &amp;&amp; --countdown == 0) {
+			execute();
+			countdown = delay;
+		}
+		return running;
+	}
+
+	protected abstract void execute();
+
+	public void setDelay(int delay) {
+		checkDelay(delay);
+		delay = 0;
+	}
+
+	public void stop() {
+		checkStopped();
+		running = false;
+	}
+
+	private void checkDelay(int delay) {
+		if (delay &lt;= 0)
+			throw new IllegalArgumentException(&quot;Delay must be positive.&quot;);
+	}
+
+	private void checkStopped() {
+		if (!running)
+			throw new IllegalStateException();
+	}
+
+}[/code]
+
+TaskScheduler.java
+[code]import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public final class TaskScheduler implements Runnable {
+
+	private static final Logger logger = Logger.getLogger(TaskScheduler.class.getName());
+
+	private static final int TIME_PERIOD = 600;
+
+	private final ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor();
+
+	private final List&lt;Task&gt; tasks = new ArrayList&lt;Task&gt;();
+	private final Queue&lt;Task&gt; newTasks = new ArrayDeque&lt;Task&gt;();
+
+	public TaskScheduler() {
+		service.scheduleAtFixedRate(this, 0, TIME_PERIOD, TimeUnit.MILLISECONDS);
+	}
+
+	public void terminate() {
+		service.shutdown();
+	}
+
+	public void schedule(final Task task) {
+		if (task.isImmediate()) {
+			service.execute(new Runnable() {
+				@Override
+				public void run() {
+					task.execute();
+				}
+			});
+		}
+
+		synchronized (newTasks) {
+			newTasks.add(task);
+		}
+	}
+
+	@Override
+	public void run() {
+		synchronized (newTasks) {
+			Task task;
+			while ((task = newTasks.poll()) != null)
+				tasks.add(task);
+		}
+
+		for (Iterator&lt;Task&gt; it = tasks.iterator(); it.hasNext(); ) {
+			Task task = it.next();
+			try {
+				if (!task.tick())
+					it.remove();
+			} catch (Throwable t) {
+				logger.log(Level.SEVERE, &quot;Exception during task execution.&quot;, t);
+			}
+		}
+	}
+
+}[/code]
+
+In server.java add:
+[code]	private static final TaskScheduler scheduler = new TaskScheduler();
+
+	public static TaskScheduler getTaskScheduler() {
+		return scheduler;
+	}[/code]
+
+Ship travelling: (requires task manager)
+
+Hey, in this tutorial We&#39;re going to add fully working ship travelling for delta, including configs for the ship.
+
+First, add this class:
+[code]/*
+ * I assume almost nobody packaged his Delta.
+*/
+
+//package server.player;
+
+//import server.*;
+//import server.event.*;
+
+public class Travelling {
+
+	client c;
+
+	public Travelling(client c) {
+		this.c = c;
+	}
+	
+public static boolean Travel;
+
+/*
+ * Timer using the Task Manager
+ *
+*/
+public void travelTask(final int Time, final String Place) {
+	server.getTaskScheduler().schedule(new Task(Time, false) {
+	@Override
+		protected void execute() {
+			if(Travel) {//if travelling = true then
+				c.sendInterface(&quot;The ship arrives at &quot; + Place + &quot;.&quot;); //message
+				stop();//stops the task
+			} else {
+				stop();//stops the task if travelling = false
+			}
+		}
+	});
+}
+
+/*
+ * Leave the boat by using the plank.
+ *
+*/
+public void usePlank(int X, int Y, int objX, int objY) {
+	if(c.GoodDistance(objX, objY, c.absX, c.absY, 1) == true) {//if your in a distance of 1 tile
+		c.toX = X;//teleport to X
+		c.toY = Y;//teleport to Y
+		c.heightLevel = 0; // Sets players height level to 0
+	}
+}
+
+/*
+ * Starts task &amp; teles to new location
+*/
+public void Travel(int GP, int X, int Y, int Height, int Time, int Config, String Place) {
+	if(c.playerHasItem(995, GP)) {//checks if you have enough coins.
+		Travel = true;
+		c.setClientConfig(75, Config);//creates the boat on the interface
+		c.showInterface(3281);//shows the interface
+		c.deleteItem(995, GP);//deletes the coins.
+		travelTask(Time, Place);//starts the task.
+		c.sM(&quot;You pay &quot; + GP + &quot; coins and board the ship.&quot;);
+		c.toX = X; // teleports to X
+		c.toY = Y; // Teleports to Y
+		c.heightLevel = Height; //Sets height level to the int Height
+		c.updateRequired = true; //Updates your position.
+	}
+}
+}[/code]
+
+Next, open client.java / Packets.java and find:
+[code]case 132:[/code]
+
+Add:
+[code]				if(objectID == 2082) {
+				travel.usePlank(2956, 3146, objectX, objectY);//Exit the boat.
+				}
+				if(objectID == 2084) {
+				travel.usePlank(3029, 3217, objectX, objectY);//Exit the boat.
+				}[/code]
+
+in client.java find:
+[code]UpdateNPCChat()[/code]
+
+add:
+[code]		case 340://karamja travel dialogue
+			talk(&quot;Do you want a trip to Karamja? It will cost you 30 coins.&quot;, 376);
+		break;
+		
+		case 342://port_sarim travel dialogue
+			talk(&quot;Do you want a trip to Port Sarim? It will cost you 30 coins.&quot;, 380);
+		break;[/code]
+
+Next, in Packets / client find:
+[code]case 40:[/code]
+
+You will see something like:
+[code]			if (c.NpcDialogue == 1 || c.NpcDialogue == 2|| c.NpcDialogue == 3 || c.NpcDialogue == 4  || c.NpcDialogue == 5  || c.NpcDialogue == 6  || c.NpcDialogue == 8 || c.NpcDialogue == 10 || c.NpcDialogue == 13 || c.NpcDialogue == 16 || c.NpcDialogue == 18 || c.NpcDialogue == 19 || c.NpcDialogue == 21 || c.NpcDialogue == 22 || c.NpcDialogue == 23 || c.NpcDialogue == 27 || c.NpcDialogue == 28 || c.NpcDialogue == 30 || c.NpcDialogue == 31 || c.NpcDialogue == 32 || c.NpcDialogue == 34 || c.NpcDialogue == 37 || c.NpcDialogue == 41 || c.NpcDialogue == 42 || c.NpcDialogue == 44 || c.NpcDialogue == 45 || c.NpcDialogue == 48 || c.NpcDialogue == 49 || c.NpcDialogue == 50 || c.NpcDialogue == 52 || c.NpcDialogue == 54 || c.NpcDialogue == 57 || c.NpcDialogue == 60 || c.NpcDialogue == 64 || c.NpcDialogue == 65 || c.NpcDialogue == 66 || c.NpcDialogue == 73 || c.NpcDialogue == 75 || c.NpcDialogue == 77 || c.NpcDialogue == 81 || c.NpcDialogue == 82 || c.NpcDialogue == 83 || c.NpcDialogue == 85 || c.NpcDialogue == 87 || c.NpcDialogue == 91 || c.NpcDialogue == 89 || c.NpcDialogue == 90 || c.NpcDialogue == 91 || c.NpcDialogue == 92 || c.NpcDialogue == 95 || c.NpcDialogue == 96 || c.NpcDialogue == 97 || c.NpcDialogue == 98 || c.NpcDialogue == 100 || c.NpcDialogue == 102 || c.NpcDialogue == 103 || c.NpcDialogue == 105 || c.NpcDialogue == 106 || c.NpcDialogue == 107 || c.NpcDialogue == 108 || c.NpcDialogue == 109 || c.NpcDialogue == 111 || c.NpcDialogue == 112 || c.NpcDialogue == 114 || c.NpcDialogue == 116 || c.NpcDialogue == 300 || c.NpcDialogue == 301 || c.NpcDialogue == 310 || c.NpcDialogue == 312 || c.NpcDialogue == 313 || c.NpcDialogue == 315 || c.NpcDialogue == 317 || c.NpcDialogue == 320 || c.NpcDialogue &gt;= 400 &amp;&amp; c.NpcDialogue &lt;= 405 || c.NpcDialogue == 407 || c.NpcDialogue == 408 || c.NpcDialogue == 410 || c.NpcDialogue == 340 || c.NpcDialogue == 342) {
+				c.NpcDialogue += 1;
+				c.NpcDialogueSend = false;[/code]
+
+add:
+[code] || NpcDialogue == 340 || NpcDialogue == 342[/code]
+If the npcdialogue = 341 or 342 it will add 1 to it.
+
+in the same packet, add:
+[code]			if (c.NpcDialogue == 343) {//Gives the option to travel to port sarim.
+				c.NpcDialogue = 0;
+				c.NpcDialogueSend = false;
+				c.TalkOptions = &quot;PortSarim&quot;;
+				c.sendQuest(&quot;Yes please.&quot;, 2461);
+				c.sendQuest(&quot;No, thank you.&quot;, 2462);
+				c.sendFrame164(2459);
+			}
+			if (c.NpcDialogue == 341) {//Gives the options to travel to Karamja
+				c.NpcDialogue = 0;
+				c.NpcDialogueSend = false;
+				c.TalkOptions = &quot;Karamja&quot;;
+				c.sendQuest(&quot;Yes please.&quot;, 2461);
+				c.sendQuest(&quot;No, thank you.&quot;, 2462);
+				c.sendFrame164(2459);
+			}[/code]
+
+Next, in Player.java add:
+[code]public static String TalkOptions;[/code]
+
+Now, in ActionButtons.java
+
+find:
+[code]case 9157:[/code]
+
+(if you don&#39;t have it, make it yourself)
+
+under it add:
+[code]if(c.TalkOptions == &quot;Karamja&quot;) {
+	c.TalkOptions = &quot;&quot;;
+	c.travel.Travel(30, 2956, 3143, 1, 10, 5, &quot;Karamja&quot;);//starts the travelling to karamja
+}
+if(c.TalkOptions == &quot;PortSarim&quot;) {
+	c.TalkOptions = &quot;&quot;;
+	c.travel.Travel(30, 3032, 3217, 1, 10, 6, &quot;Port Sarim&quot;);//starts the travelling to portsarim
+}[/code]
+
+Next, find:
+[code]case 9158:[/code]
+
+(if you can&#39;t find it, make it youself)
+
+and add:
+[code]if(c.TalkOptions == &quot;Karamja&quot; || c.TalkOptions == &quot;PortSarim&quot;) {
+c.closeInterface();//closes the interface
+c.RemoveAllWindows();
+c.TalkOptions = &quot;&quot;;
+}[/code]
+
+In client.java / Packets.java, search for:
+[code]case 155:[/code]
+
+and add:
+[code]if(NPCID == 376){//traveller at port sarim
+	PutNPCCoords = true;
+	NpcDialogue = 340;
+}
+if(NPCID == 380){//traveller at karamja
+	PutNPCCoords = true;
+	NpcDialogue = 342;
+}[/code]
+
+Lastly, in client.java add:
+[code]public Travelling travel = new Travelling(this);[/code]
+
+You have to do you can&#39;t logout and walk if your travelling yourself.
+
+Picture:
+[img]http://i45.tinypic.com/2vi0dmt.jpg[/img]</description>
+    
+    <lastBuildDate>Fri, 05 Oct 2012 23:16:16 +0000</lastBuildDate>
+    <category>Runescape</category>
+    <atom:link href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@TannerRSC TannerRSC]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/tannerrsc">@TannerRSC</a> wrote:</p>
+          <blockquote>
+              <aside class="quote quote-modified" data-post="8" data-topic="441341">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/fox2007/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> Fox2007:</div>
+<blockquote>
+<p>If you didnt make the classes, then why remove the Credits and the Comments within the class? Yea, I respect graham highly, and so should you if you’re going to post his Classes by KEEPING THE CREDITS AND COMMENTS</p>
+</blockquote>
+</aside>
+<p>^This^</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/9</link>
+        <pubDate>Fri, 05 Oct 2012 23:16:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-9</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@Fox2007 Fox2007]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/fox2007">@Fox2007</a> wrote:</p>
+          <blockquote>
+              <p>If you didnt make the classes, then why remove the Credits and the Comments within the class? Yea, I respect graham highly, and so should you if you’re going to post his Classes by KEEPING THE CREDITS AND COMMENTS</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/8</link>
+        <pubDate>Fri, 05 Oct 2012 22:16:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-8</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@strucker Strucker]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/strucker">@strucker</a> wrote:</p>
+          <blockquote>
+              <p>Nicee… might use, thanks for the manager haha</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/7</link>
+        <pubDate>Wed, 03 Oct 2012 02:29:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-7</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@WowILikeToCode WowILikeToCode]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/wowiliketocode">@WowILikeToCode</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="5" data-topic="441341">
+<div class="title">
+<div class="quote-controls"></div>
+ Mario PvP:</div>
+<blockquote>
+<p>if you made something on Karamja that makes people come.</p>
+</blockquote>
+</aside>
+<p>Lol’d… <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"> My Dirty mind FTW</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/6</link>
+        <pubDate>Sat, 05 May 2012 18:31:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-6</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@Mario_PvP Mario PvP]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/mario_pvp">@Mario_PvP</a> wrote:</p>
+          <blockquote>
+              <p>Good job  <img src="https://forum.moparisthebest.com/images/emoji/twitter/wink.png?v=5" title=":wink:" class="emoji" alt=":wink:"><br>
+It’s a nice feature, if you made something on Karamja that makes people come. Which is apart from this tutorial</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/5</link>
+        <pubDate>Fri, 04 May 2012 20:51:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-5</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>[quote=“enzo42, post:3, topic:441341”][quote author=RandQm link=topic=544033.msg3987742#msg3987742 date=1336156007]<br>
+Please explain the code in order to be a tutorial.<br>
+[/quote]</p>
+<p>I explained some things in the code, but ill explain more stuff inside the code, thanks.[/quote]</p>
+<p>Looks good naw  <img src="https://forum.moparisthebest.com/images/emoji/twitter/stuck_out_tongue.png?v=5" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"><br>
+Good job,</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/4</link>
+        <pubDate>Fri, 04 May 2012 19:31:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-4</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@enzo42 enzo42]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enzo42">@enzo42</a> wrote:</p>
+          <blockquote>
+              <aside class="quote" data-post="2" data-topic="441341">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.moparisthebest.com/letter_avatar/randqm/40/5_e05bb34c421432ee4d40de30c10af3e5.png" class="avatar"> RandQm:</div>
+<blockquote>
+<p>Please explain the code in order to be a tutorial.</p>
+</blockquote>
+</aside>
+<p>I explained some things in the code, but ill explain more stuff inside the code, thanks.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/3</link>
+        <pubDate>Fri, 04 May 2012 19:16:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-3</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@RandQm RandQm]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/randqm">@RandQm</a> wrote:</p>
+          <blockquote>
+              <p>Please explain the code in order to be a tutorial.</p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/2</link>
+        <pubDate>Fri, 04 May 2012 18:26:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-2</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+      <item>
+        <title>[Delta] Fully working ship travelling + adding task manager</title>
+        <dc:creator><![CDATA[@enzo42 enzo42]]></dc:creator>
+        <description><![CDATA[
+          <p><a href="https://forum.moparisthebest.com/u/enzo42">@enzo42</a> wrote:</p>
+          <blockquote>
+              <p>Requirements:<br>
+*Know where to find some things yourself.</p>
+<p>UPDATE:<br>
+Adding task manager: (This is NOT created by me!)<br>
+add those 2 classes:</p>
+<p>Task.java</p>
+<p>[code]public abstract class Task {</p>
+<pre><code>private final int delay;
+private final boolean immediate;
+private int countdown;
+private boolean running = true;
+
+public Task() {
+	this(1);
+}
+
+public Task(boolean immediate) {
+	this(1, immediate);
+}
+
+public Task(int delay) {
+	this(delay, false);
+}
+
+public Task(int delay, boolean immediate) {
+	checkDelay(delay);
+	this.delay = delay;
+	this.countdown = delay;
+	this.immediate = immediate;
+}
+
+public boolean isImmediate() {
+	return immediate;
+}
+
+public boolean isRunning() {
+	return running;
+}
+
+public boolean isStopped() {
+	return !running;
+}
+
+public boolean tick() {
+	if (running &amp;&amp; --countdown == 0) {
+		execute();
+		countdown = delay;
+	}
+	return running;
+}
+
+protected abstract void execute();
+
+public void setDelay(int delay) {
+	checkDelay(delay);
+	delay = 0;
+}
+
+public void stop() {
+	checkStopped();
+	running = false;
+}
+
+private void checkDelay(int delay) {
+	if (delay &lt;= 0)
+		throw new IllegalArgumentException("Delay must be positive.");
+}
+
+private void checkStopped() {
+	if (!running)
+		throw new IllegalStateException();
+}
+</code></pre>
+<p>}[/code]</p>
+<p>TaskScheduler.java</p>
+<p>[code]import java.util.ArrayDeque;<br>
+import java.util.ArrayList;<br>
+import java.util.Iterator;<br>
+import java.util.List;<br>
+import java.util.Queue;<br>
+import java.util.concurrent.Executors;<br>
+import java.util.concurrent.ScheduledExecutorService;<br>
+import java.util.concurrent.TimeUnit;<br>
+import java.util.logging.Level;<br>
+import java.util.logging.Logger;</p>
+<p>public final class TaskScheduler implements Runnable {</p>
+<pre><code>private static final Logger logger = Logger.getLogger(TaskScheduler.class.getName());
+
+private static final int TIME_PERIOD = 600;
+
+private final ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor();
+
+private final List&lt;Task&gt; tasks = new ArrayList&lt;Task&gt;();
+private final Queue&lt;Task&gt; newTasks = new ArrayDeque&lt;Task&gt;();
+
+public TaskScheduler() {
+	service.scheduleAtFixedRate(this, 0, TIME_PERIOD, TimeUnit.MILLISECONDS);
+}
+
+public void terminate() {
+	service.shutdown();
+}
+
+public void schedule(final Task task) {
+	if (task.isImmediate()) {
+		service.execute(new Runnable() {
+			@Override
+			public void run() {
+				task.execute();
+			}
+		});
+	}
+
+	synchronized (newTasks) {
+		newTasks.add(task);
+	}
+}
+
+@Override
+public void run() {
+	synchronized (newTasks) {
+		Task task;
+		while ((task = newTasks.poll()) != null)
+			tasks.add(task);
+	}
+
+	for (Iterator&lt;Task&gt; it = tasks.iterator(); it.hasNext(); ) {
+		Task task = it.next();
+		try {
+			if (!task.tick())
+				it.remove();
+		} catch (Throwable t) {
+			logger.log(Level.SEVERE, "Exception during task execution.", t);
+		}
+	}
+}
+</code></pre>
+<p>}[/code]</p>
+<p>In server.java add:</p>
+<p>[code]	private static final TaskScheduler scheduler = new TaskScheduler();</p>
+<pre><code>public static TaskScheduler getTaskScheduler() {
+	return scheduler;
+}[/code]
+</code></pre>
+<p>Ship travelling: (requires task manager)</p>
+<p>Hey, in this tutorial We’re going to add fully working ship travelling for delta, including configs for the ship.</p>
+<p>First, add this class:</p>
+<p>[code]/*</p>
+<ul>
+<li>I assume almost nobody packaged his Delta.<br>
+*/</li>
+</ul>
+<p>//package server.player;</p>
+<p>//import server.<em>;<br>
+//import server.event.</em>;</p>
+<p>public class Travelling {</p>
+<pre><code>client c;
+
+public Travelling(client c) {
+	this.c = c;
+}
+</code></pre>
+<p>public static boolean Travel;</p>
+<p>/*</p>
+<ul>
+<li>Timer using the Task Manager</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public void travelTask(final int Time, final String Place) {<br>
+server.getTaskScheduler().schedule(new Task(Time, false) {<br>
+<a class="mention" href="/u/override">@Override</a><br>
+protected void execute() {<br>
+if(Travel) {//if travelling = true then<br>
+c.sendInterface("The ship arrives at " + Place + “.”); //message<br>
+stop();//stops the task<br>
+} else {<br>
+stop();//stops the task if travelling = false<br>
+}<br>
+}<br>
+});<br>
+}</p>
+<p>/*</p>
+<ul>
+<li>Leave the boat by using the plank.</li>
+<li>
+</li>
+</ul>
+<p>*/<br>
+public void usePlank(int X, int Y, int objX, int objY) {<br>
+if(c.GoodDistance(objX, objY, c.absX, c.absY, 1) == true) {//if your in a distance of 1 tile<br>
+c.toX = X;//teleport to X<br>
+c.toY = Y;//teleport to Y<br>
+c.heightLevel = 0; // Sets players height level to 0<br>
+}<br>
+}</p>
+<p>/*</p>
+<ul>
+<li>Starts task &amp; teles to new location<br>
+*/<br>
+public void Travel(int GP, int X, int Y, int Height, int Time, int Config, String Place) {<br>
+if(c.playerHasItem(995, GP)) {//checks if you have enough coins.<br>
+Travel = true;<br>
+c.setClientConfig(75, Config);//creates the boat on the interface<br>
+c.showInterface(3281);//shows the interface<br>
+c.deleteItem(995, GP);//deletes the coins.<br>
+travelTask(Time, Place);//starts the task.<br>
+c.sM(“You pay " + GP + " coins and board the ship.”);<br>
+c.toX = X; // teleports to X<br>
+c.toY = Y; // Teleports to Y<br>
+c.heightLevel = Height; //Sets height level to the int Height<br>
+c.updateRequired = true; //Updates your position.<br>
+}<br>
+}<br>
+}[/code]</li>
+</ul>
+<p>Next, open client.java / Packets.java and find:</p>
+<pre><code class="lang-auto">case 132:</code></pre>
+<p>Add:</p>
+<p><code>				if(objectID == 2082) {
+				travel.usePlank(2956, 3146, objectX, objectY);//Exit the boat.
+				}
+				if(objectID == 2084) {
+				travel.usePlank(3029, 3217, objectX, objectY);//Exit the boat.
+				}</code></p>
+<p>in client.java find:</p>
+<pre><code class="lang-auto">UpdateNPCChat()</code></pre>
+<p>add:</p>
+<p>[code]		case 340://karamja travel dialogue<br>
+talk(“Do you want a trip to Karamja? It will cost you 30 coins.”, 376);<br>
+break;</p>
+<pre><code>	case 342://port_sarim travel dialogue
+		talk("Do you want a trip to Port Sarim? It will cost you 30 coins.", 380);
+	break;[/code]
+</code></pre>
+<p>Next, in Packets / client find:</p>
+<pre><code class="lang-auto">case 40:</code></pre>
+<p>You will see something like:</p>
+<p><code>			if (c.NpcDialogue == 1 || c.NpcDialogue == 2|| c.NpcDialogue == 3 || c.NpcDialogue == 4  || c.NpcDialogue == 5  || c.NpcDialogue == 6  || c.NpcDialogue == 8 || c.NpcDialogue == 10 || c.NpcDialogue == 13 || c.NpcDialogue == 16 || c.NpcDialogue == 18 || c.NpcDialogue == 19 || c.NpcDialogue == 21 || c.NpcDialogue == 22 || c.NpcDialogue == 23 || c.NpcDialogue == 27 || c.NpcDialogue == 28 || c.NpcDialogue == 30 || c.NpcDialogue == 31 || c.NpcDialogue == 32 || c.NpcDialogue == 34 || c.NpcDialogue == 37 || c.NpcDialogue == 41 || c.NpcDialogue == 42 || c.NpcDialogue == 44 || c.NpcDialogue == 45 || c.NpcDialogue == 48 || c.NpcDialogue == 49 || c.NpcDialogue == 50 || c.NpcDialogue == 52 || c.NpcDialogue == 54 || c.NpcDialogue == 57 || c.NpcDialogue == 60 || c.NpcDialogue == 64 || c.NpcDialogue == 65 || c.NpcDialogue == 66 || c.NpcDialogue == 73 || c.NpcDialogue == 75 || c.NpcDialogue == 77 || c.NpcDialogue == 81 || c.NpcDialogue == 82 || c.NpcDialogue == 83 || c.NpcDialogue == 85 || c.NpcDialogue == 87 || c.NpcDialogue == 91 || c.NpcDialogue == 89 || c.NpcDialogue == 90 || c.NpcDialogue == 91 || c.NpcDialogue == 92 || c.NpcDialogue == 95 || c.NpcDialogue == 96 || c.NpcDialogue == 97 || c.NpcDialogue == 98 || c.NpcDialogue == 100 || c.NpcDialogue == 102 || c.NpcDialogue == 103 || c.NpcDialogue == 105 || c.NpcDialogue == 106 || c.NpcDialogue == 107 || c.NpcDialogue == 108 || c.NpcDialogue == 109 || c.NpcDialogue == 111 || c.NpcDialogue == 112 || c.NpcDialogue == 114 || c.NpcDialogue == 116 || c.NpcDialogue == 300 || c.NpcDialogue == 301 || c.NpcDialogue == 310 || c.NpcDialogue == 312 || c.NpcDialogue == 313 || c.NpcDialogue == 315 || c.NpcDialogue == 317 || c.NpcDialogue == 320 || c.NpcDialogue &gt;= 400 &amp;&amp; c.NpcDialogue &lt;= 405 || c.NpcDialogue == 407 || c.NpcDialogue == 408 || c.NpcDialogue == 410 || c.NpcDialogue == 340 || c.NpcDialogue == 342) {
+				c.NpcDialogue += 1;
+				c.NpcDialogueSend = false;</code></p>
+<p>add:</p>
+<pre><code class="lang-auto"> || NpcDialogue == 340 || NpcDialogue == 342</code></pre>
+<p>If the npcdialogue = 341 or 342 it will add 1 to it.</p>
+<p>in the same packet, add:</p>
+<p><code>			if (c.NpcDialogue == 343) {//Gives the option to travel to port sarim.
+				c.NpcDialogue = 0;
+				c.NpcDialogueSend = false;
+				c.TalkOptions = "PortSarim";
+				c.sendQuest("Yes please.", 2461);
+				c.sendQuest("No, thank you.", 2462);
+				c.sendFrame164(2459);
+			}
+			if (c.NpcDialogue == 341) {//Gives the options to travel to Karamja
+				c.NpcDialogue = 0;
+				c.NpcDialogueSend = false;
+				c.TalkOptions = "Karamja";
+				c.sendQuest("Yes please.", 2461);
+				c.sendQuest("No, thank you.", 2462);
+				c.sendFrame164(2459);
+			}</code></p>
+<p>Next, in Player.java add:</p>
+<pre><code class="lang-auto">public static String TalkOptions;</code></pre>
+<p>Now, in ActionButtons.java</p>
+<p>find:</p>
+<pre><code class="lang-auto">case 9157:</code></pre>
+<p>(if you don’t have it, make it yourself)</p>
+<p>under it add:</p>
+<p><code>if(c.TalkOptions == "Karamja") {
+	c.TalkOptions = "";
+	c.travel.Travel(30, 2956, 3143, 1, 10, 5, "Karamja");//starts the travelling to karamja
+}
+if(c.TalkOptions == "PortSarim") {
+	c.TalkOptions = "";
+	c.travel.Travel(30, 3032, 3217, 1, 10, 6, "Port Sarim");//starts the travelling to portsarim
+}</code></p>
+<p>Next, find:</p>
+<pre><code class="lang-auto">case 9158:</code></pre>
+<p>(if you can’t find it, make it youself)</p>
+<p>and add:</p>
+<p><code>if(c.TalkOptions == "Karamja" || c.TalkOptions == "PortSarim") {
+c.closeInterface();//closes the interface
+c.RemoveAllWindows();
+c.TalkOptions = "";
+}</code></p>
+<p>In client.java / Packets.java, search for:</p>
+<pre><code class="lang-auto">case 155:</code></pre>
+<p>and add:</p>
+<p><code>if(NPCID == 376){//traveller at port sarim
+	PutNPCCoords = true;
+	NpcDialogue = 340;
+}
+if(NPCID == 380){//traveller at karamja
+	PutNPCCoords = true;
+	NpcDialogue = 342;
+}</code></p>
+<p>Lastly, in client.java add:</p>
+<pre><code class="lang-auto">public Travelling travel = new Travelling(this);</code></pre>
+<p>You have to do you can’t logout and walk if your travelling yourself.</p>
+<p>Picture:<br>
+<div class="lightbox-wrapper"><a class="lightbox" href="http://i45.tinypic.com/2vi0dmt.jpg" title="2vi0dmt.jpg" rel="nofollow noopener"><img src="http://i45.tinypic.com/2vi0dmt.jpg" alt width="690" height="453"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">2vi0dmt.jpg</span><span class="informations">749×492</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+          </blockquote>
+          <p><a href="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341/1</link>
+        <pubDate>Fri, 04 May 2012 17:48:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.moparisthebest.com-post-441341-1</guid>
+        <source url="https://forum.moparisthebest.com/t/delta-fully-working-ship-travelling-adding-task-manager/441341.rss">[Delta] Fully working ship travelling + adding task manager</source>
+      </item>
+  </channel>
+</rss>
